@@ -37,6 +37,7 @@ export function scanEmptyAllowlistPolicyWarnings(
     prefix: string,
     channelName: string,
     parent?: DoctorAccountRecord,
+    skipGroupAllowFromWarning?: boolean,
   ) => {
     const accountDm = asObjectRecord(account.dm);
     const parentDm = asObjectRecord(parent?.dm);
@@ -63,6 +64,7 @@ export function scanEmptyAllowlistPolicyWarnings(
         prefix,
         shouldSkipDefaultEmptyGroupAllowlistWarning:
           params.shouldSkipDefaultEmptyGroupAllowlistWarning,
+        skipGroupAllowFromWarning,
       }),
     );
     if (params.extraWarningsForAccount) {
@@ -92,11 +94,10 @@ export function scanEmptyAllowlistPolicyWarnings(
     const accounts = asObjectRecord(channelConfig.accounts);
     const hasAccounts = accounts && Object.keys(accounts).length > 0;
 
-    // When accounts exist, the top-level config is a fallback parent, not a
-    // real account. Check the top-level config but skip the groupAllowFrom
-    // warning if every account has its own populated groupAllowFrom.
+    // When accounts exist, check the top-level config but skip the groupAllowFrom
+    // warning if every enabled account has its own populated allowlist.
+    // This preserves DM warnings and channel extra-warning hooks.
     if (hasAccounts) {
-      // Check if every enabled account has its own groupAllowFrom or allowFrom
       const allAccountsCovered = Object.values(accounts).every((account) => {
         if (!account || typeof account !== "object") {
           return false;
@@ -113,12 +114,15 @@ export function scanEmptyAllowlistPolicyWarnings(
         return hasGroupAllowFrom || hasAllowFrom;
       });
 
-      if (allAccountsCovered) {
-        // Skip the top-level check entirely — every account covers the policy
-        // Skip to accounts below
-      } else {
-        checkAccount(channelConfig, `channels.${channelName}`, channelName);
-      }
+      // Always check the top-level config (preserves DM warnings and hooks)
+      // but pass a flag to skip the groupAllowFrom warning if covered
+      checkAccount(
+        channelConfig,
+        `channels.${channelName}`,
+        channelName,
+        undefined,
+        allAccountsCovered,
+      );
     } else {
       checkAccount(channelConfig, `channels.${channelName}`, channelName);
     }
