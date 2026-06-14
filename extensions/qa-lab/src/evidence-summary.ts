@@ -184,6 +184,7 @@ type QaEvidenceScenarioResultInput = {
   name: string;
   status: QaEvidenceStatusInput;
   details?: string;
+  timing?: QaEvidenceTiming;
   rttMs?: number;
   rttMeasurement?: {
     finalMatchedReplyRttMs?: number;
@@ -195,6 +196,7 @@ type QaEvidenceLiveTransportCheckInput = {
   title: string;
   status: QaEvidenceStatusInput;
   details: string;
+  timing?: QaEvidenceTiming;
   rttMs?: number;
   rttMeasurement?: {
     finalMatchedReplyRttMs?: number;
@@ -203,7 +205,10 @@ type QaEvidenceLiveTransportCheckInput = {
   artifactPaths?: Readonly<Record<string, string>>;
 };
 
-type QaEvidenceRttInput = Pick<QaEvidenceScenarioResultInput, "rttMeasurement" | "rttMs">;
+type QaEvidenceRttInput = Pick<
+  QaEvidenceScenarioResultInput,
+  "rttMeasurement" | "rttMs" | "timing"
+>;
 
 type QaEvidenceTestTargetInput = {
   id: string;
@@ -423,8 +428,17 @@ function failureForResult(result: {
 }
 
 function timingForRttResult(check: QaEvidenceRttInput) {
+  const timing: QaEvidenceTiming = { ...check.timing };
   const rttMs = check.rttMeasurement?.finalMatchedReplyRttMs ?? check.rttMs;
-  return typeof rttMs === "number" && Number.isFinite(rttMs) && rttMs > 0 ? { rttMs } : undefined;
+  if (
+    timing.rttMs === undefined &&
+    typeof rttMs === "number" &&
+    Number.isFinite(rttMs) &&
+    rttMs > 0
+  ) {
+    timing.rttMs = rttMs;
+  }
+  return Object.keys(timing).length > 0 ? timing : undefined;
 }
 
 function timingForTestResult(result: QaEvidenceTestResultInput) {
