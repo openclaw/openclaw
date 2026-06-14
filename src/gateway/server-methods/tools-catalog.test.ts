@@ -3,6 +3,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
@@ -108,6 +110,7 @@ function expectCatalogPayload(respond: ReturnType<typeof vi.fn>): CatalogPayload
 
 describe("tools.catalog handler", () => {
   beforeEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
     pluginToolMetaState.clear();
     pluginToolMetaState.set("voice_call", { pluginId: "voice-call", optional: true });
     pluginToolMetaState.set("matrix_room", { pluginId: "matrix", optional: false });
@@ -155,6 +158,57 @@ describe("tools.catalog handler", () => {
       risk: undefined,
       tags: undefined,
       defaultProfiles: [],
+    });
+  });
+
+  it("ignores unreadable plugin tool metadata rows when building plugin groups", async () => {
+    const registry = createEmptyPluginRegistry();
+    const unreadableMetadata = Object.defineProperty(
+      {
+        pluginId: "broken-plugin",
+        pluginName: "Broken Plugin",
+        source: "fixture",
+      },
+      "metadata",
+      {
+        get() {
+          throw new Error("plugin tool metadata row exploded");
+        },
+      },
+    );
+    registry.toolMetadata = [
+      unreadableMetadata as never,
+      {
+        pluginId: "voice-call",
+        pluginName: "Voice Call",
+        source: "fixture",
+        metadata: {
+          toolName: "voice_call",
+          displayName: "Voice Call",
+          description: "Managed voice call.",
+          risk: "medium",
+          tags: ["voice", "calling"],
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const { respond, invoke } = createInvokeParams({});
+
+    await invoke();
+
+    const payload = expectCatalogPayload(respond);
+    const voiceCall = payload.groups
+      .filter((group) => group.source === "plugin")
+      .flatMap((group) => group.tools)
+      .find((tool) => tool.id === "voice_call");
+    expect(voiceCall).toMatchObject({
+      id: "voice_call",
+      label: "Voice Call",
+      description: "Managed voice call.",
+      source: "plugin",
+      pluginId: "voice-call",
+      risk: "medium",
+      tags: ["voice", "calling"],
     });
   });
 
