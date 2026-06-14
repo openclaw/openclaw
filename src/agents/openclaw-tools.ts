@@ -41,7 +41,7 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
-import { createCronTool } from "./tools/cron-tool.js";
+import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import {
@@ -109,6 +109,8 @@ export function createOpenClawTools(
     config?: OpenClawConfig;
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
+    /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
+    cronCreatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
     /** Current thread timestamp for auto-threading. */
@@ -423,6 +425,7 @@ export function createOpenClawTools(
               accountId: options?.agentAccountId,
               threadId: options?.currentThreadTs ?? options?.agentThreadId,
             },
+            creatorToolAllowlist: options?.cronCreatorToolAllowlist,
             ...(options?.cronSelfRemoveOnlyJobId
               ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
               : {}),
