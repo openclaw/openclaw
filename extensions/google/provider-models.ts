@@ -14,6 +14,7 @@ const GEMINI_2_5_FLASH_LITE_PREFIX = "gemini-2.5-flash-lite";
 const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
+const GEMINI_3_5_FLASH_PREFIX = "gemini-3.5-flash";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_FLASH_LITE_PREFIX = "gemini-3-flash-lite";
 const GEMINI_3_FLASH_PREFIX = "gemini-3-flash";
@@ -26,6 +27,7 @@ const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
 const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3.1-pro-preview", "gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite"] as const;
+const GEMINI_3_5_FLASH_TEMPLATE_IDS = ["gemini-3.5-flash"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview", "gemini-2.5-flash"] as const;
 const GEMINI_3_PRO_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-pro-low", "gemini-3-pro-high"] as const;
 const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
@@ -176,6 +178,12 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     if (params.providerId === "google" || params.providerId === GOOGLE_GEMINI_CLI_PROVIDER_ID) {
       patch = { reasoning: true };
     }
+  } else if (lower.startsWith(GEMINI_3_5_FLASH_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_3_5_FLASH_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_5_FLASH_TEMPLATE_IDS,
+      antigravityTemplateIds: GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS,
+    };
   } else if (
     lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX) ||
     lower.startsWith(GEMINI_3_FLASH_LITE_PREFIX) ||

@@ -54,6 +54,15 @@ const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = [
     maxTokens: 65_536,
   },
   {
+    id: "gemini-3.5-flash",
+    name: "Gemini 3.5 Flash",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: GOOGLE_GEMINI_COST,
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+  },
+  {
     id: "gemini-3-flash-preview",
     name: "Gemini 3 Flash Preview",
     reasoning: true,
