@@ -1,5 +1,6 @@
 // Legacy config tests cover channel plugin config compatibility and migration helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { findLegacyConfigIssues } from "../../config/legacy.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 
 const {
@@ -218,5 +219,118 @@ describe("collectChannelLegacyConfigRules", () => {
     ]);
     expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledTimes(1);
     expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledWith("discord");
+  });
+
+  it("skips unreadable bundled doctor contract rule rows", () => {
+    loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) => {
+      if (channelId !== "discord") {
+        return undefined;
+      }
+      return {
+        legacyConfigRules: [
+          {
+            get path() {
+              throw new Error("bundled legacy rule path exploded");
+            },
+            message: "bad bundled rule",
+          },
+          {
+            path: ["channels", "discord", "healthy"],
+            message: "healthy bundled rule",
+          },
+        ],
+      };
+    });
+
+    const rules = collectChannelLegacyConfigRules({
+      channels: {
+        discord: {},
+      },
+    });
+
+    expect(rules).toEqual([
+      {
+        path: ["channels", "discord", "healthy"],
+        message: "healthy bundled rule",
+      },
+    ]);
+  });
+
+  it("skips unreadable bootstrap doctor rule metadata before healthy rules", () => {
+    getBootstrapChannelPluginMock.mockImplementation((channelId: string) =>
+      channelId === "matrix"
+        ? {
+            doctor: {
+              get legacyConfigRules() {
+                throw new Error("bootstrap legacy rules exploded");
+              },
+            },
+          }
+        : channelId === "slack"
+          ? {
+              doctor: {
+                legacyConfigRules: [
+                  {
+                    path: ["channels", "slack", "legacy"],
+                    message: "healthy slack rule",
+                  },
+                ],
+              },
+            }
+          : undefined,
+    );
+
+    const rules = collectChannelLegacyConfigRules({
+      channels: {
+        matrix: {},
+        slack: {},
+      },
+    });
+
+    expect(rules).toEqual([
+      {
+        path: ["channels", "slack", "legacy"],
+        message: "healthy slack rule",
+      },
+    ]);
+  });
+
+  it("treats throwing plugin rule matchers as non-matches", () => {
+    loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) =>
+      channelId === "discord"
+        ? {
+            legacyConfigRules: [
+              {
+                path: ["channels", "discord", "legacy"],
+                message: "bad match rule",
+                match: () => {
+                  throw new Error("legacy rule match exploded");
+                },
+              },
+              {
+                path: ["channels", "discord", "healthy"],
+                message: "healthy match rule",
+              },
+            ],
+          }
+        : undefined,
+    );
+
+    const cfg = {
+      channels: {
+        discord: {
+          healthy: true,
+          legacy: true,
+        },
+      },
+    };
+    const rules = collectChannelLegacyConfigRules(cfg);
+
+    expect(findLegacyConfigIssues(cfg, undefined, rules)).toEqual([
+      {
+        path: "channels.discord.healthy",
+        message: "healthy match rule",
+      },
+    ]);
   });
 });
