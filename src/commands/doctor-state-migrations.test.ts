@@ -1690,6 +1690,49 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("archives legacy plugin install index when SQLite has resolved npm artifact metadata", async () => {
+    const root = await makeTempRoot();
+    await writeExistingPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@latest",
+        version: "1.0.0",
+        resolvedName: "demo",
+        resolvedVersion: "1.0.0",
+        resolvedSpec: "demo@1.0.0",
+        integrity: "sha512-current",
+        shasum: "current",
+        installedAt: "2026-06-01T21:04:35.000Z",
+      },
+    });
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      demo: {
+        source: "npm",
+        spec: "demo@beta",
+        version: "1.0.0",
+      },
+    });
+
+    const result = await runLegacyStateMigrationsForRoot(root);
+    const secondResult = await runLegacyStateMigrationsForRoot(root);
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    expect(secondResult.warnings).toStrictEqual([]);
+    expect(secondResult.changes).toStrictEqual([]);
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: {
+        demo: {
+          source: "npm",
+          spec: "demo@latest",
+          resolvedVersion: "1.0.0",
+          integrity: "sha512-current",
+        },
+      },
+    });
+  });
+
   for (const fixture of [
     {
       label: "name different packages",
