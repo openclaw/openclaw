@@ -500,6 +500,8 @@ function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
 
 function isStalledEmbeddedRunRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
+  queueDepth: number;
+  state: SessionStateValue;
   ageMs: number;
   stuckSessionAbortMs: number;
 }): boolean {
@@ -507,6 +509,7 @@ function isStalledEmbeddedRunRecoveryEligible(params: {
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "embedded_run" &&
+    !(params.state === "processing" && params.queueDepth > 0) &&
     params.ageMs >= params.stuckSessionAbortMs
   );
 }
@@ -551,6 +554,8 @@ function isStalledModelCallRecoveryEligible(params: {
 function isActiveAbortRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
+  queueDepth: number;
+  state: SessionStateValue;
   ageMs: number;
   stuckSessionAbortMs: number;
 }): boolean {
@@ -1018,6 +1023,8 @@ export function logSessionAttention(
     isActiveAbortRecoveryEligible({
       classification,
       activity,
+      queueDepth: state.queueDepth,
+      state: params.state,
       ageMs: params.ageMs,
       stuckSessionAbortMs:
         params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs),
@@ -1323,6 +1330,8 @@ export function startDiagnosticHeartbeat(
           isActiveAbortRecoveryEligible({
             classification,
             activity,
+            queueDepth: state.queueDepth,
+            state: state.state,
             ageMs: attentionAgeMs,
             stuckSessionAbortMs,
           })
