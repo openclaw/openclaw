@@ -96,4 +96,41 @@ describe("OpenResponses file-only input that renders to images", () => {
     expect(opts.images?.length).toBe(1);
     await res.text();
   });
+
+  it("keeps an empty extracted file visible to the model", async () => {
+    extractFileContentFromSourceMock.mockResolvedValueOnce({
+      filename: "empty.txt",
+      text: "",
+      images: [],
+    });
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses({
+      model: "openclaw",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              source: {
+                type: "base64",
+                media_type: "text/plain",
+                data: Buffer.from("binary-only file").toString("base64"),
+                filename: "empty.txt",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const body = await res.text();
+    expect(res.status, body).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = agentCommand.mock.calls[0]?.[0] as { extraSystemPrompt?: string };
+    expect(opts.extraSystemPrompt).toContain('<file name="empty.txt">');
+    expect(opts.extraSystemPrompt).toContain("[No extractable text]");
+  });
 });
