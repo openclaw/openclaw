@@ -18,7 +18,9 @@ const hoisted = vi.hoisted(() => {
     loadModelPricingCacheModule: vi.fn(),
     isVitestRuntimeEnv: vi.fn(() => false),
     recoverPendingDeliveries: vi.fn(async () => undefined),
-    recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+    recoverPendingRestartContinuationDeliveries: vi.fn<
+      (args: { deps: unknown; maxEnqueuedAt: number; log: unknown }) => Promise<undefined>
+    >(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
   };
 });
@@ -179,6 +181,95 @@ describe("server-runtime-services", () => {
       maxEnqueuedAt: 123,
       log: sessionDeliveryLog,
     });
+  });
+
+  it("periodically retries pending restart continuation deliveries every 60 seconds", async () => {
+    vi.useFakeTimers();
+    const log = createLog();
+    activateScheduledServicesForTest({ log });
+
+    // Advance past the initial 1_250ms delay to trigger the first recovery call
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+
+    hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+
+    // Advance by 60_000ms — the periodic retry should fire again with a fresh cutoff
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+    let call = hoisted.recoverPendingRestartContinuationDeliveries.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    // Periodic retry uses Date.now() — known to be >= 1_250 + 60_000 = 61_250
+    expect(call.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250);
+    expect(call.log).toBe(log.child.mock.results[2]?.value);
+
+    hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+
+    // Advance another 60_000ms — the periodic retry should fire a third time
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+    // Each periodic retry uses a new Date.now() cutoff
+    call = hoisted.recoverPendingRestartContinuationDeliveries.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250 + 60_000);
+    expect(call.log).toBe(log.child.mock.results[3]?.value);
+  });
+
+  it("recovers delivery entries enqueued after startup maxEnqueuedAt via periodic retry", async () => {
+    vi.useFakeTimers();
+    const log = createLog();
+    activateScheduledServicesForTest({ log });
+
+    // Advance past the initial 1_250ms delay — first recovery uses startup cutoff (123)
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+    // First call uses the startup maxEnqueuedAt
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith({
+      deps: {},
+      maxEnqueuedAt: 123,
+      log: expect.anything(),
+    });
+
+    hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+
+    // Simulate a delivery entry being enqueued at time 5_000 (after the startup cutoff of 123)
+    // Advance to time 5_000
+    await vi.advanceTimersByTimeAsync(3_750);
+
+    // Advance to the first periodic retry at 1_250 + 60_000 = 61_250
+    await vi.advanceTimersByTimeAsync(56_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+    // The periodic retry uses Date.now() which is >= 61_250, so the entry enqueued at 5_000
+    // is eligible
+    const periodicCall = hoisted.recoverPendingRestartContinuationDeliveries.mock.calls[0]?.[0];
+    expect(periodicCall).toBeDefined();
+    expect(periodicCall.maxEnqueuedAt).toBeGreaterThanOrEqual(61_250);
+  });
+
+  it("stops session delivery periodic retry after close — no retry fires after stop handle is called", async () => {
+    vi.useFakeTimers();
+    const log = createLog();
+    const { services } = activateScheduledServicesForTest({ log });
+
+    // Advance past the initial 1_250ms delay to trigger the first recovery call
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+
+    hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+
+    // Stop the session delivery recovery — simulates gateway close/restart
+    services.stopSessionDeliveryRecovery();
+
+    // Advance well past the 60_000ms interval — no retry should fire
+    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
   });
 
   it("can defer cron startup while activating other scheduled services", async () => {
