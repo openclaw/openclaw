@@ -2627,6 +2627,195 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("cleans schema row before using a table reopened after transient create cleanup failure", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const partialVectorSearch = vi.fn(() => {
+      throw new Error("partial table should not be reused");
+    });
+    const partialTable = {
+      vectorSearch: partialVectorSearch,
+      countRows: vi.fn(async () => 0),
+      add: vi.fn(async () => undefined),
+      delete: vi.fn().mockRejectedValueOnce(new Error("temporary bind mount cleanup failure")),
+    };
+    const recoveredDelete = vi.fn(async () => undefined);
+    const recoveredTable = {
+      vectorSearch,
+      countRows: vi.fn(async () => 0),
+      add: vi.fn(async () => undefined),
+      delete: recoveredDelete,
+    };
+    const tableNames = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(["memories"]);
+    const createTable = vi.fn(async () => partialTable);
+    const openTable = vi.fn(async () => recoveredTable);
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames,
+        createTable,
+        openTable,
+      })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: dynamicMemoryPlugin } = await import("./index.js");
+      const registeredTools: any[] = [];
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      dynamicMemoryPlugin.register(mockApi as any);
+      const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+      if (!recallTool) {
+        throw new Error("memory_recall tool was not registered");
+      }
+
+      const result = await recallTool.execute("test-call-create-cleanup-retry", {
+        query: "hello cleanup retry",
+      });
+
+      expect(result.details?.count).toBe(0);
+      expect(tableNames).toHaveBeenCalledTimes(2);
+      expect(createTable).toHaveBeenCalledTimes(1);
+      expect(partialTable.delete).toHaveBeenCalledWith('id = "__schema__"');
+      expect(openTable).toHaveBeenCalledWith("memories");
+      expect(recoveredDelete).toHaveBeenCalledWith('id = "__schema__"');
+      expect(partialVectorSearch).not.toHaveBeenCalled();
+      expect(vectorSearch).toHaveBeenCalledWith([0.1, 0.2, 0.3]);
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+  });
+
+  test("includes Docker bind mount guidance when table initialization retries are exhausted", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const tableNames = vi.fn(async () => {
+      throw new Error("metadata is not ready");
+    });
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames,
+      })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: dynamicMemoryPlugin } = await import("./index.js");
+      const registeredTools: any[] = [];
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      dynamicMemoryPlugin.register(mockApi as any);
+      const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+      if (!recallTool) {
+        throw new Error("memory_recall tool was not registered");
+      }
+
+      await expect(
+        recallTool.execute("test-call-exhausted-retry", { query: "hello exhausted retry" }),
+      ).rejects.toThrow("If the LanceDB data directory is backed by a Docker bind mount");
+      expect(tableNames).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+  });
+
   test("config schema accepts storageOptions with string values", async () => {
     const { default: memoryPluginCandidate } = await import("./index.js");
 
