@@ -391,6 +391,7 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadChannelsMock).toHaveBeenCalled();
     expect(mocks.loadSessionsMock).toHaveBeenCalled();
     expect(mocks.loadUsageMock).toHaveBeenCalled();
+    expect(mocks.loadModelAuthStatusStateMock).toHaveBeenCalledWith(host, { refresh: true });
   });
 
   it("skips overview usage refresh if the user leaves while primary loaders run", async () => {
