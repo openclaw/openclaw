@@ -1,6 +1,7 @@
 // Session snapshot tests cover runtime skill state captured for agent sessions.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillSnapshot } from "../types.js";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";
@@ -10,6 +11,7 @@ function strippedSnapshot(skillName = "test"): SkillSnapshot {
     prompt: "skills prompt",
     skills: [{ name: skillName }],
     version: 0,
+    promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };
 }
 
@@ -168,5 +170,30 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     });
 
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes persisted snapshots missing the current prompt format marker", () => {
+    ensureSkillsWatcherMock.mockImplementation(() => undefined);
+    getSkillsSnapshotVersionMock.mockReturnValue(0);
+    shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
+    const oldSnapshot = {
+      ...strippedSnapshot(),
+      version: 5,
+      promptFormatVersion: undefined,
+    };
+
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      existingSnapshot: oldSnapshot,
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(5, 0);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+      [string, { snapshotVersion?: number }]
+    >;
+    expect(snapshotParams.snapshotVersion).toBe(0);
   });
 });

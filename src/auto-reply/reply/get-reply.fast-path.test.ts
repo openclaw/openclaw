@@ -10,6 +10,7 @@ import {
   readSessionStoreForTest,
   writeSessionStoreForTestAsync,
 } from "../../config/sessions/test-helpers.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import {
   buildFastReplyCommandContext,
   initFastReplySessionState,
@@ -219,6 +220,34 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).toHaveBeenCalledOnce();
     expect(mocks.initSessionState).toHaveBeenCalledOnce();
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+  });
+
+  it("reports the prepared session binding after session bootstrap", async () => {
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
+    mocks.initSessionState.mockResolvedValue(
+      createGetReplySessionState({
+        sessionKey: "agent:main:slack:channel:C123",
+        sessionId: "rotated-session",
+        storePath: "/tmp/custom-sessions.json",
+      }),
+    );
+    const onSessionPrepared = vi.fn();
+
+    await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: "agent:main:slack:channel:C123",
+      }),
+      { onSessionPrepared } as never,
+      {} as OpenClawConfig,
+    );
+
+    expect(onSessionPrepared).toHaveBeenCalledWith({
+      sessionKey: "agent:main:slack:channel:C123",
+      sessionId: "rotated-session",
+      storePath: "/tmp/custom-sessions.json",
+    });
   });
 
   it("marks configs through withFastReplyConfig()", async () => {
@@ -480,6 +509,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       throw new Error("expected single reply payload");
     }
     expect(reply.text).toContain("Think: xhigh");
+    expect(getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression).toBe(true);
     expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
@@ -504,22 +534,26 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       reply: { text: "model status" },
     });
 
-    await expect(
-      getReplyFromConfig(
-        buildGetReplyCtx({
-          Body: "/model status",
-          BodyForAgent: "/model status",
-          RawBody: "/model status",
-          CommandBody: "/model status",
-          CommandSource: "native",
-          CommandAuthorized: true,
-          SessionKey: "telegram:slash:123",
-          CommandTargetSessionKey: targetSessionKey,
-        }),
-        undefined,
-        cfg,
-      ),
-    ).resolves.toEqual({ text: "model status" });
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: "/model status",
+        BodyForAgent: "/model status",
+        RawBody: "/model status",
+        CommandBody: "/model status",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: targetSessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+
+    expect(reply).toMatchObject({ text: "model status" });
+    if (!reply || Array.isArray(reply)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression).toBe(true);
 
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();

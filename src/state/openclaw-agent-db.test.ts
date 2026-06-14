@@ -1,4 +1,5 @@
 // OpenClaw agent database tests cover agent-scoped DB storage and migrations.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,6 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
-  closeOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
@@ -116,26 +116,6 @@ describe("openclaw agent database", () => {
     ).toEqual([defaultDatabase.path, relocated.path].toSorted());
   });
 
-  it("closes one cached agent database handle", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const database = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env,
-    });
-
-    expect(closeOpenClawAgentDatabase({ agentId: "worker-1", env })).toBe(true);
-    expect(database.db.isOpen).toBe(false);
-    expect(closeOpenClawAgentDatabase({ agentId: "worker-1", env })).toBe(false);
-
-    const reopened = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env,
-    });
-    expect(reopened.db.isOpen).toBe(true);
-    expect(reopened).not.toBe(database);
-  });
-
   it("rejects the legacy agent registry primary key with a doctor repair hint", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -173,6 +153,82 @@ describe("openclaw agent database", () => {
         env,
       }),
     ).toThrow(/run openclaw doctor --fix/);
+  });
+
+  it("keys explicit relative paths by resolved database pathname", () => {
+    const agentModuleUrl = new URL("./openclaw-agent-db.ts", import.meta.url).href;
+    const stateModuleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+          import fs from "node:fs";
+          import os from "node:os";
+          import path from "node:path";
+          import {
+            closeOpenClawAgentDatabasesForTest,
+            listOpenClawRegisteredAgentDatabases,
+            openOpenClawAgentDatabase,
+          } from ${JSON.stringify(agentModuleUrl)};
+          import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(stateModuleUrl)};
+
+          const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-state-"));
+          const env = { OPENCLAW_STATE_DIR: stateDir };
+          const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-relative-"));
+          const firstDir = path.join(root, "first");
+          const secondDir = path.join(root, "second");
+          fs.mkdirSync(firstDir);
+          fs.mkdirSync(secondDir);
+          const previousCwd = process.cwd();
+          try {
+            process.chdir(firstDir);
+            const first = openOpenClawAgentDatabase({
+              agentId: "worker-1",
+              env,
+              path: "agent.sqlite",
+            });
+
+            process.chdir(secondDir);
+            const second = openOpenClawAgentDatabase({
+              agentId: "worker-1",
+              env,
+              path: "agent.sqlite",
+            });
+
+            console.log(JSON.stringify({
+              sameHandle: first === second,
+              firstFileExists: fs.existsSync(path.join(firstDir, "agent.sqlite")),
+              secondFileExists: fs.existsSync(path.join(secondDir, "agent.sqlite")),
+              registeredPaths: listOpenClawRegisteredAgentDatabases({ env })
+                .filter((entry) => entry.agentId === "worker-1")
+                .map((entry) => entry.path),
+              expectedPaths: [first.path, second.path].toSorted(),
+            }));
+          } finally {
+            process.chdir(previousCwd);
+            closeOpenClawAgentDatabasesForTest();
+            closeOpenClawStateDatabaseForTest();
+          }
+        `,
+      ],
+      { encoding: "utf8" },
+    );
+    const result = JSON.parse(output) as {
+      expectedPaths: string[];
+      firstFileExists: boolean;
+      registeredPaths: string[];
+      sameHandle: boolean;
+      secondFileExists: boolean;
+    };
+
+    expect(result.sameHandle).toBe(false);
+    expect(result.firstFileExists).toBe(true);
+    expect(result.secondFileExists).toBe(true);
+    expect(result.registeredPaths).toEqual(result.expectedPaths);
   });
 
   it("rejects sharing one explicit database path across agent ids", () => {

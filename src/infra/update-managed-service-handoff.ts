@@ -495,7 +495,7 @@ export async function startManagedServiceUpdateHandoff(params: {
 
 export function buildManagedServiceHandoffUnavailableMessage(command: string): string {
   return [
-    "Package updates cannot safely run inside the live gateway process.",
-    `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host control plane.`,
+    "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
+    `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host UI.`,
   ].join("\n");
 }

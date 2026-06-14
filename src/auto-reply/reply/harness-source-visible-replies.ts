@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
 import {
   buildModelAliasIndex,
@@ -10,7 +11,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -180,6 +180,7 @@ export function resolveHarnessSourceVisibleRepliesDefault(params: {
       const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
         provider: candidate.provider,
         entry: params.entry,
+        cfg: params.cfg,
       });
       const harness = selectAgentHarness({
         provider: candidate.provider,

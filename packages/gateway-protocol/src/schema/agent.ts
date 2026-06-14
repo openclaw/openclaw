@@ -71,6 +71,7 @@ export const AgentEventSchema = Type.Object(
 export const MessageActionToolContextSchema = Type.Object(
   {
     currentChannelId: Type.Optional(Type.String()),
+    currentMessagingTarget: Type.Optional(Type.String()),
     currentGraphChannelId: Type.Optional(Type.String()),
     currentChannelProvider: Type.Optional(Type.String()),
     currentThreadTs: Type.Optional(Type.String()),
@@ -91,6 +92,7 @@ export const MessageActionToolContextSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    sameChannelThreadRequired: Type.Optional(Type.Boolean()),
     skipCrossContextDecoration: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
@@ -275,6 +277,12 @@ export const WakeParamsSchema = Type.Object(
     // Typed field; misspelled variants remain opaque metadata because wake
     // senders already rely on additionalProperties.
     sessionKey: Type.Optional(NonEmptyString),
+    /**
+     * Optional agent id paired with `sessionKey`. Routes multi-agent setups
+     * to the agent that owns the targeted session — closes the related half
+     * of #46886 ("always routes to default agent").
+     */
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata
 );

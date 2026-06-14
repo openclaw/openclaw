@@ -245,15 +245,17 @@ export function isChatStopCommand(text: string) {
 }
 
 function isChatResetCommand(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
+  const parsed = parseSlashCommand(text);
+  if (!parsed || (parsed.command.key !== "new" && parsed.command.key !== "reset")) {
     return false;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (normalized === "/new" || normalized === "/reset") {
+  if (parsed.command.key === "new") {
     return true;
   }
-  return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
+  if (/^soft(?:\s|$)/.test(normalizeLowercaseStringOrEmpty(parsed.args))) {
+    return false;
+  }
+  return true;
 }
 
 function confirmChatResetCommand(text: string) {
@@ -1521,7 +1523,7 @@ function historyIdleProofIsStaleForSelectedRow(
   return selectedStartedAt >= historyUpdatedAt;
 }
 
-function flushChatQueueAfterIdleSessionReconciliation(
+export function flushChatQueueAfterIdleSessionReconciliation(
   host: ChatHost,
   sessionKey: string,
   historyRefresh: Promise<ChatHistoryResult | undefined>,
@@ -1888,7 +1890,7 @@ async function dispatchSlashCommand(
       await host.onSlashAction("new-session");
       return;
     case "reset":
-      await sendChatMessageNow(host, "/reset", {
+      await sendChatMessageNow(host, args ? `/reset ${args}` : "/reset", {
         refreshSessions: true,
         previousDraft: sendOpts?.previousDraft,
         restoreDraft: sendOpts?.restoreDraft,

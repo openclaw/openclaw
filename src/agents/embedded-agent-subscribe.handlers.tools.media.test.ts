@@ -40,6 +40,8 @@ function createMockContext(overrides?: {
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
+      messagingToolSourceReplyPayloads: [],
+      messageToolOnlySourceReplyDelivered: false,
       messagingToolSentTargets: [],
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,

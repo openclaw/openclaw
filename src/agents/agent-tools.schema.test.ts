@@ -7,7 +7,11 @@ import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sd
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import {
+  isToolWrappedWithBeforeToolCallHook,
+  testing as beforeToolCallTesting,
+  wrapToolWithBeforeToolCallHook,
+} from "./agent-tools.before-tool-call.js";
 import {
   cleanToolSchemaForGemini,
   normalizeToolParameterSchema,
@@ -655,6 +659,19 @@ function makeTool(parameters: TSchema): AnyAgentTool {
 }
 
 describe("normalizeToolParameters", () => {
+  it("preserves before_tool_call wrapper metadata", () => {
+    const source = makeTool(Type.Object({ value: Type.String() }));
+    const hookContext = { agentId: "main", sessionId: "session-before-normalize" };
+    const wrapped = wrapToolWithBeforeToolCallHook(source, hookContext);
+
+    const normalized = normalizeToolParameters(wrapped);
+    const tagged = normalized as unknown as Record<symbol, unknown>;
+
+    expect(isToolWrappedWithBeforeToolCallHook(normalized)).toBe(true);
+    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_SOURCE_TOOL]).toBe(source);
+    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_HOOK_CONTEXT]).toBe(hookContext);
+  });
+
   it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {
     const tool: AnyAgentTool = {
       name: "get_flux_instance",
