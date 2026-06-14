@@ -445,6 +445,15 @@ Index session transcripts and surface them via `memory_search`:
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.
 </Warning>
 
+<Warning>
+If you also enable the bundled `session-memory` hook, it writes session summaries
+under `<workspace>/memory/`. Keeping both `memory` and `sessions` in
+`memorySearch.sources` can index the same conversation twice: once from the raw
+session transcript and once from the generated memory summary. Use
+`sources: ["memory"]` when the hook is your session recall path, or disable the
+hook when you want raw transcript search from `sources: ["sessions"]`.
+</Warning>
+
 ---
 
 ## SQLite vector acceleration (sqlite-vec)

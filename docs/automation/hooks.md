@@ -224,6 +224,15 @@ openclaw hooks enable <hook-name>
 
 Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs with the configured model. Requires `workspace.dir` to be configured.
 
+<Warning>
+This hook writes session-derived Markdown into the normal workspace memory tree.
+If memory search also indexes raw session transcripts with
+`memorySearch.sources: ["memory", "sessions"]`, the same conversation can appear
+from both sources. Use this hook with the default `["memory"]` source list, or
+disable the hook when raw transcript search is the desired session recall path.
+See [Session memory search](/reference/memory-config#session-memory-search-experimental).
+</Warning>
+
 <a id="bootstrap-extra-files"></a>
 
 ### bootstrap-extra-files config
