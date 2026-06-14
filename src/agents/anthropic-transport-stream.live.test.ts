@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { streamAnthropic } from "../llm/providers/anthropic.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { isLiveBillingDrift } from "./live-test-provider-drift.js";
 
 const LIVE = isLiveTestEnabled(["ANTHROPIC_TRANSPORT_LIVE_TEST"]);
 const describeLive = LIVE ? describe : describe.skip;
@@ -63,6 +64,17 @@ async function readRequestBody(request: http.IncomingMessage): Promise<string> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function skipAnthropicBillingDrift(
+  label: string,
+  result: { stopReason: string; errorMessage?: string },
+): boolean {
+  if (result.stopReason !== "error" || !isLiveBillingDrift(result.errorMessage ?? "")) {
+    return false;
+  }
+  console.warn(`[anthropic:live] skip ${label}: billing drift`);
+  return true;
 }
 
 describeLive("anthropic transport stream live", () => {
@@ -198,6 +210,9 @@ describeProviderLive("anthropic transport stream provider live", () => {
     );
 
     const result = await stream.result();
+    if (skipAnthropicBillingDrift("forced tool projection", result)) {
+      return;
+    }
     const toolCall = result.content.find(
       (block) => block.type === "toolCall" && block.name === "healthy_probe",
     );
@@ -257,6 +272,9 @@ describeProviderLive("anthropic transport stream provider live", () => {
     );
 
     const result = await stream.result();
+    if (skipAnthropicBillingDrift("SDK forced tool projection", result)) {
+      return;
+    }
     const toolCall = result.content.find(
       (block) => block.type === "toolCall" && block.name === "healthy_probe",
     );
