@@ -20,10 +20,9 @@ import {
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
 import {
+  hasDirectProviderApiKeyAuthForTool,
   hasProviderAuthForTool,
-  type OpenAiFamilyMediaCandidateDecision,
   resolveDefaultModelRef,
-  resolveOpenAiFamilyMediaCandidate,
 } from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
 
@@ -33,11 +32,6 @@ function formatProviderModelRef(providerId: string, modelId: string): string {
     return modelId;
   }
   return `${providerId}/${modelId}`;
-}
-
-function providerFromModelRef(ref: string): string {
-  const slash = ref.indexOf("/");
-  return slash > 0 ? normalizeLowercaseStringOrEmpty(ref.slice(0, slash)) : "";
 }
 
 function localModelIdForProvider(providerId: string, modelId: string): string {
@@ -123,6 +117,7 @@ function resolveTextExtractionCandidateRefs(params: {
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  filter?: (providerId: string) => boolean;
 }): string[] {
   const candidates: string[] = [];
   const addCandidate = (providerId: string, modelId: string) => {
@@ -148,6 +143,7 @@ function resolveTextExtractionCandidateRefs(params: {
   for (const providerId of providerIds) {
     if (
       !providerId ||
+      (params.filter && !params.filter(providerId)) ||
       !hasProviderAuthForTool({
         provider: providerId,
         cfg: params.cfg,
@@ -244,13 +240,26 @@ export function resolvePdfModelConfigForTool(params: {
 
   let preferred: string | null = null;
 
-  const providerOk = hasProviderAuthForTool({
-    provider: primary.provider,
+  const allowImplicitOpenAiPdfCandidate = hasDirectProviderApiKeyAuthForTool({
+    provider: "openai",
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
+    modelApi: "openai-responses",
   });
+  const allowImplicitPdfProvider = (providerId: string) =>
+    normalizeLowercaseStringOrEmpty(providerId) !== "openai" || allowImplicitOpenAiPdfCandidate;
+
+  const providerOk =
+    allowImplicitPdfProvider(primary.provider) &&
+    hasProviderAuthForTool({
+      provider: primary.provider,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+    });
   const providerVision = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
     provider: primary.provider,
@@ -263,22 +272,6 @@ export function resolvePdfModelConfigForTool(params: {
       providerId: primary.provider,
       capability: "image",
     });
-  const openAiFamilyDecision: OpenAiFamilyMediaCandidateDecision | null =
-    primary.provider === "openai" && providerDefault
-      ? resolveOpenAiFamilyMediaCandidate({
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          agentDir: params.agentDir,
-          authStore: params.authStore,
-          capability: "image",
-          openAiModel: providerDefault,
-          // PDF fallback execution uses generic complete(), not Codex's media
-          // provider. Without a PDF app-server route, OAuth-only OpenAI must
-          // drop here instead of substituting codex/<model>.
-        })
-      : null;
-  const shouldDropImplicitOpenAiCandidates =
-    primary.provider === "openai" && openAiFamilyDecision?.kind !== "keep";
   const primarySupportsNativePdf = providerSupportsNativePdfDocument({
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -290,6 +283,7 @@ export function resolvePdfModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
     filter: (providerId) =>
+      allowImplicitPdfProvider(providerId) &&
       providerSupportsNativePdfDocument({
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
@@ -301,29 +295,16 @@ export function resolvePdfModelConfigForTool(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
+    filter: allowImplicitPdfProvider,
   });
-  if (shouldDropImplicitOpenAiCandidates) {
-    for (let i = nativePdfCandidates.length - 1; i >= 0; i--) {
-      if (providerFromModelRef(nativePdfCandidates[i] ?? "") === "openai") {
-        nativePdfCandidates.splice(i, 1);
-      }
-    }
-    for (let i = genericImageCandidates.length - 1; i >= 0; i--) {
-      if (providerFromModelRef(genericImageCandidates[i] ?? "") === "openai") {
-        genericImageCandidates.splice(i, 1);
-      }
-    }
-  }
   const textExtractionCandidates = resolveTextExtractionCandidateRefs({
     cfg: params.cfg,
     primary,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
-  }).filter(
-    (candidate) =>
-      !shouldDropImplicitOpenAiCandidates || providerFromModelRef(candidate) !== "openai",
-  );
+    filter: allowImplicitPdfProvider,
+  });
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
@@ -331,7 +312,7 @@ export function resolvePdfModelConfigForTool(params: {
     // Configured provider vision models are added even when not present in static media defaults.
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
       const providerId = normalizeLowercaseStringOrEmpty(providerKey);
-      if (shouldDropImplicitOpenAiCandidates && providerId === "openai") {
+      if (!allowImplicitPdfProvider(providerId)) {
         continue;
       }
       const documentImageModel = providerId
@@ -382,12 +363,7 @@ export function resolvePdfModelConfigForTool(params: {
   if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
     // Google native PDF handling is preferred when auth and a configured vision model are present.
     preferred = providerVision;
-  } else if (
-    providerOk &&
-    !shouldDropImplicitOpenAiCandidates &&
-    primarySupportsNativePdf &&
-    (providerVision || providerDefault)
-  ) {
+  } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
     preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
   } else {
     preferred = fallbackCandidates[0] ?? null;

@@ -87,6 +87,29 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
     ).toEqual({ kind: "substitute", provider: "codex", ref: "codex/gpt-5.5" });
   });
 
+  it("substitutes Codex for canonical OpenAI token-only media auth", () => {
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:token": {
+          provider: "openai",
+          type: "token",
+          token: "token-test",
+        },
+      },
+    };
+
+    expect(
+      resolveOpenAiFamilyMediaCandidate({
+        agentDir,
+        authStore,
+        capability: "image",
+        openAiModel: "gpt-5.5",
+        codexModel: "gpt-5.5",
+      }),
+    ).toEqual({ kind: "substitute", provider: "codex", ref: "codex/gpt-5.5" });
+  });
+
   it("keeps OpenAI media when a direct API key profile exists", () => {
     const authStore: AuthProfileStore = {
       version: 1,
@@ -202,6 +225,29 @@ describe("resolveOpenAiFamilyMediaCandidate", () => {
           access: "oauth-test",
           refresh: "refresh-test",
           expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    expect(
+      resolveOpenAiFamilyMediaCandidate({
+        agentDir,
+        authStore,
+        capability: "image",
+        openAiModel: "gpt-5.5",
+        codexModel: "gpt-5.5",
+      }),
+    ).toEqual({ kind: "drop" });
+  });
+
+  it("does not treat legacy openai-codex token profiles as canonical Codex auth", () => {
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:token": {
+          provider: "openai-codex",
+          type: "token",
+          token: "token-test",
         },
       },
     };

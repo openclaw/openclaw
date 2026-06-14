@@ -162,14 +162,15 @@ function hasAuthProfileTypeForProvider(params: {
   agentDir?: string;
   authStore?: AuthProfileStore;
   includeExternalCli?: boolean;
-  type: AuthProfileCredential["type"];
+  type: AuthProfileCredential["type"] | readonly AuthProfileCredential["type"][];
 }): boolean {
   const store = loadAuthStoreForProvider(params);
   if (!store) {
     return false;
   }
-  return listProfilesForProvider(store, params.provider).some(
-    (profileId) => store.profiles[profileId]?.type === params.type,
+  const types = Array.isArray(params.type) ? params.type : [params.type];
+  return listProfilesForProvider(store, params.provider).some((profileId) =>
+    types.includes(store.profiles[profileId]?.type as AuthProfileCredential["type"]),
   );
 }
 
@@ -206,7 +207,7 @@ export function hasDirectProviderApiKeyAuthForTool(params: {
   });
 }
 
-function hasCanonicalOpenAiCodexOAuthSignal(params: {
+function hasCanonicalOpenAiCodexAuthSignal(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   authStore?: AuthProfileStore;
@@ -217,7 +218,7 @@ function hasCanonicalOpenAiCodexOAuthSignal(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     includeExternalCli: true,
-    type: "oauth",
+    type: ["oauth", "token"],
   });
 }
 
@@ -294,12 +295,12 @@ export function resolveOpenAiFamilyMediaCandidate(params: {
 
   const codexModel = params.codexModel?.trim();
   // Codex's bundled synthetic marker only proves the app-server route exists.
-  // Require a canonical OpenAI OAuth signal too so fresh installs do not route
-  // to Codex media just because the bundled plugin is present.
+  // Require canonical OpenAI subscription-style auth too so fresh installs do
+  // not route to Codex media just because the bundled plugin is present.
   if (
     params.capability === "image" &&
     codexModel &&
-    hasCanonicalOpenAiCodexOAuthSignal(params) &&
+    hasCanonicalOpenAiCodexAuthSignal(params) &&
     hasCodexSyntheticMediaRoute(params)
   ) {
     return {

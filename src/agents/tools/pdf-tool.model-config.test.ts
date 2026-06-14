@@ -154,6 +154,47 @@ describe("resolvePdfModelConfigForTool", () => {
     );
   });
 
+  it("drops implicit OpenAI PDF candidates for non-OpenAI primaries on OAuth-only auth", () => {
+    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
+    vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+    const cfg = withDefaultModel("google/gemini-3-flash-preview");
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
+  });
+
+  it("omits implicit OpenAI PDF fallbacks for non-OpenAI primaries on OAuth-only auth", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
+    vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+    const cfg = withDefaultModel("google/gemini-3-flash-preview");
+    const resolved = resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR });
+    expect(resolved?.primary).toBe(ANTHROPIC_PDF_MODEL);
+    expect([resolved?.primary, ...(resolved?.fallbacks ?? [])]).not.toContain("openai/gpt-5.5");
+  });
+
+  it("does not re-add configured OpenAI vision metadata for non-OpenAI primaries", () => {
+    vi.stubEnv("OPENCLAW_TEST_CODEX_OAUTH", "1");
+    const cfg = {
+      ...withDefaultModel("google/gemini-3-flash-preview"),
+      models: {
+        providers: {
+          OpenAI: {
+            models: [{ id: "gpt-5.5", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
+  });
+
+  it("keeps implicit OpenAI PDF candidates for non-OpenAI primaries with direct auth", () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const cfg = withDefaultModel("google/gemini-3-flash-preview");
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })?.primary).toBe(
+      "openai/gpt-5.5",
+    );
+  });
+
   it("prefers explicit pdfModel config", () => {
     const cfg = {
       agents: {

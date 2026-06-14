@@ -951,6 +951,89 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("uses Codex media for implicit OpenAI image defaults on canonical token-only auth", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:token": {
+            provider: "openai",
+            type: "token",
+            token: "token-test",
+          },
+        },
+      });
+      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "codex/gpt-5.5",
+      });
+    });
+  });
+
+  it("uses Codex media for implicit OpenAI image auto candidates on OAuth-only auth", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:chatgpt": {
+            provider: "openai",
+            type: "oauth",
+            access: "oauth-test",
+            refresh: "refresh-test",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "codex/gpt-5.5",
+      });
+    });
+  });
+
+  it("drops implicit OpenAI image auto candidates on OAuth-only auth without Codex route", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:chatgpt": {
+            provider: "openai",
+            type: "oauth",
+            access: "oauth-test",
+            refresh: "refresh-test",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
+    });
+  });
+
+  it("keeps implicit OpenAI image auto candidates when direct OpenAI API key auth exists", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "openai/gpt-5.4-mini",
+      });
+    });
+  });
+
   it("uses Codex media when OAuth-only OpenAI has configured vision model metadata", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
