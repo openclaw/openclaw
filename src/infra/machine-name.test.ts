@@ -1,6 +1,5 @@
 // Covers machine name resolution fallback behavior.
 import os from "node:os";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -20,10 +19,9 @@ const originalVitest = process.env.VITEST;
 const originalNodeEnv = process.env.NODE_ENV;
 
 async function importMachineName(scope: string) {
-  return await importFreshModule<typeof import("./machine-name.js")>(
-    import.meta.url,
-    `./machine-name.js?scope=${scope}`,
-  );
+  return (await import(
+    /* @vite-ignore */ new URL(`./machine-name.js?scope=${scope}`, import.meta.url).href
+  )) as typeof import("./machine-name.js");
 }
 
 afterEach(() => {

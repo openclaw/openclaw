@@ -95,6 +95,10 @@ const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
 const resolveDefaultModelForAgent = vi.hoisted(() =>
   vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 );
+const resolveHarnessSourceVisibleRepliesDefault = vi.hoisted(() =>
+  vi.fn((): "automatic" | "message_tool" | undefined => undefined),
+);
+const resolveSourceReplyMessageToolAvailable = vi.hoisted(() => vi.fn(() => true));
 const getAgentScopedMediaLocalRoots = vi.hoisted(() =>
   vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
 );
@@ -169,6 +173,8 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   modelSupportsVision,
   resolveAgentDir,
   resolveDefaultModelForAgent,
+  resolveHarnessSourceVisibleRepliesDefault,
+  resolveSourceReplyMessageToolAvailable,
 }));
 
 vi.mock("./sticker-cache.js", () => ({
@@ -284,6 +290,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     modelSupportsVision.mockReset();
     resolveAgentDir.mockReset();
     resolveDefaultModelForAgent.mockReset();
+    resolveHarnessSourceVisibleRepliesDefault.mockReset();
+    resolveHarnessSourceVisibleRepliesDefault.mockReturnValue(undefined);
+    resolveSourceReplyMessageToolAvailable.mockReset();
+    resolveSourceReplyMessageToolAvailable.mockReturnValue(true);
     loadConfig.mockReturnValue({});
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
@@ -3121,6 +3131,232 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("does not create transient previews when visible replies prefer the message tool", async () => {
+    loadSessionStore.mockReturnValue({
+      "agent:main:telegram:direct:123": { reasoningLevel: "stream" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "draft leak" });
+      await replyOptions?.onReasoningStream?.({ text: "<think>reasoning leak</think>" });
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123",
+          ChatType: "direct",
+          CommandBody: "send me 3 test messages",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        messages: {
+          visibleReplies: "message_tool",
+        },
+      },
+      streamMode: "partial",
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: {
+        sourceReplyDeliveryMode?: string;
+        onPartialReply?: unknown;
+        onReasoningStream?: unknown;
+      };
+    };
+    expect(dispatchParams.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatchParams.replyOptions?.onPartialReply).toBeUndefined();
+    expect(dispatchParams.replyOptions?.onReasoningStream).toBeUndefined();
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("does not create transient previews when harness defaults prefer the message tool", async () => {
+    resolveHarnessSourceVisibleRepliesDefault.mockReturnValue("message_tool");
+    loadSessionStore.mockReturnValue({
+      "agent:main:telegram:direct:123": { sessionId: "s1", reasoningLevel: "stream" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "harness-default draft leak" });
+      await replyOptions?.onReasoningStream?.({ text: "<think>harness reasoning leak</think>" });
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123",
+          ChatType: "direct",
+          CommandBody: "send me 3 test messages",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: {
+        sourceReplyDeliveryMode?: string;
+        onPartialReply?: unknown;
+        onReasoningStream?: unknown;
+      };
+    };
+    expect(resolveHarnessSourceVisibleRepliesDefault).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionAgentId: "default",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
+    expect(resolveSourceReplyMessageToolAvailable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prefersMessageToolDelivery: true,
+        sessionAgentId: "default",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
+    expect(dispatchParams.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatchParams.replyOptions?.onPartialReply).toBeUndefined();
+    expect(dispatchParams.replyOptions?.onReasoningStream).toBeUndefined();
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("keeps previews when message-tool visible replies fall back to automatic delivery", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2002 });
+    resolveHarnessSourceVisibleRepliesDefault.mockReturnValue("message_tool");
+    resolveSourceReplyMessageToolAvailable.mockReturnValue(false);
+    loadSessionStore.mockReturnValue({
+      "agent:main:telegram:direct:123": { sessionId: "s1", reasoningLevel: "stream" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "automatic fallback preview" });
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        sourceReplyDeliveryMode: "automatic",
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123",
+          ChatType: "direct",
+          CommandBody: "send me 3 test messages",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: {
+        sourceReplyDeliveryMode?: string;
+        onPartialReply?: unknown;
+      };
+    };
+    expect(resolveSourceReplyMessageToolAvailable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prefersMessageToolDelivery: true,
+        sessionAgentId: "default",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
+    expect(dispatchParams.replyOptions?.sourceReplyDeliveryMode).toBeUndefined();
+    expect(typeof dispatchParams.replyOptions?.onPartialReply).toBe("function");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("automatic fallback preview");
+  });
+
+  it("keeps explicit commands on automatic source delivery even with message-tool defaults", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Working" });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123",
+          ChatType: "direct",
+          CommandBody: "/status",
+          CommandSource: "text",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        messages: {
+          visibleReplies: "message_tool",
+        },
+      },
+      streamMode: "partial",
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { sourceReplyDeliveryMode?: string; onPartialReply?: unknown };
+    };
+    expect(dispatchParams.replyOptions?.sourceReplyDeliveryMode).toBeUndefined();
+    expect(typeof dispatchParams.replyOptions?.onPartialReply).toBe("function");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Working");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Done");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not create transient previews for unauthorized group slash commands", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "unauthorized draft leak" });
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+          CommandBody: "/status",
+          CommandSource: "text",
+          CommandAuthorized: false,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        isGroup: true,
+        chatId: -100123,
+        threadSpec: { scope: "none" },
+      }),
+      cfg: {
+        messages: {
+          groupChat: { visibleReplies: "message_tool" },
+        },
+      },
+      streamMode: "partial",
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { sourceReplyDeliveryMode?: string; onPartialReply?: unknown };
+    };
+    expect(dispatchParams.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatchParams.replyOptions?.onPartialReply).toBeUndefined();
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(sendMessageTelegram).not.toHaveBeenCalled();

@@ -16,8 +16,8 @@ vi.mock("../infra/outbound/message.js", () => ({
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import {
   buildExecApprovalFollowupPrompt,

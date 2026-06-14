@@ -40,6 +40,7 @@ export function resolveChannelSourceReplyDeliveryMode(params: {
   requested?: SourceReplyDeliveryMode;
   /** Whether the message-send tool is available for this turn. */
   messageToolAvailable?: boolean;
+  defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
   return resolveSourceReplyDeliveryMode(params);
 }

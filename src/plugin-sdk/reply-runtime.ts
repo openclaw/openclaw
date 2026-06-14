@@ -28,6 +28,9 @@ export {
 } from "../auto-reply/heartbeat.js";
 export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 export { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+export { resolveHarnessSourceVisibleRepliesDefault } from "../auto-reply/reply/harness-source-visible-replies.js";
+export type { HarnessSourceVisibleRepliesDefault } from "../auto-reply/reply/harness-source-visible-replies.js";
+export { resolveSourceReplyMessageToolAvailable } from "../auto-reply/reply/source-reply-message-tool-availability.js";
 export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { isAbortRequestText } from "../auto-reply/reply/abort.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";

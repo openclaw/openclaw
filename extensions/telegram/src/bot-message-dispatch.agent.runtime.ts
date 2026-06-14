@@ -6,3 +6,8 @@ export {
   resolveAgentDir,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
+
+export {
+  resolveHarnessSourceVisibleRepliesDefault,
+  resolveSourceReplyMessageToolAvailable,
+} from "openclaw/plugin-sdk/reply-runtime";
