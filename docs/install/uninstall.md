@@ -114,10 +114,12 @@ The task script lives under your state dir.
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
+Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.vbs"
 Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.cmd"
 ```
 
-If you used a profile, delete the matching task name and `~\.openclaw-<profile>\gateway.cmd`.
+If you used a profile, delete the matching task name and `~\.openclaw-<profile>\gateway.vbs`.
+Older installs may still leave `~\.openclaw-<profile>\gateway.cmd`, so remove that too if present.
 
 ## Normal install vs source checkout
 
