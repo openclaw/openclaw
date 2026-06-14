@@ -17,6 +17,7 @@ import type {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
@@ -161,25 +162,31 @@ vi.mock("../../media/channel-inbound-roots.js", () => ({
   },
 }));
 
+function readMockAuthProfileStore(agentDir?: string): {
+  version: number;
+  profiles: Record<string, { provider?: string; type?: string }>;
+} {
+  const fallback = {
+    version: 1,
+    profiles: {} as Record<string, { provider?: string; type?: string }>,
+  };
+  if (!agentDir) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(fsSync.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8")) as {
+      version: number;
+      profiles: Record<string, { provider?: string; type?: string }>;
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 vi.mock("../auth-profiles.js", () => ({
   externalCliDiscoveryForProviderAuth: (params: { provider: string }) => params,
   ensureAuthProfileStore: (agentDir?: string) => {
-    const fallback = {
-      version: 1,
-      profiles: {} as Record<string, { provider?: string; type?: string }>,
-    };
-    const load = () => {
-      if (!agentDir) {
-        return fallback;
-      }
-      const pathname = path.join(agentDir, "auth-profiles.json");
-      try {
-        return JSON.parse(fsSync.readFileSync(pathname, "utf8")) as typeof fallback;
-      } catch {
-        return fallback;
-      }
-    };
-    const store = load();
+    const store = readMockAuthProfileStore(agentDir);
     if (process.env.OPENCLAW_TEST_CODEX_CLI_OAUTH === "1") {
       store.profiles["openai:default"] = {
         provider: "openai",
@@ -188,20 +195,8 @@ vi.mock("../auth-profiles.js", () => ({
     }
     return store;
   },
-  ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) => {
-    if (!agentDir) {
-      return { version: 1, profiles: {} };
-    }
-    const pathname = path.join(agentDir, "auth-profiles.json");
-    try {
-      return JSON.parse(fsSync.readFileSync(pathname, "utf8")) as {
-        version?: number;
-        profiles?: Record<string, { provider?: string }>;
-      };
-    } catch {
-      return { version: 1, profiles: {} };
-    }
-  },
+  ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) =>
+    readMockAuthProfileStore(agentDir),
   hasAnyAuthProfileStoreSource: (agentDir?: string) => {
     if (!agentDir) {
       return false;
@@ -915,6 +910,35 @@ function findSchemaUnionKeywords(schema: unknown, pathLocal = "root"): string[] 
 }
 
 describe("image tool implicit imageModel config", () => {
+  type Profiles = AuthProfileStore["profiles"];
+
+  const openAiPrimaryCfg = {
+    agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+  } satisfies OpenClawConfig;
+  const anthropicPrimaryCfg = {
+    agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+  } satisfies OpenClawConfig;
+  const codexImageModel = { primary: "codex/gpt-5.5" };
+  const openAiDefaultImageModel = { primary: "openai/gpt-5.4-mini" };
+
+  const openAiOAuthProfile = (provider = "openai") => ({
+    provider,
+    type: "oauth" as const,
+    access: "oauth-test",
+    refresh: "refresh-test",
+    expires: Date.now() + 60_000,
+  });
+
+  const openAiTokenProfile = (provider = "openai") => ({
+    provider,
+    type: "token" as const,
+    token: "token-test",
+  });
+
+  const authStore = (profiles: Profiles): AuthProfileStore => ({ version: 1, profiles });
+  const writeProfiles = (agentDir: string, profiles: Profiles) =>
+    writeAuthProfiles(agentDir, authStore(profiles));
+
   const priorFetch = global.fetch;
   registerImageToolEnvReset(priorFetch, [
     "OPENAI_API_KEY",
@@ -947,139 +971,85 @@ describe("image tool implicit imageModel config", () => {
 
   it("stays disabled without auth when no pairing is possible", async () => {
     await withTempAgentDir(async (agentDir) => {
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
-      expect(createImageTool({ config: cfg, agentDir })).toBeNull();
+      expect(resolveImageModelConfigForTool({ cfg: openAiPrimaryCfg, agentDir })).toBeNull();
+      expect(createImageTool({ config: openAiPrimaryCfg, agentDir })).toBeNull();
     });
   });
 
-  it("uses Codex media for implicit OpenAI image defaults on canonical OAuth-only auth", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            provider: "openai",
-            type: "oauth",
-            access: "oauth-test",
-            refresh: "refresh-test",
-            expires: Date.now() + 60_000,
-          },
-        },
-      });
+  it.each([
+    {
+      name: "uses Codex media for implicit OpenAI image defaults on canonical OAuth-only auth",
+      cfg: openAiPrimaryCfg,
+      profiles: { "openai:chatgpt": openAiOAuthProfile() },
+      codexRoute: true,
+      expected: codexImageModel,
+    },
+    {
+      name: "uses Codex media for implicit OpenAI image defaults on canonical token-only auth",
+      cfg: openAiPrimaryCfg,
+      profiles: { "openai:token": openAiTokenProfile() },
+      codexRoute: true,
+      expected: codexImageModel,
+    },
+    {
+      name: "uses Codex media for implicit OpenAI image auto candidates on OAuth-only auth",
+      cfg: anthropicPrimaryCfg,
+      profiles: { "openai:chatgpt": openAiOAuthProfile() },
+      codexRoute: true,
+      expected: codexImageModel,
+    },
+    {
+      name: "drops implicit OpenAI image auto candidates on OAuth-only auth without Codex route",
+      cfg: anthropicPrimaryCfg,
+      profiles: { "openai:chatgpt": openAiOAuthProfile() },
+      expected: null,
+    },
+    {
+      name: "keeps implicit OpenAI image auto candidates when direct OpenAI API key auth exists",
+      cfg: anthropicPrimaryCfg,
+      openAiApiKey: true,
+      expected: openAiDefaultImageModel,
+    },
+    {
+      name: "keeps implicit OpenAI image defaults when direct OpenAI API key auth exists",
+      cfg: openAiPrimaryCfg,
+      openAiApiKey: true,
+      expected: openAiDefaultImageModel,
+    },
+    {
+      name: "does not treat legacy openai-codex profiles as canonical Codex OAuth",
+      cfg: openAiPrimaryCfg,
+      profiles: { "openai-codex:default": openAiOAuthProfile("openai-codex") },
+      codexRoute: true,
+      expected: null,
+    },
+  ])("$name", async ({ cfg, profiles, codexRoute, openAiApiKey, expected }) => {
+    if (codexRoute) {
       vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
-
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "codex/gpt-5.5",
-      });
-    });
-  });
-
-  it("uses Codex media for implicit OpenAI image defaults on canonical token-only auth", async () => {
+    }
+    if (openAiApiKey) {
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    }
     await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
-          "openai:token": {
-            provider: "openai",
-            type: "token",
-            token: "token-test",
-          },
-        },
-      });
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
+      if (profiles) {
+        await writeProfiles(agentDir, profiles);
+      }
 
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "codex/gpt-5.5",
-      });
-    });
-  });
-
-  it("uses Codex media for implicit OpenAI image auto candidates on OAuth-only auth", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            provider: "openai",
-            type: "oauth",
-            access: "oauth-test",
-            refresh: "refresh-test",
-            expires: Date.now() + 60_000,
-          },
-        },
-      });
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
-      };
-
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "codex/gpt-5.5",
-      });
-    });
-  });
-
-  it("drops implicit OpenAI image auto candidates on OAuth-only auth without Codex route", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            provider: "openai",
-            type: "oauth",
-            access: "oauth-test",
-            refresh: "refresh-test",
-            expires: Date.now() + 60_000,
-          },
-        },
-      });
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
-      };
-
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
-    });
-  });
-
-  it("keeps implicit OpenAI image auto candidates when direct OpenAI API key auth exists", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    await withTempAgentDir(async (agentDir) => {
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
-      };
-
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5.4-mini",
-      });
+      const actual = resolveImageModelConfigForTool({ cfg, agentDir });
+      if (expected === null) {
+        expect(actual).toBeNull();
+      } else {
+        expect(actual).toEqual(expected);
+      }
     });
   });
 
   it("uses Codex media when OAuth-only OpenAI has configured vision model metadata", async () => {
     await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            provider: "openai",
-            type: "oauth",
-            access: "oauth-test",
-            refresh: "refresh-test",
-            expires: Date.now() + 60_000,
-          },
-        },
-      });
+      await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
       vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+        ...openAiPrimaryCfg,
         models: {
           providers: {
             openai: {
@@ -1090,20 +1060,7 @@ describe("image tool implicit imageModel config", () => {
       };
 
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "codex/gpt-5.5",
-      });
-    });
-  });
-
-  it("keeps implicit OpenAI image defaults when direct OpenAI API key auth exists", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    await withTempAgentDir(async (agentDir) => {
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
-
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5.4-mini",
+        primary: codexImageModel.primary,
       });
     });
   });
@@ -1112,7 +1069,7 @@ describe("image tool implicit imageModel config", () => {
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+        ...openAiPrimaryCfg,
         models: {
           providers: {
             openai: {
@@ -1124,7 +1081,7 @@ describe("image tool implicit imageModel config", () => {
 
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "openai/gpt-5.5",
-        fallbacks: ["openai/gpt-5.4-mini"],
+        fallbacks: [openAiDefaultImageModel.primary],
       });
     });
   });
@@ -1152,37 +1109,12 @@ describe("image tool implicit imageModel config", () => {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.4" },
-            imageModel: { primary: "codex/gpt-5.5" },
+            imageModel: codexImageModel,
           },
         },
       };
 
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "codex/gpt-5.5",
-      });
-    });
-  });
-
-  it("does not treat legacy openai-codex profiles as canonical Codex OAuth", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
-          "openai-codex:default": {
-            provider: "openai-codex",
-            type: "oauth",
-            access: "oauth-test",
-            refresh: "refresh-test",
-            expires: Date.now() + 60_000,
-          },
-        },
-      });
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
-
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(codexImageModel);
     });
   });
 
@@ -1190,13 +1122,10 @@ describe("image tool implicit imageModel config", () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
       vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
 
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "codex/gpt-5.5",
-      });
+      expect(resolveImageModelConfigForTool({ cfg: openAiPrimaryCfg, agentDir })).toEqual(
+        codexImageModel,
+      );
     });
   });
 
@@ -1204,46 +1133,27 @@ describe("image tool implicit imageModel config", () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
       vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
 
       expect(
         resolveImageModelConfigForTool({
-          cfg,
+          cfg: openAiPrimaryCfg,
           agentDir,
-          authStore: { version: 1, profiles: {} },
+          authStore: authStore({}),
         }),
-      ).toEqual({
-        primary: "codex/gpt-5.5",
-      });
+      ).toEqual(codexImageModel);
     });
   });
 
   it("does not re-import persisted OpenAI OAuth when a scoped auth store is supplied", async () => {
     await withTempAgentDir(async (agentDir) => {
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
-          "openai:chatgpt": {
-            provider: "openai",
-            type: "oauth",
-            access: "oauth-test",
-            refresh: "refresh-test",
-            expires: Date.now() + 60_000,
-          },
-        },
-      });
+      await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
       vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
 
       expect(
         resolveImageModelConfigForTool({
-          cfg,
+          cfg: openAiPrimaryCfg,
           agentDir,
-          authStore: { version: 1, profiles: {} },
+          authStore: authStore({}),
         }),
       ).toBeNull();
     });
