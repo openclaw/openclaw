@@ -9,6 +9,13 @@ import type {
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import {
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  resolveOriginalAnthropicToolName,
+  type AnthropicProjectedToolChoice,
+  type AnthropicToolProjection,
+} from "../../agents/anthropic-tool-projection.js";
+import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
@@ -121,16 +128,6 @@ const ccToolLookup = new Map(claudeCodeTools.map((t) => [t.toLowerCase(), t]));
 
 // Convert tool name to CC canonical casing if it matches (case-insensitive)
 const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) ?? name;
-const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
-  if (tools && tools.length > 0) {
-    const lowerName = name.toLowerCase();
-    const matchedTool = tools.find((tool) => tool.name.toLowerCase() === lowerName);
-    if (matchedTool) {
-      return matchedTool.name;
-    }
-  }
-  return name;
-};
 
 /**
  * Convert content blocks to Anthropic API format
@@ -557,7 +554,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         client = created.client;
         isOAuth = created.isOAuthToken;
       }
-      let params = buildParams(model, context, isOAuth, options);
+      const builtParams = buildParams(model, context, isOAuth, options);
+      let params = builtParams.params;
+      const toolProjection = builtParams.toolProjection;
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
@@ -648,7 +647,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
               type: "toolCall",
               id: event.content_block.id,
               name: isOAuth
-                ? fromClaudeCodeName(event.content_block.name, context.tools)
+                ? resolveOriginalAnthropicToolName(event.content_block.name, toolProjection)
                 : event.content_block.name,
               arguments: (event.content_block.input as Record<string, unknown>) ?? {},
               partialJson: "",
@@ -804,8 +803,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 
 function normalizeAnthropicToolChoice(
   model: Model<"anthropic-messages">,
-  toolChoice: AnthropicOptions["toolChoice"],
-) {
+  toolChoice: NonNullable<AnthropicOptions["toolChoice"]>,
+): AnthropicProjectedToolChoice {
   if (
     requiresClaudeAdaptiveThinking(model) &&
     (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
@@ -1057,13 +1056,16 @@ function buildParams(
   context: Context,
   isOAuthTokenResult: boolean,
   options?: AnthropicOptions,
-): MessageCreateParamsStreaming {
+): {
+  params: MessageCreateParamsStreaming;
+  toolProjection?: AnthropicToolProjection;
+} {
   const fable5 = usesClaudeFable5MessagesContract(model);
   const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
   const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
-  const compat = context.tools?.length ? getAnthropicCompat(model) : undefined;
-  const tools =
+  const compat = context.tools ? getAnthropicCompat(model) : undefined;
+  const convertedTools =
     context.tools && compat
       ? convertTools(
           context.tools,
@@ -1072,6 +1074,8 @@ function buildParams(
           compat.supportsCacheControlOnTools ? cacheControl : undefined,
         )
       : undefined;
+  const tools = convertedTools?.tools;
+  const toolProjection = convertedTools?.projection;
   const systemCacheControlCount = countNativeCacheControlMarkers(system);
   const toolCacheControlCount = countNativeCacheControlMarkers(tools);
   const messageCacheControlLimit = Math.max(
@@ -1155,10 +1159,16 @@ function buildParams(
   }
 
   if (options?.toolChoice) {
-    params.tool_choice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const normalizedToolChoice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const projectedToolChoice = toolProjection
+      ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
+      : normalizedToolChoice;
+    if (projectedToolChoice) {
+      params.tool_choice = projectedToolChoice;
+    }
   }
 
-  return params;
+  return { params, toolProjection };
 }
 
 // Normalize tool call IDs to match Anthropic's required pattern and length
@@ -1472,26 +1482,32 @@ function convertTools(
   isOAuthTokenLocal: boolean,
   supportsEagerToolInputStreaming: boolean,
   cacheControl?: CacheControlEphemeral,
-): Anthropic.Messages.Tool[] {
-  if (!tools) {
-    return [];
-  }
-
-  return tools.map((tool, index) => {
-    const schema = tool.parameters as { properties?: unknown; required?: string[] };
-
-    return {
-      name: isOAuthTokenLocal ? toClaudeCodeName(tool.name) : tool.name,
+): {
+  projection: AnthropicToolProjection;
+  tools: Anthropic.Messages.Tool[];
+} {
+  const projection = projectAnthropicTools(tools, (name) =>
+    isOAuthTokenLocal ? toClaudeCodeName(name) : name,
+  );
+  const convertedTools: Anthropic.Messages.Tool[] = [];
+  for (const [index, tool] of projection.tools.entries()) {
+    const convertedTool: Anthropic.Messages.Tool = {
+      name: tool.wireName,
       description: tool.description,
-      ...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
-      input_schema: {
-        type: "object",
-        properties: schema.properties ?? {},
-        required: schema.required ?? [],
-      },
-      ...(cacheControl && index === tools.length - 1 ? { cache_control: cacheControl } : {}),
+      input_schema: tool.inputSchema,
     };
-  });
+    if (supportsEagerToolInputStreaming) {
+      convertedTool.eager_input_streaming = true;
+    }
+    if (cacheControl && index === projection.tools.length - 1) {
+      convertedTool.cache_control = cacheControl;
+    }
+    convertedTools.push(convertedTool);
+  }
+  return {
+    projection,
+    tools: convertedTools,
+  };
 }
 
 function mapStopReason(reason: string): StopReason {
