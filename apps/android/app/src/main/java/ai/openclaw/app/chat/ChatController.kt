@@ -685,6 +685,10 @@ class ChatController(
       totalTokens = obj["totalTokens"].asLongOrNull(),
       totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
       contextTokens = obj["contextTokens"].asLongOrNull(),
+      hasContextUsageMetadata =
+        "totalTokens" in obj ||
+          "totalTokensFresh" in obj ||
+          "contextTokens" in obj,
     )
   }
 
@@ -698,7 +702,7 @@ class ChatController(
     val index = current.indexOfFirst { it.key == entry.key }
     _sessions.value =
       if (index >= 0) {
-        current.toMutableList().also { it[index] = mergeSessionEntry(it[index], entry) }
+        current.toMutableList().also { it[index] = mergeChatSessionEntry(it[index], entry) }
       } else {
         listOf(entry) + current
       }
@@ -708,18 +712,6 @@ class ChatController(
     val key = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: return
     _sessions.value = _sessions.value.filterNot { it.key == key }
   }
-
-  private fun mergeSessionEntry(
-    existing: ChatSessionEntry,
-    next: ChatSessionEntry,
-  ): ChatSessionEntry =
-    existing.copy(
-      updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
-      displayName = next.displayName ?: existing.displayName,
-      totalTokens = next.totalTokens ?: existing.totalTokens,
-      totalTokensFresh = next.totalTokensFresh ?: existing.totalTokensFresh,
-      contextTokens = next.contextTokens ?: existing.contextTokens,
-    )
 
   private fun parseRunId(resJson: String): String? =
     try {
@@ -946,3 +938,16 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
     is JsonPrimitive -> content.toBooleanStrictOrNull()
     else -> null
   }
+
+internal fun mergeChatSessionEntry(
+  existing: ChatSessionEntry,
+  next: ChatSessionEntry,
+): ChatSessionEntry =
+  existing.copy(
+    updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
+    displayName = next.displayName ?: existing.displayName,
+    totalTokens = if (next.hasContextUsageMetadata) next.totalTokens else null,
+    totalTokensFresh = if (next.hasContextUsageMetadata) next.totalTokensFresh else null,
+    contextTokens = if (next.hasContextUsageMetadata) next.contextTokens else null,
+    hasContextUsageMetadata = next.hasContextUsageMetadata,
+  )
