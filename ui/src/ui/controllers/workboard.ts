@@ -566,9 +566,8 @@ export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
     if (!state.draftSaving) {
       state.loading = false;
     }
-    if (!state.loaded) {
-      state.loadAttempted = false;
-    }
+    state.loaded = false;
+    state.loadAttempted = false;
   }
   nextWorkboardLoadGeneration(host);
   workboardLoadPromises.delete(host);

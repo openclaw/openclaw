@@ -1951,6 +1951,36 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).loaded).toBe(false);
   });
 
+  it("reloads a previously loaded board after lifecycle teardown", async () => {
+    const host = {};
+    const reopenedCard = { ...sampleCard, title: "Reopened board" };
+    let listCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        listCalls += 1;
+        return {
+          cards: [listCalls === 1 ? sampleCard : reopenedCard],
+          statuses: ["todo", "done"],
+        };
+      }
+      return {};
+    });
+
+    await loadWorkboard({ host, client: client as never });
+
+    const state = getWorkboardState(host);
+    expect(state.loaded).toBe(true);
+    expect(state.cards).toEqual([sampleCard]);
+
+    stopWorkboardLifecycleRefresh(host);
+
+    expect(state.loaded).toBe(false);
+    expect(state.loadAttempted).toBe(false);
+    await expect(loadWorkboard({ host, client: client as never })).resolves.toBe(true);
+    expect(listCalls).toBe(2);
+    expect(state.cards).toEqual([reopenedCard]);
+  });
+
   it("does not attach a stale forced refresh to a reopened board load", async () => {
     const host = {};
     const staleList = createDeferred<unknown>();
