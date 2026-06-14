@@ -12,12 +12,23 @@ import {
 } from "./lib/ts-guard-utils.mjs";
 
 const legacyReaderNames = new Set(["loadSessionStore", "readSessionEntries"]);
+const legacyTranscriptWriterNames = new Set([
+  "appendSessionTranscriptMessage",
+  "emitSessionTranscriptUpdate",
+]);
 
 export const migratedSessionAccessorFiles = new Set([
   "src/config/sessions/combined-store-gateway.ts",
   "src/gateway/session-utils.ts",
   "src/gateway/sessions-resolve.ts",
   "src/gateway/server-methods/sessions.ts",
+]);
+
+export const migratedTranscriptWriterFiles = new Set([
+  "src/agents/command/attempt-execution.ts",
+  "src/config/sessions/transcript.ts",
+  "src/gateway/server-methods/chat-transcript-inject.ts",
+  "src/sessions/user-turn-transcript.ts",
 ]);
 
 function normalizeRelativePath(filePath) {
@@ -49,6 +60,20 @@ function bindingName(node) {
 }
 
 export function findSessionAccessorBoundaryViolations(content, fileName = "source.ts") {
+  return findNamedBoundaryViolations(content, fileName, {
+    names: legacyReaderNames,
+    subject: "legacy session store reader",
+  });
+}
+
+export function findTranscriptWriterBoundaryViolations(content, fileName = "source.ts") {
+  return findNamedBoundaryViolations(content, fileName, {
+    names: legacyTranscriptWriterNames,
+    subject: "legacy transcript writer",
+  });
+}
+
+function findNamedBoundaryViolations(content, fileName, options) {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations = [];
 
@@ -58,10 +83,10 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
       if (namedBindings && ts.isNamedImports(namedBindings)) {
         for (const specifier of namedBindings.elements) {
           const importedName = specifier.propertyName?.text ?? specifier.name.text;
-          if (legacyReaderNames.has(importedName)) {
+          if (options.names.has(importedName)) {
             violations.push({
               line: toLine(sourceFile, specifier),
-              reason: `imports legacy session store reader "${importedName}"`,
+              reason: `imports ${options.subject} "${importedName}"`,
             });
           }
         }
@@ -70,29 +95,29 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
 
     if (ts.isBindingElement(node)) {
       const name = bindingName(node);
-      if (name && legacyReaderNames.has(name)) {
+      if (name && options.names.has(name)) {
         violations.push({
           line: toLine(sourceFile, node),
-          reason: `aliases legacy session store reader "${name}"`,
+          reason: `aliases ${options.subject} "${name}"`,
         });
       }
     }
 
-    if (ts.isPropertyAccessExpression(node) && legacyReaderNames.has(node.name.text)) {
+    if (ts.isPropertyAccessExpression(node) && options.names.has(node.name.text)) {
       violations.push({
         line: toLine(sourceFile, node.name),
-        reason: `references legacy session store reader "${node.name.text}"`,
+        reason: `references ${options.subject} "${node.name.text}"`,
       });
     }
 
     if (
       ts.isElementAccessExpression(node) &&
       ts.isStringLiteral(node.argumentExpression) &&
-      legacyReaderNames.has(node.argumentExpression.text)
+      options.names.has(node.argumentExpression.text)
     ) {
       violations.push({
         line: toLine(sourceFile, node.argumentExpression),
-        reason: `references legacy session store reader "${node.argumentExpression.text}"`,
+        reason: `references ${options.subject} "${node.argumentExpression.text}"`,
       });
     }
 
@@ -100,12 +125,12 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
       const calleeName = propertyAccessName(node.expression);
       if (
         calleeName &&
-        legacyReaderNames.has(calleeName) &&
+        options.names.has(calleeName) &&
         ts.isIdentifier(unwrapExpression(node.expression))
       ) {
         violations.push({
           line: toLine(sourceFile, node.expression),
-          reason: `calls legacy session store reader "${calleeName}"`,
+          reason: `calls ${options.subject} "${calleeName}"`,
         });
       }
     }
@@ -119,13 +144,33 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
 
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
-  const sourceRoots = resolveSourceRoots(repoRoot, ["src/config/sessions", "src/gateway"]);
+  const sourceRoots = resolveSourceRoots(repoRoot, [
+    "src/agents/command",
+    "src/config/sessions",
+    "src/gateway",
+    "src/sessions",
+  ]);
   const violations = await collectFileViolations({
     repoRoot,
     sourceRoots,
-    skipFile: (filePath) =>
-      !migratedSessionAccessorFiles.has(normalizeRelativePath(path.relative(repoRoot, filePath))),
-    findViolations: findSessionAccessorBoundaryViolations,
+    skipFile: (filePath) => {
+      const relativePath = normalizeRelativePath(path.relative(repoRoot, filePath));
+      return (
+        !migratedSessionAccessorFiles.has(relativePath) &&
+        !migratedTranscriptWriterFiles.has(relativePath)
+      );
+    },
+    findViolations: (content, filePath) => {
+      const relativePath = normalizeRelativePath(path.relative(repoRoot, filePath));
+      return [
+        ...(migratedSessionAccessorFiles.has(relativePath)
+          ? findSessionAccessorBoundaryViolations(content, filePath)
+          : []),
+        ...(migratedTranscriptWriterFiles.has(relativePath)
+          ? findTranscriptWriterBoundaryViolations(content, filePath)
+          : []),
+      ];
+    },
   });
 
   if (violations.length === 0) {
@@ -138,7 +183,7 @@ export async function main() {
     console.error(`- ${violation.path}:${violation.line}: ${violation.reason}`);
   }
   console.error(
-    "Use src/config/sessions/session-accessor.ts helpers for migrated read/projection paths. Expand this ratchet only after a slice migrates more files.",
+    "Use src/config/sessions/session-accessor.ts helpers for migrated read/projection and transcript-writer paths. Expand this ratchet only after a slice migrates more files.",
   );
   process.exit(1);
 }

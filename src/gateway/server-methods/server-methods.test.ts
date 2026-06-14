@@ -1980,7 +1980,7 @@ describe("gateway chat transcript writes (guardrail)", () => {
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
     expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
-    expect(helperSrc).toContain("appendSessionTranscriptMessage({");
+    expect(helperSrc).toContain("appendTranscriptMessage(");
     expect(helperSrc).toContain("useRawWhenLinear: true");
     expect(helperSrc).not.toContain("SessionManager.open(params.transcriptPath)");
   });
