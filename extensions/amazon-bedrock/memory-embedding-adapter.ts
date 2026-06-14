@@ -5,12 +5,31 @@
 import {
   isMissingEmbeddingApiKeyError,
   type MemoryEmbeddingProviderAdapter,
+  type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createBedrockEmbeddingProvider,
   DEFAULT_BEDROCK_EMBEDDING_MODEL,
   hasAwsCredentials,
 } from "./embedding-provider.js";
+
+function isBedrockProviderId(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === "bedrock";
+}
+
+function shouldAllowAwsImdsCredentialProbe(options: MemoryEmbeddingProviderCreateOptions): boolean {
+  if (isBedrockProviderId(options.provider)) {
+    return true;
+  }
+  if (isBedrockProviderId(options.config.agents?.defaults?.memorySearch?.provider)) {
+    return true;
+  }
+  return (
+    options.config.agents?.list?.some((agent) =>
+      isBedrockProviderId(agent.memorySearch?.provider),
+    ) ?? false
+  );
+}
 
 /** Memory-core adapter descriptor for Bedrock embeddings. */
 export const bedrockMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
@@ -22,7 +41,11 @@ export const bedrockMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapt
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
-    if (!(await hasAwsCredentials())) {
+    if (
+      !(await hasAwsCredentials(process.env, undefined, {
+        allowImds: shouldAllowAwsImdsCredentialProbe(options),
+      }))
+    ) {
       throw new Error(
         'No API key found for provider "bedrock". ' +
           "AWS credentials are not available. " +
