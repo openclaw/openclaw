@@ -487,6 +487,21 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
   Enables exec and plugin approval forwarding together so plugin events are not
   suppressed by exec approval routing, then verifies the same pending/resolved
   native Slack UI path.
+- `slack-codex-approval-exec-native` - opt-in Codex Guardian command approval
+  scenario. Enables the Codex plugin in Guardian mode, routes a Slack-originated
+  Gateway agent turn through the Codex app-server harness, waits for the native
+  Slack plugin approval prompt for `openclaw-codex-app-server`, resolves it, and
+  verifies the Codex turn finishes.
+- `slack-codex-approval-plugin-native` - opt-in Codex Guardian file approval
+  scenario. Uses an outside-workspace `apply_patch` instruction so Codex emits
+  the app-server file-change approval route, then verifies the same native Slack
+  pending/resolved approval path.
+
+The Codex approval scenarios require the normal live model credentials for the
+selected `--model` plus Codex auth or API-key auth accepted by the Codex plugin.
+Their Slack report and summary approval entries include the Codex app-server
+method, selected Codex model key, and final Codex turn status alongside the
+redacted Slack approval metadata.
 
 Output artifacts:
 

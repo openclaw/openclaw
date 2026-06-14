@@ -62,6 +62,8 @@ type SlackQaScenarioId =
   | "slack-approval-exec-native"
   | "slack-approval-plugin-native"
   | "slack-canary"
+  | "slack-codex-approval-exec-native"
+  | "slack-codex-approval-plugin-native"
   | "slack-mention-gating"
   | "slack-restart-resume"
   | "slack-thread-follow-up"
@@ -70,6 +72,9 @@ type SlackQaScenarioId =
 
 type SlackQaApprovalKind = "exec" | "plugin";
 type SlackQaApprovalDecision = "allow-always" | "allow-once" | "deny";
+type SlackQaCodexApprovalMethod =
+  | "item/commandExecution/requestApproval"
+  | "item/fileChange/requestApproval";
 
 type SlackQaMessageScenarioRun = {
   kind?: "message";
@@ -88,7 +93,18 @@ type SlackQaApprovalScenarioRun = {
   token: string;
 };
 
-type SlackQaScenarioRun = SlackQaApprovalScenarioRun | SlackQaMessageScenarioRun;
+type SlackQaCodexApprovalScenarioRun = {
+  approvalKind: "plugin";
+  appServerMethod: SlackQaCodexApprovalMethod;
+  decision: "allow-once";
+  kind: "codex-approval";
+  token: string;
+};
+
+type SlackQaScenarioRun =
+  | SlackQaApprovalScenarioRun
+  | SlackQaCodexApprovalScenarioRun
+  | SlackQaMessageScenarioRun;
 
 type SlackQaBeforeRunResult =
   | string
@@ -105,6 +121,7 @@ type SlackQaConfigOverrides = {
     plugin?: boolean;
     target?: "both" | "channel" | "dm";
   };
+  codexApproval?: boolean;
   replyToMode?: "all" | "off";
   users?: string[];
 };
@@ -173,8 +190,11 @@ type SlackObservedMessageArtifact = {
 type SlackApprovalArtifact = {
   approvalId: string;
   approvalKind: SlackQaApprovalKind;
+  appServerMethod?: SlackQaCodexApprovalMethod;
   channelId?: string;
+  codexModelKey?: string;
   decision: SlackQaApprovalDecision;
+  finalCodexTurnStatus?: string;
   pendingActionValues?: string[];
   pendingCheckpointPath?: string;
   pendingMessageTs?: string;
@@ -389,6 +409,46 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
     }),
   },
   {
+    id: "slack-codex-approval-exec-native",
+    title: "Slack native Codex command approval prompt resolves",
+    timeoutMs: 180_000,
+    configOverrides: {
+      approvals: {
+        exec: true,
+        plugin: true,
+        target: "channel",
+      },
+      codexApproval: true,
+    },
+    buildRun: () => ({
+      approvalKind: "plugin",
+      appServerMethod: "item/commandExecution/requestApproval",
+      decision: "allow-once",
+      kind: "codex-approval",
+      token: `SLACK_QA_CODEX_EXEC_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
+    }),
+  },
+  {
+    id: "slack-codex-approval-plugin-native",
+    title: "Slack native Codex file approval prompt resolves",
+    timeoutMs: 180_000,
+    configOverrides: {
+      approvals: {
+        exec: true,
+        plugin: true,
+        target: "channel",
+      },
+      codexApproval: true,
+    },
+    buildRun: () => ({
+      approvalKind: "plugin",
+      appServerMethod: "item/fileChange/requestApproval",
+      decision: "allow-once",
+      kind: "codex-approval",
+      token: `SLACK_QA_CODEX_FILE_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
+    }),
+  },
+  {
     id: "slack-restart-resume",
     standardId: "restart-resume",
     title: "Slack replies after gateway restart",
@@ -560,19 +620,35 @@ function findScenario(ids?: string[]) {
   });
 }
 
+function asPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 function buildSlackQaConfig(
   baseCfg: OpenClawConfig,
   params: {
     channelId: string;
     driverBotUserId: string;
     overrides?: SlackQaConfigOverrides;
+    primaryModel?: string;
     sutAccountId: string;
     sutAppToken: string;
     sutBotToken: string;
   },
 ): OpenClawConfig {
-  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "slack"]);
+  const codexApprovalConfig = params.overrides?.codexApproval === true;
+  const primaryModel = params.primaryModel;
+  const pluginAllow = uniqueStrings([
+    ...(baseCfg.plugins?.allow ?? []),
+    "slack",
+    ...(codexApprovalConfig ? ["codex"] : []),
+  ]);
   const approvalOverrides = params.overrides?.approvals;
+  const codexEntry = baseCfg.plugins?.entries?.codex;
+  const codexEntryConfig = asPlainRecord(codexEntry?.config);
+  const codexAppServerConfig = asPlainRecord(codexEntryConfig.appServer);
   const approvalForwardingConfig =
     approvalOverrides?.exec || approvalOverrides?.plugin
       ? {
@@ -599,6 +675,19 @@ function buildSlackQaConfig(
           },
         }
       : {};
+  const codexAgentDefaults =
+    codexApprovalConfig && primaryModel
+      ? {
+          ...baseCfg.agents?.defaults,
+          models: {
+            ...baseCfg.agents?.defaults?.models,
+            [primaryModel]: {
+              ...baseCfg.agents?.defaults?.models?.[primaryModel],
+              agentRuntime: { id: "codex" as const },
+            },
+          },
+        }
+      : baseCfg.agents?.defaults;
   const execApprovalsConfig = approvalOverrides
     ? {
         enabled: true,
@@ -615,8 +704,38 @@ function buildSlackQaConfig(
       entries: {
         ...baseCfg.plugins?.entries,
         slack: { enabled: true },
+        ...(codexApprovalConfig
+          ? {
+              codex: {
+                ...codexEntry,
+                enabled: true,
+                config: {
+                  ...codexEntryConfig,
+                  appServer: {
+                    ...codexAppServerConfig,
+                    mode: "guardian" as const,
+                  },
+                },
+              },
+            }
+          : {}),
       },
     },
+    ...(codexApprovalConfig
+      ? {
+          agents: {
+            ...baseCfg.agents,
+            ...(codexAgentDefaults ? { defaults: codexAgentDefaults } : {}),
+          },
+          tools: {
+            ...baseCfg.tools,
+            exec: {
+              ...baseCfg.tools?.exec,
+              mode: "ask" as const,
+            },
+          },
+        }
+      : {}),
     messages: {
       ...baseCfg.messages,
       groupChat: {
@@ -831,15 +950,31 @@ function buildSlackApprovalCheckpointMessage(
 
 function hasSlackNativeApprovalActions(params: {
   actionValues: string[];
-  approvalId: string;
+  approvalId?: string;
   decision: SlackQaApprovalDecision;
 }) {
   return params.actionValues.some(
     (value) =>
       value.includes("/approve") &&
-      value.includes(params.approvalId) &&
+      (!params.approvalId || value.includes(params.approvalId)) &&
       value.includes(params.decision),
   );
+}
+
+function extractSlackNativeApprovalId(params: {
+  actionValues: string[];
+  decision: SlackQaApprovalDecision;
+}) {
+  for (const value of params.actionValues) {
+    if (!value.includes("/approve") || !value.includes(params.decision)) {
+      continue;
+    }
+    const match = value.match(/\b((?:exec|plugin):[^\s]+)/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return undefined;
 }
 
 function isSutSlackMessage(message: SlackMessage, sutIdentity: SlackAuthIdentity) {
@@ -1047,7 +1182,7 @@ function pushObservedApprovalMessage(params: {
 }
 
 async function waitForSlackApprovalPrompt(params: {
-  approvalId: string;
+  approvalId?: string;
   approvalKind: SlackQaApprovalKind;
   channelId: string;
   client: WebClient;
@@ -1059,6 +1194,7 @@ async function waitForSlackApprovalPrompt(params: {
   sutIdentity: SlackAuthIdentity;
   timeoutMs: number;
   token: string;
+  extraTextMatches?: string[];
 }) {
   const startedAt = Date.now();
   const seenObservedMessages = new Set<string>();
@@ -1079,6 +1215,9 @@ async function waitForSlackApprovalPrompt(params: {
         resolveApprovalHeading({ approvalKind: params.approvalKind, state: "pending" }),
       );
       const hasToken = text.includes(params.token);
+      const hasExtraMatches = (params.extraTextMatches ?? []).every((match) =>
+        text.includes(match),
+      );
       const observedKey = `${message.ts}:${message.text ?? ""}:${actionValues.join("|")}`;
       if (hasHeading || hasToken || hasSlackNativeApprovalActions({ ...params, actionValues })) {
         if (!seenObservedMessages.has(observedKey)) {
@@ -1093,7 +1232,7 @@ async function waitForSlackApprovalPrompt(params: {
           });
         }
       }
-      if (!hasHeading || !hasToken) {
+      if (!hasHeading || !hasToken || !hasExtraMatches) {
         continue;
       }
       if (
@@ -1108,6 +1247,12 @@ async function waitForSlackApprovalPrompt(params: {
       }
       return {
         actionValues,
+        approvalId:
+          params.approvalId ??
+          extractSlackNativeApprovalId({
+            actionValues,
+            decision: params.decision,
+          }),
         message,
         observedAt: new Date().toISOString(),
       };
@@ -1508,6 +1653,314 @@ async function runSlackApprovalScenario(params: {
   };
 }
 
+function buildCodexApprovalInstruction(params: {
+  appServerMethod: SlackQaCodexApprovalMethod;
+  token: string;
+}) {
+  if (params.appServerMethod === "item/commandExecution/requestApproval") {
+    return [
+      "Slack QA Codex command approval scenario.",
+      `Marker: ${params.token}`,
+      "Use the shell tool exactly once and request approval before running it.",
+      `Run exactly: printf '${params.token}\\n'`,
+      `After the command succeeds, reply exactly ${params.token} and nothing else.`,
+    ].join("\n");
+  }
+  const targetPath = path.join(
+    "/tmp",
+    `openclaw-qa-codex-file-approval-${params.token.toLowerCase()}.txt`,
+  );
+  return [
+    "Slack QA Codex file approval scenario.",
+    `Marker: ${params.token}`,
+    "Use apply_patch exactly once to create this file outside the workspace.",
+    `Target file: ${targetPath}`,
+    `File contents: ${params.token}`,
+    "Request approval for the file change before applying the patch.",
+    `After the file change succeeds, reply exactly ${params.token} and nothing else.`,
+  ].join("\n");
+}
+
+function readStartedAgentRunId(result: unknown) {
+  const started =
+    typeof result === "object" && result !== null
+      ? (result as { runId?: unknown; status?: unknown })
+      : null;
+  if (started?.status !== "started") {
+    throw new Error(
+      `Codex agent run status was ${formatApprovalResultValue(started?.status)} instead of started`,
+    );
+  }
+  if (typeof started.runId !== "string" || started.runId.trim().length === 0) {
+    throw new Error(`Codex agent run id was ${formatApprovalResultValue(started.runId)}`);
+  }
+  return started.runId;
+}
+
+function readAgentWaitStatus(result: unknown) {
+  return typeof result === "object" && result !== null
+    ? String((result as { status?: unknown }).status ?? "unknown")
+    : "unknown";
+}
+
+function findPendingCodexPluginApprovalRecord(params: {
+  approvalId: string;
+  appServerMethod: SlackQaCodexApprovalMethod;
+  channelId: string;
+  records: unknown;
+  sessionKey: string;
+  sutAccountId: string;
+}) {
+  const list = Array.isArray(params.records) ? params.records : [];
+  const expectedTitle =
+    params.appServerMethod === "item/commandExecution/requestApproval"
+      ? "Codex app-server command approval"
+      : "Codex app-server file approval";
+  const expectedToolName =
+    params.appServerMethod === "item/commandExecution/requestApproval"
+      ? "codex_command_approval"
+      : "codex_file_approval";
+  for (const entry of list) {
+    const record = asPlainRecord(entry);
+    if (record.id !== params.approvalId) {
+      continue;
+    }
+    const request = asPlainRecord(record.request);
+    if (
+      request.pluginId === "openclaw-codex-app-server" &&
+      request.title === expectedTitle &&
+      request.toolName === expectedToolName &&
+      request.sessionKey === params.sessionKey &&
+      request.turnSourceChannel === "slack" &&
+      request.turnSourceTo === `channel:${params.channelId}` &&
+      request.turnSourceAccountId === params.sutAccountId
+    ) {
+      return record;
+    }
+  }
+  return undefined;
+}
+
+async function assertPendingCodexPluginApproval(params: {
+  approvalId: string;
+  appServerMethod: SlackQaCodexApprovalMethod;
+  channelId: string;
+  context: Omit<SlackQaScenarioContext, "sentTs">;
+  sessionKey: string;
+  sutAccountId: string;
+}) {
+  const records = await params.context.gateway.call(
+    "plugin.approval.list",
+    {},
+    {
+      timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
+    },
+  );
+  const record = findPendingCodexPluginApprovalRecord({
+    approvalId: params.approvalId,
+    appServerMethod: params.appServerMethod,
+    channelId: params.channelId,
+    records,
+    sessionKey: params.sessionKey,
+    sutAccountId: params.sutAccountId,
+  });
+  if (!record) {
+    throw new Error(
+      `Pending Codex plugin approval ${params.approvalId} did not match the expected app-server route and Slack turn source.`,
+    );
+  }
+}
+
+async function startCodexApprovalAgentRun(params: {
+  channelId: string;
+  context: Omit<SlackQaScenarioContext, "sentTs">;
+  primaryModel: string;
+  run: SlackQaCodexApprovalScenarioRun;
+  scenario: SlackQaScenarioDefinition;
+  sutAccountId: string;
+}) {
+  const sessionKey = buildCodexApprovalSessionKey({
+    scenario: params.scenario,
+    token: params.run.token,
+  });
+  const result = await params.context.gateway.call(
+    "agent",
+    {
+      accountId: params.sutAccountId,
+      agentId: "qa",
+      channel: "slack",
+      deliver: false,
+      idempotencyKey: `slack-qa-codex-approval-${randomUUID()}`,
+      message: buildCodexApprovalInstruction({
+        appServerMethod: params.run.appServerMethod,
+        token: params.run.token,
+      }),
+      model: params.primaryModel,
+      sessionKey,
+      thinking: "low",
+      timeout: Math.ceil(params.scenario.timeoutMs / 1_000),
+      to: `channel:${params.channelId}`,
+    },
+    {
+      timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
+    },
+  );
+  return { runId: readStartedAgentRunId(result), sessionKey };
+}
+
+function buildCodexApprovalSessionKey(params: {
+  scenario: SlackQaScenarioDefinition;
+  token: string;
+}) {
+  return `agent:qa:${params.scenario.id}-${params.token.toLowerCase()}`;
+}
+
+async function waitForCodexApprovalAgentRun(params: {
+  context: Omit<SlackQaScenarioContext, "sentTs">;
+  runId: string;
+  timeoutMs: number;
+}) {
+  const result = await params.context.gateway.call(
+    "agent.wait",
+    {
+      runId: params.runId,
+      timeoutMs: params.timeoutMs,
+    },
+    {
+      timeoutMs: params.timeoutMs + 5_000,
+    },
+  );
+  return readAgentWaitStatus(result);
+}
+
+async function runSlackCodexApprovalScenario(params: {
+  channelId: string;
+  context: Omit<SlackQaScenarioContext, "sentTs">;
+  observedMessages: SlackObservedMessage[];
+  primaryModel: string;
+  run: SlackQaCodexApprovalScenarioRun;
+  scenario: SlackQaScenarioDefinition;
+  sutAccountId: string;
+}) {
+  const requestStartedAt = new Date();
+  const oldestTs = ((requestStartedAt.getTime() - 5_000) / 1_000).toFixed(6);
+  const codexRun = await startCodexApprovalAgentRun({
+    channelId: params.channelId,
+    context: params.context,
+    primaryModel: params.primaryModel,
+    run: params.run,
+    scenario: params.scenario,
+    sutAccountId: params.sutAccountId,
+  });
+  const expectedTitle =
+    params.run.appServerMethod === "item/commandExecution/requestApproval"
+      ? "Codex app-server command approval"
+      : "Codex app-server file approval";
+  const pending = await waitForSlackApprovalPrompt({
+    approvalKind: params.run.approvalKind,
+    channelId: params.channelId,
+    client: params.context.sutReadClient,
+    decision: params.run.decision,
+    extraTextMatches: ["openclaw-codex-app-server", expectedTitle],
+    observedMessages: params.observedMessages,
+    oldestTs,
+    scenarioId: params.scenario.id,
+    scenarioTitle: params.scenario.title,
+    sutIdentity: params.context.sutIdentity,
+    timeoutMs: params.scenario.timeoutMs,
+    token: params.run.token,
+  });
+  const approvalId = pending.approvalId;
+  if (!approvalId) {
+    throw new Error(
+      "Codex Slack approval prompt exposed native actions but no plugin approval id.",
+    );
+  }
+  await assertPendingCodexPluginApproval({
+    approvalId,
+    appServerMethod: params.run.appServerMethod,
+    channelId: params.channelId,
+    context: params.context,
+    sessionKey: codexRun.sessionKey,
+    sutAccountId: params.sutAccountId,
+  });
+  const pendingCheckpoint = await writeSlackApprovalCheckpoint({
+    approvalId,
+    approvalKind: params.run.approvalKind,
+    channelId: params.channelId,
+    message: pending.message,
+    observedAt: pending.observedAt,
+    scenarioId: params.scenario.id,
+    state: "pending",
+  });
+  await resolveApprovalDecision({
+    approvalId,
+    context: params.context,
+    decision: params.run.decision,
+    kind: params.run.approvalKind,
+  });
+  const finalCodexTurnStatus = await waitForCodexApprovalAgentRun({
+    context: params.context,
+    runId: codexRun.runId,
+    timeoutMs: params.scenario.timeoutMs,
+  });
+  if (finalCodexTurnStatus !== "ok") {
+    throw new Error(
+      `Codex approval run ${codexRun.runId} finished with status ${finalCodexTurnStatus}`,
+    );
+  }
+  const resolved = await waitForSlackApprovalResolvedUpdate({
+    approvalKind: params.run.approvalKind,
+    channelId: params.channelId,
+    client: params.context.sutReadClient,
+    decision: params.run.decision,
+    messageTs: pending.message.ts,
+    observedMessages: params.observedMessages,
+    oldestTs,
+    scenarioId: params.scenario.id,
+    scenarioTitle: params.scenario.title,
+    sutIdentity: params.context.sutIdentity,
+    timeoutMs: params.scenario.timeoutMs,
+    token: params.run.token,
+  });
+  const resolvedCheckpoint = await writeSlackApprovalCheckpoint({
+    approvalId,
+    approvalKind: params.run.approvalKind,
+    channelId: params.channelId,
+    decision: params.run.decision,
+    message: resolved.message,
+    observedAt: resolved.observedAt,
+    scenarioId: params.scenario.id,
+    state: "resolved",
+  });
+  const responseObservedAt = new Date(resolved.observedAt);
+  return {
+    artifact: {
+      approvalId,
+      approvalKind: params.run.approvalKind,
+      appServerMethod: params.run.appServerMethod,
+      channelId: params.channelId,
+      codexModelKey: params.primaryModel,
+      decision: params.run.decision,
+      finalCodexTurnStatus,
+      pendingActionValues: pending.actionValues,
+      pendingCheckpointPath: pendingCheckpoint?.checkpointPath,
+      pendingMessageTs: pending.message.ts,
+      pendingScreenshotPath: pendingCheckpoint?.screenshotPath,
+      pendingText: pending.message.text,
+      resolvedActionValues: resolved.actionValues,
+      resolvedCheckpointPath: resolvedCheckpoint?.checkpointPath,
+      resolvedMessageTs: resolved.message.ts,
+      resolvedScreenshotPath: resolvedCheckpoint?.screenshotPath,
+      resolvedText: resolved.message.text,
+      threadTs: pending.message.thread_ts,
+    } satisfies SlackApprovalArtifact,
+    requestStartedAt,
+    responseObservedAt,
+    rttMs: responseObservedAt.getTime() - requestStartedAt.getTime(),
+  };
+}
+
 async function waitForSlackChannelRunning(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
@@ -1669,8 +2122,11 @@ function toSlackQaScenarioArtifactResults(params: {
       approval: {
         approvalId: params.redactMetadata ? "<redacted>" : approval.approvalId,
         approvalKind: approval.approvalKind,
+        appServerMethod: approval.appServerMethod,
         channelId: params.redactMetadata ? undefined : approval.channelId,
+        codexModelKey: approval.codexModelKey,
         decision: approval.decision,
+        finalCodexTurnStatus: approval.finalCodexTurnStatus,
         pendingActionValues: params.includeContent ? approval.pendingActionValues : undefined,
         pendingCheckpointPath: approval.pendingCheckpointPath,
         pendingMessageTs: params.redactMetadata ? undefined : approval.pendingMessageTs,
@@ -1725,6 +2181,15 @@ function renderSlackQaMarkdown(params: {
     }
     if (scenario.approval) {
       lines.push(`- Approval kind: ${scenario.approval.approvalKind}`);
+      if (scenario.approval.appServerMethod) {
+        lines.push(`- Codex app-server method: \`${scenario.approval.appServerMethod}\``);
+      }
+      if (scenario.approval.codexModelKey) {
+        lines.push(`- Codex model: \`${scenario.approval.codexModelKey}\``);
+      }
+      if (scenario.approval.finalCodexTurnStatus) {
+        lines.push(`- Codex turn status: ${scenario.approval.finalCodexTurnStatus}`);
+      }
       lines.push(`- Approval ID: \`${scenario.approval.approvalId}\``);
       lines.push(`- Decision: ${scenario.approval.decision}`);
       if (scenario.approval.pendingScreenshotPath) {
@@ -1841,6 +2306,7 @@ export async function runSlackQaLive(params: {
                 channelId: activeRuntimeEnv.channelId,
                 driverBotUserId: driverIdentity.userId,
                 overrides: scenario.configOverrides,
+                primaryModel,
                 sutAccountId,
                 sutAppToken: activeRuntimeEnv.sutAppToken,
                 sutBotToken: activeRuntimeEnv.sutBotToken,
@@ -1849,7 +2315,9 @@ export async function runSlackQaLive(params: {
           const activeGatewayHarness = gatewayHarness;
           const scenarioRun = scenario.buildRun(sutIdentity.userId);
           const readinessMode: SlackChannelReadinessMode =
-            scenarioRun.kind === "approval" ? "started" : "connected";
+            scenarioRun.kind === "approval" || scenarioRun.kind === "codex-approval"
+              ? "started"
+              : "connected";
           await waitForSlackChannelStable(
             activeGatewayHarness.gateway,
             sutAccountId,
@@ -1892,6 +2360,39 @@ export async function runSlackQaLive(params: {
               status: "pass",
               details: [
                 `${scenarioRun.approvalKind} approval resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
+                scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
+              ]
+                .filter(Boolean)
+                .join("; "),
+              rttMs: approval.rttMs,
+              requestStartedAt: approval.requestStartedAt.toISOString(),
+              responseObservedAt: approval.responseObservedAt.toISOString(),
+              rttMeasurement: {
+                finalMatchedReplyRttMs: approval.rttMs,
+                requestStartedAt: approval.requestStartedAt.toISOString(),
+                responseObservedAt: approval.responseObservedAt.toISOString(),
+                source: "approval-request-to-resolution",
+              },
+            });
+            break;
+          }
+          if (scenarioRun.kind === "codex-approval") {
+            const approval = await runSlackCodexApprovalScenario({
+              channelId: activeRuntimeEnv.channelId,
+              context: baseScenarioContext,
+              observedMessages,
+              primaryModel,
+              run: scenarioRun,
+              scenario,
+              sutAccountId,
+            });
+            scenarioResults.push({
+              approval: approval.artifact,
+              id: scenario.id,
+              title: scenario.title,
+              status: "pass",
+              details: [
+                `Codex ${scenarioRun.appServerMethod} approval resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
                 scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
               ]
                 .filter(Boolean)
@@ -2130,11 +2631,14 @@ export async function runSlackQaLive(params: {
 }
 
 export const testing = {
+  buildCodexApprovalInstruction,
   buildSlackApprovalCheckpointMessage,
   buildSlackQaConfig,
   collectSlackActionValues,
   collectSlackButtonLabels,
   collectSlackBlockText,
+  extractSlackNativeApprovalId,
+  findPendingCodexPluginApprovalRecord,
   findScenario,
   isSlackChannelReadyForQa,
   parseSlackQaCredentialPayload,
