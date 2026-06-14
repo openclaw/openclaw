@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/llama-cpp-provider",
-  "version": "2026.6.2",
+  "version": "2026.6.6",
   "description": "OpenClaw llama.cpp embedding provider plugin",
   "repository": {
     "type": "git",
@@ -18,15 +18,16 @@
       "./index.ts"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/llama-cpp-provider",
       "npmSpec": "@openclaw/llama-cpp-provider",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.6.2"
+      "minHostVersion": ">=2026.6.6"
     },
     "compat": {
-      "pluginApi": ">=2026.6.2"
+      "pluginApi": ">=2026.6.6"
     },
     "build": {
-      "openclawVersion": "2026.6.2"
+      "openclawVersion": "2026.6.6"
     },
     "release": {
       "bundleRuntimeDependencies": false,

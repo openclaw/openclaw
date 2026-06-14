@@ -1618,6 +1618,7 @@
     "plugins:boundary-report:summary": "node --import tsx scripts/plugin-boundary-report.ts --summary",
     "plugins:assets:build": "node scripts/bundled-plugin-assets.mjs --phase build",
     "plugins:assets:copy": "node scripts/bundled-plugin-assets.mjs --phase copy",
+    "plugins:clawhub:validate-changed": "node --import tsx scripts/validate-changed-clawhub-plugins.ts",
     "plugins:inventory:check": "node scripts/generate-plugin-inventory-doc.mjs --check",
     "plugins:inventory:gen": "node scripts/generate-plugin-inventory-doc.mjs --write",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",

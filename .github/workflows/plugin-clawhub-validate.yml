@@ -1,0 +1,40 @@
+name: Plugin ClawHub Validate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+    paths:
+      - "extensions/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-clawhub-validate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  validate_changed_clawhub_plugins:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Validate changed ClawHub plugin packages
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.sha }}
+        run: pnpm plugins:clawhub:validate-changed -- --base-ref "$BASE_REF" --head-ref "$HEAD_REF"
