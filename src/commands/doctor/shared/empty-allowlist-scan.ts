@@ -109,12 +109,16 @@ export function scanEmptyAllowlistPolicyWarnings(
       );
 
     const origSkipDefault = params.shouldSkipDefaultEmptyGroupAllowlistWarning;
+    const origExtraWarnings = params.extraWarningsForAccount;
     if (allSubAccountsHaveGroupAllowFrom) {
       params.shouldSkipDefaultEmptyGroupAllowlistWarning = (ctx) =>
         ctx.parent === undefined ? true : (origSkipDefault?.(ctx) ?? false);
+      params.extraWarningsForAccount = (ctx) =>
+        ctx.parent === undefined ? [] : (origExtraWarnings?.(ctx) ?? []);
     }
     checkAccount(channelConfig, `channels.${channelName}`, channelName);
     params.shouldSkipDefaultEmptyGroupAllowlistWarning = origSkipDefault;
+    params.extraWarningsForAccount = origExtraWarnings;
 
     const accounts = channelAccounts;
     if (!accounts) {
