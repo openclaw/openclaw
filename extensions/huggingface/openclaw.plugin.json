@@ -5,6 +5,9 @@
   },
   "enabledByDefault": true,
   "providers": ["huggingface"],
+  "contracts": {
+    "imageGenerationProviders": ["huggingface"]
+  },
   "modelIdNormalization": {
     "providers": {
       "huggingface": {
