@@ -45,11 +45,6 @@ function writeSessionStoreSeed(
   fs.writeFileSync(storePath, JSON.stringify(sessions));
 }
 
-function canonicalPath(filePath: string): string {
-  // macOS temp paths may appear as /var/... or /private/var/... depending on resolution path.
-  return fs.realpathSync.native(filePath);
-}
-
 async function withCrossAgentResumeFixture(
   run: (params: { sessionId: string; sessionKey: string; cfg: OpenClawConfig }) => Promise<void>,
 ): Promise<void> {
