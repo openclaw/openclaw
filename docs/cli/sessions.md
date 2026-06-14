@@ -120,9 +120,10 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run history, which is managed by `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
+- Cleanup reports short-lived gateway model-run probe cleanup separately as `modelRunPruned`. This uses `session.maintenance.modelRunPruneAfter` (default `24h`; `false` disables) and only matches strict explicit keys shaped like `agent:*:explicit:model-run-<uuid>`.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
-  - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
+  - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed. Model-run probe rows that would be removed show action `prune-model-run`.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
 - `--fix-missing`: remove entries whose transcript files are missing or header-only/empty, even if they would not normally age/count out yet.
 - `--fix-dm-scope`: when `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying the cleanup removes those rows from `sessions.json` and preserves their transcripts as deleted archives.
@@ -151,7 +152,8 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "afterCount": 80,
       "missing": 0,
       "dmScopeRetired": 0,
-      "pruned": 40,
+      "modelRunPruned": 5,
+      "pruned": 35,
       "capped": 0
     },
     {
@@ -161,6 +163,7 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
       "afterCount": 18,
       "missing": 0,
       "dmScopeRetired": 0,
+      "modelRunPruned": 0,
       "pruned": 0,
       "capped": 0
     }

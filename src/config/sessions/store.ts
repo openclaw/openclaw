@@ -51,6 +51,7 @@ import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   pruneQuotaSuspensions,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
   shouldRunSessionEntryMaintenance,
   type QuotaSuspensionMaintenanceResult,
@@ -135,6 +136,7 @@ export type SessionMaintenanceApplyReport = {
   mode: ResolvedSessionMaintenanceConfig["mode"];
   beforeCount: number;
   afterCount: number;
+  modelRunPruned: number;
   pruned: number;
   capped: number;
   diskBudget: SessionDiskBudgetSweepResult | null;
@@ -144,6 +146,7 @@ export {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   getSessionStoreCacheVersion,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
   resolveMaintenanceConfig,
 };
@@ -559,6 +562,7 @@ async function saveSessionStoreUnlocked(
         mode: maintenance.mode,
         beforeCount,
         afterCount: Object.keys(store).length,
+        modelRunPruned: 0,
         pruned: 0,
         capped: 0,
         diskBudget,
@@ -567,6 +571,12 @@ async function saveSessionStoreUnlocked(
       const preserveSessionKeys = collectSessionMaintenancePreserveKeys([opts?.activeSessionKey]);
       // Prune stale entries and cap total count before serializing.
       const removedSessionFiles = new Map<string, string | undefined>();
+      const modelRunPruned = pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
+        onPruned: ({ entry }) => {
+          rememberRemovedSessionFile(removedSessionFiles, entry);
+        },
+        preserveKeys: preserveSessionKeys,
+      });
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         onPruned: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
@@ -641,11 +651,13 @@ async function saveSessionStoreUnlocked(
         warnOnly: false,
         log,
       });
-      maintenanceChangedStore = pruned > 0 || capped > 0 || (diskBudget?.removedEntries ?? 0) > 0;
+      maintenanceChangedStore =
+        modelRunPruned > 0 || pruned > 0 || capped > 0 || (diskBudget?.removedEntries ?? 0) > 0;
       await opts?.onMaintenanceApplied?.({
         mode: maintenance.mode,
         beforeCount,
         afterCount: Object.keys(store).length,
+        modelRunPruned,
         pruned,
         capped,
         diskBudget,

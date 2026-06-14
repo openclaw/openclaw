@@ -7,11 +7,17 @@ import {
   registerSessionMaintenancePreserveKeysProvider,
 } from "./store-maintenance-preserve.js";
 import {
+  isGatewayModelRunSessionKey,
   isProtectedSessionMaintenanceEntry,
   resolveMaintenanceConfigFromInput,
   resolveSessionEntryMaintenanceHighWater,
 } from "./store-maintenance.js";
-import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } from "./store.js";
+import {
+  capEntryCount,
+  getActiveSessionMaintenanceWarning,
+  pruneStaleEntries,
+  pruneStaleModelRunEntries,
+} from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -74,6 +80,115 @@ describe("pruneStaleEntries", () => {
     expect(store).toHaveProperty("agent:main:slack:channel:C999");
     expect(store).toHaveProperty("agent:main:telegram:group:-100123");
     expect(store).toHaveProperty("agent:main:discord:channel:ops");
+  });
+});
+
+describe("pruneStaleModelRunEntries", () => {
+  it("removes only stale generated gateway model-run sessions", () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174001";
+    const store = makeStore([
+      [staleModelRun, makeEntry(now - 25 * 60 * 60 * 1000)],
+      [recentModelRun, makeEntry(now)],
+      ["agent:main:explicit:model-run-not-a-uuid", makeEntry(now - 10 * DAY_MS)],
+      [
+        "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174002",
+        makeEntry(now - 10 * DAY_MS),
+      ],
+      ["agent:main:telegram:group:-100123:topic:77", makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:cron:job:run:123", makeEntry(now - 10 * DAY_MS)],
+    ]);
+
+    const pruned = pruneStaleModelRunEntries(store, DAY_MS);
+
+    expect(pruned).toBe(1);
+    expect(store[staleModelRun]).toBeUndefined();
+    expect(store).toHaveProperty(recentModelRun);
+    expect(store).toHaveProperty("agent:main:explicit:model-run-not-a-uuid");
+    expect(store).toHaveProperty(
+      "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174002",
+    );
+    expect(store).toHaveProperty("agent:main:telegram:group:-100123:topic:77");
+    expect(store).toHaveProperty("agent:main:cron:job:run:123");
+  });
+
+  it("honors preserve keys and disabled retention", () => {
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const store = makeStore([[staleModelRun, makeEntry(Date.now() - 10 * DAY_MS)]]);
+
+    expect(
+      pruneStaleModelRunEntries(store, DAY_MS, { preserveKeys: new Set([staleModelRun]) }),
+    ).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+    expect(pruneStaleModelRunEntries(store, null)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+  });
+
+  it("matches only explicit model-run uuid session keys", () => {
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(true);
+    expect(isGatewayModelRunSessionKey("agent:main:explicit:model-run-not-a-uuid")).toBe(false);
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects non-canonical session keys that do not parse as agent-scoped", () => {
+    // Unscoped: missing `agent:<id>:` prefix — parseAgentSessionKey returns null.
+    expect(
+      isGatewayModelRunSessionKey("explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
+    ).toBe(false);
+    // Empty agent id segment: not a canonical `agent:<id>:` scoped key.
+    expect(
+      isGatewayModelRunSessionKey("agent::explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
+    ).toBe(false);
+    // Extra colon segment between agent id and `explicit:` — rest starts
+    // with `extra:` and fails the predicate's regex.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:extra:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+    // Whitespace-padded keys are non-canonical even though parseAgentSessionKey
+    // trims before normalizing; the predicate intentionally checks the original
+    // key shape before accepting a model-run key.
+    expect(
+      isGatewayModelRunSessionKey(
+        "  agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000  ",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches canonical keys whose agent id begins with model-run-", () => {
+    // Guards against an over-tight fix that confuses the agent id segment
+    // with the `explicit:model-run-<uuid>` rest segment.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:model-run-foo:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves case-insensitive matching for canonical keys", () => {
+    // normalizeLowercaseStringOrEmpty + parseAgentSessionKey's normalization
+    // lower-case everything outside opaque peer IDs, so a mixed-case
+    // canonical key still matches.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:Main:Explicit:Model-Run-123E4567-E89B-12D3-A456-426614174000",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -253,6 +368,19 @@ describe("resolveMaintenanceConfigFromInput", () => {
     const maintenance = resolveMaintenanceConfigFromInput();
 
     expect(maintenance.mode).toBe("enforce");
+  });
+
+  it("defaults gateway model-run probes to 24h retention with override and disable support", () => {
+    expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterMs).toBe(DAY_MS);
+    expect(
+      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "48h" }).modelRunPruneAfterMs,
+    ).toBe(2 * DAY_MS);
+    expect(
+      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: false }).modelRunPruneAfterMs,
+    ).toBe(null);
+    expect(
+      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "bad" }).modelRunPruneAfterMs,
+    ).toBe(DAY_MS);
   });
 
   it("batches normal entry-count maintenance for production-sized caps", () => {

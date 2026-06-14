@@ -1688,6 +1688,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Deprecated age-retention field kept for compatibility with legacy configs using day counts. Use session.maintenance.pruneAfter instead so duration syntax and behavior are consistent.",
   "session.maintenance.maxEntries":
     "Caps total session entry count retained in the store to prevent unbounded growth over time. Use lower limits for constrained environments, or higher limits when longer history is required.",
+  "session.maintenance.modelRunPruneAfter":
+    "Retention for short-lived gateway model-run probe sessions (`agent:*:explicit:model-run-<uuid>`). Accepts a duration such as `24h` or `2d`; set `false` to disable model-run-specific cleanup. Default: `24h`.",
   "session.maintenance.rotateBytes":
     'Deprecated and ignored. Do not use for `sessions.json` growth control; OpenClaw no longer creates automatic rotation backups, and "openclaw doctor --fix" removes this key.',
   "session.maintenance.resetArchiveRetention":

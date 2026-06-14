@@ -126,6 +126,7 @@ describe("sessionsCleanupCommand", () => {
         cappedKeys: Set<string>;
         budgetEvictedKeys: Set<string>;
         dmScopeRetiredKeys: Set<string>;
+        modelRunPrunedKeys?: Set<string>;
       }) => {
         if (params.dmScopeRetiredKeys.has(params.key)) {
           return "retire-dm-scope";
@@ -192,6 +193,7 @@ describe("sessionsCleanupCommand", () => {
           afterCount: 1,
           missing: 0,
           dmScopeRetired: 0,
+          modelRunPruned: 0,
           pruned: 0,
           capped: 2,
           diskBudget: {
@@ -231,6 +233,7 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 0,
       capped: 2,
       diskBudget: {
@@ -267,6 +270,7 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 2,
       capped: 0,
       diskBudget: null,
@@ -300,6 +304,7 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 2,
       capped: 0,
       diskBudget: null,
@@ -323,6 +328,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 1,
             missing: 0,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 1,
             capped: 0,
             diskBudget: {
@@ -343,6 +349,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -367,6 +374,7 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 1,
       missing: 0,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 1,
       capped: 0,
       diskBudget: {
@@ -400,6 +408,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 1,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 0,
             capped: 0,
             diskBudget: null,
@@ -411,6 +420,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -436,6 +446,7 @@ describe("sessionsCleanupCommand", () => {
       afterCount: 0,
       missing: 1,
       dmScopeRetired: 0,
+      modelRunPruned: 0,
       pruned: 0,
       capped: 0,
       diskBudget: null,
@@ -458,6 +469,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 1,
             missing: 0,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 1,
             capped: 0,
             unreferencedArtifacts: {
@@ -478,6 +490,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -522,6 +535,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 0,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -533,6 +547,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
         {
           summary: {
@@ -544,6 +559,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 0,
             dmScopeRetired: 0,
+            modelRunPruned: 0,
             pruned: 1,
             capped: 0,
             diskBudget: null,
@@ -555,6 +571,7 @@ describe("sessionsCleanupCommand", () => {
           cappedKeys: new Set<string>(),
           budgetEvictedKeys: new Set<string>(),
           dmScopeRetiredKeys: new Set<string>(),
+          modelRunPrunedKeys: new Set<string>(),
         },
       ],
       appliedSummaries: [],
@@ -585,6 +602,7 @@ describe("sessionsCleanupCommand", () => {
           afterCount: 0,
           missing: 0,
           dmScopeRetired: 0,
+          modelRunPruned: 0,
           pruned: 1,
           capped: 0,
           diskBudget: null,
@@ -599,6 +617,7 @@ describe("sessionsCleanupCommand", () => {
           afterCount: 0,
           missing: 0,
           dmScopeRetired: 0,
+          modelRunPruned: 0,
           pruned: 1,
           capped: 0,
           diskBudget: null,
