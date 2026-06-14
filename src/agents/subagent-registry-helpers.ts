@@ -61,7 +61,16 @@ export function capFrozenResultText(resultText: string): string {
     0,
     FROZEN_RESULT_TEXT_MAX_BYTES - Buffer.byteLength(notice, "utf8"),
   );
-  const payload = Buffer.from(trimmed, "utf8").subarray(0, maxPayloadBytes).toString("utf8");
+  const encoded = Buffer.from(trimmed, "utf8");
+  // Back off to a UTF-8 character boundary so we never split a multi-byte
+  // sequence: a mid-character cut decodes the orphaned bytes to U+FFFD, which
+  // both corrupts the boundary character and (being 3 bytes) pushes the stored
+  // payload back over FROZEN_RESULT_TEXT_MAX_BYTES.
+  let payloadEnd = maxPayloadBytes;
+  while (payloadEnd > 0 && (encoded[payloadEnd] & 0xc0) === 0x80) {
+    payloadEnd -= 1;
+  }
+  const payload = encoded.subarray(0, payloadEnd).toString("utf8");
   return `${payload}${notice}`;
 }
 
