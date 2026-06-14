@@ -95,6 +95,95 @@ describe("createEmbeddedLobsterRunner", () => {
     vi.restoreAllMocks();
   });
 
+  it("populates ctx.llmAdapters from bridges and injects no gateway credentials into env", async () => {
+    const runtime = {
+      runToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+    const adapter = { source: "test", invoke: vi.fn() };
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+      bridges: { llmAdapters: { openclaw: adapter } },
+    });
+
+    await runner.run({
+      action: "run",
+      pipeline: "exec --json=true echo hi",
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    const request = requireRecord(
+      requireFirstCallParam(runtime.runToolRequest.mock.calls, "run tool request"),
+      "run tool request",
+    );
+    const ctx = requireRecord(request.ctx, "tool context");
+    const llmAdapters = requireRecord(ctx.llmAdapters, "llmAdapters");
+    expect(llmAdapters.openclaw).toBe(adapter);
+
+    // SECURITY (#76101): no gateway URL/token is injected into the embedded env,
+    // so workflow shell steps cannot read or exfiltrate operator credentials.
+    const env = requireRecord(ctx.env, "env");
+    expect(env.OPENCLAW_URL).toBeUndefined();
+    expect(env.OPENCLAW_TOKEN).toBeUndefined();
+    expect(env.CLAWD_URL).toBeUndefined();
+    expect(env.CLAWD_TOKEN).toBeUndefined();
+  });
+
+  it("strips gateway credentials from the embedded env even when present in process.env", async () => {
+    // Seed the gateway-process env with credentials (via vi.stubEnv, auto-restored
+    // in the finally), then confirm they are NOT forwarded into the embedded tool
+    // context (review finding: a workflow shell step must not be able to read
+    // OPENCLAW_URL/token from ctx.env). Using vi.stubEnv rather than writing
+    // process.env directly also avoids the skill-env-host-injection lint pattern.
+    vi.stubEnv("OPENCLAW_URL", "http://127.0.0.1:18789");
+    vi.stubEnv("OPENCLAW_TOKEN", "secret-token");
+    vi.stubEnv("CLAWD_URL", "http://127.0.0.1:18789");
+    vi.stubEnv("CLAWD_TOKEN", "secret-token");
+    try {
+      const runtime = {
+        runToolRequest: vi.fn().mockResolvedValue({
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: [],
+          requiresApproval: null,
+        }),
+        resumeToolRequest: vi.fn(),
+      };
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await runner.run({
+        action: "run",
+        pipeline: "exec --json=true echo hi",
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      });
+
+      const request = requireRecord(
+        requireFirstCallParam(runtime.runToolRequest.mock.calls, "run tool request"),
+        "run tool request",
+      );
+      const env = requireRecord(requireRecord(request.ctx, "tool context").env, "env");
+      expect(env.OPENCLAW_URL).toBeUndefined();
+      expect(env.OPENCLAW_TOKEN).toBeUndefined();
+      expect(env.CLAWD_URL).toBeUndefined();
+      expect(env.CLAWD_TOKEN).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("runs inline pipelines through the embedded runtime", async () => {
     const runtime = {
       runToolRequest: vi.fn().mockResolvedValue({
