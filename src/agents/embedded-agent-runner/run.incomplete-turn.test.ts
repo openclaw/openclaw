@@ -2568,48 +2568,97 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("retries replay-safe errored turns that only emitted thinking blocks", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning before provider error",
+          thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+        },
+        { type: "redacted_thinking", data: "opaque" },
+        { type: "text", text: " " },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
     expect(
       shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({
-          assistantTexts: [],
-          lastAssistant: {
-            role: "assistant",
-            stopReason: "error",
-            provider: "anthropic",
-            model: "claude-opus-4-8",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning before provider error",
-                thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
-              },
-            ],
-            usage: { input: 100, output: 1120, totalTokens: 1220 },
-          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        }),
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
       }),
     ).toBe(true);
   });
 
   it("does not retry errored empty turns when non-zero output may indicate progress", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      content: [],
+      usage: { input: 100, output: 12, totalTokens: 112 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
     expect(
       shouldRetrySilentErrorAssistantTurn({
-        attempt: makeAttemptResult({
-          assistantTexts: [],
-          lastAssistant: {
-            role: "assistant",
-            stopReason: "error",
-            provider: "ollama",
-            model: "glm-5.1:cloud",
-            content: [],
-            usage: { input: 100, output: 12, totalTokens: 112 },
-          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        }),
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "visible text",
+      content: [
+        { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+        { type: "text", text: "partial answer" },
+      ],
+    },
+    {
+      name: "tool call",
+      content: [
+        { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
+      ],
+    },
+    {
+      name: "unknown block",
+      content: [{ type: "provider_metadata", value: "opaque" }],
+    },
+  ])("does not retry errored turns containing $name", ({ content }) => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content,
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
       }),
     ).toBe(false);
   });
 
   it("does not retry errored thinking-only turns after side effects", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "redacted_thinking",
+          data: "opaque",
+        },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
     expect(
       shouldRetrySilentErrorAssistantTurn({
         attempt: makeAttemptResult({
@@ -2618,24 +2667,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             hadPotentialSideEffects: true,
             replaySafe: false,
           },
-          lastAssistant: {
-            role: "assistant",
-            stopReason: "error",
-            provider: "anthropic",
-            model: "claude-opus-4-8",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning before provider error",
-                thinkingSignature: JSON.stringify({
-                  id: "rs_error_side_effect",
-                  type: "reasoning",
-                }),
-              },
-            ],
-            usage: { input: 100, output: 1120, totalTokens: 1220 },
-          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+          lastAssistant: assistant,
         }),
+        assistant,
       }),
     ).toBe(false);
   });

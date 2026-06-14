@@ -9,10 +9,10 @@ coverage:
     - runtime.anthropic-thinking-error-recovery
   secondary:
     - runtime.retry-policy
-objective: Verify an Anthropic thinking-only terminal error after a replay-safe read retries the same prompt into a visible answer.
+objective: Verify an Anthropic stream error after signed thinking and a replay-safe read retries the same prompt into a visible answer.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.
-  - The agent performs a replay-safe read before the Anthropic thinking-only terminal error.
+  - The agent performs a replay-safe read before the Anthropic stream error.
   - The runtime retries the same prompt without injecting the visible-answer continuation instruction.
   - The final visible reply contains the exact recovery marker.
 docsRefs:
@@ -22,7 +22,7 @@ codeRefs:
   - src/agents/embedded-agent-runner/run/incomplete-turn.ts
 execution:
   kind: flow
-  summary: Verify Anthropic thinking-only error turns recover after a replay-safe read.
+  summary: Verify Anthropic stream errors after signed thinking recover after a replay-safe read.
   config:
     requiredProvider: mock-openai
     promptSnippet: Anthropic thinking error QA check

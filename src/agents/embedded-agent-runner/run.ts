@@ -2937,6 +2937,13 @@ async function runEmbeddedAgentInternal(
           const imageDimensionError = parseImageDimensionError(
             assistantForFailover?.errorMessage ?? "",
           );
+          const silentErrorRetryReason =
+            assistantFailoverReason === null ||
+            assistantFailoverReason === "timeout" ||
+            assistantFailoverReason === "server_error" ||
+            assistantFailoverReason === "no_error_details" ||
+            assistantFailoverReason === "unclassified" ||
+            assistantFailoverReason === "unknown";
           // Retry replay-safe non-visible provider errors before assistant
           // failover surfaces them as terminal provider failures.
           if (
@@ -2948,7 +2955,8 @@ async function runEmbeddedAgentInternal(
             !aborted &&
             !promptError &&
             !timedOut &&
-            shouldRetrySilentErrorAssistantTurn({ attempt }) &&
+            silentErrorRetryReason &&
+            shouldRetrySilentErrorAssistantTurn({ attempt, assistant: assistantForFailover }) &&
             emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
           ) {
             emptyErrorRetries += 1;

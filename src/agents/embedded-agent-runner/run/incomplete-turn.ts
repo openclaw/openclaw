@@ -16,6 +16,7 @@ import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
 } from "../../execution-contract.js";
+import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
@@ -287,7 +288,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
     !joinAssistantTexts(params.attempt.assistantTexts).length &&
-    (isReasoningOnlyAssistantTurn(assistant) || isUnsignedThinkingOnlyAssistantTurn(assistant));
+    Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
   if (
     (params.payloadCount !== 0 && !toolUseTerminal && !thinkingOnlyTerminal) ||
@@ -556,10 +557,8 @@ function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
 }
 
 export function shouldRetrySilentErrorAssistantTurn(params: {
-  attempt: Pick<
-    EmbeddedRunAttemptResult,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant" | "replayMetadata"
-  >;
+  attempt: Pick<EmbeddedRunAttemptResult, "assistantTexts" | "replayMetadata">;
+  assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
   if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return false;
@@ -568,7 +567,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     return false;
   }
 
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const assistant = params.assistant;
   if (!assistant || assistant.stopReason !== "error") {
     return false;
   }
@@ -581,7 +580,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     return !hasPositiveOutputTokenUsage(assistant);
   }
 
-  return isReasoningOnlyAssistantTurn(assistant) || isUnsignedThinkingOnlyAssistantTurn(assistant);
+  return hasOnlyAssistantReasoningContent(assistant);
 }
 
 function isEmptyResponseAssistantTurn(params: {

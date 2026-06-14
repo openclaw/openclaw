@@ -3131,28 +3131,18 @@ function buildAnthropicMessageResponse(params: {
 }
 
 const QA_ANTHROPIC_THINKING_ERROR_TEXT =
-  "QA replay-safe read completed, but the provider returned only signed thinking before a terminal error.";
+  "QA replay-safe read completed, but the provider stream failed after signed thinking.";
 const QA_ANTHROPIC_THINKING_ERROR_SIGNATURE = "qa_signed_thinking_block_91953";
+const QA_ANTHROPIC_THINKING_ERROR_MESSAGE = "QA injected provider stream failure";
 
 function buildAnthropicThinkingErrorResponse(params: { model: string }): Record<string, unknown> {
   return {
-    id: `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`,
-    type: "message",
-    role: "assistant",
-    model: params.model || "claude-opus-4-8",
-    content: [
-      {
-        type: "thinking",
-        thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT,
-        signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE,
-      },
-    ],
-    stop_reason: "sensitive",
-    stop_sequence: null,
-    usage: {
-      input_tokens: 64,
-      output_tokens: 1120,
+    type: "error",
+    error: {
+      type: "api_error",
+      message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
     },
+    model: params.model || "claude-opus-4-8",
   };
 }
 
@@ -3182,7 +3172,23 @@ function buildAnthropicThinkingErrorStreamEvents(params: {
       index: 0,
       content_block: {
         type: "thinking",
+        thinking: "",
+        signature: "",
+      },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "thinking_delta",
         thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT,
+      },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "signature_delta",
         signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE,
       },
     },
@@ -3192,16 +3198,18 @@ function buildAnthropicThinkingErrorStreamEvents(params: {
     },
     {
       type: "message_delta",
-      delta: {
-        stop_reason: "sensitive",
-      },
+      delta: {},
       usage: {
         input_tokens: 64,
         output_tokens: 1120,
       },
     },
     {
-      type: "message_stop",
+      type: "error",
+      error: {
+        type: "api_error",
+        message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
+      },
     },
   ];
 }

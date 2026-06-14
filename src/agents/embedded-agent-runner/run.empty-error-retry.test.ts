@@ -102,6 +102,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
   });
 
   it("retries thinking-only unknown provider errors before assistant failover", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       emptyErrorAttempt(
         "anthropic",
@@ -128,6 +129,34 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads).toBeUndefined();
+  });
+
+  it("does not intercept concrete non-transient failover errors", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("model_not_found");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt(
+        "anthropic",
+        "missing-model",
+        1120,
+        [
+          {
+            type: "thinking",
+            thinking: "internal reasoning before provider error",
+            thinkingSignature: JSON.stringify({ id: "rs_missing_model", type: "reasoning" }),
+          },
+        ],
+        "model not found",
+      ),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "missing-model",
+      runId: "run-empty-error-retry-non-transient",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("caps retries at MAX_EMPTY_ERROR_RETRIES and surfaces incomplete-turn error", async () => {
