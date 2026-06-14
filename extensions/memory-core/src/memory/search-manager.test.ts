@@ -368,6 +368,30 @@ describe("getMemorySearchManager caching", () => {
     expect(searchResults).toHaveLength(1);
   });
 
+  it("returns the qmd startup failure when builtin fallback is unavailable", async () => {
+    const cfg = createQmdCfg("missing-qmd-no-builtin");
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      reason: "binary",
+      error: "spawn qmd ENOENT",
+    });
+    mockMemoryIndexGet.mockRejectedValueOnce(
+      new Error(
+        'Memory search unavailable: embedding provider "openai" is configured but unavailable.',
+      ),
+    );
+
+    const result = await getMemorySearchManager({ cfg, agentId: "missing-qmd-no-builtin" });
+
+    expect(result.manager).toBeNull();
+    expect(result.error).toContain("qmd binary unavailable (qmd): spawn qmd ENOENT");
+    expect(result.error).toContain(
+      'builtin fallback unavailable: Memory search unavailable: embedding provider "openai" is configured but unavailable.',
+    );
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+  });
+
   it("treats legacy qmd unavailable results without a reason as binary failures", async () => {
     const cfg = createQmdCfg("missing-qmd-legacy");
     checkQmdBinaryAvailability.mockResolvedValueOnce({

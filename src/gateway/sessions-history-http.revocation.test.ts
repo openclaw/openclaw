@@ -94,6 +94,7 @@ vi.mock("./session-utils.js", () => ({
     sessionFile: "/tmp/session-1.jsonl",
   }),
   readSessionMessagesAsync: async () => [],
+  readSessionMessagesWithSourceAsync: async () => ({ messages: [] }),
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
@@ -109,6 +110,7 @@ vi.mock("./session-history-state.js", () => ({
         messageSeq: 1,
         messageId,
       }),
+      shouldRefreshForTranscriptPath: () => false,
       refreshAsync: async () => ({ items: [], nextCursor: null, messages: [] }),
     }),
   },

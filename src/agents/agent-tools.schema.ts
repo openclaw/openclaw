@@ -8,6 +8,7 @@ import {
   normalizeToolParameterSchema,
   type ToolParameterSchemaOptions,
 } from "./agent-tools-parameter-schema.js";
+import { copyBeforeToolCallHookMarker } from "./agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 
@@ -72,6 +73,7 @@ export function normalizeToolParameters(
   function preserveToolMeta(target: AnyAgentTool): AnyAgentTool {
     copyPluginToolMeta(tool, target);
     copyChannelAgentToolMeta(tool as never, target as never);
+    copyBeforeToolCallHookMarker(tool, target);
     return target;
   }
   const schema =
