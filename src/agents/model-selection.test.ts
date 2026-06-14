@@ -2947,6 +2947,9 @@ describe("resolveSubagentSpawnModelSelection", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openai/xiaomi/mimo-v2-pro-mit": { alias: "xiaomi/mimo-v2-pro-mit" },
+          },
         },
       },
     } as OpenClawConfig;
@@ -2958,6 +2961,27 @@ describe("resolveSubagentSpawnModelSelection", () => {
         modelOverride: "openai/gpt-5.4",
       }),
     ).toBe("openai/gpt-5.4");
+  });
+
+  it("resolves slash-form alias overrides before provider/model passthrough", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openai/xiaomi/mimo-v2-pro-mit": { alias: "xiaomi/mimo-v2-pro-mit" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "main",
+        modelOverride: "xiaomi/mimo-v2-pro-mit",
+      }),
+    ).toBe("openai/xiaomi/mimo-v2-pro-mit");
   });
 
   it("falls back to runtime default when no override or config", () => {
