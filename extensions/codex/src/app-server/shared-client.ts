@@ -281,7 +281,9 @@ export async function createIsolatedCodexAppServerClient(
   const { agentDir, usesNativeAuth, authProfileId, startOptions } =
     await resolveCodexAppServerClientStartContext(options);
   const client = CodexAppServerClient.start(startOptions);
-  if (options?.authProfileStore) {
+  if (authProfileId) {
+    // Profile-backed Codex auth is ephemeral. Keep the host refresh callback
+    // available whether the profile came from a scoped store or persisted state.
     client.addRequestHandler(async (request) => {
       if (request.method !== "account/chatgptAuthTokens/refresh") {
         return undefined;
@@ -289,8 +291,8 @@ export async function createIsolatedCodexAppServerClient(
       return await refreshCodexAppServerAuthTokens({
         agentDir,
         authProfileId,
-        authProfileStore: options.authProfileStore,
-        config: options.config,
+        ...(options?.authProfileStore ? { authProfileStore: options.authProfileStore } : {}),
+        config: options?.config,
       });
     });
   }

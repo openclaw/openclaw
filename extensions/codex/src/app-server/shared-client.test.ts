@@ -291,6 +291,41 @@ describe("shared Codex app-server client", () => {
     });
   });
 
+  it("registers persisted profile refresh for isolated app-server startup", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    const clientPromise = createIsolatedCodexAppServerClient({
+      timeoutMs: 1000,
+      authProfileId: "openai:persisted",
+      agentDir: "/tmp/openclaw-persisted-agent",
+    });
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+
+    await expect(clientPromise).resolves.toBe(harness.client);
+    const priorWriteCount = harness.writes.length;
+    harness.send({
+      id: "refresh-persisted",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "unauthorized", previousAccountId: "persisted-account" },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(priorWriteCount));
+
+    expect(mocks.refreshCodexAppServerAuthTokens).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw-persisted-agent",
+      authProfileId: "openai:persisted",
+      config: undefined,
+    });
+    expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toEqual({
+      id: "refresh-persisted",
+      result: {
+        accessToken: "refreshed-access",
+        chatgptAccountId: "refreshed-account",
+        chatgptPlanType: null,
+      },
+    });
+  });
+
   it("skips target auth resolution when native source auth is requested", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
