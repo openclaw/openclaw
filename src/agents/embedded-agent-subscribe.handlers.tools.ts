@@ -15,6 +15,7 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
   AgentApprovalEventData,
   AgentCommandOutputEventData,
@@ -52,6 +53,7 @@ import {
   extractToolResultMediaArtifact,
   extractToolErrorCode,
   extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolErrorMessage,
   extractToolResultText,
   filterToolResultMediaUrls,
@@ -289,6 +291,36 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
 
 function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
   return readRecordField(asOptionalObjectRecord(result)?.details);
+}
+
+function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  if (
+    toolName !== "message" ||
+    readStringValue(args.provider) ||
+    readStringValue(args.channel) ||
+    !currentProvider
+  ) {
+    return args;
+  }
+  return { ...args, provider: currentProvider };
+}
+
+function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
+  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+  if (toolSend === undefined) {
+    return result;
+  }
+  return {
+    ...readRecordField(result),
+    details: {
+      ...readToolResultDetailsRecord(result),
+      toolSend,
+    },
+  };
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
@@ -1031,7 +1063,22 @@ export function handleToolExecutionStart(
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
       if (isMessagingSend) {
-        const sendTarget = extractMessagingToolSend(toolName, argsRecord);
+        const telemetryArgs = applyCurrentMessageProvider(
+          toolName,
+          argsRecord,
+          ctx.params.messageChannel,
+        );
+        const sendTarget = extractMessagingToolSend(toolName, telemetryArgs, {
+          config: ctx.params.config,
+          currentChannelId: ctx.params.currentChannelId,
+          currentMessagingTarget: ctx.params.currentMessagingTarget,
+          currentThreadId:
+            ctx.params.currentThreadId ??
+            parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+          currentMessageId: ctx.params.currentMessageId,
+          replyToMode: ctx.params.replyToMode,
+          hasRepliedRef: ctx.params.hasRepliedRef,
+        });
         if (sendTarget) {
           ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
         }
@@ -1166,6 +1213,7 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
+  const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
   const approvalUnavailable =
@@ -1275,8 +1323,10 @@ export async function handleToolExecutionEnd(
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
     if (!isToolError) {
+      const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
+      const confirmedTarget = extractMessagingToolSendResult(pendingTarget, extractionResult);
       ctx.state.messagingToolSentTargets.push({
-        ...pendingTarget,
+        ...confirmedTarget,
         ...(pendingText ? { text: pendingText } : {}),
         ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       });

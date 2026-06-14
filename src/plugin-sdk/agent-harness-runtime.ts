@@ -129,6 +129,8 @@ export {
 } from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   isToolResultError,
