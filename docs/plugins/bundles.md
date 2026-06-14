@@ -106,6 +106,9 @@ loader. Cursor command markdown works through the same path.
   default; use `tools.deny: ["bundle-mcp"]` to opt out for an agent or gateway
 - project-local embedded agent settings still apply after bundle defaults, so workspace
   settings can override bundle MCP entries when needed
+- bundle MCP server entries use the same server config shape as configured
+  `mcp.servers`, including per-server `toolFilter.include` and
+  `toolFilter.exclude`
 - bundle MCP tool catalogs are sorted deterministically before registration, so
   upstream `listTools()` order changes do not thrash prompt-cache tool blocks
 
@@ -157,6 +160,34 @@ MCP servers can use stdio or HTTP transport:
   descriptions and logs
 - `connectionTimeoutMs` overrides the default 30-second connection timeout for
   both stdio and HTTP transports
+
+##### Tool filters
+
+Bundle MCP server entries can set `toolFilter.include` and
+`toolFilter.exclude`. Entries are raw MCP tool names or simple `*` globs.
+Filtering runs after the server catalog is read and before provider-safe names
+are registered, so filters match names such as `read_docs`, not exposed names
+such as `my-server__read_docs`.
+
+Use filters in bundle defaults when a server exposes both workflow-level tools
+and direct write/admin tools. Keep defaults narrow; workspace config can
+override the same server key under `mcp.servers` when a project needs a broader
+surface.
+
+```json
+{
+  "mcpServers": {
+    "desktop-maps": {
+      "command": "npx",
+      "args": ["-y", "@example/desktop-mcp", "serve"],
+      "toolFilter": {
+        "include": ["workflow.*", "state.snapshot", "state.verify"],
+        "exclude": ["*.raw_*", "admin_*"]
+      }
+    }
+  }
+}
+```
 
 ##### Tool naming
 
