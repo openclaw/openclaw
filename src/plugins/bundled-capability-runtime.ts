@@ -516,10 +516,10 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
         });
         if (undeclared.length > 0) {
           registry.diagnostics.push({
-            level: "error",
+            level: "warn",
             pluginId: record.id,
             source: record.source,
-            message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+            message: `plugin must declare contracts.tools for: ${undeclared.join(", ")} — add these tool names to contracts.tools in the plugin manifest`,
           });
           continue;
         }
