@@ -2381,6 +2381,9 @@ export abstract class MemoryManagerSyncOps {
 
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
+    const tempLockPath = `${tempDbPath}.lock`;
+    fsSync.mkdirSync(path.dirname(tempLockPath), { recursive: true });
+    fsSync.writeFileSync(tempLockPath, JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
     const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
 
     const originalDb = this.db;
@@ -2539,6 +2542,8 @@ export abstract class MemoryManagerSyncOps {
         sessions: shouldRetrySessionsOnFailure,
       });
       throw err;
+    } finally {
+      await fs.rm(tempLockPath, { force: true });
     }
   }
 
