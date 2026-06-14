@@ -599,6 +599,8 @@ describe("resolvePinnedClientMetadata", () => {
     ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
     ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
     ["openclaw-android", "Android 16", "Android 15", "Android"],
+    ["openclaw-macos", "macos 26.5.1", "macos 26.5.0", "Mac"],
+    ["openclaw-macos", "macos 27.0.0", "macos 26.5.1", "Mac"],
   ])(
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
@@ -640,7 +642,7 @@ describe("resolvePinnedClientMetadata", () => {
     });
   });
 
-  it("keeps non-mobile platform version changes approval-bound", () => {
+  it("keeps non-native-app platform version changes approval-bound", () => {
     expect(
       testing.resolvePinnedClientMetadata({
         clientId: "node-host",
