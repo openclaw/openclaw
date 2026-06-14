@@ -1,5 +1,6 @@
 // Argv tests cover CLI argument parsing helpers and platform-specific normalization.
 import { describe, expect, it } from "vitest";
+import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import {
   buildParseArgv,
   getFlagValue,
@@ -324,7 +325,7 @@ describe("argv helpers", () => {
     },
     {
       name: "terminator cuts parsing",
-      argv: ["node", "openclaw", "status", "--", "ignored"],
+      argv: ["node", "openclaw", "status", FLAG_TERMINATOR, "ignored"],
       expected: ["status"],
     },
   ])("extracts command path: $name", ({ argv, expected }) => {
