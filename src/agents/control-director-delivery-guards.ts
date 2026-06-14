@@ -30,6 +30,7 @@ import {
   type ControlDirectorMissionSummary,
   type ControlDirectorTruthAudit,
 } from "./control-director-contract.js";
+import { loadControlDirectorTruthEvidence } from "./control-director-truth-evidence.js";
 
 const MAX_CONTROL_DIRECTOR_GUARD_AUDIT_ENTRIES = 20;
 const MAX_CONTROL_DIRECTOR_LIVENESS_AUDIT_ENTRIES = 20;
@@ -644,7 +645,14 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
         storePath: params.storePath,
       })) ?? sessionEntry;
   }
-  const truthEvidence: ControlDirectorClaimEvidence[] = [...(params.truthEvidence ?? [])];
+  const implementationSha =
+    params.implementationSha ?? process.env.GITHUB_SHA ?? process.env.GITHUB_COMMIT_SHA;
+  const truthEvidence: ControlDirectorClaimEvidence[] = loadControlDirectorTruthEvidence({
+    sessionEntry,
+    runId,
+    implementationSha,
+    extraEvidence: params.truthEvidence,
+  });
   if (judgeCompletionGate.approval && !judgeCompletionGate.audit) {
     truthEvidence.push({
       type: "judge_approval",
@@ -658,7 +666,7 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
     agentId,
     payloads: finalPayloads,
     evidence: truthEvidence,
-    implementationSha: params.implementationSha,
+    implementationSha,
   });
   finalPayloads = truthGate.payloads;
   let sessionTruthAudit: SessionControlDirectorTruthAuditEntry | undefined;

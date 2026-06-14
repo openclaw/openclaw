@@ -954,16 +954,32 @@ function extractControlDirectorTruthClaims(
 }
 
 function findControlDirectorEvidenceForClaim(params: {
-  claim: Pick<ControlDirectorTruthClaimAudit, "requiredEvidenceType">;
+  claim: Pick<ControlDirectorTruthClaimAudit, "claim" | "requiredEvidenceType">;
   evidence: readonly ControlDirectorClaimEvidence[];
   implementationSha?: string | undefined;
 }): ControlDirectorClaimEvidence | undefined {
+  const claimText = params.claim.claim.toLowerCase();
   return params.evidence.find((candidate) => {
     if (candidate.type !== params.claim.requiredEvidenceType || candidate.status !== "passed") {
       return false;
     }
     if (candidate.type === "command" && candidate.exitCode !== 0) {
       return false;
+    }
+    if (candidate.type === "command") {
+      const haystack = `${candidate.source} ${candidate.summary}`.toLowerCase();
+      const requiredCommandTerms = [
+        ["test", /\b(test|vitest|pnpm test)\b/u],
+        ["check", /\b(check|lint|type|tsgo|pnpm check)\b/u],
+        ["smoke", /\b(smoke)\b/u],
+        ["readiness", /\b(readiness|control-director:readiness)\b/u],
+        ["pnpm", /\bpnpm\b/u],
+      ] as const;
+      for (const [term, pattern] of requiredCommandTerms) {
+        if (claimText.includes(term) && !pattern.test(haystack)) {
+          return false;
+        }
+      }
     }
     if (
       candidate.type === "github_run" &&

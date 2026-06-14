@@ -224,6 +224,48 @@ function detectControlDirectorTruthGate() {
   }
 }
 
+function detectControlDirectorTruthEvidenceIngestion() {
+  try {
+    const evidenceSource = fs.readFileSync(
+      path.join(REPO_ROOT, "src/agents/control-director-truth-evidence.ts"),
+      "utf8",
+    );
+    const deliveryGuardSource = fs.readFileSync(
+      path.join(REPO_ROOT, "src/agents/control-director-delivery-guards.ts"),
+      "utf8",
+    );
+    const agentCommandSource = fs.readFileSync(
+      path.join(REPO_ROOT, "src/agents/agent-command.ts"),
+      "utf8",
+    );
+    const autoReplySource = fs.readFileSync(
+      path.join(REPO_ROOT, "src/auto-reply/reply/agent-runner.ts"),
+      "utf8",
+    );
+    const chatSource = fs.readFileSync(
+      path.join(REPO_ROOT, "src/gateway/server-methods/chat.ts"),
+      "utf8",
+    );
+    return (
+      evidenceSource.includes("buildControlDirectorTruthEvidenceFromRecords") &&
+      evidenceSource.includes("loadControlDirectorTruthEvidence") &&
+      evidenceSource.includes("exitCode === 0") &&
+      evidenceSource.includes("github_run") &&
+      evidenceSource.includes("ui_smoke") &&
+      evidenceSource.includes("repo_change") &&
+      evidenceSource.includes("source_citation") &&
+      deliveryGuardSource.includes("loadControlDirectorTruthEvidence") &&
+      deliveryGuardSource.includes("extraEvidence: params.truthEvidence") &&
+      deliveryGuardSource.includes("implementationSha") &&
+      agentCommandSource.includes("applyControlDirectorDeliveryGuards") &&
+      autoReplySource.includes("applyControlDirectorDeliveryGuards") &&
+      chatSource.includes("applyControlDirectorDeliveryGuards")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function readOllamaEnvFromLaunchctl() {
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
   if (uid === null) {
@@ -395,6 +437,14 @@ export function buildControlDirectorReadinessScorecard(params) {
       "runtime-truth-gate",
       "Control Director runtime truthfulness gate is wired",
       params.runtimeTruthGate === true,
+      true,
+    ),
+  );
+  facts.push(
+    fact(
+      "runtime-truth-evidence-ingestion",
+      "Control Director runtime truth evidence ingestion is wired",
+      params.runtimeTruthEvidenceIngestion === true,
       true,
     ),
   );
@@ -599,6 +649,7 @@ export async function main(argv = process.argv.slice(2)) {
     runtimeFinalOutputGuard: detectControlDirectorRuntimeFinalOutputGuard(),
     runtimeJudgeCompletionGate: detectControlDirectorJudgeCompletionGate(),
     runtimeTruthGate: detectControlDirectorTruthGate(),
+    runtimeTruthEvidenceIngestion: detectControlDirectorTruthEvidenceIngestion(),
   });
   if (args.json) {
     console.log(JSON.stringify(scorecard, null, 2));

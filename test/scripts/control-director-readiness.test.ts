@@ -76,6 +76,7 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: true,
       runtimeJudgeCompletionGate: true,
       runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(true);
@@ -104,6 +105,7 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: true,
       runtimeJudgeCompletionGate: true,
       runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -132,6 +134,7 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: true,
       runtimeJudgeCompletionGate: true,
       runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -161,6 +164,7 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: true,
       runtimeJudgeCompletionGate: true,
       runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -190,6 +194,7 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: true,
       runtimeJudgeCompletionGate: true,
       runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -219,6 +224,7 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: true,
       runtimeJudgeCompletionGate: true,
       runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -248,6 +254,7 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: false,
       runtimeJudgeCompletionGate: true,
       runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -277,6 +284,7 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: true,
       runtimeJudgeCompletionGate: false,
       runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
@@ -306,11 +314,42 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: true,
       runtimeJudgeCompletionGate: true,
       runtimeTruthGate: false,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
     expect(scorecard.failedCritical).toContain(
       "Control Director runtime truthfulness gate is wired",
+    );
+  });
+
+  it("flags missing runtime truth evidence ingestion as a critical readiness gap", () => {
+    const scorecard = buildControlDirectorReadinessScorecard({
+      config: createConfig(),
+      ollamaModels: new Map([
+        ["openclaw-control-qwen36-27b:latest", { digest: "same" }],
+        ["qwen3.6:27b-q8_0", { digest: "same" }],
+        ["openclaw-control-qwen25-32b:latest", { digest: "fallback" }],
+      ]),
+      ollamaEnv: {
+        OLLAMA_FLASH_ATTENTION: "1",
+        OLLAMA_KV_CACHE_TYPE: "q8_0",
+        OLLAMA_NUM_PARALLEL: "1",
+      },
+      ollamaPrimaryChatSmoke: { ok: true, detail: "status=200" },
+      thinkingEscalationPolicy: true,
+      continueUntilCompletePolicy: true,
+      completionEvidencePolicy: true,
+      explicitStatusPolicy: true,
+      runtimeFinalOutputGuard: true,
+      runtimeJudgeCompletionGate: true,
+      runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: false,
+    });
+
+    expect(scorecard.productionReady).toBe(false);
+    expect(scorecard.failedCritical).toContain(
+      "Control Director runtime truth evidence ingestion is wired",
     );
   });
 
@@ -339,6 +378,7 @@ describe("control-director-readiness", () => {
       runtimeFinalOutputGuard: true,
       runtimeJudgeCompletionGate: true,
       runtimeTruthGate: true,
+      runtimeTruthEvidenceIngestion: true,
     });
 
     expect(scorecard.productionReady).toBe(false);
