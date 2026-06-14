@@ -87,9 +87,12 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
 }
 
 function resolvePreservedPromptSkillPathRoots(): string[] {
-  const configDir = path.resolve(resolveConfigDir());
-  const realConfigDir = tryRealpath(configDir);
-  return uniqueStrings([configDir, ...(realConfigDir ? [realConfigDir] : [])]);
+  const managedSkillsDir = path.resolve(resolveConfigDir(), "skills");
+  const realManagedSkillsDir = tryRealpath(managedSkillsDir);
+  return uniqueStrings([
+    managedSkillsDir,
+    ...(realManagedSkillsDir ? [realManagedSkillsDir] : []),
+  ]);
 }
 
 function shouldPreservePromptSkillPath(filePath: string, roots: readonly string[]): boolean {
