@@ -287,11 +287,15 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const readableAllToolProjection = filterProviderNormalizableTools(allTools);
   preNormalizationDiagnostics.push(...readableAllToolProjection.diagnostics);
   const readableAllTools = [...readableAllToolProjection.tools];
-  const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
-    addSandboxShellDynamicToolsIfAvailable(
-      isCodexMemoryFlushRun(params)
-        ? filterCodexMemoryFlushDynamicTools(readableAllTools)
-        : filterCodexDynamicTools(readableAllTools, input.pluginConfig),
+  const codexFilteredTools = addDirectShellDynamicToolsIfNeeded(
+    addNodeShellDynamicToolsIfNeeded(
+      addSandboxShellDynamicToolsIfAvailable(
+        isCodexMemoryFlushRun(params)
+          ? filterCodexMemoryFlushDynamicTools(readableAllTools)
+          : filterCodexDynamicTools(readableAllTools, input.pluginConfig),
+        readableAllTools,
+        input,
+      ),
       readableAllTools,
       input,
     ),
@@ -632,24 +636,14 @@ function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
   return isCodexDynamicToolExcluded(config, ["exec", "sandbox_exec", "process", "sandbox_process"]);
 }
 
-function addNodeShellDynamicToolsIfNeeded(
-  filteredTools: OpenClawDynamicTool[],
-  allTools: OpenClawDynamicTool[],
-  input: DynamicToolBuildParams,
-): OpenClawDynamicTool[] {
-  if (
-    isCodexMemoryFlushRun(input.params) ||
-    !isCodexNativeExecutionBlockedByNodeExecHost(input.params, {
-      agentId: input.sessionAgentId,
-      runtimeSessionKey: input.sandboxSessionKey,
-      sandbox: input.sandbox,
-    })
-  ) {
-    return filteredTools;
-  }
+export function restoreOpenClawShellDynamicTools<T extends { name: string }>(
+  filteredTools: T[],
+  allTools: T[],
+  pluginConfig: CodexPluginConfig,
+): T[] {
   let next = filteredTools;
   for (const toolName of ["exec", "process"]) {
-    if (isCodexDynamicToolExcluded(input.pluginConfig, [toolName])) {
+    if (isCodexDynamicToolExcluded(pluginConfig, [toolName])) {
       continue;
     }
     if (next.some((tool) => normalizeCodexDynamicToolName(tool.name) === toolName)) {
@@ -667,6 +661,39 @@ function addNodeShellDynamicToolsIfNeeded(
     next.push(tool);
   }
   return next;
+}
+
+function addNodeShellDynamicToolsIfNeeded(
+  filteredTools: OpenClawDynamicTool[],
+  allTools: OpenClawDynamicTool[],
+  input: DynamicToolBuildParams,
+): OpenClawDynamicTool[] {
+  if (
+    isCodexMemoryFlushRun(input.params) ||
+    !isCodexNativeExecutionBlockedByNodeExecHost(input.params, {
+      agentId: input.sessionAgentId,
+      runtimeSessionKey: input.sandboxSessionKey,
+      sandbox: input.sandbox,
+    })
+  ) {
+    return filteredTools;
+  }
+  return restoreOpenClawShellDynamicTools(filteredTools, allTools, input.pluginConfig);
+}
+
+function addDirectShellDynamicToolsIfNeeded(
+  filteredTools: OpenClawDynamicTool[],
+  allTools: OpenClawDynamicTool[],
+  input: DynamicToolBuildParams,
+): OpenClawDynamicTool[] {
+  if (
+    isCodexMemoryFlushRun(input.params) ||
+    input.nativeToolSurfaceEnabled !== true ||
+    input.sandbox?.enabled === true
+  ) {
+    return filteredTools;
+  }
+  return restoreOpenClawShellDynamicTools(filteredTools, allTools, input.pluginConfig);
 }
 
 /** Applies a normalized tool allowlist while preserving sandbox shell aliases for exec/process. */
