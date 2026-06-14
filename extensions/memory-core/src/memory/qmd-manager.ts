@@ -42,7 +42,7 @@ import {
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
-  type MemorySearchRuntimeDebug,
+  type MemorySearchOptions,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
@@ -1217,17 +1217,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     return true;
   }
 
-  async search(
-    query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      sources?: MemorySource[];
-    },
-  ): Promise<MemorySearchResult[]> {
+  async search(query: string, opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
       this.logScopeDenied(opts?.sessionKey);
       return [];

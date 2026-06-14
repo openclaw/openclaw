@@ -90,21 +90,19 @@ export type MemoryProviderStatus = {
   custom?: Record<string, unknown>;
 };
 
+export type MemorySearchOptions = {
+  maxResults?: number;
+  minScore?: number;
+  sessionKey?: string;
+  qmdSearchModeOverride?: "query" | "search" | "vsearch";
+  onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+  sources?: MemorySource[];
+  signal?: AbortSignal;
+};
+
 /** Search/read/sync/status contract implemented by memory managers. */
 export interface MemorySearchManager {
-  search(
-    query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      sources?: MemorySource[];
-      /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
-      signal?: AbortSignal;
-    },
-  ): Promise<MemorySearchResult[]>;
+  search(query: string, opts?: MemorySearchOptions): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
   sync?(params?: {

@@ -62,6 +62,7 @@ export type {
   MemoryProviderStatus,
   MemoryReadResult,
   MemorySearchManager,
+  MemorySearchOptions,
   MemorySearchRuntimeDebug,
   MemorySyncProgressUpdate,
   ResolvedMemoryBackendConfig,

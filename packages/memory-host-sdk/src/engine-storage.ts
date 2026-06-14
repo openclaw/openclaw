@@ -34,6 +34,7 @@ export type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
   MemorySearchManager,
+  MemorySearchOptions,
   MemorySearchRuntimeDebug,
   MemorySearchResult,
   MemorySource,
