@@ -111,6 +111,54 @@ describe("command-execution-startup", () => {
     ).toBe(true);
   });
 
+  it("keeps interactive and config-only agents add flows distinct in startup context", () => {
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: [
+          "node",
+          "openclaw",
+          "agents",
+          "add",
+          "alpha",
+          "--workspace",
+          "/tmp/agent-workspace",
+          "--non-interactive",
+          "--json",
+        ],
+        jsonOutputMode: true,
+      }).startupPolicy.loadPlugins,
+    ).toBe(false);
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "agents", "add", "alpha"],
+        jsonOutputMode: false,
+      }).startupPolicy.loadPlugins,
+    ).toBe(true);
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "agents", "add", "alpha", "--workspace=/tmp/agent-workspace"],
+        jsonOutputMode: false,
+      }).startupPolicy.loadPlugins,
+    ).toBe(false);
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: [
+          "node",
+          "openclaw",
+          "agents",
+          "add",
+          "alpha",
+          "--workspace",
+          "/tmp/agent-workspace",
+          "--bind",
+          "matrix",
+          "--json",
+        ],
+        jsonOutputMode: true,
+      }).startupPolicy.loadPlugins,
+    ).toBe(true);
+  });
+
   it("routes logs to stderr and emits banner only when allowed", async () => {
     await mod.applyCliExecutionStartupPresentation({
       startupPolicy: {
