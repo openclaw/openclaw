@@ -1,7 +1,11 @@
 /** Builds installed-index records from normalized plugin manifest registry entries. */
 import path from "node:path";
-import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeSortedUniqueStringEntries,
+  normalizeSortedUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
+import { isRecord } from "../utils.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -23,45 +27,79 @@ import type { PluginPackageChannel } from "./manifest.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import { hasKind } from "./slots.js";
 
+function readArray(value: unknown): readonly unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function readRecordKeys(value: unknown): string[] {
+  return isRecord(value) ? Object.keys(value) : [];
+}
+
+function normalizeRecordStringList(value: unknown): string[] {
+  return normalizeSortedUniqueTrimmedStringList(value);
+}
+
+function buildContractContributionInfo(value: unknown): Record<string, string[]> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const contracts: Record<string, string[]> = {};
+  for (const [key, entries] of Object.entries(value)) {
+    if (Array.isArray(entries)) {
+      contracts[key] = normalizeRecordStringList(entries);
+    }
+  }
+  return contracts;
+}
+
+function listModelCatalogContributionProviders(value: unknown): string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  const suppressions = readArray(value.suppressions).flatMap((entry) =>
+    isRecord(entry) ? normalizeRecordStringList([entry.provider]) : [],
+  );
+  return [...readRecordKeys(value.providers), ...readRecordKeys(value.aliases), ...suppressions];
+}
+
+function listCommandAliases(value: unknown): string[] {
+  return readArray(value).flatMap((alias) =>
+    isRecord(alias) ? normalizeRecordStringList([alias.name]) : [],
+  );
+}
+
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
+  const activation = isRecord(record.activation) ? record.activation : undefined;
   return {
-    sidecar: record.activation?.onStartup === true,
+    sidecar: activation?.onStartup === true,
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
-    agentHarnesses: normalizeSortedUniqueStringEntries([
-      ...(record.activation?.onAgentHarnesses ?? []),
-      ...(record.cliBackends ?? []),
+    agentHarnesses: normalizeRecordStringList([
+      ...readArray(activation?.onAgentHarnesses),
+      ...readArray(record.cliBackends),
     ]),
-    configPaths: normalizeSortedUniqueStringEntries(record.activation?.onConfigPaths),
+    configPaths: normalizeRecordStringList(activation?.onConfigPaths),
   };
 }
 
 function buildContributionInfo(record: PluginManifestRecord): InstalledPluginContributionInfo {
-  const contracts = Object.fromEntries(
-    Object.entries(record.contracts ?? {}).map(([key, values]) => [
-      key,
-      normalizeSortedUniqueStringEntries(values),
-    ]),
-  );
   return {
-    channels: normalizeSortedUniqueStringEntries(record.channels),
-    channelConfigs: normalizeSortedUniqueStringEntries(Object.keys(record.channelConfigs ?? {})),
-    providers: normalizeSortedUniqueStringEntries(record.providers),
-    modelCatalogProviders: normalizeSortedUniqueStringEntries([
-      ...Object.keys(record.modelCatalog?.providers ?? {}),
-      ...Object.keys(record.modelCatalog?.aliases ?? {}),
-      ...(record.modelCatalog?.suppressions ?? []).map((entry) => entry.provider),
-    ]),
-    modelSupportPrefixes: normalizeSortedUniqueStringEntries(record.modelSupport?.modelPrefixes),
-    modelSupportPatterns: normalizeSortedUniqueStringEntries(record.modelSupport?.modelPatterns),
-    autoEnableProviderIds: normalizeSortedUniqueStringEntries(
-      record.autoEnableWhenConfiguredProviders,
+    channels: normalizeRecordStringList(record.channels),
+    channelConfigs: normalizeSortedUniqueStringEntries(readRecordKeys(record.channelConfigs)),
+    providers: normalizeRecordStringList(record.providers),
+    modelCatalogProviders: normalizeSortedUniqueStringEntries(
+      listModelCatalogContributionProviders(record.modelCatalog),
     ),
-    commandAliases: normalizeSortedUniqueStringEntries(
-      record.commandAliases?.map((alias) => alias.name),
+    modelSupportPrefixes: normalizeRecordStringList(
+      isRecord(record.modelSupport) ? record.modelSupport.modelPrefixes : undefined,
     ),
-    contracts,
+    modelSupportPatterns: normalizeRecordStringList(
+      isRecord(record.modelSupport) ? record.modelSupport.modelPatterns : undefined,
+    ),
+    autoEnableProviderIds: normalizeRecordStringList(record.autoEnableWhenConfiguredProviders),
+    commandAliases: normalizeSortedUniqueStringEntries(listCommandAliases(record.commandAliases)),
+    contracts: buildContractContributionInfo(record.contracts),
   };
 }
 
@@ -70,31 +108,32 @@ export function collectPluginManifestCompatCodes(
   record: PluginManifestRecord,
 ): readonly PluginCompatCode[] {
   const codes: PluginCompatCode[] = [];
-  if (record.providerAuthEnvVars && Object.keys(record.providerAuthEnvVars).length > 0) {
+  if (readRecordKeys(record.providerAuthEnvVars).length > 0) {
     codes.push("provider-auth-env-vars");
   }
-  if (record.channelEnvVars && Object.keys(record.channelEnvVars).length > 0) {
+  if (readRecordKeys(record.channelEnvVars).length > 0) {
     codes.push("channel-env-vars");
   }
-  if (record.activation?.onProviders?.length) {
+  const activation = isRecord(record.activation) ? record.activation : undefined;
+  if (readArray(activation?.onProviders).length) {
     codes.push("activation-provider-hint");
   }
-  if (record.activation?.onAgentHarnesses?.length) {
+  if (readArray(activation?.onAgentHarnesses).length) {
     codes.push("activation-agent-harness-hint");
   }
-  if (record.activation?.onChannels?.length) {
+  if (readArray(activation?.onChannels).length) {
     codes.push("activation-channel-hint");
   }
-  if (record.activation?.onCommands?.length) {
+  if (readArray(activation?.onCommands).length) {
     codes.push("activation-command-hint");
   }
-  if (record.activation?.onRoutes?.length) {
+  if (readArray(activation?.onRoutes).length) {
     codes.push("activation-route-hint");
   }
-  if (record.activation?.onConfigPaths?.length) {
+  if (readArray(activation?.onConfigPaths).length) {
     codes.push("activation-config-path-hint");
   }
-  if (record.activation?.onCapabilities?.length) {
+  if (readArray(activation?.onCapabilities).length) {
     codes.push("activation-capability-hint");
   }
   return normalizeSortedUniqueStringEntries(codes) as readonly PluginCompatCode[];
