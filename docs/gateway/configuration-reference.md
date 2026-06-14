@@ -784,14 +784,14 @@ Validation and safety notes:
     gmail: {
       account: "openclaw@gmail.com",
       topic: "projects/<project-id>/topics/gog-gmail-watch",
-      subscription: "gog-gmail-watch-push",
-      pushToken: "shared-push-token",
+      delivery: {
+        mode: "pull",
+        subscription: "projects/<project-id>/subscriptions/gog-gmail-watch",
+      },
       hookUrl: "http://127.0.0.1:18789/hooks/gmail",
       includeBody: true,
       maxBytes: 20000,
       renewEveryMinutes: 720,
-      serve: { bind: "127.0.0.1", port: 8788, path: "/" },
-      tailscale: { mode: "funnel", path: "/gmail-pubsub" },
       model: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
       thinking: "off",
     },
@@ -799,8 +799,34 @@ Validation and safety notes:
 }
 ```
 
-- Gateway auto-starts `gog gmail watch serve` on boot when configured. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to disable.
-- Don't run a separate `gog gmail watch serve` alongside the Gateway.
+- Pull delivery starts `gog gmail watch pull` on boot. It consumes a Pub/Sub pull subscription from the gateway host and posts processed Gmail notifications into the local OpenClaw hook endpoint. It does not need `pushToken`, `serve`, `tailscale`, or a public HTTP callback URL.
+- Pull delivery requires `delivery.subscription` to be a full Pub/Sub subscription resource path: `projects/<project-id>/subscriptions/<subscription>`.
+- Do not run a separate `gog gmail watch pull` against the same subscription alongside the Gateway.
+- Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to disable the Gateway-managed Gmail watcher.
+
+Push delivery is still supported for existing deployments and explicit HTTP ingress setups. Omit `delivery.mode` to preserve existing push behavior, or set it explicitly:
+
+```json5
+{
+  hooks: {
+    gmail: {
+      account: "openclaw@gmail.com",
+      topic: "projects/<project-id>/topics/gog-gmail-watch",
+      delivery: {
+        mode: "push",
+        subscription: "gog-gmail-watch-push",
+      },
+      pushToken: "shared-push-token",
+      hookUrl: "http://127.0.0.1:18789/hooks/gmail",
+      serve: { bind: "127.0.0.1", port: 8788, path: "/" },
+      tailscale: { mode: "funnel", path: "/gmail-pubsub" },
+    },
+  },
+}
+```
+
+- Push delivery starts `gog gmail watch serve` and requires a Pub/Sub push subscription to reach the callback endpoint.
+- `openclaw webhooks gmail setup` remains push-oriented in this release. Pull-mode cloud setup is a later slice after pull delivery is dogfooded.
 
 ---
 

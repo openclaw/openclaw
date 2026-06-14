@@ -1812,7 +1812,7 @@ export const FIELD_HELP: Record<string, string> = {
   "hooks.mappings[].transform.export":
     "Named export to invoke from the transform module; defaults to module default export when omitted. Set this when one file hosts multiple transform handlers.",
   "hooks.gmail":
-    "Gmail push integration settings used for Pub/Sub notifications and optional local callback serving. Keep this scoped to dedicated Gmail automation accounts where possible.",
+    "Gmail integration settings used for Pub/Sub change notifications and local hook delivery. Keep this scoped to dedicated Gmail automation accounts where possible.",
   "hooks.gmail.account":
     "Google account identifier used for Gmail watch/subscription operations in this hook integration. Use a dedicated automation mailbox account to isolate operational permissions.",
   "hooks.gmail.label":
@@ -1820,9 +1820,15 @@ export const FIELD_HELP: Record<string, string> = {
   "hooks.gmail.topic":
     "Google Pub/Sub topic name used by Gmail watch to publish change notifications for this account. Ensure the topic IAM grants Gmail publish access before enabling watches.",
   "hooks.gmail.subscription":
-    "Pub/Sub subscription consumed by the gateway to receive Gmail change notifications from the configured topic. Keep subscription ownership clear so multiple consumers do not race unexpectedly.",
+    "Pub/Sub subscription name used by the Gmail integration. Push mode may use a short subscription name; pull mode should use delivery.subscription with a full Pub/Sub path.",
+  "hooks.gmail.delivery":
+    "Gmail Pub/Sub delivery mode configuration. Use pull for no-inbound local consumption, or push only when operating an intentional HTTP ingress path.",
+  "hooks.gmail.delivery.mode":
+    'Gmail Pub/Sub delivery mode. Use "pull" to start a local Pub/Sub consumer with no inbound HTTP endpoint, or "push" to start the existing HTTP callback server. Omitted mode preserves existing push behavior.',
+  "hooks.gmail.delivery.subscription":
+    "Full Pub/Sub subscription path used by pull mode, for example projects/<project>/subscriptions/<subscription>. Do not share one pull subscription between independent consumers.",
   "hooks.gmail.hookUrl":
-    "Public callback URL Gmail or intermediaries invoke to deliver notifications into this hook pipeline. Keep this URL protected with token validation and restricted network exposure.",
+    "OpenClaw hook URL invoked by the Gmail watcher after notification processing. Pull mode normally uses a loopback URL; push mode may use the same local hook behind the callback server.",
   "hooks.gmail.includeBody":
     "When true, fetch and include email body content for downstream mapping/agent processing. Keep false unless body text is required, because this increases payload size and sensitivity.",
   "hooks.gmail.allowUnsafeExternalContent":

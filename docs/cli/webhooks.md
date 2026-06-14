@@ -17,14 +17,14 @@ openclaw webhooks gmail setup --account <email> [...]
 openclaw webhooks gmail run   [--account <email>] [...]
 ```
 
-| Subcommand    | Description                                                                                  |
-| ------------- | -------------------------------------------------------------------------------------------- |
-| `gmail setup` | Configure Gmail watch, Pub/Sub topic/subscription, and the OpenClaw webhook delivery target. |
-| `gmail run`   | Run `gog watch serve` plus the watch auto-renew loop.                                        |
+| Subcommand    | Description                                                                              |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| `gmail setup` | Configure the existing Gmail Pub/Sub push flow and the OpenClaw webhook delivery target. |
+| `gmail run`   | Run the configured `gog gmail watch` delivery process plus the watch auto-renew loop.    |
 
 ## `webhooks gmail setup`
 
-Configure Gmail watch, Pub/Sub, and OpenClaw webhook delivery.
+Configure Gmail watch, Pub/Sub push, and OpenClaw webhook delivery.
 
 ```bash
 openclaw webhooks gmail setup --account you@example.com
@@ -83,17 +83,18 @@ openclaw webhooks gmail setup --account you@example.com --hook-url https://gatew
 
 ## `webhooks gmail run`
 
-Run `gog watch serve` plus the watch auto-renew loop in the foreground.
+Run the configured `gog gmail watch` delivery process plus the watch auto-renew loop in the foreground. Push configs start `gog gmail watch serve`; pull configs start `gog gmail watch pull`.
 
 ```bash
 openclaw webhooks gmail run --account you@example.com
 ```
 
-`run` accepts the same `gog watch serve`, OpenClaw delivery, Pub/Sub, and Tailscale flags as `setup`, except:
+`run` accepts the same push-oriented `gog watch serve`, OpenClaw delivery, Pub/Sub, and Tailscale flags as `setup`, except:
 
 - `--account` is **optional** on `run` (it falls back to the configured account).
 - `run` does **not** accept `--project`, `--push-endpoint`, or `--json`.
 - `run` flags have no built-in defaults; missing values fall back to the values written by `setup`.
+- Pull mode is selected from `hooks.gmail.delivery.mode` in config. Use `hooks.gmail.delivery.subscription` for the full pull subscription path.
 
 | Category          | Flags                                                                            |
 | ----------------- | -------------------------------------------------------------------------------- |

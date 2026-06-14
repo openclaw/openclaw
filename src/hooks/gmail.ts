@@ -6,6 +6,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import {
   type OpenClawConfig,
   DEFAULT_GATEWAY_PORT,
+  type HooksGmailDeliveryMode,
   type HooksGmailTailscaleMode,
   resolveGatewayPort,
 } from "../config/config.js";
@@ -27,6 +28,7 @@ let gogBin: string | undefined;
 
 export type GmailHookOverrides = {
   account?: string;
+  deliveryMode?: HooksGmailDeliveryMode;
   label?: string;
   topic?: string;
   subscription?: string;
@@ -44,17 +46,24 @@ export type GmailHookOverrides = {
   tailscaleTarget?: string;
 };
 
-export type GmailHookRuntimeConfig = {
+export type GmailHookBaseRuntimeConfig = {
   account: string;
   label: string;
   topic: string;
   subscription: string;
-  pushToken: string;
   hookToken: string;
   hookUrl: string;
   includeBody: boolean;
   maxBytes: number;
   renewEveryMinutes: number;
+};
+
+export type GmailHookPushRuntimeConfig = GmailHookBaseRuntimeConfig & {
+  delivery: {
+    mode: "push";
+    subscription: string;
+  };
+  pushToken: string;
   serve: {
     bind: string;
     port: number;
@@ -66,6 +75,27 @@ export type GmailHookRuntimeConfig = {
     target?: string;
   };
 };
+
+export type GmailHookPullRuntimeConfig = GmailHookBaseRuntimeConfig & {
+  delivery: {
+    mode: "pull";
+    subscription: string;
+  };
+};
+
+export type GmailHookRuntimeConfig = GmailHookPushRuntimeConfig | GmailHookPullRuntimeConfig;
+
+export function isGmailHookPushRuntimeConfig(
+  cfg: GmailHookRuntimeConfig,
+): cfg is GmailHookPushRuntimeConfig {
+  return cfg.delivery.mode === "push";
+}
+
+export function isGmailHookPullRuntimeConfig(
+  cfg: GmailHookRuntimeConfig,
+): cfg is GmailHookPullRuntimeConfig {
+  return cfg.delivery.mode === "pull";
+}
 
 export function generateHookToken(bytes = 24): string {
   return randomBytes(bytes).toString("hex");
@@ -127,12 +157,9 @@ export function resolveGmailHookRuntimeConfig(
     return { ok: false, error: "gmail topic required" };
   }
 
-  const subscription = overrides.subscription ?? gmail?.subscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
-
-  const pushToken = overrides.pushToken ?? gmail?.pushToken ?? "";
-  if (!pushToken) {
-    return { ok: false, error: "gmail push token required" };
-  }
+  const deliveryMode = overrides.deliveryMode ?? gmail?.delivery?.mode ?? "push";
+  const configuredSubscription =
+    overrides.subscription ?? gmail?.delivery?.subscription ?? gmail?.subscription;
 
   const hookUrl =
     overrides.hookUrl ??
@@ -154,6 +181,50 @@ export function resolveGmailHookRuntimeConfig(
     renewEveryMinutesRaw > 0
       ? Math.floor(renewEveryMinutesRaw)
       : DEFAULT_GMAIL_RENEW_MINUTES;
+
+  const label = overrides.label ?? gmail?.label ?? DEFAULT_GMAIL_LABEL;
+  const baseRuntimeConfig = {
+    account,
+    label,
+    topic,
+    hookToken,
+    hookUrl,
+    includeBody,
+    maxBytes,
+    renewEveryMinutes,
+  };
+
+  if (deliveryMode === "pull") {
+    if (!configuredSubscription) {
+      return { ok: false, error: "gmail pull subscription required" };
+    }
+    const subscriptionPath = parseSubscriptionPath(configuredSubscription);
+    if (!subscriptionPath) {
+      return {
+        ok: false,
+        error:
+          "gmail pull subscription must be a full Pub/Sub path (projects/<project>/subscriptions/<subscription>)",
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        ...baseRuntimeConfig,
+        subscription: configuredSubscription,
+        delivery: {
+          mode: "pull",
+          subscription: configuredSubscription,
+        },
+      },
+    };
+  }
+
+  const subscription = configuredSubscription ?? DEFAULT_GMAIL_SUBSCRIPTION;
+
+  const pushToken = overrides.pushToken ?? gmail?.pushToken ?? "";
+  if (!pushToken) {
+    return { ok: false, error: "gmail push token required" };
+  }
 
   const serveBind = overrides.serveBind ?? gmail?.serve?.bind ?? DEFAULT_GMAIL_SERVE_BIND;
   const servePortRaw = overrides.servePort ?? gmail?.serve?.port;
@@ -190,16 +261,13 @@ export function resolveGmailHookRuntimeConfig(
   return {
     ok: true,
     value: {
-      account,
-      label: overrides.label ?? gmail?.label ?? DEFAULT_GMAIL_LABEL,
-      topic,
+      ...baseRuntimeConfig,
       subscription,
+      delivery: {
+        mode: "push",
+        subscription,
+      },
       pushToken,
-      hookToken,
-      hookUrl,
-      includeBody,
-      maxBytes,
-      renewEveryMinutes,
       serve: {
         bind: serveBind,
         port: servePort,
@@ -215,7 +283,7 @@ export function resolveGmailHookRuntimeConfig(
 }
 
 export function buildGogWatchStartArgs(
-  cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
+  cfg: Pick<GmailHookBaseRuntimeConfig, "account" | "label" | "topic">,
 ): string[] {
   return [
     "gmail",
@@ -230,7 +298,7 @@ export function buildGogWatchStartArgs(
   ];
 }
 
-export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
+export function buildGogWatchServeArgs(cfg: GmailHookPushRuntimeConfig): string[] {
   const args = [
     "gmail",
     "watch",
@@ -259,12 +327,47 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
   return args;
 }
 
-export function buildGogWatchServeLogArgs(cfg: GmailHookRuntimeConfig): string[] {
-  return buildGogWatchServeArgs(cfg).filter(
-    (arg, index, args) =>
+export function buildGogWatchPullArgs(cfg: GmailHookPullRuntimeConfig): string[] {
+  const args = [
+    "gmail",
+    "watch",
+    "pull",
+    "--account",
+    cfg.account,
+    "--subscription",
+    cfg.delivery.subscription,
+    "--hook-url",
+    cfg.hookUrl,
+    "--hook-token",
+    cfg.hookToken,
+  ];
+  if (cfg.includeBody) {
+    args.push("--include-body");
+  }
+  if (cfg.maxBytes > 0) {
+    args.push("--max-bytes", String(cfg.maxBytes));
+  }
+  return args;
+}
+
+export function buildGogWatchPullHelpArgs(): string[] {
+  return ["gmail", "watch", "pull", "--help"];
+}
+
+function removeGogWatchSensitiveArgs(args: string[]): string[] {
+  return args.filter(
+    (arg, index, allArgs) =>
       !GMAIL_WATCH_SENSITIVE_FLAGS.has(arg) &&
-      !GMAIL_WATCH_SENSITIVE_FLAGS.has(args[index - 1] ?? ""),
+      !GMAIL_WATCH_SENSITIVE_FLAGS.has(allArgs[index - 1] ?? ""),
   );
+}
+
+export function buildGogWatchServeLogArgs(cfg: GmailHookPushRuntimeConfig): string[] {
+  return removeGogWatchSensitiveArgs(buildGogWatchServeArgs(cfg));
+}
+
+export function buildGogWatchPullLogArgs(cfg: GmailHookPullRuntimeConfig): string[] {
+  return removeGogWatchSensitiveArgs(buildGogWatchPullArgs(cfg));
 }
 
 export function resolveGogExecutable(): string {
@@ -311,6 +414,16 @@ export function parseTopicPath(topic: string): { projectId: string; topicName: s
     return null;
   }
   return { projectId: match[1] ?? "", topicName: match[2] ?? "" };
+}
+
+export function parseSubscriptionPath(
+  subscription: string,
+): { projectId: string; subscriptionName: string } | null {
+  const match = subscription.trim().match(/^projects\/([^/]+)\/subscriptions\/([^/]+)$/i);
+  if (!match) {
+    return null;
+  }
+  return { projectId: match[1] ?? "", subscriptionName: match[2] ?? "" };
 }
 
 function joinUrl(base: string, pathLocal: string): string {
