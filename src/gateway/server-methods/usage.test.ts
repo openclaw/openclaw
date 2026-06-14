@@ -327,7 +327,8 @@ describe("gateway usage helpers", () => {
 
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(3);
     expect(
-      vi.mocked(loadCostUsageSummaryFromCache)
+      vi
+        .mocked(loadCostUsageSummaryFromCache)
         .mock.calls.slice(1)
         .map((call) => call[0]?.agentId),
     ).toEqual(["main", "opus"]);

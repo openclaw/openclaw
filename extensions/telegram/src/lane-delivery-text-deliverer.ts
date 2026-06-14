@@ -364,7 +364,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     };
 
     const candidateTexts = [stream.lastDeliveredText?.(), lane.lastPartialText];
-    if (useFinalTextRecovery && remainingChunks.length === 0 && isPotentialTruncatedFinal(activeFullText)) {
+    if (
+      useFinalTextRecovery &&
+      remainingChunks.length === 0 &&
+      isPotentialTruncatedFinal(activeFullText)
+    ) {
       const resolvedFullCandidate = await params.resolveFinalTextCandidate?.({
         finalText: text,
         laneName,
@@ -379,7 +383,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
 
     const retainedPreview =
-      useFinalTextRecovery && remainingChunks.length === 0 && isPotentialTruncatedFinal(activeFullText)
+      useFinalTextRecovery &&
+      remainingChunks.length === 0 &&
+      isPotentialTruncatedFinal(activeFullText)
         ? selectLongerFinalText({
             finalText: activeFullText,
             candidateTexts,
@@ -443,7 +449,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     } else {
       await params.flushDraftLane(lane);
     }
-    const activeChunkIndexAfterStop = useFinalTextRecovery ? clampActiveChunkIndex() : activeChunkIndex;
+    const activeChunkIndexAfterStop = useFinalTextRecovery
+      ? clampActiveChunkIndex()
+      : activeChunkIndex;
     const activeChunkAfterStop = chunks[activeChunkIndexAfterStop] ?? activeChunk;
     const remainingChunksAfterStop = chunks.slice(activeChunkIndexAfterStop + 1);
 

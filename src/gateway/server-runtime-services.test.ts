@@ -378,5 +378,6 @@ function createMaintenanceHandles() {
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: setInterval(() => undefined, 60_000),
+    dailySessionReset: setInterval(() => undefined, 60_000),
   };
 }

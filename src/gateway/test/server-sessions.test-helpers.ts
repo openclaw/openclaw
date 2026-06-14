@@ -251,6 +251,7 @@ export function setupGatewaySessionsTestHarness() {
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
+    testState.gatewayBind = "loopback";
     harness = await startGatewayServerHarness();
     sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
   });

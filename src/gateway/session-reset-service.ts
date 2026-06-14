@@ -839,8 +839,12 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
-  reason: "new" | "reset";
+  reason: "new" | "reset" | "daily";
   commandSource: string;
+  expectedDailySession?: {
+    sessionId: string;
+    updatedAt: number;
+  };
   assertCurrent?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
@@ -889,6 +893,15 @@ export async function performGatewaySessionReset(params: {
     params.key,
     requestedAgentId ? { agentId: requestedAgentId } : undefined,
   );
+  if (
+    params.expectedDailySession &&
+    !matchesExpectedDailyResetEntry(entry, params.expectedDailySession)
+  ) {
+    return {
+      ok: false,
+      error: skippedDailyResetError(params.key),
+    };
+  }
   const hadExistingEntry = Boolean(entry);
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -904,7 +917,7 @@ export async function performGatewaySessionReset(params: {
   let deferredAcpResetState: { sessionKey: string; meta: SessionAcpMeta } | undefined;
   const hookEvent = createInternalHookEvent(
     "command",
-    params.reason,
+    params.reason === "new" ? "new" : "reset",
     target.canonicalKey ?? params.key,
     {
       sessionEntry: entry,
@@ -916,6 +929,18 @@ export async function performGatewaySessionReset(params: {
   );
   params.assertCurrent?.();
   await triggerInternalHook(hookEvent);
+  if (params.expectedDailySession) {
+    const { entry: currentEntry } = loadSessionEntry(
+      params.key,
+      requestedAgentId ? { agentId: requestedAgentId } : undefined,
+    );
+    if (!matchesExpectedDailyResetEntry(currentEntry, params.expectedDailySession)) {
+      return {
+        ok: false,
+        error: skippedDailyResetError(params.key),
+      };
+    }
+  }
   params.assertCurrent?.();
   // Cleanup below is destructive. Once it starts, finish rotating the same
   // session even if gateway ownership changes; otherwise runtime state can be
@@ -972,6 +997,12 @@ export async function performGatewaySessionReset(params: {
       ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
     });
     const currentEntry = store[primaryKey];
+    if (
+      params.expectedDailySession &&
+      !matchesExpectedDailyResetEntry(currentEntry, params.expectedDailySession)
+    ) {
+      return undefined;
+    }
     if (!isResetLifecycleCurrent() && currentEntry?.sessionId !== entry?.sessionId) {
       // A newer owner already replaced or removed the session while cleanup
       // targeted the old id. Preserve that newer state instead of resetting it.
@@ -1085,6 +1116,12 @@ export async function performGatewaySessionReset(params: {
     store[primaryKey] = nextEntry;
     return nextEntry;
   });
+  if (!next) {
+    return {
+      ok: false,
+      error: skippedDailyResetError(params.key),
+    };
+  }
   let committedAcpResetState: { sessionKey: string; meta: SessionAcpMeta } | undefined;
   if (deferredAcpResetState) {
     const identity = deferredAcpResetState.meta.identity;
@@ -1126,7 +1163,7 @@ export async function performGatewaySessionReset(params: {
     target,
     storePath,
     entry: resetSourceEntry,
-    reason: params.reason,
+    reason: params.reason === "new" ? "new" : "reset",
   });
 
   const archivedTranscripts = archiveSessionTranscriptsForSessionDetailed({
@@ -1183,4 +1220,21 @@ export async function performGatewaySessionReset(params: {
     agentId: target.agentId,
     storePath,
   };
+}
+
+function matchesExpectedDailyResetEntry(
+  entry: SessionEntry | undefined,
+  expected: { sessionId: string; updatedAt: number },
+) {
+  return entry?.sessionId === expected.sessionId && entry.updatedAt === expected.updatedAt;
+}
+
+function skippedDailyResetError(key: string) {
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    `Daily reset skipped for ${key}; session changed before reset mutation.`,
+    {
+      details: { skippedDailyReset: true },
+    },
+  );
 }

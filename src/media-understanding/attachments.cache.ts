@@ -357,10 +357,7 @@ export class MediaAttachmentCache {
         return usableCwdCandidate;
       }
       const stateCandidate = path.resolve(resolveStateDir(), rawPath);
-      const usableStateCandidate = resolveUsableLocalCandidate(
-        stateCandidate,
-        this.localPathRoots,
-      );
+      const usableStateCandidate = resolveUsableLocalCandidate(stateCandidate, this.localPathRoots);
       if (usableStateCandidate) {
         return usableStateCandidate;
       }

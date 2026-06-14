@@ -102,12 +102,16 @@ function stopMaintenanceTimers(timers: {
   healthInterval: NodeJS.Timeout;
   dedupeCleanup: NodeJS.Timeout;
   mediaCleanup: NodeJS.Timeout | null;
+  dailySessionReset: NodeJS.Timeout | null;
 }) {
   clearInterval(timers.tickInterval);
   clearInterval(timers.healthInterval);
   clearInterval(timers.dedupeCleanup);
   if (timers.mediaCleanup) {
     clearInterval(timers.mediaCleanup);
+  }
+  if (timers.dailySessionReset) {
+    clearInterval(timers.dailySessionReset);
   }
 }
 
@@ -127,8 +131,96 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(cleanOldMediaMock).not.toHaveBeenCalled();
     expect(timers.mediaCleanup).toBeNull();
+    expect(timers.dailySessionReset).toBeNull();
 
     stopMaintenanceTimers(timers);
+  });
+
+  it("broadcasts sessions.changed after successful scheduled daily resets", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const startDailySessionResetSchedulerMock = vi.fn(
+      (params: {
+        onSuccessfulReset?: (payload: { sessionKey: string; agentId?: string }) => void;
+      }) => {
+        params.onSuccessfulReset?.({ sessionKey: "agent:main:main", agentId: "main" });
+        return setInterval(() => {}, 60_000);
+      },
+    );
+    const loadGatewaySessionRowMock = vi.fn(() => ({
+      updatedAt: 123,
+      sessionId: "sess-new",
+      kind: "main",
+      channel: "cli",
+      modelProvider: "openai",
+      model: "gpt-5",
+      status: "idle",
+    }));
+    vi.doMock("./session-daily-reset-scheduler.js", () => ({
+      startDailySessionResetScheduler: startDailySessionResetSchedulerMock,
+    }));
+    vi.doMock("./session-utils.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
+      return {
+        ...actual,
+        loadGatewaySessionRow: loadGatewaySessionRowMock,
+      };
+    });
+
+    try {
+      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+      const deps = createMaintenanceTimerDeps();
+      const broadcast = vi.fn();
+      const nodeSendToAllSubscribed = vi.fn();
+
+      const timers = startGatewayMaintenanceTimers({
+        ...deps,
+        broadcast,
+        nodeSendToAllSubscribed,
+        cfg: {
+          session: {
+            store: "/tmp/test-sessions.json",
+            reset: { mode: "daily", atHour: 4 },
+          },
+          agents: {
+            list: [{ id: "main" }],
+          },
+        },
+      });
+
+      expect(startDailySessionResetSchedulerMock).toHaveBeenCalledOnce();
+      expect(loadGatewaySessionRowMock).toHaveBeenCalledWith("agent:main:main", undefined);
+      expect(broadcast).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          reason: "reset",
+          sessionId: "sess-new",
+          updatedAt: 123,
+          modelProvider: "openai",
+          model: "gpt-5",
+          status: "idle",
+        }),
+        { dropIfSlow: true },
+      );
+      expect(nodeSendToAllSubscribed).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          reason: "reset",
+          sessionId: "sess-new",
+        }),
+      );
+
+      stopMaintenanceTimers(timers);
+    } finally {
+      vi.doUnmock("./session-daily-reset-scheduler.js");
+      vi.doUnmock("./session-utils.js");
+      vi.resetModules();
+    }
   });
 
   it("runs startup media cleanup and repeats it hourly", async () => {

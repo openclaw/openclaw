@@ -26,12 +26,12 @@ import {
   setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
-import { waitForWaConnection } from "./session.js";
 import {
   createTestLegacyFlatWebInboundMessage,
   createTestWebInboundMessage,
 } from "./inbound/test-message.test-helper.js";
 import type { WebInboundMessageInput } from "./inbound/types.js";
+import { waitForWaConnection } from "./session.js";
 
 type DrainSelectionEntry = {
   channel: string;

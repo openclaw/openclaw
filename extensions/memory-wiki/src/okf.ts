@@ -344,11 +344,12 @@ function safeDecodeOkfLinkPath(value: string | undefined): string {
 function getMarkdownDestinationSuffix(destination: string): string {
   const queryIndex = destination.indexOf("?");
   const fragmentIndex = destination.indexOf("#");
-  const suffixIndex = queryIndex === -1
-    ? fragmentIndex
-    : fragmentIndex === -1
-      ? queryIndex
-      : Math.min(queryIndex, fragmentIndex);
+  const suffixIndex =
+    queryIndex === -1
+      ? fragmentIndex
+      : fragmentIndex === -1
+        ? queryIndex
+        : Math.min(queryIndex, fragmentIndex);
   return suffixIndex === -1 ? "" : destination.slice(suffixIndex);
 }
 
