@@ -88,14 +88,14 @@ describeLive("OpenAI tool projection live", () => {
     });
   }, 45_000);
 
-  it("calls a healthy Chat Completions function after quarantining an unreadable sibling", async () => {
+  it("calls a GPT-5.5 Chat Completions function without incompatible reasoning effort", async () => {
     const model = {
       id: modelId,
       name: modelId,
       api: "openai-completions",
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
+      reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
@@ -103,6 +103,7 @@ describeLive("OpenAI tool projection live", () => {
     } satisfies Model<"openai-completions">;
     const params = buildOpenAICompletionsParams(model, context, {
       maxTokens: 128,
+      reasoning: "low",
       toolChoice: {
         type: "allowed_tools",
         allowed_tools: {
@@ -114,6 +115,7 @@ describeLive("OpenAI tool projection live", () => {
         },
       },
     });
+    expect(params).not.toHaveProperty("reasoning_effort");
     const { stream_options: _streamOptions, ...nonStreamingParams } = params;
 
     const response = await client.chat.completions.create({
