@@ -49,7 +49,7 @@ export async function deliverReplies(params: {
           config: params.cfg,
           maxBytes,
           accountId,
-          replyToId: payload.replyToId,
+          replyToId: payload.replyToId ?? undefined,
         });
         sentMessageCache?.remember(scope, {
           text: sent.echoText ?? sent.sentText,
@@ -62,7 +62,7 @@ export async function deliverReplies(params: {
           mediaUrl,
           maxBytes,
           accountId,
-          replyToId: payload.replyToId,
+          replyToId: payload.replyToId ?? undefined,
         });
         sentMessageCache?.remember(scope, {
           text: sent.echoText ?? (sent.sentText || undefined),

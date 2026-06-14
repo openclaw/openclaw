@@ -239,6 +239,7 @@ describe("delivery-queue recovery", () => {
         accountId: "acct-1",
         payloads: [{ text: "maybe sent" }],
         replyToId: "root-message",
+        quoteAuthor: "uuid:sender-1",
         threadId: "thread-1",
         silent: true,
       },
@@ -293,6 +294,7 @@ describe("delivery-queue recovery", () => {
       accountId?: string;
       payloads?: unknown;
       replyToId?: string;
+      quoteAuthor?: string;
       threadId?: string;
       silent?: boolean;
       retryCount?: number;
@@ -304,6 +306,7 @@ describe("delivery-queue recovery", () => {
     expect(reconcileInput.accountId).toBe("acct-1");
     expect(reconcileInput.payloads).toEqual([{ text: "maybe sent" }]);
     expect(reconcileInput.replyToId).toBe("root-message");
+    expect(reconcileInput.quoteAuthor).toBe("uuid:sender-1");
     expect(reconcileInput.threadId).toBe("thread-1");
     expect(reconcileInput.silent).toBe(true);
     expect(reconcileInput.retryCount).toBe(0);
@@ -313,6 +316,7 @@ describe("delivery-queue recovery", () => {
       to?: string;
       accountId?: string;
       replyToId?: string;
+      quoteAuthor?: string;
       threadId?: string;
       silent?: boolean;
       result?: { messageId?: string };
@@ -321,6 +325,7 @@ describe("delivery-queue recovery", () => {
     expect(afterCommitInput.to).toBe("+1");
     expect(afterCommitInput.accountId).toBe("acct-1");
     expect(afterCommitInput.replyToId).toBe("root-message");
+    expect(afterCommitInput.quoteAuthor).toBe("uuid:sender-1");
     expect(afterCommitInput.threadId).toBe("thread-1");
     expect(afterCommitInput.silent).toBe(true);
     expect(afterCommitInput.result?.messageId).toBe("platform-1");
@@ -545,6 +550,7 @@ describe("delivery-queue recovery", () => {
         payloads: [{ text: "a" }],
         replyToId: "root-message",
         replyToMode: "first",
+        quoteAuthor: "uuid:sender-1",
         formatting: {
           textLimit: 1234,
           maxLinesPerMessage: 7,
@@ -582,6 +588,7 @@ describe("delivery-queue recovery", () => {
       silent?: boolean;
       replyToId?: string;
       replyToMode?: string;
+      quoteAuthor?: string;
       formatting?: unknown;
       gatewayClientScopes?: string[];
       mirror?: unknown;
@@ -592,6 +599,7 @@ describe("delivery-queue recovery", () => {
     expect(deliverInput.silent).toBe(true);
     expect(deliverInput.replyToId).toBe("root-message");
     expect(deliverInput.replyToMode).toBe("first");
+    expect(deliverInput.quoteAuthor).toBe("uuid:sender-1");
     expect(deliverInput.formatting).toEqual({
       textLimit: 1234,
       maxLinesPerMessage: 7,

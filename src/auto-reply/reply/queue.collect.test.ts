@@ -1330,6 +1330,111 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
   });
 
+  // Regression: when a Signal user quote-replies while the agent is busy, the
+  // inbound body is queued with the `[Quoting ... id:<ts>] "<body>" [/Quoting]`
+  // marker baked in by the Signal event handler. The "Queued messages while
+  // agent was busy" wrapper builds its merged prompt purely from each item's
+  // `prompt`, so the wrapped output must still carry the quote marker, the
+  // quote id, the quoted body, and the quoting author — otherwise the agent
+  // loses the conversational thread the user was responding to. See
+  // openclaw#36630 (fix(signal): complete bidirectional quote-reply support).
+  it("preserves Signal quote markers and structured context when wrapping queued messages", async () => {
+    const key = `test-collect-signal-quote-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const signalRoute = {
+      originatingChannel: "signal" as const,
+      originatingTo: "signal:+15550001111",
+      originatingAccountId: "main",
+    };
+    const quotedAuthor = "+15550002222";
+    const quotedId = "1700000000000";
+    const quotedBody = "the meeting is at 3pm";
+    const quoteMarker = `[Quoting ${quotedAuthor} id:${quotedId}]\n"${quotedBody}"\n[/Quoting]`;
+    const replyContext = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      JSON.stringify(
+        {
+          chat_id: signalRoute.originatingTo,
+          message_id: "1700000000006",
+          reply_to_id: quotedId,
+          has_reply_context: true,
+        },
+        null,
+        2,
+      ),
+      "```",
+      "Reply target of current user message (untrusted, for context):",
+      "```json",
+      JSON.stringify(
+        {
+          sender_label: quotedAuthor,
+          is_quote: true,
+          body: quotedBody,
+        },
+        null,
+        2,
+      ),
+      "```",
+    ].join("\n");
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "got it",
+        messageId: "1700000000005",
+        ...signalRoute,
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: `yes please send it\n\n${quoteMarker}`,
+          messageId: "1700000000006",
+          ...signalRoute,
+        }),
+        currentInboundContext: { text: replyContext },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    expect(calls).toHaveLength(1);
+    const merged = calls[0]?.prompt ?? "";
+    expect(merged).toContain("[Queued messages while agent was busy]");
+    expect(merged).toContain("got it");
+    expect(merged).toContain("yes please send it");
+    expect(merged).toContain(`[Quoting ${quotedAuthor} id:${quotedId}]`);
+    expect(merged).toContain(quotedBody);
+    expect(merged).toContain("[/Quoting]");
+    expect(calls[0]?.currentInboundContext?.text).toContain("Queued #2 current-turn context:");
+    expect(calls[0]?.currentInboundContext?.text).toContain('"reply_to_id": "1700000000000"');
+    expect(calls[0]?.currentInboundContext?.text).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(calls[0]?.currentInboundContext?.text).toContain(`"sender_label": "${quotedAuthor}"`);
+    expect(calls[0]?.currentInboundContext?.text).toContain('"is_quote": true');
+    expect(calls[0]?.currentInboundContext?.text).toContain(`"body": "${quotedBody}"`);
+    expect(calls[0]?.currentInboundContext?.promptJoiner).toBe("\n\n");
+    expect(calls[0]?.originatingChannel).toBe("signal");
+    expect(calls[0]?.originatingTo).toBe("signal:+15550001111");
+  });
+
   it("preserves live item abort metadata on overflow summary followups", async () => {
     const key = `test-overflow-summary-runtime-${Date.now()}`;
     const calls: FollowupRun[] = [];

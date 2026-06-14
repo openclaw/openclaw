@@ -39,7 +39,8 @@ export type OutboundReplyPayload = {
   /** Marks media as sensitive for channel-specific spoiler/safety handling. */
   sensitiveMedia?: boolean;
   /** Platform message id that the outbound reply should target when supported. */
-  replyToId?: string;
+  // null explicitly suppresses inherited reply metadata (distinct from undefined = "not set")
+  replyToId?: string | null;
 };
 
 /** Minimal payload shape used to identify reasoning/thinking replies. */
@@ -106,7 +107,17 @@ export function isReasoningReplyPayload(payload: ReasoningReplyPayload): boolean
 export function normalizeOutboundReplyPayload(
   payload: Record<string, unknown>,
 ): OutboundReplyPayload {
-  return normalizeCoreOutboundReplyPayload(payload);
+  const normalized = normalizeCoreOutboundReplyPayload(payload);
+  // Core normalization coerces replyToId to string|undefined; preserve the SDK's
+  // explicit null suppression signal (null = "do not reply", distinct from
+  // undefined = "not set") that the core helper would otherwise drop.
+  const replyToId =
+    typeof payload.replyToId === "string"
+      ? payload.replyToId
+      : payload.replyToId === null
+        ? null
+        : undefined;
+  return { ...normalized, replyToId };
 }
 
 /** Wrap a deliverer so callers can hand it arbitrary payloads while channels receive normalized data. */
@@ -506,7 +517,7 @@ export async function deliverFormattedTextWithAttachments(params: {
   }
   await params.send({
     text,
-    replyToId: params.payload.replyToId,
+    replyToId: params.payload.replyToId ?? undefined,
   });
   return true;
 }

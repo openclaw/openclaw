@@ -179,9 +179,18 @@ function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
   );
 }
 
+/**
+ * Determines whether an item carries runtime-only metadata that must NOT be
+ * coalesced into a collect batch (i.e. forces per-item drain).
+ *
+ * `currentInboundContext` alone (without `currentInboundEventKind === "room_event"`)
+ * is allowed to be merged: that is how Signal quote-reply contexts ride along
+ * with their adjacent user message in a collect batch. See openclaw#36630 and
+ * `mergeCurrentInboundContext` below for the merge semantics.
+ */
 function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
   return Boolean(
-    hasCurrentTurnRuntimeMetadata(item) ||
+    item.currentInboundEventKind === "room_event" ||
     item.abortSignal ||
     item.deliveryCorrelations?.length ||
     item.queuedLifecycle,
@@ -216,6 +225,41 @@ function combineAbortSignals(items: readonly FollowupRun[]): AbortSignal | undef
   return controller.signal;
 }
 
+/**
+ * Aggregate `currentInboundContext` text across queued items.
+ *
+ * When the auth group is a single item (overflow/summary case or a singleton
+ * collect batch), pass its context through verbatim — preserves upstream
+ * behavior and existing single-item tests. When multiple queued items are
+ * being merged in a collect batch (e.g. Signal quote-replies wrapped into a
+ * "Queued messages while agent was busy" prompt), prefix each context with
+ * its queue position so the agent can correlate the reply target with the
+ * right queued message. See openclaw#36630.
+ */
+function mergeCurrentInboundContext(
+  items: FollowupRun[],
+  fallback: FollowupRun["currentInboundContext"],
+): FollowupRun["currentInboundContext"] {
+  const contexts: Array<{ index: number; text: string }> = [];
+  for (const [index, item] of items.entries()) {
+    const text = item.currentInboundContext?.text.trim();
+    if (!text) {
+      continue;
+    }
+    contexts.push({ index, text });
+  }
+  if (contexts.length === 0) {
+    return fallback;
+  }
+  if (items.length === 1) {
+    return items[0]?.currentInboundContext ?? fallback;
+  }
+  const merged = contexts
+    .map(({ index, text }) => `Queued #${index + 1} current-turn context:\n${text}`)
+    .join("\n\n");
+  return { text: merged, promptJoiner: "\n\n" };
+}
+
 function collectRuntimeMetadata(
   items: FollowupRun[],
   singletonOwner?: FollowupRun,
@@ -228,10 +272,13 @@ function collectRuntimeMetadata(
   const abortSignal = singletonOwner?.abortSignal ?? combineAbortSignals(candidates);
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const lifecycleSource = singletonOwner ?? items.find((item) => item.queuedLifecycle);
+  const currentInboundContext = singletonOwner
+    ? currentTurnSource?.currentInboundContext
+    : mergeCurrentInboundContext(items, currentTurnSource?.currentInboundContext);
   return {
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
-    currentInboundContext: currentTurnSource?.currentInboundContext,
+    currentInboundContext,
     abortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     queuedLifecycle:

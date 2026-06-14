@@ -18,7 +18,8 @@ export async function deliverGoogleChatReply(params: {
     text?: string;
     mediaUrls?: string[];
     mediaUrl?: string;
-    replyToId?: string;
+    // null mirrors OutboundReplyPayload.replyToId: explicit suppression of inherited reply metadata.
+    replyToId?: string | null;
   };
   account: ResolvedGoogleChatAccount;
   spaceId: string;
@@ -76,7 +77,7 @@ export async function deliverGoogleChatReply(params: {
       account,
       space: spaceId,
       text: chunk,
-      thread: payload.replyToId,
+      thread: payload.replyToId ?? undefined,
     });
   };
   await deliverTextOrMediaReply({
@@ -131,7 +132,7 @@ export async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: payload.replyToId ?? undefined,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
