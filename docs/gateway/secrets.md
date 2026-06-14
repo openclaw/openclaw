@@ -377,6 +377,64 @@ the config fields that accept SecretRefs.
     ```
 
   </Accordion>
+  <Accordion title="Native OS Keychain (macOS / Linux / Windows)">
+    Use a resolver wrapper when you want SecretRef ids to map to secrets stored
+    in the operating system's native encrypted keychain. The repository includes
+    `scripts/secrets/openclaw-keychain-resolver.mjs`; install or copy it to an
+    absolute trusted path on the host that runs the Gateway.
+
+    Requirements:
+
+    - `keytar` npm package installed on the Gateway host:
+      `npm install -g keytar` or `npm install -g openclaw-keychain-resolver`.
+    - On Linux: `libsecret` and a running keyring daemon (`gnome-keyring` or
+      `kwallet`). Install with `apt install libsecret-1-dev` or
+      `dnf install libsecret-devel`.
+    - On Windows: no extra steps — DPAPI / Credential Manager is built in.
+
+    Store secrets using the companion `ckg` CLI before starting the Gateway:
+
+    ```bash
+    ckg set ANTHROPIC_API_KEY  sk-ant-your-key-here
+    ckg set OPENAI_API_KEY     sk-your-openai-key
+    ckg list
+    ```
+
+    ```json5
+    {
+      secrets: {
+        providers: {
+          keychain: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-keychain-resolver",
+            jsonOnly: true,
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            apiKey: {
+              source: "exec",
+              provider: "keychain",
+              id: "ANTHROPIC_API_KEY",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The resolver fetches each requested id from the OS keychain under the
+    service name `openclaw-keychain`. Secrets are encrypted at rest by the OS
+    and are unlocked only when the user session is active. After updating
+    config, verify the resolver path:
+
+    ```bash
+    openclaw secrets audit --allow-exec
+    ```
+
+  </Accordion>
   <Accordion title="HashiCorp Vault CLI">
     ```json5
     {
