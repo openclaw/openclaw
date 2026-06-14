@@ -274,6 +274,7 @@ type RecallSubagentResult = {
   transcriptPath?: string;
   searchDebug?: ActiveMemorySearchDebug;
   hasUsableMemoryResult?: boolean;
+  hasUnavailableMemorySearchResult?: boolean;
 };
 
 type TerminalMemorySearchResult = {
@@ -1903,15 +1904,18 @@ async function readMergedActiveMemoryTranscriptState(params: {
 }): Promise<{
   searchDebug?: ActiveMemorySearchDebug;
   hasUsableMemoryResult: boolean;
+  hasUnavailableMemorySearchResult: boolean;
 }> {
   let searchDebug: ActiveMemorySearchDebug | undefined;
   let hasUsableMemoryResult = false;
+  let hasUnavailableMemorySearchResult = false;
   for (const sessionFile of new Set(params.sessionFiles)) {
     const state = await readActiveMemoryTranscriptState(sessionFile, undefined, params.toolsAllow);
     searchDebug = state.searchDebug ?? searchDebug;
     hasUsableMemoryResult ||= state.hasUsableMemoryResult;
+    hasUnavailableMemorySearchResult ||= state.hasUnavailableMemorySearchResult;
   }
-  return { searchDebug, hasUsableMemoryResult };
+  return { searchDebug, hasUsableMemoryResult, hasUnavailableMemorySearchResult };
 }
 
 async function readTerminalMemorySearchResult(
@@ -2244,7 +2248,11 @@ function buildSubagentRecallResult(params: {
   const hasUsableMemoryResult =
     params.subagentResult.hasUsableMemoryResult === true ||
     params.fallbackHasUsableMemoryResult === true;
-  const canUseSummary = !isUnavailableMemorySearchDebug(searchDebug) || hasUsableMemoryResult;
+  const hasUnavailableMemorySearchResult =
+    params.subagentResult.hasUnavailableMemorySearchResult === true;
+  const canUseSummary =
+    (!isUnavailableMemorySearchDebug(searchDebug) && !hasUnavailableMemorySearchResult) ||
+    hasUsableMemoryResult;
   return summary.length > 0 && canUseSummary
     ? {
         status: "ok",
@@ -2260,7 +2268,9 @@ function buildSubagentRecallResult(params: {
           summary: null,
           searchDebug,
         }
-      : resultStatus === "unavailable" || isUnavailableMemorySearchDebug(searchDebug)
+      : resultStatus === "unavailable" ||
+          isUnavailableMemorySearchDebug(searchDebug) ||
+          hasUnavailableMemorySearchResult
         ? {
             status: "unavailable",
             elapsedMs: params.elapsedMs,
@@ -2818,6 +2828,7 @@ async function runRecallSubagent(params: {
       transcriptPath: params.config.persistTranscripts ? activeSessionFile : undefined,
       searchDebug,
       hasUsableMemoryResult: transcriptState.hasUsableMemoryResult,
+      hasUnavailableMemorySearchResult: transcriptState.hasUnavailableMemorySearchResult,
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
@@ -3278,8 +3289,8 @@ export default definePluginEntry({
       },
     });
 
-    // The recall watchdog owns the configured deadline. The hook needs a small
-    // completion allowance for bounded abort recovery and transcript reading.
+    // Recall work stops at the configured deadline. The outer hook keeps a
+    // fixed completion allowance for abort settlement and transcript recovery.
     const beforePromptBuildTimeoutMs =
       config.timeoutMs + config.setupGraceTimeoutMs + HOOK_TIMEOUT_RECOVERY_GRACE_MS;
     api.on(
