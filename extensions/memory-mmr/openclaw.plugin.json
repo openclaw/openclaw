@@ -6,6 +6,8 @@
   "activation": {
     "onStartup": true,
     "onConfigPaths": [
+      "agents.defaults.memorySearch.query.hybrid.mmr.enabled",
+      "agents.*.memorySearch.query.hybrid.mmr.enabled",
       "agents.defaults.memorySearch.query.hybrid.mmr.provider",
       "agents.*.memorySearch.query.hybrid.mmr.provider",
       "agents.defaults.memorySearch.query.hybrid.mmr.fallback",
