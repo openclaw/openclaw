@@ -41,6 +41,7 @@ import {
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
   shouldRetryMissingAssistantTurn,
+  shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -693,7 +694,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it("does not retry reasoning-only turns when the assistant ended in error", async () => {
+  it("retries reasoning-only turns when the assistant ended in error", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -714,6 +715,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Recovered." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
 
     const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
@@ -722,9 +735,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runId: "run-reasoning-only-assistant-error",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("Please try again");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
   });
 
   it("does not retry reasoning-only turns for non-strict-agentic providers", async () => {
@@ -2527,6 +2539,191 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBeNull();
+  });
+
+  it("surfaces incomplete-turn text for errored signed-thinking-only turns with payloads", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "anthropic",
+          model: "claude-opus-4-8",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning before provider error",
+              thinkingSignature: JSON.stringify({ id: "rs_error_payload", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
+  it.each([
+    [
+      "heartbeat responses",
+      {
+        heartbeatToolResponse: {
+          outcome: "progress" as const,
+          notify: false,
+          summary: "Still working",
+        },
+      },
+    ],
+    ["tool media", { toolMediaUrls: ["file:///tmp/render.png"] }],
+    ["voice media", { toolAudioAsVoice: true }],
+    ["trusted local media", { toolTrustedLocalMedia: true }],
+    [
+      "source reply payloads",
+      { messagingToolSourceReplyPayloads: [{ text: "Delivered through the source reply." }] },
+    ],
+    ["delivered source replies", { didDeliverSourceReplyViaMessageTool: true }],
+  ] satisfies Array<[string, Partial<EmbeddedRunAttemptResult>]>)(
+    "does not replace terminal %s with an incomplete-turn warning",
+    (_label, attemptState) => {
+      const incompleteTurnText = resolveIncompleteTurnPayloadText({
+        payloadCount: 1,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          ...attemptState,
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "error",
+            provider: "anthropic",
+            model: "claude-opus-4-8",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal reasoning before provider error",
+                thinkingSignature: JSON.stringify({
+                  id: "rs_terminal_payload",
+                  type: "reasoning",
+                }),
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      });
+
+      expect(incompleteTurnText).toBeNull();
+    },
+  );
+
+  it("retries replay-safe errored turns that only emitted thinking blocks", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning before provider error",
+          thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+        },
+        { type: "redacted_thinking", data: "opaque" },
+        { type: "text", text: " " },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not retry errored empty turns when non-zero output may indicate progress", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      content: [],
+      usage: { input: 100, output: 12, totalTokens: 112 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "visible text",
+      content: [
+        { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+        { type: "text", text: "partial answer" },
+      ],
+    },
+    {
+      name: "tool call",
+      content: [
+        { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
+      ],
+    },
+    {
+      name: "unknown block",
+      content: [{ type: "provider_metadata", value: "opaque" }],
+    },
+  ])("does not retry errored turns containing $name", ({ content }) => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content,
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not retry errored thinking-only turns after side effects", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "redacted_thinking",
+          data: "opaque",
+        },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(false);
   });
 
   it("detects empty openai-compatible stop turns with non-zero output usage", () => {

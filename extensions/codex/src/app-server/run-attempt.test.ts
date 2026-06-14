@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -1290,33 +1291,35 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps leading delivery hints out of the Codex current user request", async () => {
-    const sessionFile = path.join(tempDir, "session-delivery-hint.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-delivery-hint");
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.prompt = "Delivery: to send a message, use the `message` tool.\n\nhello";
-    params.skillsSnapshot = {
-      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
-      skills: [],
-    };
+    for (const [index, deliveryHint] of MESSAGE_TOOL_DELIVERY_HINTS.entries()) {
+      const sessionFile = path.join(tempDir, `session-delivery-hint-${index}.jsonl`);
+      const workspaceDir = path.join(tempDir, `workspace-delivery-hint-${index}`);
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.prompt = `${deliveryHint}\n\nhello`;
+      params.skillsSnapshot = {
+        prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+        skills: [],
+      };
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
 
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const turnStartParams = turnStart?.params as {
-      input?: Array<{ text?: string }>;
-    };
-    const inputText = turnStartParams.input?.[0]?.text ?? "";
-    expect(inputText).toContain("OpenClaw delivery metadata:");
-    expect(inputText).toContain(
-      "This delivery metadata is runtime routing guidance, not the user's request.",
-    );
-    expect(inputText).toContain("Delivery: to send a message, use the `message` tool.");
-    expect(inputText).toContain("Current user request:\nhello");
-    expect(inputText).not.toContain("Current user request:\nDelivery:");
+      const turnStart = harness.requests.find((request) => request.method === "turn/start");
+      const turnStartParams = turnStart?.params as {
+        input?: Array<{ text?: string }>;
+      };
+      const inputText = turnStartParams.input?.[0]?.text ?? "";
+      expect(inputText).toContain("OpenClaw delivery metadata:");
+      expect(inputText).toContain(
+        "This delivery metadata is runtime routing guidance, not the user's request.",
+      );
+      expect(inputText).toContain(deliveryHint);
+      expect(inputText).toContain("Current user request:\nhello");
+      expect(inputText).not.toContain("Current user request:\nDelivery:");
+    }
   });
 
   it("mirrors the Codex prompt into the transcript when the turn starts", async () => {

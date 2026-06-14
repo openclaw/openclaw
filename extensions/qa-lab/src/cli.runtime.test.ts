@@ -1405,7 +1405,7 @@ describe("qa cli runtime", () => {
 
       expect(process.exitCode).toBe(1);
       expectWriteContains(stdoutWrite, "- Verdict: fail");
-      expectWriteContains(stdoutWrite, "web-search missing codex tool call web_search");
+      expectWriteContains(stdoutWrite, "web_search missing codex tool call web_search");
     } finally {
       process.exitCode = priorExitCode;
       await fs.rm(repoRoot, { recursive: true, force: true });
