@@ -655,13 +655,20 @@ function extractMessagingToolSourceReplyPayload(
   if (!details || details.sourceReplySink !== "internal-ui") {
     return undefined;
   }
+  const sourceReply = readRecordField(details.sourceReply) ?? details;
+  if (
+    hasMessagingToolNonDeliveryEvidence(details) ||
+    hasMessagingToolNonDeliveryEvidence(sourceReply) ||
+    !hasCommittedMessagingToolResultDetails(details)
+  ) {
+    return undefined;
+  }
   const status =
     normalizeOptionalLowercaseString(details.deliveryStatus) ??
     normalizeOptionalLowercaseString(details.delivery_status);
   if (status && status !== "sent") {
     return undefined;
   }
-  const sourceReply = readRecordField(details.sourceReply) ?? details;
   const payload: MessagingToolSourceReplyPayload = {};
   const text = readStringField(sourceReply, "text") ?? readStringField(details, "message");
   if (text) {

@@ -4576,6 +4576,7 @@ async function runEmbeddedAgentInternal(
             assistantTextPayloadsArePlanningOnlyText && Boolean(planningOnlyTerminalTextCandidate);
           const finalAssistantHasVisibleText = Boolean(finalAssistantVisibleText?.trim());
           const successfulToolTerminalFallback =
+            canUseAttemptTerminalFallback &&
             (!renderedTerminalPayloads ||
               renderedPayloadsNeedPlanningReplacement ||
               (!finalAssistantHasVisibleText &&

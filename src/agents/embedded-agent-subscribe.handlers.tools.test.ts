@@ -2662,6 +2662,43 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(0);
   });
 
+  it.each([
+    { status: "failed" },
+    { ok: false },
+    { dryRun: true },
+    { result: { status: "failed" } },
+  ])(
+    "does not commit internal-ui source replies with nested non-delivery evidence",
+    async (failure) => {
+      const { ctx } = createTestContext();
+
+      await handleToolExecutionStart(ctx, {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId: "tool-nested-failed-source-reply",
+        args: { action: "send", message: "not delivered" },
+      });
+      await handleToolExecutionEnd(ctx, {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId: "tool-nested-failed-source-reply",
+        isError: false,
+        result: {
+          details: {
+            status: "ok",
+            sourceReplySink: "internal-ui",
+            sourceReply: {
+              text: "not delivered",
+              ...failure,
+            },
+          },
+        },
+      });
+
+      expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(0);
+    },
+  );
+
   it("commits sendAttachment args as message delivery evidence", async () => {
     const { ctx } = createTestContext();
 

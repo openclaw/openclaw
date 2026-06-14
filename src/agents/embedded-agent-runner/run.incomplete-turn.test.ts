@@ -2812,6 +2812,54 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("working");
   });
 
+  it("does not surface a tool fallback while a sibling item is unsettled", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+        }) => void;
+      };
+      attemptParams.onToolOutcome?.({
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      });
+      return makeAttemptResult({
+        assistantTexts: [],
+        itemLifecycle: {
+          startedCount: 2,
+          completedCount: 1,
+          activeCount: 1,
+        },
+        successfulCronAdds: 1,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      prompt: "Please update the file and report the status.",
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-unsettled-sibling-no-tool-fallback",
+    });
+
+    expect(result.payloads).toBeUndefined();
+  });
+
   it("blocks non-retryable planning-only turns instead of surfacing the placeholder", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const toolMetas = [{ toolName: "write", mutatingAction: true }];
@@ -7110,6 +7158,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it.each([
     "Should you delete the file?",
+    "Would you recommend restarting production?",
+    "Can you advise whether to delete backups?",
     "How will you delete the file?",
     "Why would you restart production?",
     "What files will you delete?",
@@ -7140,6 +7190,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "How would you delete old backups? Then delete them.",
     "Explain how to remove the database. Then remove it.",
     "How will you delete the file? Please delete it.",
+    "Would you recommend restarting production? Then restart it.",
+    "Can you advise whether to delete backups? Then delete them.",
     "Can you explain the issue and fix it?",
     "Could you describe the failure and then update the config?",
   ])("keeps advisory prompts with a separate execution request actionable: %s", (prompt) => {
