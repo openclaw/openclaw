@@ -8,7 +8,6 @@ import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.ty
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   channelRouteTargetsMatchExact,
@@ -207,18 +206,15 @@ function resolveOriginThreadIdForPayload(params: {
   accountId?: string;
   originatingThreadId?: string | number;
   replyToId?: string;
-  replyToMode?: ReplyToMode;
+  replyToIsExplicit?: boolean;
 }): string | undefined {
   const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
+  if (originThreadId && !params.replyToIsExplicit) {
+    return originThreadId;
+  }
   const replyToId = normalizeThreadIdForComparison(params.replyToId);
   const resolveReplyTransport = getChannelPlugin(params.provider)?.threading?.resolveReplyTransport;
-  if (
-    originThreadId ||
-    params.replyToMode === "off" ||
-    !replyToId ||
-    !params.config ||
-    !resolveReplyTransport
-  ) {
+  if (!replyToId || !params.config || !resolveReplyTransport) {
     return originThreadId;
   }
   const transport = resolveReplyTransport({
@@ -246,7 +242,7 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
   originatingTo?: string;
   originatingThreadId?: string | number;
   replyToId?: string;
-  replyToMode?: ReplyToMode;
+  replyToIsExplicit?: boolean;
   accountId?: string;
 }): boolean {
   return getMatchingMessagingToolReplyTargets(params).length > 0;
@@ -260,7 +256,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
   originatingTo?: string;
   originatingThreadId?: string | number;
   replyToId?: string;
-  replyToMode?: ReplyToMode;
+  replyToIsExplicit?: boolean;
   accountId?: string;
 }): MessagingToolSend[] {
   const provider = normalizeProviderForComparison(params.messageProvider);
@@ -279,7 +275,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
     accountId: originAccount,
     originatingThreadId: params.originatingThreadId,
     replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    replyToIsExplicit: params.replyToIsExplicit,
   });
   return sentTargets.filter((target) => {
     const targetProvider = resolveTargetProviderForComparison({
@@ -355,7 +351,7 @@ export function resolveMessagingToolPayloadDedupe(params: {
   originatingTo?: string;
   originatingThreadId?: string | number;
   replyToId?: string;
-  replyToMode?: ReplyToMode;
+  replyToIsExplicit?: boolean;
   accountId?: string;
 }): MessagingToolPayloadDedupeDecision {
   const sentTargets = params.messagingToolSentTargets ?? [];
@@ -366,7 +362,7 @@ export function resolveMessagingToolPayloadDedupe(params: {
     originatingTo: params.originatingTo,
     originatingThreadId: params.originatingThreadId,
     replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    replyToIsExplicit: params.replyToIsExplicit,
     accountId: params.accountId,
   });
   const matchingRoute = matchingTargets.length > 0;

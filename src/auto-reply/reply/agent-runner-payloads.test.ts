@@ -1,7 +1,10 @@
 // Tests reply payload construction and metadata propagation from agent runs.
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -46,6 +49,40 @@ async function expectSameTargetRepliesDelivered(params: { provider: string; to: 
 describe("buildReplyPayloads media filter integration", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            threading: {
+              resolveReplyTransport: ({ threadId, replyToId }) => ({
+                replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+                threadId: null,
+              }),
+            },
+          },
+          source: "test",
+        },
+        {
+          pluginId: "mattermost",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "mattermost" }),
+            threading: {
+              resolveReplyTransport: ({ threadId, replyToId }) => {
+                const resolvedThreadId =
+                  replyToId ?? (threadId != null ? String(threadId) : undefined);
+                return {
+                  replyToId: resolvedThreadId,
+                  threadId: resolvedThreadId,
+                };
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
   });
 
   it("strips legacy bracket tool blocks from heartbeat replies", async () => {
@@ -472,6 +509,58 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("keeps an explicit Slack reply when tool evidence only matches the ambient thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "thread reply", replyToId: "999.000", replyToTag: true }],
+      replyToMode: "all",
+      replyToChannel: "slack",
+      currentMessageId: "111.222",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "111.000",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+  });
+
+  it("dedupes an explicit Slack reply against tool evidence for that reply thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "thread reply", replyToId: "999.000", replyToTag: true }],
+      replyToMode: "all",
+      replyToChannel: "slack",
+      currentMessageId: "111.222",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "111.000",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "999.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("keeps an unthreaded later Slack payload when only the first payload starts a thread", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
@@ -521,7 +610,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("does not treat a Mattermost DM reply id as a thread route", async () => {
+  it("keeps an explicit Mattermost DM reply when the tool send was top-level", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       config: {},
@@ -541,10 +630,10 @@ describe("buildReplyPayloads media filter integration", () => {
       ],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
   });
 
-  it("does not infer a Slack thread when reply mode is off", async () => {
+  it("keeps an explicit Slack reply when the tool send was top-level", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       config: {},
@@ -564,7 +653,7 @@ describe("buildReplyPayloads media filter integration", () => {
       ],
     });
 
-    expect(replyPayloads).toHaveLength(0);
+    expect(replyPayloads).toHaveLength(1);
   });
 
   it("does not dedupe short commentary that appears inside a longer same-target message", async () => {

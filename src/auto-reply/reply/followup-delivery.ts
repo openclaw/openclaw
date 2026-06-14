@@ -86,7 +86,7 @@ export function resolveFollowupDeliveryPayloads(params: {
       originatingTo,
       originatingThreadId: params.originatingThreadId,
       replyToId: payload.replyToId,
-      replyToMode,
+      replyToIsExplicit: Boolean(payload.replyToTag || payload.replyToCurrent),
       accountId,
     });
     if (!decision.shouldDedupePayloads) {

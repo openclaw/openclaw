@@ -735,26 +735,37 @@ export function extractMessagingToolSend(
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
-    const threadId = normalizeOptionalString(args.threadId);
+    const pluginExtractionArgs = readStringValue(args.to) ? args : { ...args, to: toRaw };
+    const pluginExtracted = providerId
+      ? getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args: pluginExtractionArgs })
+      : null;
+    const resolvedAccountId = normalizeOptionalString(pluginExtracted?.accountId) ?? accountId;
+    const threadId =
+      normalizeOptionalString(pluginExtracted?.threadId) ?? normalizeOptionalString(args.threadId);
     const replyToId = normalizeOptionalString(args.replyTo);
     // Normal sends use prepared core delivery, where provider transport owns
     // reply/thread precedence. Other send-like actions use plugin dispatch.
     const outboundReplyToId = action === "send" ? replyToId : undefined;
-    const threadSuppressed = args.topLevel === true || args.threadId === null;
+    const threadSuppressed =
+      pluginExtracted?.threadSuppressed === true ||
+      args.topLevel === true ||
+      args.threadId === null;
     return to
       ? {
           tool: toolName,
           provider,
-          accountId,
+          accountId: resolvedAccountId,
           to,
           ...(providerId
             ? resolveMessagingToolThreadEvidence({
                 providerId,
                 to,
-                accountId,
+                accountId: resolvedAccountId,
                 threadId,
                 replyToId: outboundReplyToId,
-                allowImplicitThread: true,
+                allowImplicitThread: pluginExtracted
+                  ? pluginExtracted.threadImplicit === true
+                  : true,
                 threadSuppressed,
                 options,
               })

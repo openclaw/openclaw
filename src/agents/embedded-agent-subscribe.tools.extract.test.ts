@@ -49,27 +49,37 @@ describe("extractMessagingToolSend", () => {
             actions: {
               extractToolSend: (params: { args: Record<string, unknown> }) => {
                 const { args } = params;
-                return (args.action === "sendMessage" || args.action === "uploadFile") &&
-                  typeof args.to === "string"
-                  ? {
-                      to: args.to,
-                      accountId: typeof args.accountId === "string" ? args.accountId : undefined,
-                      threadId:
-                        typeof args.threadTs === "string"
-                          ? args.threadTs
-                          : typeof args.threadId === "string"
-                            ? args.threadId
-                            : undefined,
-                      threadSuppressed:
-                        args.topLevel === true || args.threadTs === null || args.threadId === null,
-                      threadImplicit:
-                        typeof args.threadTs !== "string" &&
-                        typeof args.threadId !== "string" &&
-                        args.topLevel !== true &&
-                        args.threadTs !== null &&
-                        args.threadId !== null,
-                    }
-                  : null;
+                if (
+                  (args.action !== "sendMessage" &&
+                    args.action !== "uploadFile" &&
+                    args.action !== "send" &&
+                    args.action !== "upload-file") ||
+                  typeof args.to !== "string"
+                ) {
+                  return null;
+                }
+                const nativeThreadId =
+                  typeof args.threadTs === "string"
+                    ? args.threadTs
+                    : typeof args.threadId === "string"
+                      ? args.threadId
+                      : undefined;
+                const replyTo = typeof args.replyTo === "string" ? args.replyTo : undefined;
+                const threadId =
+                  args.action === "send"
+                    ? (replyTo ?? nativeThreadId)
+                    : args.action === "upload-file"
+                      ? (nativeThreadId ?? replyTo)
+                      : nativeThreadId;
+                const threadSuppressed =
+                  args.topLevel === true || args.threadTs === null || args.threadId === null;
+                return {
+                  to: args.to,
+                  accountId: typeof args.accountId === "string" ? args.accountId : undefined,
+                  threadId,
+                  threadSuppressed,
+                  threadImplicit: !threadId && !threadSuppressed,
+                };
               },
             },
             threading: {
@@ -381,6 +391,33 @@ describe("extractMessagingToolSend", () => {
 
     expect(result?.threadImplicit).toBeUndefined();
     expect(result?.threadId).toBe("111.000");
+  });
+
+  it("records a plugin-dispatched upload reply target", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "upload-file",
+      provider: "slack",
+      to: "channel:C1",
+      replyTo: "999.000",
+      path: "/tmp/report.pdf",
+    });
+
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBe("999.000");
+  });
+
+  it("records a plugin-dispatched upload reply target with the target alias", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "upload-file",
+      provider: "slack",
+      target: "channel:C1",
+      replyTo: "999.000",
+      path: "/tmp/report.pdf",
+    });
+
+    expect(result?.to).toBe("channel:c1");
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBe("999.000");
   });
 
   it("does not treat a Discord replyTo as a destination thread", () => {

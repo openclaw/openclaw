@@ -591,4 +591,39 @@ describe("extractSlackToolSend", () => {
       threadSuppressed: true,
     });
   });
+
+  it("maps generic send and upload thread precedence into telemetry", () => {
+    expect(
+      extractSlackToolSend({
+        action: "send",
+        to: "channel:C1",
+        threadId: "111.000",
+        replyTo: "999.000",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "999.000",
+    });
+    expect(
+      extractSlackToolSend({
+        action: "upload-file",
+        to: "channel:C1",
+        threadId: "111.000",
+        replyTo: "999.000",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "111.000",
+    });
+    expect(
+      extractSlackToolSend({
+        action: "upload-file",
+        to: "channel:C1",
+        replyTo: "999.000",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "999.000",
+    });
+  });
 });
