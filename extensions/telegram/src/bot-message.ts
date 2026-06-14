@@ -1,6 +1,7 @@
 // Telegram plugin module implements bot message behavior.
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GetReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import {
   createSubsystemLogger,
   danger,
@@ -106,7 +107,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     ? { recordChannelActivity: telegramDeps.recordChannelActivity }
     : undefined;
 
-  return async (
+  const processMessage = async (
     primaryCtx: TelegramContext,
     allMedia: TelegramMediaRef[],
     storeAllowFrom: string[],
@@ -247,4 +248,121 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       return result;
     }
   };
+
+  /**
+   * Pin-from-here mirror: re-home an origin run onto THIS channel by running a
+   * synthetic inbound turn whose reply comes from the origin run's agent-event bus
+   * (replyResolver) instead of the model. Reuses this processor's exact deps +
+   * session runtime, so the mirror renders + persists through the normal pipeline
+   * and honors this account's streaming config. Admission is skipped (the /pin was
+   * the authorization). Loop-safe: replyResolver bypasses the agent-run path, so a
+   * mirror turn never re-enters the mirror fan-out.
+   */
+  const dispatchMirror = async (mirror: {
+    target: { to: string; threadId?: string | number };
+    replyResolver: GetReplyFromConfig;
+  }): Promise<void> => {
+    const rawChatId = mirror.target.to
+      .replace(/^(telegram|tg):/i, "")
+      .replace(/^group:/i, "")
+      .trim();
+    const chatId: string | number = /^-?\d+$/.test(rawChatId) ? Number(rawChatId) : rawChatId;
+    const threadId =
+      mirror.target.threadId != null && Number.isFinite(Number(mirror.target.threadId))
+        ? Number(mirror.target.threadId)
+        : undefined;
+    const numericChatId = typeof chatId === "number" ? chatId : Number(chatId);
+    const chatType: "private" | "supergroup" =
+      Number.isFinite(numericChatId) && numericChatId < 0 ? "supergroup" : "private";
+    const syntheticMessage = {
+      message_id: 0,
+      date: Math.floor(Date.now() / 1000),
+      chat: {
+        id: chatId,
+        type: chatType,
+        ...(chatType === "supergroup" ? { is_forum: threadId != null } : {}),
+      },
+      // For a DM the chat id IS the target user's id; use it as the synthetic
+      // sender so the DM access gate evaluates the REAL pinned participant
+      // (an authorized/paired DM passes; a revoked one is denied → suppressed).
+      // A synthetic sender of 0 would falsely reject every paired/allowlisted DM.
+      // Groups skip the per-message sender gate, so 0 is fine there.
+      from: {
+        id: chatType === "private" && Number.isFinite(numericChatId) ? numericChatId : 0,
+        is_bot: false,
+        first_name: "mirror",
+      },
+      // Minimal non-empty body: the body is never used (replyResolver supplies the
+      // reply from the bus) but the inbound pipeline drops empty messages.
+      text: "·",
+      ...(threadId != null ? { message_thread_id: threadId, is_topic_message: true } : {}),
+    } as unknown as TelegramContext["message"];
+    const primaryCtx: TelegramContext = {
+      message: syntheticMessage,
+      ...(bot.botInfo ? { me: bot.botInfo } : {}),
+      getFile: (async () => undefined) as unknown as TelegramContext["getFile"],
+    };
+    let revoked = false;
+    const context = await buildTelegramMessageContext({
+      primaryCtx,
+      allMedia: [],
+      storeAllowFrom: [],
+      options: {
+        mirror: true,
+        forceWasMentioned: true,
+        onMirrorAdmissionBlocked: () => {
+          revoked = true;
+        },
+      },
+      bot,
+      cfg,
+      account,
+      historyLimit,
+      groupHistories,
+      dmPolicy,
+      allowFrom,
+      groupAllowFrom,
+      ackReactionScope,
+      logger,
+      resolveGroupActivation,
+      resolveGroupRequireMention,
+      resolveTelegramGroupConfig,
+      loadFreshConfig,
+      runtime: contextRuntime,
+      sessionRuntime,
+      upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
+      sendChatActionHandler,
+    });
+    if (!context) {
+      if (revoked) {
+        // The destination's current policy now denies this pin (group/topic
+        // disabled, or requireTopic). Drop silently and return normally so the
+        // launcher KEEPS the handled-mark — the post-hoc final echo (a raw send
+        // that does not re-check enablement) must not deliver the revoked content
+        // either. This is the persisted-pin revocation path.
+        logVerbose(
+          `telegram mirror: destination policy denies ${mirror.target.to}; dropped (pin revoked)`,
+        );
+        return;
+      }
+      // Unexpected null (not a policy denial): signal failure so the launcher
+      // un-marks this target and the post-hoc final echo delivers (no silent drop).
+      throw new Error(`telegram mirror: context dropped for ${mirror.target.to}`);
+    }
+    await dispatchTelegramMessage({
+      context,
+      bot,
+      cfg,
+      runtime,
+      replyToMode,
+      streamMode,
+      textLimit,
+      telegramCfg,
+      telegramDeps,
+      opts,
+      replyResolver: mirror.replyResolver,
+    });
+  };
+
+  return Object.assign(processMessage, { dispatchMirror });
 };
