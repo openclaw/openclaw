@@ -103,6 +103,73 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("inline `@alice` fence ```\n@alice\n``` text <@123456789>");
   });
 
+  it("does not rewrite mentions after a triple-backtick literal inside a fenced block", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const text = '```js\nconst fence = "```";\n// do not ping @alice\n```\ntext @alice';
+
+    const rewritten = rewriteDiscordKnownMentions(text, { accountId: "default" });
+
+    expect(rewritten).toBe(
+      '```js\nconst fence = "```";\n// do not ping @alice\n```\ntext <@123456789>',
+    );
+  });
+
+  it("uses the opening fence length when skipping Discord mention rewrites", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const text = "````md\n```js\n// do not ping @alice\n```\n````\ntext @alice";
+
+    const rewritten = rewriteDiscordKnownMentions(text, { accountId: "default" });
+
+    expect(rewritten).toBe("````md\n```js\n// do not ping @alice\n```\n````\ntext <@123456789>");
+  });
+
+  it("does not treat tilde runs as Discord code fences", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const text = "~~~\n@alice\n~~~";
+
+    const rewritten = rewriteDiscordKnownMentions(text, { accountId: "default" });
+
+    expect(rewritten).toBe("~~~\n<@123456789>\n~~~");
+  });
+
+  it("does not let shorter backtick runs close inline code spans", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const text = "inline ``code ` @alice`` text @alice";
+
+    const rewritten = rewriteDiscordKnownMentions(text, { accountId: "default" });
+
+    expect(rewritten).toBe("inline ``code ` @alice`` text <@123456789>");
+  });
+
+  it("does not treat same-line inline triple-backtick spans as EOF fences", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice"],
+    });
+    const text = "inline ```@alice```\ntext @alice";
+
+    const rewritten = rewriteDiscordKnownMentions(text, { accountId: "default" });
+
+    expect(rewritten).toBe("inline ```@alice```\ntext <@123456789>");
+  });
+
   it("is account-scoped", () => {
     rememberDiscordDirectoryUser({
       accountId: "ops",
