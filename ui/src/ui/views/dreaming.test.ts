@@ -55,6 +55,84 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         promotedAt: "2026-04-05T04:00:00.000Z",
       },
     ],
+    curatorGuard: {
+      totalDecisions: 5,
+      allowed: 2,
+      denied: 1,
+      approvalRequired: 1,
+      redactions: 1,
+      privateBlocks: 0,
+      staleRecalls: 0,
+      contradictions: 0,
+      approvalRequests: 1,
+      pendingApprovals: 1,
+      approvalsAllowedOnce: 0,
+      approvalDenials: 0,
+      approvalExpirations: 0,
+      approvalReplayBlocks: 0,
+      lastDecisionAt: "2026-04-05T04:30:00.000Z",
+      lastApprovalRequestedAt: "2026-04-05T04:31:00.000Z",
+      trendBuckets: [
+        {
+          bucketStartIso: "2026-04-04T00:00:00.000Z",
+          bucketEndIso: "2026-04-05T00:00:00.000Z",
+          allowed: 1,
+          denied: 0,
+          approvalRequired: 0,
+          privateBlocks: 0,
+          contradictions: 0,
+          staleRecalls: 1,
+          approvalReplayBlocks: 0,
+          approvalExpirations: 0,
+        },
+        {
+          bucketStartIso: "2026-04-05T00:00:00.000Z",
+          bucketEndIso: "2026-04-06T00:00:00.000Z",
+          allowed: 1,
+          denied: 1,
+          approvalRequired: 1,
+          privateBlocks: 0,
+          contradictions: 0,
+          staleRecalls: 0,
+          approvalReplayBlocks: 0,
+          approvalExpirations: 0,
+        },
+      ],
+      alerts: [
+        {
+          id: "memory-curator.denied-threshold",
+          severity: "warning",
+          metric: "denied",
+          value: 3,
+          threshold: 3,
+          message: "Denied Memory Curator decisions reached 3 (threshold 3).",
+        },
+      ],
+    },
+    memoryCuratorApprovals: {
+      loading: false,
+      error: null,
+      resolvingId: null,
+      actionMessage: null,
+      items: [
+        {
+          id: "plugin:memory-approval-1234567890",
+          shortId: "memory-appro…",
+          createdAtMs: Date.parse("2026-04-05T04:31:00.000Z"),
+          expiresAtMs: Date.parse("2026-04-05T04:36:00.000Z"),
+          operation: "cli_promote_apply",
+          targetRelativePath: "MEMORY.md",
+          candidateCount: 1,
+          sensitivityClasses: ["private"],
+          confidenceLevels: ["medium"],
+          freshnessLevels: ["fresh"],
+          evidenceStatuses: ["Confirmed"],
+          reasons: ["private/shared scope requires approval"],
+          resumeCommand:
+            "pnpm openclaw memory promote --apply --approval-id plugin:memory-approval-1234567890 --json",
+        },
+      ],
+    },
     dreamingOf: null,
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
@@ -179,6 +257,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshMemoryPalace: () => {},
+    onRefreshMemoryCuratorApprovals: () => {},
     onOpenConfig: () => {},
     onOpenWikiPage: async () => null,
     onBackfillDiary: () => {},
@@ -187,6 +266,8 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
     onRepairDreamingArtifacts: () => {},
+    onResolveMemoryCuratorApproval: () => {},
+    onCopyMemoryCuratorApprovalCommand: () => {},
     ...overrides,
   };
 }
@@ -549,14 +630,57 @@ describe("dreaming view", () => {
     expect(buttons).toContain("Clear Replayed");
     expect(buttons).toContain("Most recent");
     expect(buttons).toContain("Strongest support");
+    expect(buttons).toContain("Allow once");
+    expect(buttons).toContain("Deny");
+    expect(buttons).toContain("Copy resume command");
+    expect(buttons).not.toContain("Allow always");
     const sectionTitles = [...container.querySelectorAll(".dreams-advanced__section-title")].map(
       (node) => node.textContent?.trim(),
     );
     expect(sectionTitles).toEqual([
+      "Memory Curator Guard",
+      "Memory Curator Approvals",
       "From the Daily Log",
       "Waiting for Promotion",
       "Recent Promotions",
     ]);
+    expect(container.querySelector(".dreams-advanced__curator-guard")?.textContent).toContain(
+      "Approval required",
+    );
+    expect(container.querySelector(".dreams-advanced__curator-guard")?.textContent).toContain(
+      "Pending approvals",
+    );
+    expect(container.querySelector(".dreams-advanced__curator-guard")?.textContent).toContain(
+      "Memory Curator Trends",
+    );
+    expect(container.querySelector(".dreams-advanced__curator-guard")?.textContent).toContain(
+      "Memory Curator Alerts",
+    );
+    expect(container.querySelector(".dreams-advanced__curator-guard")?.textContent).toContain(
+      "Denied Memory Curator decisions reached 3 (threshold 3).",
+    );
+    expect(container.querySelector(".dreams-advanced__alert")).not.toBeNull();
+    expect(container.querySelector(".dreams-advanced__curator-guard")?.textContent).toContain(
+      "Stale recalls",
+    );
+    expect(container.querySelector(".dreams-advanced__trend-row")).not.toBeNull();
+    expect(container.querySelector(".dreams-advanced__curator-guard")?.textContent).toContain("5");
+    expect(container.querySelector(".dreams-advanced__curator-guard")?.textContent).not.toContain(
+      "token=[REDACTED]",
+    );
+    expect(container.querySelector(".dreams-advanced__curator-guard")?.textContent).not.toContain(
+      "raw memory",
+    );
+    const approvals = container.querySelector(".dreams-advanced__curator-approvals");
+    expect(approvals?.textContent).toContain("memory-appro");
+    expect(approvals?.textContent).toContain("private");
+    expect(approvals?.textContent).toContain("medium");
+    expect(approvals?.textContent).toContain("fresh");
+    expect(approvals?.textContent).toContain("Confirmed");
+    expect(approvals?.textContent).toContain("private/shared scope requires approval");
+    expect(approvals?.textContent).not.toContain("raw memory");
+    expect(approvals?.textContent).not.toContain("cookie=");
+    expect(approvals?.textContent).not.toContain("token=");
     expect(container.querySelector(".dreams-advanced__summary")?.textContent).toContain(
       "1 from daily log",
     );
@@ -565,6 +689,70 @@ describe("dreaming view", () => {
     );
     expect(container.textContent).not.toContain("Signal Hotspots");
     setDreamAdvancedWaitingSort("recent");
+    setDreamSubTab("scene");
+  });
+
+  it("routes Memory Curator approval actions without auto-applying memory writes", () => {
+    setDreamSubTab("advanced");
+    const resolveApproval = vi.fn();
+    const copyCommand = vi.fn();
+    const container = renderInto(
+      buildProps({
+        onResolveMemoryCuratorApproval: resolveApproval,
+        onCopyMemoryCuratorApprovalCommand: copyCommand,
+      }),
+    );
+    const buttons = [...container.querySelectorAll("button")];
+    buttons.find((button) => button.textContent?.trim() === "Allow once")?.click();
+    buttons.find((button) => button.textContent?.trim() === "Deny")?.click();
+    buttons.find((button) => button.textContent?.trim() === "Copy resume command")?.click();
+
+    expect(resolveApproval).toHaveBeenNthCalledWith(
+      1,
+      "plugin:memory-approval-1234567890",
+      "allow-once",
+    );
+    expect(resolveApproval).toHaveBeenNthCalledWith(2, "plugin:memory-approval-1234567890", "deny");
+    expect(copyCommand).toHaveBeenCalledWith("plugin:memory-approval-1234567890");
+    expect(resolveApproval).not.toHaveBeenCalledWith(
+      "plugin:memory-approval-1234567890",
+      "allow-always",
+    );
+    setDreamSubTab("scene");
+  });
+
+  it("renders an empty Memory Curator trend state without raw event details", () => {
+    setDreamSubTab("advanced");
+    const container = renderInto(
+      buildProps({
+        curatorGuard: {
+          totalDecisions: 0,
+          allowed: 0,
+          denied: 0,
+          approvalRequired: 0,
+          redactions: 0,
+          privateBlocks: 0,
+          staleRecalls: 0,
+          contradictions: 0,
+          approvalRequests: 0,
+          pendingApprovals: 0,
+          approvalsAllowedOnce: 0,
+          approvalDenials: 0,
+          approvalExpirations: 0,
+          approvalReplayBlocks: 0,
+          trendBuckets: [],
+          alerts: [],
+        },
+      }),
+    );
+
+    expect(container.textContent).toContain("No Memory Curator guard alerts.");
+    expect(container.textContent).toContain(
+      "No Memory Curator guard events recorded in this window.",
+    );
+    expect(container.textContent).not.toContain("sourcePath");
+    expect(container.textContent).not.toContain("redactedPreview");
+    expect(container.textContent).not.toContain("approvalId");
     setDreamSubTab("scene");
   });
 

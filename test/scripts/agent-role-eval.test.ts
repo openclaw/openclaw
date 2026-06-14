@@ -19,6 +19,55 @@ import {
 import {
   AGENT_ROLE_CONTRACTS,
   AGENT_ROLE_CONTRACT_BY_ID,
+  AUTOMATION_PLAYBOOK_ARCHITECT_AGENT_ID,
+  AUTOMATION_PLAYBOOK_ARCHITECT_DASHBOARD_METRICS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL,
+  AUTOMATION_PLAYBOOK_ARCHITECT_EVIDENCE_LABELS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_EVALUATION_LOOP_STAGES,
+  AUTOMATION_PLAYBOOK_ARCHITECT_FORBIDDEN_TOOLS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_HANDOFF_WORKFLOWS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_MODEL_ROUTING_FIELDS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_MODEL_ROUTING_RULES,
+  AUTOMATION_PLAYBOOK_ARCHITECT_OPTIMIZATION_METRICS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_OPTIMIZATION_REQUIREMENTS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_REQUIRED_STARTUP_DIRS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_REQUIRED_STARTUP_FILES,
+  AUTOMATION_PLAYBOOK_ARCHITECT_REQUIRED_TOOLS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_REUSE_CATALOG_FIELDS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_REUSE_CATALOG_RULES,
+  AUTOMATION_PLAYBOOK_ARCHITECT_SCHEDULED_EVAL_FIELDS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_SCHEDULED_EVAL_REQUIREMENTS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_TELEMETRY_EVENTS,
+  AUTOMATION_PLAYBOOK_ARCHITECT_TELEMETRY_FIELDS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_CANONICAL_STATE_FILES,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_STATE_KEY_TERMS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE3_APPROVAL_GATES,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE3_HANDOFF_AGENTS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE3_HANDOFF_FIELDS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE4_TELEMETRY_EVENTS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE4_TELEMETRY_FIELDS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE5_DURABILITY_TERMS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE6_ROUTING_TERMS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_OUTPUT_SCHEMA_FIELDS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE2_REQUIRED_TERMS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_CANONICAL_FILES,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_SAFETY_TERMS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_STATE_REQUIRED_FIELDS,
+  BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS,
+  MEMORY_KNOWLEDGE_CURATOR_AGENT_ID,
+  MEMORY_KNOWLEDGE_CURATOR_FORBIDDEN_STATE_KEY_TERMS,
+  MEMORY_KNOWLEDGE_CURATOR_FORBIDDEN_TOOLS,
+  MEMORY_KNOWLEDGE_CURATOR_HANDOFF_AGENTS,
+  MEMORY_KNOWLEDGE_CURATOR_HANDOFF_FIELDS,
+  MEMORY_KNOWLEDGE_CURATOR_REQUIRED_CANONICAL_FILES,
+  MEMORY_KNOWLEDGE_CURATOR_REQUIRED_TERMS,
+  MEMORY_KNOWLEDGE_CURATOR_REQUIRED_TOOLS,
+  MEMORY_KNOWLEDGE_CURATOR_SCHEMA_FIELDS,
+  MEMORY_KNOWLEDGE_CURATOR_STATE_REQUIRED_FIELDS,
+  MEMORY_KNOWLEDGE_CURATOR_TELEMETRY_EVENTS,
+  MEMORY_KNOWLEDGE_CURATOR_TELEMETRY_FIELDS,
   DEFAULT_LIVE_AGENT_ROLE_EVAL_AGENTS,
   DEFAULT_SELF_CONTAINED_LIVE_PARAMS,
   DEFAULT_SELF_CONTAINED_LIVE_MODEL,
@@ -84,6 +133,219 @@ function writeAgentWorkspace(root: string, id: string, body: string) {
   return workspace;
 }
 
+function writeAutomationPlaybookWorkspace(root: string) {
+  const workspace = writeAgentWorkspace(
+    root,
+    AUTOMATION_PLAYBOOK_ARCHITECT_AGENT_ID,
+    [
+      "Automation & Playbook Architect drafts playbooks with approval gates, rollback, telemetry, handoff workflows, dashboards, and evaluation loops.",
+      "Session Startup:",
+      ...AUTOMATION_PLAYBOOK_ARCHITECT_REQUIRED_STARTUP_FILES.map((file) => `- ${file}`),
+      ...AUTOMATION_PLAYBOOK_ARCHITECT_REQUIRED_STARTUP_DIRS.map((directory) => `- ${directory}`),
+    ].join("\n"),
+  );
+  const standard = [
+    "# Automation & Playbook Architect Operating Standard",
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_REQUIRED_STARTUP_FILES,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_EVIDENCE_LABELS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_TELEMETRY_EVENTS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_TELEMETRY_FIELDS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_DASHBOARD_METRICS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_MODEL_ROUTING_FIELDS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_MODEL_ROUTING_RULES,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_REUSE_CATALOG_FIELDS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_REUSE_CATALOG_RULES,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_OPTIMIZATION_METRICS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_OPTIMIZATION_REQUIREMENTS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_SCHEDULED_EVAL_FIELDS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_SCHEDULED_EVAL_REQUIREMENTS,
+    "title version last_updated status objective scope evidence_status assumptions unknowns preconditions trigger_conditions required_inputs dependencies owner reviewer related_agents handoffs step_by_step_procedure decision_branches stop_conditions error_handling human_approval_gates security_considerations rollback_plan validation_tests acceptance_criteria telemetry_events execution_boundary next_review",
+    "credentials secrets tokens cookies contact/payment identifiers draft-only/no execution",
+  ].join("\n");
+  const contract = [
+    "# Automation & Playbook Architect Operating Contract",
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_HANDOFF_WORKFLOWS,
+    ...AUTOMATION_PLAYBOOK_ARCHITECT_EVALUATION_LOOP_STAGES,
+    "Control Director Program Manager Judge Browser / Session / Credential Steward Memory & Knowledge Curator Telemetry & Evaluation Analyst",
+    "trigger_condition input_sent output_expected owner approval_requirement failure_mode fix_for_failure_mode",
+    "rollback_plan validation_tests acceptance_criteria human_approval_gates Rollback unavailable Judge review",
+  ].join("\n");
+  const files: Record<string, string> = {
+    "docs/AUTOMATION_PLAYBOOK_ARCHITECT_STANDARD.md": `${standard}\n`,
+    "docs/AUTOMATION_PLAYBOOK_ARCHITECT_OPERATING_CONTRACT.md": `${contract}\n`,
+    "docs/AUTOMATION_PLAYBOOK_ARCHITECT_MODEL_DECISION.md": `Default local drafting model: ${AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL}.\nDefault thinking: off.\n`,
+    "memory/active-tasks.md": "No active execution tasks.\n",
+    "memory/DECISIONS.md": "Unsafe execution remains denied by default.\n",
+    "memory/LESSONS.md": "Telemetry and handoff workflows improve evaluation.\n",
+    "state/VALIDATION_RESULTS.json": '{"status":"test"}\n',
+    "logs/action-ledger.jsonl": "",
+  };
+  for (const [relativePath, content] of Object.entries(files)) {
+    const target = path.join(workspace, relativePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content, "utf8");
+  }
+  for (const directory of AUTOMATION_PLAYBOOK_ARCHITECT_REQUIRED_STARTUP_DIRS) {
+    fs.mkdirSync(path.join(workspace, directory), { recursive: true });
+  }
+  return workspace;
+}
+
+function writeBrowserSessionCredentialStewardWorkspace(root: string) {
+  return writeAgentWorkspace(
+    root,
+    BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+    [
+      "# Browser / Session / Credential Steward",
+      "Scope: credential boundary, session hygiene, browser profile isolation, and cross-project contamination prevention.",
+      "Safety: redact secrets, tokens, cookies, SSH keys, wallet data, and private-key material.",
+      "Boundary: delegate execution and require approval before shell, browser profile mutation, login/session actions, credential handling, or file mutation.",
+      "Execution boundary: draft-only/no execution unless approved by Control Director and the owning specialist.",
+    ].join("\n"),
+  );
+}
+
+function writeBrowserSessionCredentialStewardCanonicalFiles(root: string) {
+  const docsDir = path.join(root, "control", "docs");
+  const stateDir = path.join(root, "control", "state");
+  fs.mkdirSync(docsDir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+  const schemaLines = BROWSER_SESSION_CREDENTIAL_STEWARD_OUTPUT_SCHEMA_FIELDS.join("\n");
+  const requiredTerms = [
+    ...BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE2_REQUIRED_TERMS,
+    ...BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE3_HANDOFF_AGENTS,
+    ...BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE3_HANDOFF_FIELDS,
+    ...BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE3_APPROVAL_GATES,
+    ...BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE4_TELEMETRY_EVENTS,
+    ...BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE4_TELEMETRY_FIELDS,
+    ...BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE5_DURABILITY_TERMS,
+    ...BROWSER_SESSION_CREDENTIAL_STEWARD_PHASE6_ROUTING_TERMS,
+  ].join("\n");
+  fs.writeFileSync(
+    path.join(docsDir, "BROWSER_SESSION_CREDENTIAL_STEWARD.md"),
+    [
+      "# Browser / Session / Credential Steward Contract",
+      "Mission Scope Non-scope Required inputs Required outputs Structured output schema Credential handling rules Browser profile isolation rules Session hygiene rules SSH/wallet/private-key rules Approval gates Redaction rules Cross-project contamination rules Rollback/session cleanup rules Handoff workflows Approval matrix Telemetry events Durability checks Model routing scheduled regression",
+      "Confirmed Inferred Assumption Risk Unknown Recommended verification step draft-only/no execution",
+      schemaLines,
+      requiredTerms,
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(docsDir, "BACKUP_SCOPE_BROWSER_SESSION_DENYLIST.md"),
+    [
+      "# Backup Scope Browser and Session Denylist",
+      "browser cache browser cookies local storage session storage auth tokens wallet state SSH private keys credential vault exports profile lock files temporary download folders containing authenticated exports",
+      "rollback_or_cleanup_plan evidence_status Unknown",
+    ].join("\n"),
+    "utf8",
+  );
+  const owner = "Browser / Session / Credential Steward";
+  const writeJson = (relativePath: string, value: unknown) => {
+    fs.writeFileSync(path.join(root, relativePath), `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  };
+  writeJson("control/state/BROWSER_PROFILE_MAP.json", {
+    schemaVersion: 1,
+    lastUpdated: "UNKNOWN",
+    owner,
+    profiles: [],
+    evidenceStatus: "Unknown",
+    recommendedVerificationSteps: [],
+  });
+  writeJson("control/state/CREDENTIAL_BOUNDARY_MAP.json", {
+    schemaVersion: 1,
+    lastUpdated: "UNKNOWN",
+    owner,
+    credentialClasses: [],
+    rules: [],
+    evidenceStatus: "Unknown",
+    recommendedVerificationSteps: [],
+  });
+  writeJson("control/state/SSH_ALIAS_MAP.json", {
+    schemaVersion: 1,
+    lastUpdated: "UNKNOWN",
+    owner,
+    aliases: [],
+    evidenceStatus: "Unknown",
+    recommendedVerificationSteps: [],
+  });
+  writeJson("control/state/SESSION_HYGIENE_STATUS.json", {
+    schemaVersion: 1,
+    lastUpdated: "UNKNOWN",
+    owner,
+    status: "UNKNOWN",
+    checks: [],
+    evidenceStatus: "Unknown",
+    recommendedVerificationSteps: [],
+  });
+  writeJson("control/state/KEY_ROTATION_STATUS.json", {
+    schemaVersion: 1,
+    lastUpdated: "UNKNOWN",
+    owner,
+    status: "UNKNOWN",
+    keys: [],
+    evidenceStatus: "Unknown",
+    recommendedVerificationSteps: [],
+  });
+  writeJson("control/state/LAST_KNOWN_GOOD_BROWSER_ISOLATION.json", {
+    schemaVersion: 1,
+    lastUpdated: "UNKNOWN",
+    owner,
+    validatedAt: "UNKNOWN",
+    profiles: [],
+    evidenceStatus: "Unknown",
+    recommendedVerificationSteps: [],
+  });
+}
+
+function writeMemoryKnowledgeCuratorWorkspace(root: string) {
+  return writeAgentWorkspace(
+    root,
+    MEMORY_KNOWLEDGE_CURATOR_AGENT_ID,
+    [
+      "# Memory & Knowledge Curator",
+      "Scope: memory provenance, confidence, freshness, privacy, private boundaries, and Unknown handling.",
+      "Safety: redact raw private memory and secrets; require approval before risky promotion.",
+      "Boundary: use source_class and evidence_status before durable memory promotion.",
+    ].join("\n"),
+  );
+}
+
+function writeMemoryKnowledgeCuratorCanonicalFiles(root: string) {
+  const docsDir = path.join(root, "control", "docs");
+  const stateDir = path.join(root, "control", "state");
+  fs.mkdirSync(docsDir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+  const contract = [
+    "# Memory & Knowledge Curator Contract",
+    "approval gates redaction privacy boundary source/provenance/confidence/freshness contradiction/staleness cleanup prompt-injection handling hosted fallback explicit Control Director approval local-first routing",
+    ...MEMORY_KNOWLEDGE_CURATOR_SCHEMA_FIELDS,
+    ...MEMORY_KNOWLEDGE_CURATOR_REQUIRED_TERMS,
+    ...MEMORY_KNOWLEDGE_CURATOR_HANDOFF_AGENTS,
+    ...MEMORY_KNOWLEDGE_CURATOR_HANDOFF_FIELDS,
+    ...MEMORY_KNOWLEDGE_CURATOR_TELEMETRY_EVENTS,
+    ...MEMORY_KNOWLEDGE_CURATOR_TELEMETRY_FIELDS,
+  ].join("\n");
+  fs.writeFileSync(path.join(docsDir, "MEMORY_KNOWLEDGE_CURATOR.md"), `${contract}\n`, "utf8");
+  fs.writeFileSync(
+    path.join(stateDir, "MEMORY_KNOWLEDGE_CURATOR_STATUS.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        lastUpdated: "UNKNOWN",
+        owner: "Memory & Knowledge Curator",
+        status: "UNKNOWN",
+        evidenceStatus: "Unknown",
+        recommendedVerificationSteps: [],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
 function writeAgentDir(root: string, id: string) {
   const agentDir = path.join(root, "state", "agents", id, "agent");
   fs.mkdirSync(agentDir, { recursive: true });
@@ -111,7 +373,7 @@ function baseConfig(root: string, agent: Record<string, unknown>) {
     models: {
       providers: {
         ollama: {
-          models: [{ id: "qwen3.5:4b" }, { id: "qwen3.5:9b-q4_K_M" }],
+          models: [{ id: "qwen3.5:4b" }, { id: "qwen3.5:9b-q4_K_M" }, { id: "qwen3.5:27b-q8_0" }],
         },
       },
     },
@@ -213,6 +475,28 @@ describe("agent role eval harness", () => {
     expect(uploadReport.with?.name).toBe("agent-role-eval-report");
     expect(uploadReport.with?.path).toBe(DEFAULT_LIVE_AGENT_ROLE_EVAL_REPORT_DIR);
     expect(uploadReport.with?.["if-no-files-found"]).toBe("warn");
+  });
+
+  it("runs scheduled Memory Curator runtime guard regression coverage", () => {
+    const workflow = readAgentRoleEvalWorkflow();
+    const job = workflow.jobs?.["memory-curator-runtime-regression"];
+    const staticContract = requireWorkflowStep(job, "Validate Memory Curator static contract");
+    const runtimeGuard = requireWorkflowStep(job, "Run Memory Curator runtime guard tests");
+
+    expect(job).toBeDefined();
+    expect(staticContract.run).toBe(
+      "node scripts/agent-role-eval.mjs --agent memory-knowledge-curator --json",
+    );
+    expect(runtimeGuard.run).toContain("extensions/memory-core/src/short-term-promotion.test.ts");
+    expect(runtimeGuard.run).toContain("extensions/memory-core/src/cli.test.ts");
+    expect(runtimeGuard.run).toContain("extensions/memory-core/src/dreaming.test.ts");
+    expect(runtimeGuard.run).toContain("src/plugin-sdk/memory-host-events.test.ts");
+    expect(runtimeGuard.run).toContain("src/gateway/server-methods/plugin-approval.test.ts");
+    expect(runtimeGuard.run).toContain("src/agents/pi-tools.workspace-only-false.test.ts");
+    expect(runtimeGuard.run).toContain("src/gateway/server-methods/doctor.test.ts");
+    expect(runtimeGuard.run).toContain("ui/src/ui/controllers/dreaming.test.ts");
+    expect(runtimeGuard.run).toContain("ui/src/ui/views/dreaming.test.ts");
+    expect(runtimeGuard.run).toContain("test/scripts/agent-role-eval.test.ts");
   });
 
   it("resolves workflow live-eval inputs like GitHub Actions", () => {
@@ -664,6 +948,37 @@ describe("agent role eval harness", () => {
     expect(result).toMatchObject({ ok: true, agentCount: 1, issues: [] });
   });
 
+  it("filters static checks to one requested configured agent", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const id = "program-manager";
+    const workspace = writeAgentWorkspace(
+      root,
+      id,
+      "Program Manager owns milestone planning, owners, acceptance criteria, dependencies, and status.",
+    );
+    const agentDir = writeAgentDir(root, id);
+    const config = baseConfig(root, {
+      id,
+      name: "Program Manager",
+      workspace,
+      agentDir,
+      model: { primary: "ollama/qwen3.5:4b", fallbacks: [] },
+    });
+    config.agents.list.push({
+      id: "new-agent-without-contract",
+      name: "New Agent Without Contract",
+      workspace: writeAgentWorkspace(root, "new-agent-without-contract", "unknown"),
+      agentDir: writeAgentDir(root, "new-agent-without-contract"),
+    });
+
+    const result = evaluateAgentStaticContracts(config, {
+      agentId: id,
+      stateDir: path.join(root, "state"),
+    });
+
+    expect(result).toMatchObject({ ok: true, agentCount: 1, issues: [] });
+  });
+
   it("fails unknown agents so every configured role needs an eval contract", () => {
     const root = harness.createTempDir("openclaw-agent-eval-");
     const id = "new-agent-without-contract";
@@ -735,6 +1050,699 @@ describe("agent role eval harness", () => {
     expect(result.ok).toBe(false);
     expect(result.issues).toContainEqual(
       expect.objectContaining({ agentId: id, code: "tool_policy_empty" }),
+    );
+  });
+
+  it("accepts the hardened Automation & Playbook Architect Phase 4 static config", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeAutomationPlaybookWorkspace(root);
+    const agentDir = writeAgentDir(root, AUTOMATION_PLAYBOOK_ARCHITECT_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: AUTOMATION_PLAYBOOK_ARCHITECT_AGENT_ID,
+        name: "Automation & Playbook Architect",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        thinkingDefault: "off",
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...AUTOMATION_PLAYBOOK_ARCHITECT_REQUIRED_TOOLS],
+          deny: [...AUTOMATION_PLAYBOOK_ARCHITECT_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state") },
+    );
+
+    expect(result).toMatchObject({ ok: true, agentCount: 1, issues: [] });
+  });
+
+  it("rejects missing Automation & Playbook Architect Phase 4 docs", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeAutomationPlaybookWorkspace(root);
+    fs.writeFileSync(
+      path.join(workspace, "docs/AUTOMATION_PLAYBOOK_ARCHITECT_STANDARD.md"),
+      "# Incomplete\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(workspace, "docs/AUTOMATION_PLAYBOOK_ARCHITECT_OPERATING_CONTRACT.md"),
+      "# Incomplete\n",
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, AUTOMATION_PLAYBOOK_ARCHITECT_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: AUTOMATION_PLAYBOOK_ARCHITECT_AGENT_ID,
+        name: "Automation & Playbook Architect",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        thinkingDefault: "off",
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...AUTOMATION_PLAYBOOK_ARCHITECT_REQUIRED_TOOLS],
+          deny: [...AUTOMATION_PLAYBOOK_ARCHITECT_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state") },
+    );
+    const codes = result.issues.map((issue) => issue.code);
+
+    expect(result.ok).toBe(false);
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        "automation_playbook_telemetry_event_missing",
+        "automation_playbook_telemetry_field_missing",
+        "automation_playbook_handoff_workflow_missing",
+        "automation_playbook_dashboard_metric_missing",
+        "automation_playbook_evaluation_loop_stage_missing",
+        "automation_playbook_model_routing_field_missing",
+        "automation_playbook_reuse_catalog_field_missing",
+        "automation_playbook_optimization_metric_missing",
+        "automation_playbook_scheduled_eval_field_missing",
+      ]),
+    );
+  });
+
+  it("keeps Automation & Playbook Architect Phase 4 constants complete", () => {
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_TELEMETRY_EVENTS).toEqual(
+      expect.arrayContaining([
+        "automation_playbook.created",
+        "automation_playbook.handoff_completed",
+        "automation_playbook.evaluation_loop_completed",
+      ]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_TELEMETRY_FIELDS).toEqual(
+      expect.arrayContaining(["event_name", "playbook_id", "correlation_id", "timestamp"]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_HANDOFF_WORKFLOWS).toEqual(
+      expect.arrayContaining(["Program Manager tracking workflow", "Judge review workflow"]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_DASHBOARD_METRICS).toEqual(
+      expect.arrayContaining(["playbook_reuse_rate", "automation_failure_rate", "judge_pass_rate"]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_MODEL_ROUTING_FIELDS).toEqual(
+      expect.arrayContaining(["task_type", "risk_level", "fallback_model"]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_MODEL_ROUTING_RULES).toEqual(
+      expect.arrayContaining([
+        "Control Director to a stronger supported model",
+        "hosted/external models require approval before external data transfer",
+      ]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_REUSE_CATALOG_FIELDS).toEqual(
+      expect.arrayContaining(["playbook_id", "reuse_count", "deprecation_reason"]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_REUSE_CATALOG_RULES).toEqual(
+      expect.arrayContaining(["search catalog before drafting", "archive unsafe/outdated entries"]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_OPTIMIZATION_METRICS).toEqual(
+      expect.arrayContaining(["time_to_first_draft", "catalog_hit_rate", "judge_rework_rate"]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_OPTIMIZATION_REQUIREMENTS).toEqual(
+      expect.arrayContaining(["no duplicate handoffs", "no external live eval without approval"]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_SCHEDULED_EVAL_FIELDS).toEqual(
+      expect.arrayContaining(["eval name", "artifact path", "cleanup rule"]),
+    );
+    expect(AUTOMATION_PLAYBOOK_ARCHITECT_SCHEDULED_EVAL_REQUIREMENTS).toEqual(
+      expect.arrayContaining(["static checks run frequently", "local-model pinned"]),
+    );
+  });
+
+  it("accepts the hardened Browser / Session / Credential Steward Phase 1 static config", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result).toMatchObject({ ok: true, agentCount: 1, issues: [] });
+  });
+
+  it("rejects unsafe Browser / Session / Credential Steward exec defaults", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "full", ask: "off" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+    const codes = result.issues.map((issue) => issue.code);
+
+    expect(result.ok).toBe(false);
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        "browser_steward_exec_policy_unsafe",
+        "browser_steward_exec_approval_missing",
+      ]),
+    );
+  });
+
+  it("rejects Browser / Session / Credential Steward browser and web authority by default", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS, "browser", "group:web"],
+          deny: BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS.filter(
+            (tool) => tool !== "browser" && tool !== "group:web",
+          ),
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+          code: "browser_steward_unsafe_tool_callable",
+          tool: "browser",
+        }),
+        expect.objectContaining({
+          agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+          code: "browser_steward_unsafe_tool_callable",
+          tool: "group:web",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects Browser / Session / Credential Steward missing canonical Phase 2 docs", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    fs.unlinkSync(path.join(root, "control/docs/BROWSER_SESSION_CREDENTIAL_STEWARD.md"));
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        code: "browser_steward_canonical_file_missing",
+        file: "control/docs/BROWSER_SESSION_CREDENTIAL_STEWARD.md",
+      }),
+    );
+  });
+
+  it("rejects Browser / Session / Credential Steward missing Phase 2 schema field", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    const contractPath = path.join(root, "control/docs/BROWSER_SESSION_CREDENTIAL_STEWARD.md");
+    fs.writeFileSync(
+      contractPath,
+      readFileSync(contractPath, "utf8").replaceAll("boundary_decision", "boundary verdict"),
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        code: "browser_steward_output_schema_field_missing",
+        field: "boundary_decision",
+      }),
+    );
+  });
+
+  it("rejects Browser / Session / Credential Steward missing Phase 3 handoff", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    const contractPath = path.join(root, "control/docs/BROWSER_SESSION_CREDENTIAL_STEWARD.md");
+    fs.writeFileSync(
+      contractPath,
+      readFileSync(contractPath, "utf8").replaceAll("Control Director", "Control Lead"),
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        code: "browser_steward_phase3_handoff_missing",
+        handoff: "Control Director",
+      }),
+    );
+  });
+
+  it("rejects Browser / Session / Credential Steward missing Phase 3 approval gate", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    const contractPath = path.join(root, "control/docs/BROWSER_SESSION_CREDENTIAL_STEWARD.md");
+    fs.writeFileSync(
+      contractPath,
+      readFileSync(contractPath, "utf8").replaceAll(
+        "browser/profile mutation",
+        "browser profile change",
+      ),
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        code: "browser_steward_phase3_approval_gate_missing",
+        gate: "browser/profile mutation",
+      }),
+    );
+  });
+
+  it("rejects Browser / Session / Credential Steward missing Phase 4 telemetry event", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    const contractPath = path.join(root, "control/docs/BROWSER_SESSION_CREDENTIAL_STEWARD.md");
+    fs.writeFileSync(
+      contractPath,
+      readFileSync(contractPath, "utf8").replaceAll(
+        "browser_steward.boundary_decision",
+        "browser_steward.boundary_outcome",
+      ),
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        code: "browser_steward_phase4_telemetry_event_missing",
+        event: "browser_steward.boundary_decision",
+      }),
+    );
+  });
+
+  it("rejects Browser / Session / Credential Steward invalid canonical JSON state", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    fs.writeFileSync(
+      path.join(root, "control/state/SESSION_HYGIENE_STATUS.json"),
+      "{bad json",
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        code: "browser_steward_canonical_json_invalid",
+        file: "control/state/SESSION_HYGIENE_STATUS.json",
+      }),
+    );
+  });
+
+  it("rejects Browser / Session / Credential Steward state missing required durability field", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    fs.writeFileSync(
+      path.join(root, "control/state/BROWSER_PROFILE_MAP.json"),
+      `${JSON.stringify({ schemaVersion: 1, lastUpdated: "UNKNOWN", owner: "Browser / Session / Credential Steward", profiles: [], recommendedVerificationSteps: [] }, null, 2)}\n`,
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        code: "browser_steward_state_required_field_missing",
+        file: "control/state/BROWSER_PROFILE_MAP.json",
+        field: "evidenceStatus",
+      }),
+    );
+  });
+
+  it("rejects Browser / Session / Credential Steward secret-like keys in canonical JSON state", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeBrowserSessionCredentialStewardWorkspace(root);
+    writeBrowserSessionCredentialStewardCanonicalFiles(root);
+    fs.writeFileSync(
+      path.join(root, "control/state/CREDENTIAL_BOUNDARY_MAP.json"),
+      `${JSON.stringify({ schemaVersion: 1, lastUpdated: "UNKNOWN", owner: "Browser / Session / Credential Steward", apiKey: "UNKNOWN" }, null, 2)}\n`,
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        name: "Browser / Session / Credential Steward",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS],
+          deny: [...BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: BROWSER_SESSION_CREDENTIAL_STEWARD_AGENT_ID,
+        code: "browser_steward_state_secret_key_forbidden",
+        file: "control/state/CREDENTIAL_BOUNDARY_MAP.json",
+        keyPath: "apiKey",
+      }),
+    );
+  });
+
+  it("keeps Browser / Session / Credential Steward Phase 1 constants complete", () => {
+    expect(BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_TOOLS).toEqual(
+      expect.arrayContaining(["read", "memory_search", "sessions_send", "session_status"]),
+    );
+    expect(BROWSER_SESSION_CREDENTIAL_STEWARD_FORBIDDEN_TOOLS).toEqual(
+      expect.arrayContaining(["exec", "write", "cron", "browser", "group:web"]),
+    );
+    expect(BROWSER_SESSION_CREDENTIAL_STEWARD_REQUIRED_SAFETY_TERMS).toEqual(
+      expect.arrayContaining([
+        "credential",
+        "browser profile",
+        "approval",
+        "redact",
+        "delegate",
+        "cross-project contamination",
+        "draft-only/no execution",
+      ]),
+    );
+    expect(
+      AGENT_ROLE_CONTRACT_BY_ID.has("browser-session-credential-steward-safety-boundary"),
+    ).toBe(true);
+  });
+
+  it("accepts the hardened Memory & Knowledge Curator static config", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeMemoryKnowledgeCuratorWorkspace(root);
+    writeMemoryKnowledgeCuratorCanonicalFiles(root);
+    const agentDir = writeAgentDir(root, MEMORY_KNOWLEDGE_CURATOR_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: MEMORY_KNOWLEDGE_CURATOR_AGENT_ID,
+        name: "Memory & Knowledge Curator",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        thinkingDefault: "off",
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...MEMORY_KNOWLEDGE_CURATOR_REQUIRED_TOOLS],
+          deny: [...MEMORY_KNOWLEDGE_CURATOR_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result).toMatchObject({ ok: true, agentCount: 1, issues: [] });
+  });
+
+  it("rejects unsafe Memory & Knowledge Curator exec defaults", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeMemoryKnowledgeCuratorWorkspace(root);
+    writeMemoryKnowledgeCuratorCanonicalFiles(root);
+    const agentDir = writeAgentDir(root, MEMORY_KNOWLEDGE_CURATOR_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: MEMORY_KNOWLEDGE_CURATOR_AGENT_ID,
+        name: "Memory & Knowledge Curator",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...MEMORY_KNOWLEDGE_CURATOR_REQUIRED_TOOLS],
+          deny: [...MEMORY_KNOWLEDGE_CURATOR_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "full", ask: "off" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "memory_curator_exec_policy_unsafe" }),
+        expect.objectContaining({ code: "memory_curator_exec_approval_missing" }),
+      ]),
+    );
+  });
+
+  it("rejects Memory & Knowledge Curator missing schema field", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeMemoryKnowledgeCuratorWorkspace(root);
+    writeMemoryKnowledgeCuratorCanonicalFiles(root);
+    const contractPath = path.join(root, "control/docs/MEMORY_KNOWLEDGE_CURATOR.md");
+    fs.writeFileSync(
+      contractPath,
+      readFileSync(contractPath, "utf8").replaceAll("memory_decision", "memory verdict"),
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, MEMORY_KNOWLEDGE_CURATOR_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: MEMORY_KNOWLEDGE_CURATOR_AGENT_ID,
+        name: "Memory & Knowledge Curator",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...MEMORY_KNOWLEDGE_CURATOR_REQUIRED_TOOLS],
+          deny: [...MEMORY_KNOWLEDGE_CURATOR_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: MEMORY_KNOWLEDGE_CURATOR_AGENT_ID,
+        code: "memory_curator_schema_field_missing",
+        field: "memory_decision",
+      }),
+    );
+  });
+
+  it("rejects Memory & Knowledge Curator secret-like state keys", () => {
+    const root = harness.createTempDir("openclaw-agent-eval-");
+    const workspace = writeMemoryKnowledgeCuratorWorkspace(root);
+    writeMemoryKnowledgeCuratorCanonicalFiles(root);
+    fs.writeFileSync(
+      path.join(root, "control/state/MEMORY_KNOWLEDGE_CURATOR_STATUS.json"),
+      `${JSON.stringify({ schemaVersion: 1, lastUpdated: "UNKNOWN", owner: "Memory & Knowledge Curator", status: "UNKNOWN", evidenceStatus: "Unknown", recommendedVerificationSteps: [], apiKey: "UNKNOWN" }, null, 2)}\n`,
+      "utf8",
+    );
+    const agentDir = writeAgentDir(root, MEMORY_KNOWLEDGE_CURATOR_AGENT_ID);
+    const result = evaluateAgentStaticContracts(
+      baseConfig(root, {
+        id: MEMORY_KNOWLEDGE_CURATOR_AGENT_ID,
+        name: "Memory & Knowledge Curator",
+        workspace,
+        agentDir,
+        model: { primary: AUTOMATION_PLAYBOOK_ARCHITECT_DEFAULT_MODEL, fallbacks: [] },
+        tools: {
+          profile: "minimal",
+          alsoAllow: [...MEMORY_KNOWLEDGE_CURATOR_REQUIRED_TOOLS],
+          deny: [...MEMORY_KNOWLEDGE_CURATOR_FORBIDDEN_TOOLS],
+          exec: { host: "auto", security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+        },
+      }),
+      { stateDir: path.join(root, "state"), repoRoot: root },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        agentId: MEMORY_KNOWLEDGE_CURATOR_AGENT_ID,
+        code: "memory_curator_state_secret_key_forbidden",
+      }),
     );
   });
 

@@ -179,6 +179,28 @@ The dreaming system now has two closely related review lanes:
 Grounded backfill is useful when you want to replay older notes and inspect what
 the system thinks is durable without manually editing `MEMORY.md`.
 
+Before any short-term candidate is appended to `MEMORY.md`, the Memory &
+Knowledge Curator runtime guard evaluates provenance, confidence, freshness,
+sensitivity, target scope, approval state, and obvious secret-like content.
+Denied or approval-required candidates are skipped, and only redacted decision
+telemetry is written to the memory event journal.
+
+When a candidate is `approval_required`, operators can request a redacted plugin
+approval and then apply the promotion with a resolved allow-once approval id:
+
+```bash
+openclaw memory promote --apply --request-approval --json
+openclaw memory promote --apply --approval-id plugin:...
+```
+
+The approval request contains only non-secret metadata and allows exactly
+`allow-once` or `deny`. Expired, denied, mismatched, or replayed approvals do
+not write durable memory.
+
+`openclaw memory status` and the Control UI Dreaming dashboard surface only
+aggregate Memory Curator guard counts. They do not expose raw memory content,
+source snippets, credentials, tokens, or private notes from the guard event log.
+
 When you use:
 
 ```bash

@@ -199,6 +199,7 @@ import {
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
+  PluginApprovalConsumeAllowOnceParamsSchema,
   PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParamsSchema,
 } from "./plugin-approvals.js";
@@ -575,6 +576,7 @@ export const ProtocolSchemas = {
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
   PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,
+  PluginApprovalConsumeAllowOnceParams: PluginApprovalConsumeAllowOnceParamsSchema,
   PluginControlUiDescriptor: PluginControlUiDescriptorSchema,
   PluginsUiDescriptorsParams: PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResult: PluginsUiDescriptorsResultSchema,

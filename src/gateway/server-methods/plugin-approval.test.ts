@@ -59,6 +59,7 @@ describe("createPluginApprovalHandlers", () => {
   it("returns handlers for every plugin approval method", () => {
     const handlers = createPluginApprovalHandlers(manager);
     expect(Object.keys(handlers).toSorted()).toEqual([
+      "plugin.approval.consumeAllowOnce",
       "plugin.approval.list",
       "plugin.approval.request",
       "plugin.approval.resolve",
@@ -413,6 +414,77 @@ describe("createPluginApprovalHandlers", () => {
       manager.resolve(approvalId, "allow-once");
       await handlerPromise;
     });
+
+    it("preserves safe plugin approval metadata for operator UI consumers", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const requestOpts = createMockOptions(
+        "plugin.approval.request",
+        {
+          pluginId: "memory-core",
+          title: "Memory approval",
+          description: "Approve memory promotion",
+          toolName: "memory.promote",
+          toolCallId: "memory-curator:abc",
+          allowedDecisions: ["allow-once", "deny"],
+          metadata: {
+            memoryCuratorApproval: {
+              operation: "cli_promote_apply",
+              targetRelativePath: "MEMORY.md",
+              candidateCount: 1,
+              sensitivityClasses: ["private"],
+              confidenceLevels: ["medium"],
+              freshnessLevels: ["fresh"],
+              evidenceStatuses: ["Confirmed"],
+              reasons: ["private/shared scope requires approval"],
+            },
+          },
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](requestOpts);
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: expect.any(String) }),
+          undefined,
+        );
+      });
+
+      const listRespond = vi.fn();
+      await handlers["plugin.approval.list"](
+        createMockOptions("plugin.approval.list", {}, { respond: listRespond }),
+      );
+      expect(listRespond).toHaveBeenCalledWith(
+        true,
+        expect.arrayContaining([
+          expect.objectContaining({
+            request: expect.objectContaining({
+              pluginId: "memory-core",
+              toolName: "memory.promote",
+              allowedDecisions: ["allow-once", "deny"],
+              metadata: {
+                memoryCuratorApproval: expect.objectContaining({
+                  operation: "cli_promote_apply",
+                  sensitivityClasses: ["private"],
+                  reasons: ["private/shared scope requires approval"],
+                }),
+              },
+            }),
+          }),
+        ]),
+        undefined,
+      );
+
+      const acceptedCall = respond.mock.calls.find(
+        (c) => (c[1] as Record<string, unknown>)?.status === "accepted",
+      );
+      const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+      manager.resolve(approvalId, "deny");
+      await handlerPromise;
+    });
   });
 
   describe("plugin.approval.waitDecision", () => {
@@ -571,6 +643,93 @@ describe("createPluginApprovalHandlers", () => {
           code: "INVALID_REQUEST",
           message: "unknown or expired approval id",
         }),
+      );
+    });
+  });
+
+  describe("plugin.approval.consumeAllowOnce", () => {
+    it("consumes a resolved allow-once plugin approval exactly once", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          title: "Memory approval",
+          description: "Approve memory promotion",
+          pluginId: "memory-core",
+          toolName: "memory.promote",
+          toolCallId: "memory-curator:abc",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        5000,
+        "plugin:memory-approval",
+      );
+      manager.register(record, 5000).catch(() => null);
+      manager.resolve(record.id, "allow-once");
+
+      const opts = createMockOptions("plugin.approval.consumeAllowOnce", {
+        id: record.id,
+        pluginId: "memory-core",
+        toolName: "memory.promote",
+        toolCallId: "memory-curator:abc",
+      });
+      await handlers["plugin.approval.consumeAllowOnce"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          consumed: true,
+          decision: "allow-once",
+        }),
+        undefined,
+      );
+
+      const replay = createMockOptions("plugin.approval.consumeAllowOnce", {
+        id: record.id,
+        pluginId: "memory-core",
+        toolName: "memory.promote",
+        toolCallId: "memory-curator:abc",
+      });
+      await handlers["plugin.approval.consumeAllowOnce"](replay);
+      expect(replay.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          consumed: false,
+          reason: "replay",
+        }),
+        undefined,
+      );
+    });
+
+    it("refuses to consume a mismatched approval request", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          title: "Memory approval",
+          description: "Approve memory promotion",
+          pluginId: "memory-core",
+          toolName: "memory.promote",
+          toolCallId: "memory-curator:abc",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        5000,
+        "plugin:memory-approval-mismatch",
+      );
+      manager.register(record, 5000).catch(() => null);
+      manager.resolve(record.id, "allow-once");
+
+      const opts = createMockOptions("plugin.approval.consumeAllowOnce", {
+        id: record.id,
+        pluginId: "other-plugin",
+        toolName: "memory.promote",
+        toolCallId: "memory-curator:abc",
+      });
+      await handlers["plugin.approval.consumeAllowOnce"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          consumed: false,
+          reason: "mismatch",
+          field: "pluginId",
+        }),
+        undefined,
       );
     });
   });

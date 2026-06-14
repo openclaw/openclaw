@@ -9,6 +9,8 @@ import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { evaluateMemoryPromotionDecision } from "../memory-host-sdk/curator-decision.js";
+import { appendMemoryHostEvent } from "../memory-host-sdk/events.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
@@ -551,6 +553,19 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         throw new Error(
           `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
         );
+      }
+
+      const nowIso = new Date().toISOString();
+      const decision = evaluateMemoryPromotionDecision({
+        workspaceDir: options.root,
+        targetRelativePath: options.relativePath,
+        operation: "daily_flush",
+        contentPreview: content,
+        nowIso,
+      });
+      await appendMemoryHostEvent(options.root, decision.telemetryEvent).catch(() => {});
+      if (decision.decision !== "allow") {
+        throw new Error(`Memory flush write blocked: ${decision.reasons.join("; ")}`);
       }
 
       await appendMemoryFlushContent({

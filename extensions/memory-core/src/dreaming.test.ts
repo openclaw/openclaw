@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import {
   enqueueSystemEvent,
   resetSystemEventsForTest,
@@ -1866,6 +1867,59 @@ describe("short-term dreaming trigger", () => {
     expect(result?.handled).toBe(true);
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Move backups to S3 Glacier.");
+  });
+
+  it("blocks secret-like dreaming deep promotions before MEMORY.md is modified", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-secret-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["apiKey: sk-test-secret"]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "secret",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.95,
+          snippet: "apiKey: sk-test-secret",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const events = await readMemoryHostEvents({ workspaceDir });
+    const denyEvent = events.find((event) => event.type === "memory.curator.decision.deny");
+    expect(denyEvent).toMatchObject({
+      type: "memory.curator.decision.deny",
+      operation: "dreaming_deep",
+      decision: "deny",
+      targetRelativePath: "MEMORY.md",
+    });
+    expect(JSON.stringify(denyEvent)).not.toContain("sk-test-secret");
+    expect(JSON.stringify(denyEvent)).toContain("[REDACTED]");
   });
 
   it("applies promotions when the managed dreaming token is embedded in a reminder body", async () => {

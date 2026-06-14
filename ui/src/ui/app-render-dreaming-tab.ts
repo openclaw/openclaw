@@ -5,14 +5,17 @@ import { loadConfig, openConfigFile } from "./controllers/config.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,
+  copyMemoryCuratorApprovalResumeCommand,
   dedupeDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  loadMemoryCuratorApprovals,
   loadWikiImportInsights,
   loadWikiMemoryPalace,
   repairDreamingArtifacts,
   resetDreamDiary,
   resetGroundedShortTerm,
+  resolveMemoryCuratorApproval,
   updateDreamingEnabled,
 } from "./controllers/dreaming.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
@@ -51,6 +54,7 @@ export function refreshDreaming(state: AppViewState) {
     await loadConfig(state);
     await Promise.all([
       loadDreamingStatus(state),
+      loadMemoryCuratorApprovals(state),
       loadDreamDiary(state),
       loadWikiImportInsights(state),
       loadWikiMemoryPalace(state),
@@ -152,6 +156,8 @@ export function renderDreamingTab(
       phases: state.dreamingStatus?.phases ?? undefined,
       shortTermEntries: state.dreamingStatus?.shortTermEntries ?? [],
       promotedEntries: state.dreamingStatus?.promotedEntries ?? [],
+      curatorGuard: state.dreamingStatus?.curatorGuard,
+      memoryCuratorApprovals: state.memoryCuratorApprovals,
       dreamingOf: null,
       nextCycle: resolveDreamingNextCycle(state.dreamingStatus),
       timezone: state.dreamingStatus?.timezone ?? null,
@@ -188,6 +194,9 @@ export function renderDreamingTab(
           await loadWikiMemoryPalace(state);
         })();
       },
+      onRefreshMemoryCuratorApprovals: () => {
+        void loadMemoryCuratorApprovals(state);
+      },
       onOpenConfig: () => openConfigFile(state),
       onOpenWikiPage: (lookup: string) => openWikiPage(state, lookup),
       onBackfillDiary: () => backfillDreamDiary(state),
@@ -198,6 +207,9 @@ export function renderDreamingTab(
       onResetDiary: () => resetDreamDiary(state),
       onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
       onRepairDreamingArtifacts: () => repairDreamingArtifacts(state),
+      onResolveMemoryCuratorApproval: (id, decision) =>
+        resolveMemoryCuratorApproval(state, id, decision),
+      onCopyMemoryCuratorApprovalCommand: (id) => copyMemoryCuratorApprovalResumeCommand(state, id),
       onRequestUpdate: options.onRequestUpdate,
     })}
   `;

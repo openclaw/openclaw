@@ -305,6 +305,7 @@ export type AppViewState = {
   wikiMemoryPalaceLoading: boolean;
   wikiMemoryPalaceError: string | null;
   wikiMemoryPalace: import("./controllers/dreaming.js").WikiMemoryPalace | null;
+  memoryCuratorApprovals: import("./controllers/dreaming.js").MemoryCuratorApprovalsState;
   configFormMode: "form" | "raw";
   configSettingsMode: "quick" | "advanced";
   configSearchQuery: string;

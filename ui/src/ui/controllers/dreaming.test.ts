@@ -5,11 +5,14 @@ import {
   dedupeDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  loadMemoryCuratorApprovals,
   loadWikiImportInsights,
   loadWikiMemoryPalace,
   repairDreamingArtifacts,
   resetGroundedShortTerm,
   resetDreamDiary,
+  resolveMemoryCuratorApproval,
+  copyMemoryCuratorApprovalResumeCommand,
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
@@ -42,6 +45,13 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
     wikiMemoryPalaceLoading: false,
     wikiMemoryPalaceError: null,
     wikiMemoryPalace: null,
+    memoryCuratorApprovals: {
+      loading: false,
+      error: null,
+      items: [],
+      resolvingId: null,
+      actionMessage: null,
+    },
     lastError: null,
   };
   return { state, request };
@@ -76,6 +86,81 @@ describe("dreaming controller", () => {
         remPhaseHitCount: 4,
         promotedTotal: 21,
         promotedToday: 2,
+        curatorGuard: {
+          totalDecisions: 4,
+          allowed: 2,
+          denied: 1,
+          approvalRequired: 1,
+          redactions: 1,
+          privateBlocks: 1,
+          staleRecalls: 0,
+          contradictions: 0,
+          approvalRequests: 1,
+          pendingApprovals: 1,
+          approvalsAllowedOnce: 0,
+          approvalDenials: 0,
+          approvalExpirations: 0,
+          approvalReplayBlocks: 0,
+          lastDecisionAt: "2026-04-05T05:00:00.000Z",
+          lastApprovalRequestedAt: "2026-04-05T05:01:00.000Z",
+          trendBuckets: [
+            {
+              bucketStartIso: "2026-04-04T00:00:00.000Z",
+              bucketEndIso: "2026-04-05T00:00:00.000Z",
+              allowed: 1,
+              denied: "bad",
+              approvalRequired: 0,
+              privateBlocks: 0,
+              contradictions: 0,
+              staleRecalls: 1,
+              approvalReplayBlocks: 0,
+              approvalExpirations: 0,
+            },
+            {
+              bucketStartIso: "bad-date",
+              bucketEndIso: "2026-04-06T00:00:00.000Z",
+              denied: 999,
+            },
+            {
+              bucketStartIso: "2026-04-05T00:00:00.000Z",
+              bucketEndIso: "2026-04-06T00:00:00.000Z",
+              allowed: 1,
+              denied: 1,
+              approvalRequired: 1,
+              privateBlocks: 1,
+              contradictions: 0,
+              staleRecalls: 0,
+              approvalReplayBlocks: 0,
+              approvalExpirations: 0,
+            },
+          ],
+          alerts: [
+            {
+              id: "memory-curator.private-blocks-threshold",
+              severity: "critical",
+              metric: "privateBlocks",
+              value: 1,
+              threshold: 1,
+              message: "Private memory blocks reached 1 (threshold 1).",
+            },
+            {
+              id: "bad-alert",
+              severity: "notice",
+              metric: "privateBlocks",
+              value: 1,
+              threshold: 1,
+              message: "invalid severity should be dropped",
+            },
+            {
+              id: "bad-secret-alert",
+              severity: "critical",
+              metric: "privateBlocks",
+              value: "not-a-number",
+              threshold: 1,
+              message: "raw memory should not survive malformed alert",
+            },
+          ],
+        },
         shortTermEntries: [
           {
             key: "memory:memory/2026-04-05.md:1:2",
@@ -171,6 +256,52 @@ describe("dreaming controller", () => {
         totalSignalCount: 20,
         phaseSignalCount: 11,
         promotedToday: 2,
+        curatorGuard: expect.objectContaining({
+          totalDecisions: 4,
+          denied: 1,
+          approvalRequired: 1,
+          approvalRequests: 1,
+          pendingApprovals: 1,
+          redactions: 1,
+          lastDecisionAt: "2026-04-05T05:00:00.000Z",
+          lastApprovalRequestedAt: "2026-04-05T05:01:00.000Z",
+          trendBuckets: [
+            {
+              bucketStartIso: "2026-04-04T00:00:00.000Z",
+              bucketEndIso: "2026-04-05T00:00:00.000Z",
+              allowed: 1,
+              denied: 0,
+              approvalRequired: 0,
+              privateBlocks: 0,
+              contradictions: 0,
+              staleRecalls: 1,
+              approvalReplayBlocks: 0,
+              approvalExpirations: 0,
+            },
+            {
+              bucketStartIso: "2026-04-05T00:00:00.000Z",
+              bucketEndIso: "2026-04-06T00:00:00.000Z",
+              allowed: 1,
+              denied: 1,
+              approvalRequired: 1,
+              privateBlocks: 1,
+              contradictions: 0,
+              staleRecalls: 0,
+              approvalReplayBlocks: 0,
+              approvalExpirations: 0,
+            },
+          ],
+          alerts: [
+            {
+              id: "memory-curator.private-blocks-threshold",
+              severity: "critical",
+              metric: "privateBlocks",
+              value: 1,
+              threshold: 1,
+              message: "Private memory blocks reached 1 (threshold 1).",
+            },
+          ],
+        }),
         shortTermEntries: [
           expect.objectContaining({
             snippet: "Emma prefers shorter, lower-pressure check-ins.",
@@ -226,6 +357,137 @@ describe("dreaming controller", () => {
     );
     expect(state.dreamingStatus?.phases).toBeUndefined();
     expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("loads only pending Memory Curator approval metadata", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValue([
+      {
+        id: "plugin:memory-approval-1",
+        createdAtMs: 1770000000000,
+        expiresAtMs: 1770000300000,
+        request: {
+          pluginId: "memory-core",
+          toolName: "memory.promote",
+          description: "raw memory token=secret should not be used by the UI",
+          allowedDecisions: ["allow-once", "deny"],
+          metadata: {
+            memoryCuratorApproval: {
+              operation: "cli_promote_apply",
+              targetRelativePath: "MEMORY.md",
+              candidateCount: 2,
+              sensitivityClasses: ["private"],
+              confidenceLevels: ["medium"],
+              freshnessLevels: ["fresh"],
+              evidenceStatuses: ["Confirmed"],
+              reasons: ["private/shared scope requires approval"],
+            },
+          },
+        },
+      },
+      {
+        id: "plugin:other-approval",
+        request: {
+          pluginId: "other-plugin",
+          toolName: "memory.promote",
+          metadata: { memoryCuratorApproval: { operation: "cli_promote_apply" } },
+        },
+      },
+      {
+        id: "plugin:wrong-tool",
+        request: {
+          pluginId: "memory-core",
+          toolName: "other.tool",
+          metadata: { memoryCuratorApproval: { operation: "cli_promote_apply" } },
+        },
+      },
+    ]);
+
+    await loadMemoryCuratorApprovals(state);
+
+    expect(request).toHaveBeenCalledWith("plugin.approval.list", {});
+    expect(state.memoryCuratorApprovals.items).toEqual([
+      expect.objectContaining({
+        id: "plugin:memory-approval-1",
+        operation: "cli_promote_apply",
+        targetRelativePath: "MEMORY.md",
+        candidateCount: 2,
+        sensitivityClasses: ["private"],
+        confidenceLevels: ["medium"],
+        freshnessLevels: ["fresh"],
+        evidenceStatuses: ["Confirmed"],
+        reasons: ["private/shared scope requires approval"],
+        resumeCommand:
+          "pnpm openclaw memory promote --apply --approval-id plugin:memory-approval-1 --json",
+      }),
+    ]);
+    expect(JSON.stringify(state.memoryCuratorApprovals.items)).not.toContain("token=secret");
+  });
+
+  it("resolves Memory Curator approvals only as allow-once or deny", async () => {
+    const { state, request } = createState();
+    state.memoryCuratorApprovals.items = [
+      {
+        id: "plugin:memory-approval-1",
+        shortId: "memory-appr…",
+        operation: "cli_promote_apply",
+        targetRelativePath: "MEMORY.md",
+        candidateCount: 1,
+        sensitivityClasses: ["private"],
+        confidenceLevels: ["medium"],
+        freshnessLevels: ["fresh"],
+        evidenceStatuses: ["Confirmed"],
+        reasons: [],
+        resumeCommand:
+          "pnpm openclaw memory promote --apply --approval-id plugin:memory-approval-1 --json",
+      },
+    ];
+    request
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ dreaming: { enabled: true, shortTermEntries: [] } });
+
+    await resolveMemoryCuratorApproval(state, "plugin:memory-approval-1", "allow-once");
+
+    expect(request).toHaveBeenNthCalledWith(1, "plugin.approval.resolve", {
+      id: "plugin:memory-approval-1",
+      decision: "allow-once",
+    });
+    expect(request).not.toHaveBeenCalledWith(
+      "plugin.approval.resolve",
+      expect.objectContaining({ decision: "allow-always" }),
+    );
+    expect(state.memoryCuratorApprovals.actionMessage?.text).toContain("allowed once");
+  });
+
+  it("copies the explicit Memory Curator approval resume command", async () => {
+    const { state } = createState();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    state.memoryCuratorApprovals.items = [
+      {
+        id: "plugin:memory-approval-1",
+        shortId: "memory-appr…",
+        operation: "cli_promote_apply",
+        targetRelativePath: "MEMORY.md",
+        candidateCount: 1,
+        sensitivityClasses: ["private"],
+        confidenceLevels: ["medium"],
+        freshnessLevels: ["fresh"],
+        evidenceStatuses: ["Confirmed"],
+        reasons: [],
+        resumeCommand:
+          "pnpm openclaw memory promote --apply --approval-id plugin:memory-approval-1 --json",
+      },
+    ];
+
+    await copyMemoryCuratorApprovalResumeCommand(state, "plugin:memory-approval-1");
+
+    expect(writeText).toHaveBeenCalledWith(
+      "pnpm openclaw memory promote --apply --approval-id plugin:memory-approval-1 --json",
+    );
+    expect(state.memoryCuratorApprovals.actionMessage?.text).toContain("Resume command copied");
+    vi.unstubAllGlobals();
   });
 
   it("loads and normalizes wiki import insights", async () => {

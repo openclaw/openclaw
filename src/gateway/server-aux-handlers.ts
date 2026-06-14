@@ -261,6 +261,10 @@ export function createGatewayAuxHandlers(params: {
         "plugin.approval.waitDecision",
         loadPluginApprovalHandlers,
       ),
+      "plugin.approval.consumeAllowOnce": createLazyHandler(
+        "plugin.approval.consumeAllowOnce",
+        loadPluginApprovalHandlers,
+      ),
       "plugin.approval.resolve": createLazyHandler(
         "plugin.approval.resolve",
         loadPluginApprovalHandlers,

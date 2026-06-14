@@ -2,8 +2,14 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  loadMemoryCuratorAuditReport,
+  type MemoryCuratorApprovalRequest,
+  type MemoryCuratorAuditReport,
+} from "openclaw/plugin-sdk/memory-host-events";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -30,6 +36,7 @@ import {
 } from "./cli.host.runtime.js";
 import type {
   MemoryCommandOptions,
+  MemoryAuditOptions,
   MemoryPromoteCommandOptions,
   MemoryPromoteExplainOptions,
   MemoryRemBackfillOptions,
@@ -508,6 +515,133 @@ function matchesPromotionSelector(
     candidate.path.toLowerCase().includes(trimmed) ||
     candidate.snippet.toLowerCase().includes(trimmed)
   );
+}
+
+type PluginApprovalRequestResponse = {
+  id?: string;
+  status?: string;
+  decision?: string | null;
+};
+
+type PluginApprovalConsumeResponse = {
+  id?: string;
+  consumed?: boolean;
+  reason?: string | null;
+  decision?: string | null;
+};
+
+function normalizeGatewayRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function uniqueSortedStrings(values: Iterable<string | undefined>): string[] {
+  return Array.from(
+    new Set(
+      Array.from(values)
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter((value) => value.length > 0),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+}
+
+function buildMemoryCuratorApprovalMetadata(request: MemoryCuratorApprovalRequest) {
+  return {
+    memoryCuratorApproval: {
+      operation: request.operation,
+      targetRelativePath: request.targetRelativePath,
+      candidateCount: request.candidateCount,
+      sensitivityClasses: uniqueSortedStrings(
+        request.candidates.map((candidate) => candidate.sensitivityClass),
+      ),
+      confidenceLevels: uniqueSortedStrings(
+        request.candidates.map((candidate) => candidate.confidence),
+      ),
+      freshnessLevels: uniqueSortedStrings(
+        request.candidates.map((candidate) => candidate.freshness),
+      ),
+      evidenceStatuses: uniqueSortedStrings(
+        request.candidates.map((candidate) => candidate.evidenceStatus),
+      ),
+      reasons: uniqueSortedStrings(
+        request.candidates.flatMap((candidate) => candidate.reasons),
+      ).slice(0, 8),
+    },
+  };
+}
+
+async function resolveMemoryPromotionApprovalViaGateway(params: {
+  opts: MemoryPromoteCommandOptions;
+  request: MemoryCuratorApprovalRequest;
+}): ReturnType<NonNullable<Parameters<typeof applyShortTermPromotions>[0]["requestApproval"]>> {
+  const gatewayOpts = {
+    url: params.opts.url,
+    token: params.opts.token,
+    timeout: params.opts.timeout,
+    json: params.opts.json,
+  };
+  if (params.opts.approvalId) {
+    const consume = normalizeGatewayRecord(
+      await callGatewayFromCli(
+        "plugin.approval.consumeAllowOnce",
+        gatewayOpts,
+        {
+          id: params.opts.approvalId,
+          pluginId: params.request.pluginId,
+          toolName: params.request.toolName,
+          toolCallId: params.request.toolCallId,
+        },
+        { expectFinal: false },
+      ),
+    ) as PluginApprovalConsumeResponse;
+    if (consume.consumed === true && consume.decision === "allow-once") {
+      return {
+        status: "allowed_once",
+        approvalId: consume.id ?? params.opts.approvalId,
+      };
+    }
+    const reason = typeof consume.reason === "string" ? consume.reason : "expired";
+    return {
+      status: reason === "denied" ? "denied" : reason === "replay" ? "replay_blocked" : "expired",
+      approvalId: consume.id ?? params.opts.approvalId,
+      reasons: [reason],
+    };
+  }
+  if (!params.opts.requestApproval) {
+    return {
+      status: "expired",
+      reasons: ["approval required but no approval request was made"],
+    };
+  }
+  const response = normalizeGatewayRecord(
+    await callGatewayFromCli(
+      "plugin.approval.request",
+      gatewayOpts,
+      {
+        pluginId: params.request.pluginId,
+        title: params.request.title,
+        description: params.request.description,
+        severity: params.request.severity,
+        toolName: params.request.toolName,
+        toolCallId: params.request.toolCallId,
+        metadata: buildMemoryCuratorApprovalMetadata(params.request),
+        allowedDecisions: [...params.request.allowedDecisions],
+        timeoutMs: Number(params.opts.timeout ?? 30_000),
+        twoPhase: true,
+      },
+      { expectFinal: false },
+    ),
+  ) as PluginApprovalRequestResponse;
+  if (response.decision === "deny") {
+    return { status: "denied", approvalId: response.id, reasons: ["approval denied"] };
+  }
+  if (response.decision === null) {
+    return { status: "expired", approvalId: response.id, reasons: ["approval expired"] };
+  }
+  return {
+    status: "requested",
+    approvalId: response.id,
+    reasons: ["approval requested; rerun with --approval-id after allow-once"],
+  };
 }
 
 async function withMemoryManagerForAgent(params: {
@@ -1499,6 +1633,112 @@ export async function runMemoryRollup(opts: MemoryRollupOptions) {
   }
 }
 
+function normalizeMemoryAuditDays(days: number | undefined): number {
+  if (!Number.isFinite(days)) {
+    return 30;
+  }
+  return Math.min(90, Math.max(1, Math.floor(days as number)));
+}
+
+async function writeMemoryAuditReportFile(outputPath: string, payload: unknown): Promise<string> {
+  const resolvedPath = path.resolve(outputPath);
+  const dir = path.dirname(resolvedPath);
+  const base = path.basename(resolvedPath);
+  const tempPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.tmp`);
+  const content = `${JSON.stringify(payload, null, 2)}\n`;
+  try {
+    await fs.writeFile(tempPath, content, "utf-8");
+    await fs.rename(tempPath, resolvedPath);
+  } catch (err) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  }
+  return resolvedPath;
+}
+
+function formatMemoryAuditLine(report: MemoryCuratorAuditReport): string {
+  return [
+    `decisions=${report.summary.totalDecisions}`,
+    `allowed=${report.decisionEventCounts.allow}`,
+    `denied=${report.decisionEventCounts.deny}`,
+    `approvalRequired=${report.decisionEventCounts.approvalRequired}`,
+    `alerts=${report.alertCounts.total}`,
+    `pendingApprovals=${report.approvalEventCounts.pending}`,
+  ].join(" · ");
+}
+
+export async function runMemoryAudit(opts: MemoryAuditOptions) {
+  setVerbose(Boolean(opts.verbose));
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory audit");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const days = normalizeMemoryAuditDays(opts.days);
+  const agents: Array<{ agentId: string; workspaceAvailable: boolean }> = [];
+  const workspaceDirs: string[] = [];
+
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir?.trim();
+        agents.push({ agentId, workspaceAvailable: Boolean(workspaceDir) });
+        if (workspaceDir) {
+          workspaceDirs.push(workspaceDir);
+        }
+      },
+    });
+  }
+
+  const report = await loadMemoryCuratorAuditReport({
+    workspaceDirs,
+    days,
+  });
+  const payload = {
+    generatedAt: report.generatedAt,
+    windowDays: report.windowDays,
+    agentCount: agents.length,
+    workspaceCount: new Set(workspaceDirs).size,
+    agents,
+    report,
+  };
+
+  let outputPath: string | undefined;
+  if (opts.output?.trim()) {
+    try {
+      outputPath = await writeMemoryAuditReportFile(opts.output, payload);
+    } catch (err) {
+      defaultRuntime.error(`Memory audit export failed: ${formatErrorMessage(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (opts.json) {
+    defaultRuntime.writeJson(payload);
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  const success = (text: string) => colorize(rich, theme.success, text);
+  const lines = [
+    heading("Memory Curator Audit"),
+    `${muted("Window:")} ${report.windowDays} day(s)`,
+    `${muted("Agents:")} ${agents.length} · ${muted("Workspaces:")} ${new Set(workspaceDirs).size}`,
+    `${muted("Report:")} ${formatMemoryAuditLine(report)}`,
+  ];
+  if (report.summary.lastDecisionAt) {
+    lines.push(`${muted("Last decision:")} ${report.summary.lastDecisionAt}`);
+  }
+  if (outputPath) {
+    lines.push(`${muted("Export:")} ${success(shortenHomePath(outputPath))}`);
+  }
+  defaultRuntime.log(lines.join("\n"));
+}
+
 export async function runMemoryIndex(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
@@ -1768,6 +2008,14 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
             minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
             maxAgeDays: dreaming.maxAgeDays,
             timezone: dreaming.timezone,
+            requestApproval:
+              opts.requestApproval || opts.approvalId
+                ? async (request) =>
+                    await resolveMemoryPromotionApprovalViaGateway({
+                      opts,
+                      request,
+                    })
+                : undefined,
           });
         } catch (err) {
           defaultRuntime.error(`Memory promote apply failed: ${formatErrorMessage(err)}`);
@@ -1805,6 +2053,11 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
                 reconciledExisting: applyResult.reconciledExisting,
                 memoryPath: applyResult.memoryPath,
                 appliedCandidates: applyResult.appliedCandidates,
+                approvalRequired: applyResult.approvalRequired,
+                approvalId: applyResult.approvalRequests[0]?.approvalId,
+                approvalRequests: applyResult.approvalRequests,
+                denied: applyResult.denied,
+                decisionResults: applyResult.decisionResults,
               }
             : undefined,
         });
@@ -1881,8 +2134,30 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
               `appended=${applyResult.appended} reconciledExisting=${applyResult.reconciledExisting}`,
             ),
           );
+          if (applyResult.approvalRequests.length > 0) {
+            for (const request of applyResult.approvalRequests) {
+              lines.push(
+                colorize(
+                  rich,
+                  theme.muted,
+                  `approval=${request.status}${request.approvalId ? ` id=${request.approvalId}` : ""}`,
+                ),
+              );
+            }
+          }
         } else {
           lines.push(colorize(rich, theme.warn, "No candidates met apply criteria."));
+          if (applyResult.approvalRequests.length > 0) {
+            for (const request of applyResult.approvalRequests) {
+              lines.push(
+                colorize(
+                  rich,
+                  theme.warn,
+                  `approval=${request.status}${request.approvalId ? ` id=${request.approvalId}` : ""}`,
+                ),
+              );
+            }
+          }
         }
       }
       defaultRuntime.log(lines.join("\n").trim());

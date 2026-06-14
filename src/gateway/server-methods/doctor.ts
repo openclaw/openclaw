@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MemoryCuratorGuardSummary } from "../../memory-host-sdk/curator-guard-summary.js";
+import { loadMemoryCuratorGuardSummary } from "../../memory-host-sdk/curator-guard-summary.js";
 import {
   isSameMemoryDreamingDay,
   resolveMemoryDeepDreamingConfig,
@@ -101,6 +103,7 @@ type DoctorMemoryDreamingPayload = {
   lastPromotedAt?: string;
   storeError?: string;
   phaseSignalError?: string;
+  curatorGuard?: MemoryCuratorGuardSummary;
   shortTermEntries: DoctorMemoryDreamingEntryPayload[];
   signalEntries: DoctorMemoryDreamingEntryPayload[];
   promotedEntries: DoctorMemoryDreamingEntryPayload[];
@@ -950,6 +953,10 @@ export const doctorHandlers: GatewayRequestHandlers = {
               promotedTotal: 0,
               promotedToday: 0,
             };
+      const curatorGuard =
+        allWorkspaces.length > 0
+          ? await loadMemoryCuratorGuardSummary({ workspaceDirs: allWorkspaces })
+          : undefined;
       const cronStatuses = await resolveAllManagedDreamingCronStatuses(context);
       const payload: DoctorMemoryStatusPayload = {
         agentId,
@@ -958,6 +965,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
         dreaming: {
           ...dreamingConfig,
           ...storeStats,
+          ...(curatorGuard ? { curatorGuard } : {}),
           phases: {
             light: {
               ...dreamingConfig.phases.light,

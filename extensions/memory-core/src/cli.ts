@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 import type {
   MemoryCommandOptions,
+  MemoryAuditOptions,
   MemoryPromoteCommandOptions,
   MemoryPromoteExplainOptions,
   MemoryRemBackfillOptions,
@@ -71,6 +72,11 @@ async function runMemoryRollup(opts: MemoryRollupOptions) {
   await runtime.runMemoryRollup(opts);
 }
 
+async function runMemoryAudit(opts: MemoryAuditOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryAudit(opts);
+}
+
 export function registerMemoryCli(program: Command) {
   const memory = program
     .command("memory")
@@ -116,6 +122,10 @@ export function registerMemoryCli(program: Command) {
             "Also seed durable grounded candidates into the live short-term promotion store.",
           ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
+          [
+            "openclaw memory audit --json",
+            "Export a non-secret Memory Curator guard audit report.",
+          ],
           ["openclaw memory rollup --dry-run", "Preview rollup files without writing."],
           ["openclaw memory rollup --agent main", "Generate deterministic rollups for one agent."],
           ["openclaw memory rollup --stale", "List orphaned or out-of-date rollups."],
@@ -179,6 +189,18 @@ export function registerMemoryCli(program: Command) {
       (value: string) => Number(value),
     )
     .option("--apply", "Append selected candidates to MEMORY.md", false)
+    .option(
+      "--request-approval",
+      "Request allow-once approval for approval-gated MEMORY.md promotions without writing",
+      false,
+    )
+    .option(
+      "--approval-id <id>",
+      "Apply approval-gated promotions using a resolved allow-once approval",
+    )
+    .option("--url <url>", "Gateway WebSocket URL for memory promotion approval RPC")
+    .option("--token <token>", "Gateway token for memory promotion approval RPC")
+    .option("--timeout <ms>", "Gateway approval RPC timeout in ms", "30000")
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
     .action(async (opts: MemoryPromoteCommandOptions) => {
@@ -227,6 +249,19 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemBackfillOptions) => {
       await runMemoryRemBackfill(opts);
+    });
+
+  memory
+    .command("audit")
+    .description("Export a non-secret Memory Curator guard audit report")
+    .option("--agent <id>", "Agent id (default: all configured agents)")
+    .option("--days <n>", "Lookback window in UTC days (default: 30, max: 90)", (value: string) =>
+      Number(value),
+    )
+    .option("--output <path>", "Write JSON audit report to a file")
+    .option("--json", "Print JSON")
+    .action(async (opts: MemoryAuditOptions) => {
+      await runMemoryAudit(opts);
     });
 
   memory

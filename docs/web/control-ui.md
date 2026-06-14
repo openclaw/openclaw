@@ -111,7 +111,7 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and partial snapshots are labeled when a probe or audit exceeds its UI budget.
     - Instances: presence list + refresh (`system-presence`).
     - Sessions: list configured-agent sessions by default, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`).
-    - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
+    - Dreams: dreaming status, enable/disable toggle, Dream Diary reader, non-secret Memory Curator guard counts, count-only alerts, daily trend charts, and pending Memory Curator promotion approvals. Operators can allow once or deny pending `memory-core` / `memory.promote` approvals and copy the explicit `openclaw memory promote --apply --approval-id <id> --json` resume command; the UI never writes durable memory directly, and alerts/trend charts show counts/dates only (`doctor.memory.status`, `doctor.memory.dreamDiary`, `plugin.approval.list`, `plugin.approval.resolve`, `config.patch`). For operational review packets, use `openclaw memory audit --json` or `openclaw memory audit --output <path>`; the export is CLI-first and excludes raw memory content, source snippets, source paths, approval payload text, previews, credentials, cookies, and tokens.
 
   </Accordion>
   <Accordion title="Cron, skills, nodes, exec approvals">

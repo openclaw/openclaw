@@ -202,6 +202,13 @@ const createHost = (tab: Tab): SettingsHost => ({
   wikiMemoryPalaceLoading: false,
   wikiMemoryPalaceError: null,
   wikiMemoryPalace: null,
+  memoryCuratorApprovals: {
+    loading: false,
+    error: null,
+    items: [],
+    resolvingId: null,
+    actionMessage: null,
+  },
 });
 
 function createCustomThemeFixture() {

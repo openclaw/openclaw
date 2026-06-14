@@ -4,6 +4,9 @@ import { t } from "../../i18n/index.ts";
 import "../../styles/dreams.css";
 import type {
   DreamingEntry,
+  MemoryCuratorApprovalsState,
+  MemoryCuratorGuardStatus,
+  MemoryCuratorGuardTrendBucket,
   WikiImportInsights,
   WikiMemoryPalace,
 } from "../controllers/dreaming.ts";
@@ -105,6 +108,8 @@ export type DreamingProps = {
   };
   shortTermEntries: DreamingEntry[];
   promotedEntries: DreamingEntry[];
+  curatorGuard?: MemoryCuratorGuardStatus;
+  memoryCuratorApprovals: MemoryCuratorApprovalsState;
   dreamingOf: string | null;
   nextCycle: string | null;
   timezone: string | null;
@@ -129,6 +134,7 @@ export type DreamingProps = {
   onRefreshDiary: () => void;
   onRefreshImports: () => void;
   onRefreshMemoryPalace: () => void;
+  onRefreshMemoryCuratorApprovals: () => void;
   onOpenConfig: () => void;
   onOpenWikiPage: (lookup: string) => Promise<{
     title: string;
@@ -144,6 +150,8 @@ export type DreamingProps = {
   onResetDiary: () => void;
   onResetGroundedShortTerm: () => void;
   onRepairDreamingArtifacts: () => void;
+  onResolveMemoryCuratorApproval: (id: string, decision: "allow-once" | "deny") => void;
+  onCopyMemoryCuratorApprovalCommand: (id: string) => void;
   onRequestUpdate?: () => void;
 };
 
@@ -474,6 +482,29 @@ function formatCompactDateTime(value: string): string {
   });
 }
 
+function formatCompactDateTimeMs(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "unknown";
+  }
+  return formatCompactDateTime(new Date(value).toISOString());
+}
+
+function formatApprovalAge(createdAtMs: number | undefined): string {
+  if (typeof createdAtMs !== "number" || !Number.isFinite(createdAtMs)) {
+    return "age unknown";
+  }
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - createdAtMs) / 1000));
+  if (ageSeconds < 60) {
+    return `${ageSeconds}s old`;
+  }
+  const ageMinutes = Math.floor(ageSeconds / 60);
+  if (ageMinutes < 60) {
+    return `${ageMinutes}m old`;
+  }
+  const ageHours = Math.floor(ageMinutes / 60);
+  return `${ageHours}h old`;
+}
+
 function basename(value: string): string {
   const normalized = value.replace(/\\/g, "/");
   return normalized.split("/").findLast(Boolean) ?? value;
@@ -748,6 +779,335 @@ function renderAdvancedEntryList(params: {
   `;
 }
 
+const CURATOR_TREND_SERIES = [
+  { key: "allowed", label: "Allowed", className: "allowed" },
+  { key: "denied", label: "Denied", className: "denied" },
+  { key: "approvalRequired", label: "Approval required", className: "approval-required" },
+  { key: "privateBlocks", label: "Private blocks", className: "private-blocks" },
+  { key: "contradictions", label: "Contradictions", className: "contradictions" },
+  { key: "staleRecalls", label: "Stale recalls", className: "stale-recalls" },
+  { key: "approvalReplayBlocks", label: "Replay blocks", className: "replay-blocks" },
+  { key: "approvalExpirations", label: "Expirations", className: "expirations" },
+] as const;
+
+function curatorTrendBucketTotal(bucket: MemoryCuratorGuardTrendBucket): number {
+  return CURATOR_TREND_SERIES.reduce((sum, series) => sum + bucket[series.key], 0);
+}
+
+function formatTrendBucketDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown date";
+  }
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function formatTrendBucketCounts(bucket: MemoryCuratorGuardTrendBucket): string {
+  const parts = CURATOR_TREND_SERIES.flatMap((series) => {
+    const value = bucket[series.key];
+    return value > 0 ? [`${series.label}: ${value}`] : [];
+  });
+  return parts.length > 0 ? parts.join(" · ") : "No guard events";
+}
+
+function renderCuratorTrendChart(buckets: MemoryCuratorGuardTrendBucket[]) {
+  if (buckets.length === 0) {
+    return html`
+      <div class="dreams-advanced__trend-empty">
+        No Memory Curator guard events recorded in this window.
+      </div>
+    `;
+  }
+  const maxTotal = Math.max(1, ...buckets.map((bucket) => curatorTrendBucketTotal(bucket)));
+  return html`
+    <div class="dreams-advanced__trend" aria-label="Memory Curator guard trend counts">
+      <div class="dreams-advanced__trend-legend" aria-hidden="true">
+        ${CURATOR_TREND_SERIES.map(
+          (series) => html`
+            <span class="dreams-advanced__trend-legend-item">
+              <i
+                class="dreams-advanced__trend-swatch dreams-advanced__trend-swatch--${series.className}"
+              ></i>
+              ${series.label}
+            </span>
+          `,
+        )}
+      </div>
+      <div class="dreams-advanced__trend-bars">
+        ${buckets.map((bucket) => {
+          const total = curatorTrendBucketTotal(bucket);
+          return html`
+            <div
+              class="dreams-advanced__trend-row"
+              aria-label="${formatTrendBucketDate(
+                bucket.bucketStartIso,
+              )}: ${formatTrendBucketCounts(bucket)}"
+            >
+              <span class="dreams-advanced__trend-date">
+                ${formatTrendBucketDate(bucket.bucketStartIso)}
+              </span>
+              <div class="dreams-advanced__trend-track">
+                ${CURATOR_TREND_SERIES.map((series) => {
+                  const value = bucket[series.key];
+                  if (value <= 0) {
+                    return nothing;
+                  }
+                  const width = Math.max(4, (value / maxTotal) * 100);
+                  return html`
+                    <span
+                      class="dreams-advanced__trend-segment dreams-advanced__trend-segment--${series.className}"
+                      style="width: ${width}%"
+                      aria-hidden="true"
+                    ></span>
+                  `;
+                })}
+              </div>
+              <span class="dreams-advanced__trend-total">${total}</span>
+            </div>
+          `;
+        })}
+      </div>
+    </div>
+  `;
+}
+
+function renderCuratorAlertPanel(status: MemoryCuratorGuardStatus) {
+  const alerts = status.alerts;
+  return html`
+    <div class="dreams-advanced__alerts-panel">
+      <div class="dreams-advanced__trend-heading">
+        <span>Memory Curator Alerts</span>
+        <span>${alerts.length} active</span>
+      </div>
+      ${alerts.length === 0
+        ? html`<div class="dreams-advanced__alerts-empty">No Memory Curator guard alerts.</div>`
+        : html`
+            <div class="dreams-advanced__alerts-list">
+              ${alerts.map(
+                (alert) => html`
+                  <article class="dreams-advanced__alert dreams-advanced__alert--${alert.severity}">
+                    <div class="dreams-advanced__alert-header">
+                      <span class="dreams-advanced__alert-severity">${alert.severity}</span>
+                      <span class="dreams-advanced__alert-metric">${alert.metric}</span>
+                    </div>
+                    <div class="dreams-advanced__alert-message">${alert.message}</div>
+                    <div class="dreams-advanced__alert-meta">
+                      Value ${alert.value} · Threshold ${alert.threshold}
+                    </div>
+                  </article>
+                `,
+              )}
+            </div>
+          `}
+    </div>
+  `;
+}
+
+function renderCuratorGuardSection(guard?: MemoryCuratorGuardStatus) {
+  const status: MemoryCuratorGuardStatus = guard ?? {
+    totalDecisions: 0,
+    allowed: 0,
+    denied: 0,
+    approvalRequired: 0,
+    redactions: 0,
+    privateBlocks: 0,
+    staleRecalls: 0,
+    contradictions: 0,
+    approvalRequests: 0,
+    pendingApprovals: 0,
+    approvalsAllowedOnce: 0,
+    approvalDenials: 0,
+    approvalExpirations: 0,
+    approvalReplayBlocks: 0,
+    trendBuckets: [],
+    alerts: [],
+  };
+  const stats = [
+    ["Allowed", status.allowed],
+    ["Denied", status.denied],
+    ["Approval required", status.approvalRequired],
+    ["Redactions", status.redactions],
+    ["Private blocks", status.privateBlocks],
+    ["Stale recalls", status.staleRecalls],
+    ["Contradictions", status.contradictions],
+    ["Approval requests", status.approvalRequests],
+    ["Pending approvals", status.pendingApprovals],
+    ["Allow-once approvals", status.approvalsAllowedOnce],
+    ["Approval denials", status.approvalDenials],
+    ["Expired approvals", status.approvalExpirations],
+    ["Replay blocks", status.approvalReplayBlocks],
+  ] as const;
+  return html`
+    <section class="dreams-advanced__section dreams-advanced__curator-guard">
+      <div class="dreams-advanced__section-header">
+        <div class="dreams-advanced__section-copy">
+          <div class="dreams-advanced__section-title">Memory Curator Guard</div>
+          <p class="dreams-advanced__section-description">
+            Non-secret runtime guard counts for durable memory writes and promotions.
+          </p>
+        </div>
+        <div class="dreams-advanced__section-toolbar">
+          <span class="dreams-advanced__section-count">${status.totalDecisions}</span>
+        </div>
+      </div>
+      <div class="dreams-advanced__guard-grid">
+        ${stats.map(
+          ([label, value]) => html`
+            <div class="dreams-advanced__guard-stat">
+              <span class="dreams-advanced__guard-value">${value}</span>
+              <span class="dreams-advanced__guard-label">${label}</span>
+            </div>
+          `,
+        )}
+      </div>
+      ${renderCuratorAlertPanel(status)}
+      <div class="dreams-advanced__trend-panel">
+        <div class="dreams-advanced__trend-heading">
+          <span>Memory Curator Trends</span>
+          <span
+            >${status.trendBuckets.length} day${status.trendBuckets.length === 1 ? "" : "s"}</span
+          >
+        </div>
+        ${renderCuratorTrendChart(status.trendBuckets)}
+      </div>
+      <div class="dreams-advanced__guard-footer">
+        Last guard event:
+        ${status.lastDecisionAt ? formatCompactDateTime(status.lastDecisionAt) : "none recorded"} ·
+        Last approval request:
+        ${status.lastApprovalRequestedAt
+          ? formatCompactDateTime(status.lastApprovalRequestedAt)
+          : "none recorded"}
+      </div>
+    </section>
+  `;
+}
+
+function formatApprovalTags(values: string[], fallback: string): string {
+  return values.length > 0 ? values.join(", ") : fallback;
+}
+
+function renderMemoryCuratorApprovalsSection(props: DreamingProps) {
+  const approvals = props.memoryCuratorApprovals;
+  return html`
+    <section class="dreams-advanced__section dreams-advanced__curator-approvals">
+      <div class="dreams-advanced__section-header">
+        <div class="dreams-advanced__section-copy">
+          <div class="dreams-advanced__section-title">Memory Curator Approvals</div>
+          <p class="dreams-advanced__section-description">
+            Pending approval-gated MEMORY.md promotions. Resolving here never writes memory; copy
+            the resume command and run it explicitly to apply.
+          </p>
+        </div>
+        <div class="dreams-advanced__section-toolbar">
+          <button
+            class="btn btn--subtle btn--sm"
+            ?disabled=${approvals.loading}
+            @click=${() => props.onRefreshMemoryCuratorApprovals()}
+          >
+            Refresh
+          </button>
+          <span class="dreams-advanced__section-count">${approvals.items.length}</span>
+        </div>
+      </div>
+      ${approvals.actionMessage
+        ? html`
+            <div
+              class="dreams-advanced__approval-message ${approvals.actionMessage.kind === "success"
+                ? "dreams-advanced__approval-message--success"
+                : "dreams-advanced__approval-message--error"}"
+              role="status"
+            >
+              ${approvals.actionMessage.text}
+            </div>
+          `
+        : nothing}
+      ${approvals.error
+        ? html`<div
+            class="dreams-advanced__approval-message dreams-advanced__approval-message--error"
+          >
+            ${approvals.error}
+          </div>`
+        : nothing}
+      ${approvals.loading && approvals.items.length === 0
+        ? html`<div class="dreams-advanced__empty">Loading pending approvals…</div>`
+        : approvals.items.length === 0
+          ? html`<div class="dreams-advanced__empty">No pending Memory Curator approvals.</div>`
+          : html`
+              <div class="dreams-advanced__approval-list">
+                ${approvals.items.map((approval) => {
+                  const busy = approvals.resolvingId === approval.id;
+                  return html`
+                    <article class="dreams-advanced__approval-item" data-approval-id=${approval.id}>
+                      <div class="dreams-advanced__approval-main">
+                        <div class="dreams-advanced__approval-title">
+                          ${approval.shortId} · ${approval.operation}
+                        </div>
+                        <div class="dreams-advanced__approval-meta">
+                          ${approval.candidateCount}
+                          candidate${approval.candidateCount === 1 ? "" : "s"} ·
+                          ${approval.targetRelativePath} ·
+                          ${formatApprovalAge(approval.createdAtMs)} · expires
+                          ${formatCompactDateTimeMs(approval.expiresAtMs)}
+                        </div>
+                        <div class="dreams-advanced__approval-tags">
+                          <span
+                            >Sensitivity:
+                            ${formatApprovalTags(approval.sensitivityClasses, "unknown")}</span
+                          >
+                          <span
+                            >Confidence:
+                            ${formatApprovalTags(approval.confidenceLevels, "unknown")}</span
+                          >
+                          <span
+                            >Freshness:
+                            ${formatApprovalTags(approval.freshnessLevels, "unknown")}</span
+                          >
+                          <span
+                            >Evidence:
+                            ${formatApprovalTags(approval.evidenceStatuses, "unknown")}</span
+                          >
+                        </div>
+                        ${approval.reasons.length > 0
+                          ? html`
+                              <ul class="dreams-advanced__approval-reasons">
+                                ${approval.reasons.map((reason) => html`<li>${reason}</li>`)}
+                              </ul>
+                            `
+                          : nothing}
+                      </div>
+                      <div class="dreams-advanced__approval-actions">
+                        <button
+                          class="btn btn--subtle btn--sm"
+                          ?disabled=${busy || approvals.loading}
+                          @click=${() => props.onCopyMemoryCuratorApprovalCommand(approval.id)}
+                        >
+                          Copy resume command
+                        </button>
+                        <button
+                          class="btn btn--subtle btn--sm"
+                          ?disabled=${busy || approvals.loading}
+                          @click=${() => props.onResolveMemoryCuratorApproval(approval.id, "deny")}
+                        >
+                          Deny
+                        </button>
+                        <button
+                          class="btn btn--primary btn--sm"
+                          ?disabled=${busy || approvals.loading}
+                          @click=${() =>
+                            props.onResolveMemoryCuratorApproval(approval.id, "allow-once")}
+                        >
+                          Allow once
+                        </button>
+                      </div>
+                    </article>
+                  `;
+                })}
+              </div>
+            `}
+    </section>
+  `;
+}
+
 function renderAdvancedSection(props: DreamingProps) {
   const groundedEntries = props.shortTermEntries.filter((entry) => entry.groundedCount > 0);
   const waitingEntries = sortWaitingEntries(props.shortTermEntries, _advancedWaitingSort);
@@ -836,6 +1196,8 @@ function renderAdvancedSection(props: DreamingProps) {
         : nothing}
 
       <div class="dreams-advanced__sections">
+        ${renderCuratorGuardSection(props.curatorGuard)}
+        ${renderMemoryCuratorApprovalsSection(props)}
         ${renderAdvancedEntryList({
           titleKey: "dreaming.advanced.stagedTitle",
           descriptionKey: "dreaming.advanced.stagedDescription",

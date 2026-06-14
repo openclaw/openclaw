@@ -192,6 +192,7 @@ describe("operator scope authorization", () => {
     "plugin.approval.list",
     "plugin.approval.request",
     "plugin.approval.waitDecision",
+    "plugin.approval.consumeAllowOnce",
     "plugin.approval.resolve",
   ])("requires approvals scope for %s", (method) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
@@ -228,6 +229,7 @@ describe("plugin approval method registration", () => {
     expect(methods).toContain("plugin.approval.list");
     expect(methods).toContain("plugin.approval.request");
     expect(methods).toContain("plugin.approval.waitDecision");
+    expect(methods).toContain("plugin.approval.consumeAllowOnce");
     expect(methods).toContain("plugin.approval.resolve");
   });
 
@@ -235,6 +237,7 @@ describe("plugin approval method registration", () => {
     expect(isGatewayMethodClassified("plugin.approval.list")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.request")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.waitDecision")).toBe(true);
+    expect(isGatewayMethodClassified("plugin.approval.consumeAllowOnce")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.resolve")).toBe(true);
   });
 });

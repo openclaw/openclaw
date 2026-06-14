@@ -3,24 +3,32 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
-  appendMemoryHostEvent: vi.fn(async () => {}),
-}));
+vi.mock("openclaw/plugin-sdk/memory-host-events", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/memory-host-events")>(
+    "openclaw/plugin-sdk/memory-host-events",
+  );
+  return {
+    ...actual,
+    appendMemoryHostEvent: vi.fn(async () => {}),
+  };
+});
 
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import {
+  __testing,
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   isShortTermMemoryPath,
+  type PromotionCandidate,
   recordGroundedShortTermCandidates,
-  rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
+  rankShortTermPromotionCandidates,
   recordShortTermRecalls,
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
   resolveShortTermRecallLockPath,
   resolveShortTermPhaseSignalStorePath,
   resolveShortTermRecallStorePath,
-  __testing,
 } from "./short-term-promotion.js";
 
 describe("short-term promotion", () => {
@@ -85,6 +93,36 @@ describe("short-term promotion", () => {
       throw new Error(`expected ${label} promotedAt timestamp`);
     }
     return candidate.promotedAt;
+  }
+
+  function makeCandidate(overrides: Partial<PromotionCandidate> = {}): PromotionCandidate {
+    return {
+      key: "memory:memory/2026-04-03.md:1:1",
+      path: "memory/2026-04-03.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory",
+      snippet: "Keep gateway on localhost only.",
+      recallCount: 4,
+      avgScore: 0.97,
+      maxScore: 0.97,
+      uniqueQueries: 2,
+      firstRecalledAt: "2026-04-03T00:00:00.000Z",
+      lastRecalledAt: "2026-04-04T00:00:00.000Z",
+      ageDays: 0,
+      score: 0.99,
+      recallDays: ["2026-04-03", "2026-04-04"],
+      conceptTags: ["gateway"],
+      components: {
+        frequency: 1,
+        relevance: 1,
+        diversity: 1,
+        recency: 1,
+        consolidation: 1,
+        conceptual: 1,
+      },
+      ...overrides,
+    };
   }
 
   it("detects short-term daily memory paths", () => {
@@ -1215,6 +1253,229 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
+      await expect(
+        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
+  it("denies secret-like promotion content before MEMORY.md is modified", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      vi.mocked(appendMemoryHostEvent).mockClear();
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["apiKey: sk-test-secret"]);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        candidates: [
+          makeCandidate({
+            snippet: "apiKey: sk-test-secret",
+          }),
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      expect(applied.appended).toBe(0);
+      expect(applied.denied).toBe(1);
+      expect(applied.decisionResults[0]).toMatchObject({
+        decision: "deny",
+      });
+      await expect(
+        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      const decisionEvent = vi
+        .mocked(appendMemoryHostEvent)
+        .mock.calls.map((call) => call[1])
+        .find((event) => event.type === "memory.curator.decision.deny");
+      expect(decisionEvent).toMatchObject({
+        type: "memory.curator.decision.deny",
+        decision: "deny",
+      });
+      expect(JSON.stringify(decisionEvent)).not.toContain("sk-test-secret");
+      expect(JSON.stringify(decisionEvent)).toContain("[REDACTED]");
+    });
+  });
+
+  it("requires approval before promoting private content into shared memory", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      vi.mocked(appendMemoryHostEvent).mockClear();
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Private acquisition target preference is confidential.",
+      ]);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        approvalContext: {
+          targetScope: "shared",
+          sensitivityClass: "private",
+        },
+        candidates: [
+          makeCandidate({
+            snippet: "Private acquisition target preference is confidential.",
+          }),
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      expect(applied.appended).toBe(0);
+      expect(applied.approvalRequired).toBe(1);
+      expect(applied.decisionResults[0]).toMatchObject({
+        decision: "approval_required",
+      });
+      await expect(
+        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(
+        vi
+          .mocked(appendMemoryHostEvent)
+          .mock.calls.some((call) => call[1].type === "memory.curator.decision.approval_required"),
+      ).toBe(true);
+    });
+  });
+
+  it("requests approval for private shared promotion without modifying MEMORY.md", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      vi.mocked(appendMemoryHostEvent).mockClear();
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Private acquisition target preference is confidential.",
+      ]);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        approvalContext: {
+          targetScope: "shared",
+          sensitivityClass: "private",
+        },
+        requestApproval: async (request) => {
+          expect(request.pluginId).toBe("memory-core");
+          expect(request.toolName).toBe("memory.promote");
+          expect(request.allowedDecisions).toEqual(["allow-once", "deny"]);
+          expect(request.allowedDecisions).not.toContain("allow-always");
+          expect(JSON.stringify(request)).not.toContain("sk-test-secret");
+          return {
+            status: "requested",
+            approvalId: "plugin:memory-approval",
+          };
+        },
+        candidates: [
+          makeCandidate({
+            snippet: "Private acquisition target preference is confidential.",
+          }),
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      expect(applied.approvalRequired).toBe(1);
+      expect(applied.approvalRequests).toEqual([
+        expect.objectContaining({
+          approvalId: "plugin:memory-approval",
+          status: "requested",
+        }),
+      ]);
+      await expect(
+        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(
+        vi
+          .mocked(appendMemoryHostEvent)
+          .mock.calls.some((call) => call[1].type === "memory.curator.approval.requested"),
+      ).toBe(true);
+    });
+  });
+
+  it("allows an approval-required promotion exactly when allow-once is consumed", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      vi.mocked(appendMemoryHostEvent).mockClear();
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Private acquisition target preference is confidential.",
+      ]);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        approvalContext: {
+          targetScope: "shared",
+          sensitivityClass: "private",
+        },
+        requestApproval: async () => ({
+          status: "allowed_once",
+          approvalId: "plugin:memory-approval",
+        }),
+        candidates: [
+          makeCandidate({
+            snippet: "Private acquisition target preference is confidential.",
+          }),
+        ],
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appended).toBe(1);
+      expect(applied.approvalRequired).toBe(0);
+      expect(applied.decisionResults[0]).toMatchObject({
+        decision: "allow",
+        approvalId: "plugin:memory-approval",
+      });
+      await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).resolves.toContain(
+        "Private acquisition target preference is confidential.",
+      );
+      expect(
+        vi
+          .mocked(appendMemoryHostEvent)
+          .mock.calls.some((call) => call[1].type === "memory.curator.approval.allowed_once"),
+      ).toBe(true);
+    });
+  });
+
+  it.each([
+    ["denied", "denied"],
+    ["replay_blocked", "replay_blocked"],
+    ["expired", "expired"],
+  ] as const)("does not write when approval resolution is %s", async (_label, status) => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Private acquisition target preference is confidential.",
+      ]);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        approvalContext: {
+          targetScope: "shared",
+          sensitivityClass: "private",
+        },
+        requestApproval: async () => ({
+          status,
+          approvalId: "plugin:memory-approval",
+        }),
+        candidates: [
+          makeCandidate({
+            snippet: "Private acquisition target preference is confidential.",
+          }),
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      expect(applied.approvalRequired).toBe(1);
       await expect(
         fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
       ).rejects.toMatchObject({

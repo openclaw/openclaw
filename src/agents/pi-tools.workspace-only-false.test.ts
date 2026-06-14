@@ -23,6 +23,7 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
+import { readMemoryHostEvents } from "../memory-host-sdk/events.js";
 import {
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
@@ -243,5 +244,60 @@ describe("FS tools with workspaceOnly=false", () => {
       text: "Appended content to memory/2026-03-07.md.",
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
+    await expect(readMemoryHostEvents({ workspaceDir, limit: 1 })).resolves.toMatchObject([
+      {
+        type: "memory.curator.decision.allow",
+        operation: "daily_flush",
+        decision: "allow",
+        targetRelativePath: allowedRelativePath,
+      },
+    ]);
+  });
+
+  it("blocks memory flush writes to MEMORY.md", async () => {
+    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
+      root: workspaceDir,
+      relativePath: "MEMORY.md",
+    });
+
+    await expect(
+      wrapped.execute("test-call-memory-root-deny", {
+        path: "MEMORY.md",
+        content: "Do not persist this through memory flush.",
+      }),
+    ).rejects.toThrow(/daily memory flush may only append to memory\/YYYY-MM-DD\.md/);
+    await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("blocks secret-like memory flush content and logs only redacted telemetry", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed", "utf-8");
+
+    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
+      root: workspaceDir,
+      relativePath: allowedRelativePath,
+    });
+
+    await expect(
+      wrapped.execute("test-call-memory-secret-deny", {
+        path: allowedRelativePath,
+        content: "apiKey: sk-test-secret",
+      }),
+    ).rejects.toThrow(/apiKey-like field detected/);
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed");
+    const events = await readMemoryHostEvents({ workspaceDir });
+    const denyEvent = events.find((event) => event.type === "memory.curator.decision.deny");
+    expect(denyEvent).toMatchObject({
+      type: "memory.curator.decision.deny",
+      operation: "daily_flush",
+      decision: "deny",
+      targetRelativePath: allowedRelativePath,
+    });
+    expect(JSON.stringify(denyEvent)).not.toContain("sk-test-secret");
+    expect(JSON.stringify(denyEvent)).toContain("[REDACTED]");
   });
 });

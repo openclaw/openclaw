@@ -191,8 +191,10 @@ import {
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
   type PluginApprovalRequestParams,
+  type PluginApprovalConsumeAllowOnceParams,
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
+  PluginApprovalConsumeAllowOnceParamsSchema,
   PluginApprovalResolveParamsSchema,
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
@@ -871,6 +873,8 @@ export const validatePluginApprovalRequestParams = ajv.compile<PluginApprovalReq
 export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalResolveParams>(
   PluginApprovalResolveParamsSchema,
 );
+export const validatePluginApprovalConsumeAllowOnceParams =
+  ajv.compile<PluginApprovalConsumeAllowOnceParams>(PluginApprovalConsumeAllowOnceParamsSchema);
 export const validatePluginsUiDescriptorsParams = ajv.compile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );

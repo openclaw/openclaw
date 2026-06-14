@@ -53,6 +53,7 @@ const BASE_METHODS = [
   "plugin.approval.list",
   "plugin.approval.request",
   "plugin.approval.waitDecision",
+  "plugin.approval.consumeAllowOnce",
   "plugin.approval.resolve",
   "plugins.uiDescriptors",
   "projects.list",

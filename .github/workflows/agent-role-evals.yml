@@ -13,7 +13,7 @@ on:
       live_agents:
         description: Comma or space separated agent ids for live evals
         required: false
-        default: "main,judge,program-manager,memory-knowledge-curator,market-research-analyst"
+        default: "main,judge,program-manager,memory-knowledge-curator,memory-knowledge-curator-safety-boundary,market-research-analyst,browser-session-credential-steward,browser-session-credential-steward-safety-boundary"
         type: string
       live_model:
         description: Optional model ref override for live evals
@@ -58,6 +58,25 @@ jobs:
           install-bun: "false"
       - name: Validate role contracts
         run: pnpm agents:eval:contracts
+
+  memory-curator-runtime-regression:
+    name: Memory Curator runtime guard regression
+    needs: contract-catalog
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+      - name: Validate Memory Curator static contract
+        run: node scripts/agent-role-eval.mjs --agent memory-knowledge-curator --json
+      - name: Run Memory Curator runtime guard tests
+        run: pnpm test extensions/memory-core/src/short-term-promotion.test.ts extensions/memory-core/src/cli.test.ts extensions/memory-core/src/dreaming.test.ts src/plugin-sdk/memory-host-events.test.ts src/gateway/server-methods/plugin-approval.test.ts src/agents/pi-tools.workspace-only-false.test.ts src/gateway/server-methods/doctor.test.ts ui/src/ui/controllers/dreaming.test.ts ui/src/ui/views/dreaming.test.ts test/scripts/agent-role-eval.test.ts -- --reporter=verbose
 
   live-role-turns:
     name: Live role turns

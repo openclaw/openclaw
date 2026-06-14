@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/search/promote/promote-explain/rem-harness/rollup)"
+summary: "CLI reference for `openclaw memory` (status/index/search/promote/promote-explain/audit/rem-harness/rollup)"
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
@@ -30,9 +30,13 @@ openclaw memory search "meeting notes"
 openclaw memory search --query "deployment" --max-results 20
 openclaw memory promote --limit 10 --min-score 0.75
 openclaw memory promote --apply
+openclaw memory promote --apply --request-approval
+openclaw memory promote --apply --approval-id plugin:...
 openclaw memory promote --json --min-recall-count 0 --min-unique-queries 0
 openclaw memory promote-explain "router vlan"
 openclaw memory promote-explain "router vlan" --json
+openclaw memory audit --json
+openclaw memory audit --days 30 --output ./memory-curator-audit.json
 openclaw memory rollup --dry-run
 openclaw memory rollup --apply
 openclaw memory rollup --stale
@@ -91,6 +95,8 @@ openclaw memory promote [--apply] [--limit <n>] [--include-promoted]
 ```
 
 - `--apply` -- write promotions to `MEMORY.md` (default: preview only).
+- `--request-approval` -- request an allow-once approval for approval-gated promotions and write nothing in that run.
+- `--approval-id <id>` -- apply approval-gated promotions only after consuming a resolved allow-once plugin approval.
 - `--limit <n>` -- cap the number of candidates shown.
 - `--include-promoted` -- include entries already promoted in previous cycles.
 
@@ -105,8 +111,51 @@ Full options:
 - `--min-recall-count <n>`: minimum recall count required for a candidate.
 - `--min-unique-queries <n>`: minimum distinct query count required for a candidate.
 - `--apply`: append selected candidates into `MEMORY.md` and mark them promoted.
+- `--request-approval`: create a redacted plugin approval request for candidates that the Memory & Knowledge Curator guard marks `approval_required`. The request allows only `allow-once` or `deny`; it never offers `allow-always`.
+- `--approval-id <id>`: consume a resolved allow-once plugin approval and re-run the guarded promotion. Denied, expired, mismatched, or replayed approval ids write nothing.
 - `--include-promoted`: include already promoted candidates in output.
 - `--json`: print JSON output.
+
+`--apply` is guarded by the Memory & Knowledge Curator runtime contract before
+`MEMORY.md` is changed. Candidates with secret-like content are denied and
+private-to-shared promotions require approval; the event journal records only
+redacted decision telemetry.
+
+Approval-gated promotion is a two-step flow:
+
+```bash
+openclaw memory promote --apply --request-approval --json
+# approve the printed plugin approval id with allow-once in the Control UI or /approve
+openclaw memory promote --apply --approval-id plugin:...
+```
+
+The second command consumes the allow-once approval atomically. Reusing the same
+approval id is treated as replay and does not write to `MEMORY.md`.
+The Control UI's Dreams tab can list pending Memory Curator approvals, resolve
+them as `allow-once` or `deny`, and copy the exact `--approval-id` resume
+command. Resolving an approval in the UI never writes durable memory by itself;
+the explicit CLI apply command above is still required.
+
+`memory audit`:
+
+Export a non-secret Memory Curator guard audit report.
+
+```bash
+openclaw memory audit --json
+openclaw memory audit --days 30 --output ./memory-curator-audit.json
+```
+
+- `--agent <id>`: scope to one agent. Without it, audit includes every configured agent workspace.
+- `--days <n>`: UTC lookback window. Default is `30`; maximum is `90`.
+- `--output <path>`: write the JSON report to a file.
+- `--json`: print the same JSON report to stdout.
+
+The audit report is counts and timestamps only. It includes aggregate guard
+counts, alert counts, daily trend buckets, approval counts, decision counts,
+last decision time, generated time, and source event counts. It never includes
+raw memory content, snippets, redacted previews, source paths, approval payload
+text, credentials, cookies, tokens, SSH keys, wallet data, phone numbers, or
+payment identifiers.
 
 `memory promote-explain`:
 
@@ -172,6 +221,59 @@ Example:
 - `Session rollups`: enabled/disabled.
 - `Rollup coverage`: discovered/generated/pending/stale/orphaned/evidence percentage.
 - `Rollup health` warning when stale ratio exceeds threshold.
+- `Memory Curator guard`: non-secret counts for allowed, denied, approval-required,
+  approval-requested, pending-approval, allow-once, approval-denied, expired, replay-blocked,
+  redacted, private-blocked, stale, and contradictory durable-memory decisions. The same status
+  includes UTC daily `trendBuckets` for recent guard activity; trend buckets contain dates and
+  counts only, never memory snippets, approval IDs, source paths, or redacted previews. Guard
+  `alerts` are also count-only: by default they warn at denied >= 3, stale recalls >= 5, expired
+  approvals >= 3, pending approvals >= 3, and mark private blocks, contradictions, or replay
+  blocks as critical at >= 1.
+- `Memory Curator audit`: `openclaw memory audit --json` exports the same guard health as a
+  non-secret operational report suitable for review packets.
+
+## Memory Curator operator runbook
+
+Use this flow when a durable memory promotion needs review:
+
+1. Request approval without writing:
+
+   ```bash
+   openclaw memory promote --apply --request-approval --json
+   ```
+
+2. Review the pending approval in the Control UI Dreams tab or your approval channel. Confirm
+   the metadata only: operation, sensitivity class, confidence, freshness, evidence status, and
+   count-only reasons.
+3. If safe, choose **Allow once**. If unsafe or unclear, choose **Deny**.
+4. Resume only with an explicit CLI apply:
+
+   ```bash
+   openclaw memory promote --apply --approval-id plugin:example-approval --json
+   ```
+
+Rules:
+
+- UI approval never writes durable memory. It only resolves the approval.
+- Durable writes require the explicit `--approval-id` CLI resume command.
+- Denied, expired, mismatched, or replayed approval IDs write nothing.
+- Never copy raw private memory, credentials, cookies, tokens, SSH keys, wallet data, source
+  snippets, or personal/payment identifiers into approvals, exports, logs, docs, or tickets.
+
+Operational responses:
+
+- Repeated denies: run `openclaw memory audit --days 30 --json`, inspect denied counts and alerts,
+  then escalate to the Control Director with the audit report only.
+- Private-memory blocks: treat as privacy-critical. Do not retry promotion with the same content;
+  ask the Memory & Knowledge Curator to produce a safer private-scope summary.
+- Contradictions: stop promotion, collect the audit report, and ask the Judge to review source
+  confidence before any durable write.
+- Stale recall spikes: re-run memory status and index checks, then verify whether the source daily
+  notes are current before approving promotion.
+- Replay blocks: assume the approval ID was already consumed or mismatched. Request a new approval
+  instead of reusing the blocked ID.
+- Approval expirations: request a fresh approval only after confirming the candidate still matches
+  the current source content.
 
 Architecture notes:
 

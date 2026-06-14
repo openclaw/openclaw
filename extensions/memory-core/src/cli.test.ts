@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
@@ -15,6 +16,7 @@ import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
+const callGatewayFromCli = vi.hoisted(() => vi.fn());
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
@@ -55,6 +57,10 @@ vi.mock("./cli.host.runtime.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
+  callGatewayFromCli,
+}));
+
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
 let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
 let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
@@ -81,6 +87,7 @@ beforeEach(() => {
   getMemorySearchManager.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue({});
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
+  callGatewayFromCli.mockReset();
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
     diagnostics: [] as string[],
@@ -761,6 +768,8 @@ describe("memory cli", () => {
     expect(helpText).toContain("Limit results for focused troubleshooting.");
     expect(helpText).toContain("openclaw memory promote --apply");
     expect(helpText).toContain("Append top-ranked short-term candidates into MEMORY.md.");
+    expect(helpText).toContain("openclaw memory audit --json");
+    expect(helpText).toContain("Export a non-secret Memory Curator guard audit report.");
     expect(helpText).toContain('openclaw memory promote-explain "router vlan"');
     expect(helpText).toContain("Explain why a specific candidate would or would not promote.");
     expect(helpText).toContain("openclaw memory rem-harness --json");
@@ -775,6 +784,146 @@ describe("memory cli", () => {
     expect(helpText).toContain("openclaw memory rollup --dry-run");
     expect(helpText).toContain("openclaw memory rollup --agent main");
     expect(helpText).toContain("openclaw memory rollup --stale");
+  });
+
+  it("exports count-only Memory Curator audit JSON without raw event content", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await appendMemoryHostEvent(workspaceDir, {
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-05T12:00:00.000Z",
+        query: "private-note query should not appear in audit",
+        resultCount: 1,
+        results: [
+          {
+            path: "memory/private-note.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+          },
+        ],
+      });
+      await appendMemoryHostEvent(workspaceDir, {
+        type: "memory.curator.decision.deny",
+        timestamp: "2026-04-05T13:00:00.000Z",
+        agentId: "memory-knowledge-curator",
+        operation: "cli_promote_apply",
+        decision: "deny",
+        targetRelativePath: "MEMORY.md",
+        sourcePath: "memory/private-note.md",
+        sourceStartLine: 1,
+        sourceEndLine: 1,
+        evidenceStatus: "Confirmed",
+        confidence: "high",
+        freshness: "current",
+        sensitivityClass: "secret",
+        privateOrSharedScope: "private",
+        reasons: ["do not expose sk-test-secret from reason"],
+        redactedPreview: "token=[REDACTED]",
+      });
+      await appendMemoryHostEvent(workspaceDir, {
+        type: "memory.curator.private_memory_blocked",
+        timestamp: "2026-04-05T14:00:00.000Z",
+        agentId: "memory-knowledge-curator",
+        operation: "dreaming_deep",
+        targetRelativePath: "MEMORY.md",
+        sourcePath: "memory/private-note.md",
+        reasons: ["private note blocked"],
+        redactedPreview: "Private note with token=[REDACTED]",
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["audit", "--agent", "main", "--days", "90", "--json"]);
+
+      const payload = firstWrittenJsonArg<{
+        windowDays: number;
+        agentCount: number;
+        workspaceCount: number;
+        report: {
+          sourceEventCount: number;
+          curatorEventCount: number;
+          decisionEventCounts: { deny: number };
+          signalEventCounts: { privateMemoryBlocked: number };
+          alertCounts: { critical: number };
+        };
+      }>(writeJson);
+      expect(payload?.windowDays).toBe(90);
+      expect(payload?.agentCount).toBe(1);
+      expect(payload?.workspaceCount).toBe(1);
+      expect(payload?.report.sourceEventCount).toBe(3);
+      expect(payload?.report.curatorEventCount).toBe(2);
+      expect(payload?.report.decisionEventCounts.deny).toBe(1);
+      expect(payload?.report.signalEventCounts.privateMemoryBlocked).toBe(1);
+      expect(payload?.report.alertCounts.critical).toBe(1);
+      expect(JSON.stringify(payload)).not.toContain("sk-test-secret");
+      expect(JSON.stringify(payload)).not.toContain("private-note");
+      expect(JSON.stringify(payload)).not.toContain("token=[REDACTED]");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("writes Memory Curator audit JSON to an output file", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await appendMemoryHostEvent(workspaceDir, {
+        type: "memory.curator.decision.allow",
+        timestamp: "2026-04-05T13:00:00.000Z",
+        agentId: "memory-knowledge-curator",
+        operation: "daily_flush",
+        decision: "allow",
+        targetRelativePath: "memory/2026-04-05.md",
+        evidenceStatus: "Inferred",
+        confidence: "Unknown",
+        freshness: "current",
+        sensitivityClass: "internal",
+        privateOrSharedScope: "private",
+        reasons: [],
+        redactedPreview: "safe note",
+      });
+      const outputPath = path.join(workspaceDir, "audit.json");
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["audit", "--agent", "main", "--output", outputPath, "--json"]);
+
+      const payload = firstWrittenJsonArg<Record<string, unknown>>(writeJson);
+      const filePayload = JSON.parse(await fs.readFile(outputPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      expect(filePayload).toEqual(payload);
+      expect(JSON.stringify(filePayload)).not.toContain("safe note");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("fails Memory Curator audit output cleanly when the destination is invalid", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const invalidOutputPath = path.join(workspaceDir, "missing-parent", "audit.json");
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      const error = spyRuntimeErrors(defaultRuntime);
+      await runMemoryCli(["audit", "--agent", "main", "--output", invalidOutputPath, "--json"]);
+
+      expect(writeJson).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory audit export failed"));
+      await expectPathMissing(invalidOutputPath);
+      expect(process.exitCode).toBe(1);
+      expect(close).toHaveBeenCalled();
+    });
   });
 
   it("preview rollups without writing to disk by default", async () => {
@@ -2436,6 +2585,140 @@ describe("memory cli", () => {
       expect(memoryText).toContain("memory/2026-04-01.md:10-10");
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Processed 1 candidate(s) for"));
       expect(log).toHaveBeenCalledWith(expect.stringContaining("appended=1 reconciledExisting=0"));
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("requests approval for stale promote candidates without writing MEMORY.md", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2024-01-01", ["Review old private strategy note."]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "old strategy",
+        results: [
+          {
+            path: "memory/2024-01-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.91,
+            snippet: "Review old private strategy note.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      callGatewayFromCli.mockResolvedValueOnce({
+        id: "plugin:memory-approval",
+        status: "accepted",
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--request-approval",
+        "--json",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      const payload = firstWrittenJsonArg<{
+        apply?: {
+          applied?: number;
+          approvalId?: string;
+          approvalRequired?: number;
+          approvalRequests?: Array<{ status?: string; approvalId?: string }>;
+        };
+      }>(writeJson);
+      expect(payload?.apply).toMatchObject({
+        applied: 0,
+        approvalId: "plugin:memory-approval",
+        approvalRequired: 1,
+      });
+      expect(payload?.apply?.approvalRequests?.[0]).toMatchObject({
+        status: "requested",
+        approvalId: "plugin:memory-approval",
+      });
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "plugin.approval.request",
+        expect.any(Object),
+        expect.objectContaining({
+          pluginId: "memory-core",
+          toolName: "memory.promote",
+          allowedDecisions: ["allow-once", "deny"],
+          twoPhase: true,
+        }),
+        { expectFinal: false },
+      );
+      await expectPathMissing(path.join(workspaceDir, "MEMORY.md"));
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("applies stale promote candidates only after consuming allow-once approval", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2024-01-01", ["Review old private strategy note."]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "old strategy",
+        results: [
+          {
+            path: "memory/2024-01-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.91,
+            snippet: "Review old private strategy note.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      callGatewayFromCli.mockResolvedValueOnce({
+        id: "plugin:memory-approval",
+        consumed: true,
+        decision: "allow-once",
+      });
+
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--approval-id",
+        "plugin:memory-approval",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("Review old private strategy note.");
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "plugin.approval.consumeAllowOnce",
+        expect.any(Object),
+        expect.objectContaining({
+          id: "plugin:memory-approval",
+          pluginId: "memory-core",
+          toolName: "memory.promote",
+          toolCallId: expect.stringMatching(/^memory-curator:/),
+        }),
+        { expectFinal: false },
+      );
       expect(close).toHaveBeenCalled();
     });
   });

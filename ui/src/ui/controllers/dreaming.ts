@@ -6,6 +6,10 @@ export type DreamingPhaseId = "light" | "deep" | "rem";
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
 const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
 const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
+const MEMORY_CURATOR_APPROVAL_PLUGIN_ID = "memory-core";
+const MEMORY_CURATOR_APPROVAL_TOOL_NAME = "memory.promote";
+const MEMORY_CURATOR_APPROVAL_RESUME_COMMAND_PREFIX =
+  "pnpm openclaw memory promote --apply --approval-id";
 
 type DreamingPhaseStatusBase = {
   enabled: boolean;
@@ -51,6 +55,73 @@ export type DreamingEntry = {
   lastRecalledAt?: string;
 };
 
+export type MemoryCuratorGuardTrendBucket = {
+  bucketStartIso: string;
+  bucketEndIso: string;
+  allowed: number;
+  denied: number;
+  approvalRequired: number;
+  privateBlocks: number;
+  contradictions: number;
+  staleRecalls: number;
+  approvalReplayBlocks: number;
+  approvalExpirations: number;
+};
+
+export type MemoryCuratorGuardAlert = {
+  id: string;
+  severity: "warning" | "critical";
+  metric: string;
+  value: number;
+  threshold: number;
+  message: string;
+};
+
+export type MemoryCuratorGuardStatus = {
+  totalDecisions: number;
+  allowed: number;
+  denied: number;
+  approvalRequired: number;
+  redactions: number;
+  privateBlocks: number;
+  staleRecalls: number;
+  contradictions: number;
+  approvalRequests: number;
+  pendingApprovals: number;
+  approvalsAllowedOnce: number;
+  approvalDenials: number;
+  approvalExpirations: number;
+  approvalReplayBlocks: number;
+  lastDecisionAt?: string;
+  lastApprovalRequestedAt?: string;
+  trendBuckets: MemoryCuratorGuardTrendBucket[];
+  alerts: MemoryCuratorGuardAlert[];
+};
+
+export type MemoryCuratorPendingApproval = {
+  id: string;
+  shortId: string;
+  createdAtMs?: number;
+  expiresAtMs?: number;
+  operation: string;
+  targetRelativePath: string;
+  candidateCount: number;
+  sensitivityClasses: string[];
+  confidenceLevels: string[];
+  freshnessLevels: string[];
+  evidenceStatuses: string[];
+  reasons: string[];
+  resumeCommand: string;
+};
+
+export type MemoryCuratorApprovalsState = {
+  loading: boolean;
+  error: string | null;
+  items: MemoryCuratorPendingApproval[];
+  resolvingId: string | null;
+  actionMessage: { kind: "success" | "error"; text: string } | null;
+};
+
 export type DreamingStatus = {
   enabled: boolean;
   timezone?: string;
@@ -74,6 +145,7 @@ export type DreamingStatus = {
   shortTermEntries: DreamingEntry[];
   signalEntries: DreamingEntry[];
   promotedEntries: DreamingEntry[];
+  curatorGuard?: MemoryCuratorGuardStatus;
   phases?: {
     light: LightDreamingStatus;
     deep: DeepDreamingStatus;
@@ -198,6 +270,13 @@ type WikiMemoryPalacePayload = {
   clusters?: unknown;
 };
 
+type PluginApprovalListEntryPayload = {
+  id?: unknown;
+  request?: unknown;
+  createdAtMs?: unknown;
+  expiresAtMs?: unknown;
+};
+
 export type DreamingState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -221,6 +300,7 @@ export type DreamingState = {
   wikiMemoryPalaceLoading: boolean;
   wikiMemoryPalaceError: string | null;
   wikiMemoryPalace: WikiMemoryPalace | null;
+  memoryCuratorApprovals: MemoryCuratorApprovalsState;
   lastError: string | null;
 };
 
@@ -423,6 +503,117 @@ function normalizeDreamingEntries(raw: unknown): DreamingEntry[] {
     .filter((entry): entry is DreamingEntry => entry !== null);
 }
 
+function normalizeMemoryCuratorGuardTrendBucket(
+  raw: unknown,
+): MemoryCuratorGuardTrendBucket | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+  const bucketStartIso = normalizeTrimmedString(record.bucketStartIso);
+  const bucketEndIso = normalizeTrimmedString(record.bucketEndIso);
+  if (
+    !bucketStartIso ||
+    !bucketEndIso ||
+    !Number.isFinite(Date.parse(bucketStartIso)) ||
+    !Number.isFinite(Date.parse(bucketEndIso))
+  ) {
+    return null;
+  }
+  return {
+    bucketStartIso,
+    bucketEndIso,
+    allowed: normalizeFiniteInt(record.allowed, 0),
+    denied: normalizeFiniteInt(record.denied, 0),
+    approvalRequired: normalizeFiniteInt(record.approvalRequired, 0),
+    privateBlocks: normalizeFiniteInt(record.privateBlocks, 0),
+    contradictions: normalizeFiniteInt(record.contradictions, 0),
+    staleRecalls: normalizeFiniteInt(record.staleRecalls, 0),
+    approvalReplayBlocks: normalizeFiniteInt(record.approvalReplayBlocks, 0),
+    approvalExpirations: normalizeFiniteInt(record.approvalExpirations, 0),
+  };
+}
+
+function normalizeMemoryCuratorGuardTrendBuckets(raw: unknown): MemoryCuratorGuardTrendBucket[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((entry) => normalizeMemoryCuratorGuardTrendBucket(entry))
+    .filter((entry): entry is MemoryCuratorGuardTrendBucket => entry !== null)
+    .slice(-30);
+}
+
+function normalizeMemoryCuratorGuardAlert(raw: unknown): MemoryCuratorGuardAlert | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+  const id = normalizeTrimmedString(record.id);
+  const metric = normalizeTrimmedString(record.metric);
+  const message = normalizeTrimmedString(record.message);
+  const severity = normalizeTrimmedString(record.severity);
+  if (
+    !id ||
+    !metric ||
+    !message ||
+    (severity !== "warning" && severity !== "critical") ||
+    !Number.isFinite(record.value) ||
+    !Number.isFinite(record.threshold)
+  ) {
+    return null;
+  }
+  return {
+    id,
+    severity,
+    metric,
+    value: normalizeFiniteInt(record.value, 0),
+    threshold: normalizeFiniteInt(record.threshold, 1),
+    message,
+  };
+}
+
+function normalizeMemoryCuratorGuardAlerts(raw: unknown): MemoryCuratorGuardAlert[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((entry) => normalizeMemoryCuratorGuardAlert(entry))
+    .filter((entry): entry is MemoryCuratorGuardAlert => entry !== null)
+    .slice(0, 20);
+}
+
+function normalizeMemoryCuratorGuardStatus(raw: unknown): MemoryCuratorGuardStatus | undefined {
+  const record = asRecord(raw);
+  if (!record) {
+    return undefined;
+  }
+  const lastDecisionAt = normalizeTrimmedString(record.lastDecisionAt);
+  const lastApprovalRequestedAt = normalizeTrimmedString(record.lastApprovalRequestedAt);
+  const trendBuckets = normalizeMemoryCuratorGuardTrendBuckets(record.trendBuckets);
+  const alerts = normalizeMemoryCuratorGuardAlerts(record.alerts);
+  return {
+    totalDecisions: normalizeFiniteInt(record.totalDecisions, 0),
+    allowed: normalizeFiniteInt(record.allowed, 0),
+    denied: normalizeFiniteInt(record.denied, 0),
+    approvalRequired: normalizeFiniteInt(record.approvalRequired, 0),
+    redactions: normalizeFiniteInt(record.redactions, 0),
+    privateBlocks: normalizeFiniteInt(record.privateBlocks, 0),
+    staleRecalls: normalizeFiniteInt(record.staleRecalls, 0),
+    contradictions: normalizeFiniteInt(record.contradictions, 0),
+    approvalRequests: normalizeFiniteInt(record.approvalRequests, 0),
+    pendingApprovals: normalizeFiniteInt(record.pendingApprovals, 0),
+    approvalsAllowedOnce: normalizeFiniteInt(record.approvalsAllowedOnce, 0),
+    approvalDenials: normalizeFiniteInt(record.approvalDenials, 0),
+    approvalExpirations: normalizeFiniteInt(record.approvalExpirations, 0),
+    approvalReplayBlocks: normalizeFiniteInt(record.approvalReplayBlocks, 0),
+    ...(lastDecisionAt ? { lastDecisionAt } : {}),
+    ...(lastApprovalRequestedAt ? { lastApprovalRequestedAt } : {}),
+    trendBuckets,
+    alerts,
+  };
+}
+
 function normalizeStringArray(raw: unknown): string[] {
   if (!Array.isArray(raw)) {
     return [];
@@ -430,6 +621,77 @@ function normalizeStringArray(raw: unknown): string[] {
   return raw.filter(
     (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
   );
+}
+
+function normalizeUniqueStringArray(raw: unknown, limit = 8): string[] {
+  return Array.from(
+    new Set(
+      normalizeStringArray(raw)
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, limit);
+}
+
+function normalizeOptionalMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : undefined;
+}
+
+function shortApprovalId(id: string): string {
+  const withoutPrefix = id.startsWith("plugin:") ? id.slice("plugin:".length) : id;
+  return withoutPrefix.length <= 12 ? withoutPrefix : `${withoutPrefix.slice(0, 12)}…`;
+}
+
+function buildMemoryCuratorApprovalResumeCommand(id: string): string {
+  return `${MEMORY_CURATOR_APPROVAL_RESUME_COMMAND_PREFIX} ${id} --json`;
+}
+
+function normalizeMemoryCuratorPendingApproval(
+  raw: PluginApprovalListEntryPayload,
+): MemoryCuratorPendingApproval | null {
+  const id = normalizeTrimmedString(raw.id);
+  const request = asRecord(raw.request);
+  if (!id || !request) {
+    return null;
+  }
+  if (
+    normalizeTrimmedString(request.pluginId) !== MEMORY_CURATOR_APPROVAL_PLUGIN_ID ||
+    normalizeTrimmedString(request.toolName) !== MEMORY_CURATOR_APPROVAL_TOOL_NAME
+  ) {
+    return null;
+  }
+  const metadataRoot = asRecord(request.metadata);
+  const metadata = asRecord(metadataRoot?.memoryCuratorApproval);
+  return {
+    id,
+    shortId: shortApprovalId(id),
+    ...(normalizeOptionalMs(raw.createdAtMs) !== undefined
+      ? { createdAtMs: normalizeOptionalMs(raw.createdAtMs) }
+      : {}),
+    ...(normalizeOptionalMs(raw.expiresAtMs) !== undefined
+      ? { expiresAtMs: normalizeOptionalMs(raw.expiresAtMs) }
+      : {}),
+    operation: normalizeTrimmedString(metadata?.operation) ?? "memory promotion",
+    targetRelativePath: normalizeTrimmedString(metadata?.targetRelativePath) ?? "MEMORY.md",
+    candidateCount: normalizeFiniteInt(metadata?.candidateCount, 1),
+    sensitivityClasses: normalizeUniqueStringArray(metadata?.sensitivityClasses),
+    confidenceLevels: normalizeUniqueStringArray(metadata?.confidenceLevels),
+    freshnessLevels: normalizeUniqueStringArray(metadata?.freshnessLevels),
+    evidenceStatuses: normalizeUniqueStringArray(metadata?.evidenceStatuses),
+    reasons: normalizeUniqueStringArray(metadata?.reasons, 5),
+    resumeCommand: buildMemoryCuratorApprovalResumeCommand(id),
+  };
+}
+
+function normalizeMemoryCuratorPendingApprovals(raw: unknown): MemoryCuratorPendingApproval[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((entry) => normalizeMemoryCuratorPendingApproval(entry as PluginApprovalListEntryPayload))
+    .filter((entry): entry is MemoryCuratorPendingApproval => entry !== null);
 }
 
 function normalizeWikiImportInsightItem(raw: unknown): WikiImportInsightItem | null {
@@ -687,6 +949,7 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const phaseSignalPath = normalizeTrimmedString(record.phaseSignalPath);
   const storeError = normalizeTrimmedString(record.storeError);
   const phaseSignalError = normalizeTrimmedString(record.phaseSignalError);
+  const curatorGuard = normalizeMemoryCuratorGuardStatus(record.curatorGuard);
 
   return {
     enabled: normalizeBoolean(record.enabled, false),
@@ -711,6 +974,7 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
     shortTermEntries: normalizeDreamingEntries(record.shortTermEntries),
     signalEntries: normalizeDreamingEntries(record.signalEntries),
     promotedEntries: normalizeDreamingEntries(record.promotedEntries),
+    ...(curatorGuard ? { curatorGuard } : {}),
     ...(phases ? { phases } : {}),
   };
 }
@@ -731,6 +995,120 @@ export async function loadDreamingStatus(state: DreamingState): Promise<void> {
     state.dreamingStatusError = String(err);
   } finally {
     state.dreamingStatusLoading = false;
+  }
+}
+
+export async function loadMemoryCuratorApprovals(state: DreamingState): Promise<void> {
+  if (!state.client || !state.connected || state.memoryCuratorApprovals.loading) {
+    return;
+  }
+  if (hasGatewayMethod(state, "plugin.approval.list") === false) {
+    state.memoryCuratorApprovals = {
+      ...state.memoryCuratorApprovals,
+      loading: false,
+      error: null,
+      items: [],
+    };
+    return;
+  }
+  state.memoryCuratorApprovals = {
+    ...state.memoryCuratorApprovals,
+    loading: true,
+    error: null,
+  };
+  try {
+    const payload = await state.client.request<unknown>("plugin.approval.list", {});
+    state.memoryCuratorApprovals = {
+      ...state.memoryCuratorApprovals,
+      loading: false,
+      error: null,
+      items: normalizeMemoryCuratorPendingApprovals(payload),
+    };
+  } catch (err) {
+    const message = String(err);
+    state.memoryCuratorApprovals = {
+      ...state.memoryCuratorApprovals,
+      loading: false,
+      error: message,
+    };
+    state.lastError = message;
+  }
+}
+
+export async function resolveMemoryCuratorApproval(
+  state: DreamingState,
+  id: string,
+  decision: "allow-once" | "deny",
+): Promise<boolean> {
+  const approval = state.memoryCuratorApprovals.items.find((item) => item.id === id);
+  if (!state.client || !state.connected || !approval || state.memoryCuratorApprovals.resolvingId) {
+    return false;
+  }
+  state.memoryCuratorApprovals = {
+    ...state.memoryCuratorApprovals,
+    resolvingId: id,
+    actionMessage: null,
+    error: null,
+  };
+  try {
+    await state.client.request("plugin.approval.resolve", { id, decision });
+    state.memoryCuratorApprovals = {
+      ...state.memoryCuratorApprovals,
+      resolvingId: null,
+      actionMessage: {
+        kind: "success",
+        text:
+          decision === "allow-once"
+            ? `Approval ${approval.shortId} allowed once. Run the copied resume command to apply.`
+            : `Approval ${approval.shortId} denied.`,
+      },
+    };
+    await Promise.all([loadMemoryCuratorApprovals(state), loadDreamingStatus(state)]);
+    return true;
+  } catch (err) {
+    const message = String(err);
+    state.memoryCuratorApprovals = {
+      ...state.memoryCuratorApprovals,
+      resolvingId: null,
+      error: message,
+      actionMessage: { kind: "error", text: message },
+    };
+    state.lastError = message;
+    return false;
+  }
+}
+
+export async function copyMemoryCuratorApprovalResumeCommand(
+  state: DreamingState,
+  id: string,
+): Promise<boolean> {
+  const approval = state.memoryCuratorApprovals.items.find((item) => item.id === id);
+  if (!approval) {
+    return false;
+  }
+  if (!globalThis.navigator?.clipboard?.writeText) {
+    state.memoryCuratorApprovals = {
+      ...state.memoryCuratorApprovals,
+      actionMessage: { kind: "error", text: "Could not copy memory approval resume command." },
+    };
+    return false;
+  }
+  try {
+    await globalThis.navigator.clipboard.writeText(approval.resumeCommand);
+    state.memoryCuratorApprovals = {
+      ...state.memoryCuratorApprovals,
+      actionMessage: {
+        kind: "success",
+        text: `Resume command copied for approval ${approval.shortId}.`,
+      },
+    };
+    return true;
+  } catch {
+    state.memoryCuratorApprovals = {
+      ...state.memoryCuratorApprovals,
+      actionMessage: { kind: "error", text: "Could not copy memory approval resume command." },
+    };
+    return false;
   }
 }
 

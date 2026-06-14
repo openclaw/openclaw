@@ -50,6 +50,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "plugin.approval.list",
     "plugin.approval.request",
     "plugin.approval.waitDecision",
+    "plugin.approval.consumeAllowOnce",
     "plugin.approval.resolve",
     "patternLab.assets.approve",
   ],

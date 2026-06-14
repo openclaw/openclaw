@@ -3,7 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
-import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import {
+  appendMemoryHostEvent,
+  buildMemoryCuratorApprovalRequest,
+  evaluateMemoryPromotionDecision,
+  type MemoryCuratorOperation,
+  type MemoryCuratorApprovalRequest,
+  type MemoryCuratorApprovalResolution,
+  type MemoryPromotionApprovalContext,
+  type MemoryPromotionDecision,
+} from "openclaw/plugin-sdk/memory-host-events";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -203,6 +212,12 @@ type ApplyShortTermPromotionsOptions = {
   maxAgeDays?: number;
   nowMs?: number;
   timezone?: string;
+  agentId?: string;
+  operation?: Exclude<MemoryCuratorOperation, "daily_flush">;
+  approvalContext?: MemoryPromotionApprovalContext;
+  requestApproval?: (
+    request: MemoryCuratorApprovalRequest,
+  ) => Promise<MemoryCuratorApprovalResolution>;
 };
 
 type ApplyShortTermPromotionsResult = {
@@ -211,6 +226,21 @@ type ApplyShortTermPromotionsResult = {
   appended: number;
   reconciledExisting: number;
   appliedCandidates: PromotionCandidate[];
+  denied: number;
+  approvalRequired: number;
+  approvalRequests: Array<{
+    approvalId?: string;
+    status: MemoryCuratorApprovalResolution["status"];
+    toolCallId: string;
+    candidateCount: number;
+    reasons: string[];
+  }>;
+  decisionResults: Array<{
+    key: string;
+    decision: "allow" | "deny" | "approval_required";
+    reasons: string[];
+    approvalId?: string;
+  }>;
 };
 
 function clampScore(value: number): number {
@@ -1548,6 +1578,114 @@ function extractPromotionMarkers(memoryText: string): Set<string> {
   return markers;
 }
 
+type PromotionDecisionRecord = {
+  candidate: PromotionCandidate;
+  decision: MemoryPromotionDecision;
+};
+
+function buildPromotionDecisionRecords(params: {
+  candidates: PromotionCandidate[];
+  agentId?: string;
+  workspaceDir: string;
+  nowIso: string;
+  operation: Exclude<MemoryCuratorOperation, "daily_flush">;
+  approvalContext?: MemoryPromotionApprovalContext;
+}): PromotionDecisionRecord[] {
+  return params.candidates.map((candidate) => ({
+    candidate,
+    decision: evaluateMemoryPromotionDecision({
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      targetRelativePath: "MEMORY.md",
+      operation: params.operation,
+      contentPreview: candidate.snippet,
+      sourcePath: candidate.path,
+      sourceStartLine: candidate.startLine,
+      sourceEndLine: candidate.endLine,
+      score: candidate.score,
+      recallCount: candidate.recallCount,
+      uniqueQueries: candidate.uniqueQueries,
+      nowIso: params.nowIso,
+      approvalContext: params.approvalContext,
+    }),
+  }));
+}
+
+function buildApprovalRequestForRecords(params: {
+  operation: Exclude<MemoryCuratorOperation, "daily_flush">;
+  records: PromotionDecisionRecord[];
+}): MemoryCuratorApprovalRequest {
+  return buildMemoryCuratorApprovalRequest({
+    operation: params.operation,
+    targetRelativePath: "MEMORY.md",
+    candidates: params.records.map((record) => ({
+      key: record.candidate.key,
+      sourcePath: record.decision.telemetryEvent.sourcePath,
+      sourceStartLine: record.decision.telemetryEvent.sourceStartLine,
+      sourceEndLine: record.decision.telemetryEvent.sourceEndLine,
+      evidenceStatus: record.decision.evidenceStatus,
+      confidence: record.decision.confidence,
+      freshness: record.decision.freshness,
+      sensitivityClass: record.decision.sensitivityClass,
+      privateOrSharedScope: record.decision.privateOrSharedScope,
+      reasons: record.decision.reasons,
+      redactedPreview: record.decision.redactedPreview,
+      score: record.decision.telemetryEvent.score,
+      recallCount: record.decision.telemetryEvent.recallCount,
+      uniqueQueries: record.decision.telemetryEvent.uniqueQueries,
+    })),
+  });
+}
+
+function approvalEventTypeForStatus(
+  status: MemoryCuratorApprovalResolution["status"],
+): Parameters<typeof appendMemoryHostEvent>[1]["type"] | null {
+  if (status === "requested") {
+    return "memory.curator.approval.requested";
+  }
+  if (status === "allowed_once") {
+    return "memory.curator.approval.allowed_once";
+  }
+  if (status === "denied") {
+    return "memory.curator.approval.denied";
+  }
+  if (status === "expired") {
+    return "memory.curator.approval.expired";
+  }
+  if (status === "replay_blocked") {
+    return "memory.curator.approval.replay_blocked";
+  }
+  return null;
+}
+
+async function appendApprovalResolutionEvent(params: {
+  workspaceDir: string;
+  nowIso: string;
+  agentId?: string;
+  request: MemoryCuratorApprovalRequest;
+  resolution: MemoryCuratorApprovalResolution;
+}): Promise<void> {
+  const type = approvalEventTypeForStatus(params.resolution.status);
+  if (!type) {
+    return;
+  }
+  await appendMemoryHostEvent(params.workspaceDir, {
+    type,
+    timestamp: params.nowIso,
+    agentId: params.agentId,
+    operation: params.request.operation,
+    approvalId: params.resolution.approvalId,
+    approvalToolCallId: params.request.toolCallId,
+    candidateCount: params.request.candidateCount,
+    sensitivityClasses: Array.from(
+      new Set(params.request.candidates.map((candidate) => candidate.sensitivityClass)),
+    ),
+    reasons:
+      params.resolution.reasons ??
+      params.request.candidates.flatMap((candidate) => candidate.reasons),
+  });
+}
+
 export async function applyShortTermPromotions(
   options: ApplyShortTermPromotionsOptions,
 ): Promise<ApplyShortTermPromotionsResult> {
@@ -1623,6 +1761,95 @@ export async function applyShortTermPromotions(
         appended: 0,
         reconciledExisting: 0,
         appliedCandidates: [],
+        denied: 0,
+        approvalRequired: 0,
+        approvalRequests: [],
+        decisionResults: [],
+      };
+    }
+
+    const operation = options.operation ?? "cli_promote_apply";
+    let decisionRecords = buildPromotionDecisionRecords({
+      candidates: rehydratedSelected,
+      agentId: options.agentId,
+      workspaceDir,
+      nowIso,
+      operation,
+      approvalContext: options.approvalContext,
+    });
+    const initialApprovalRequiredRecords = decisionRecords.filter(
+      (record) => record.decision.decision === "approval_required",
+    );
+    const approvalRequests: ApplyShortTermPromotionsResult["approvalRequests"] = [];
+    let approvedApprovalId: string | undefined;
+
+    if (initialApprovalRequiredRecords.length > 0 && options.requestApproval) {
+      const approvalRequest = buildApprovalRequestForRecords({
+        operation,
+        records: initialApprovalRequiredRecords,
+      });
+      const approvalResolution = await options.requestApproval(approvalRequest);
+      approvalRequests.push({
+        approvalId: approvalResolution.approvalId,
+        status: approvalResolution.status,
+        toolCallId: approvalRequest.toolCallId,
+        candidateCount: approvalRequest.candidateCount,
+        reasons: approvalResolution.reasons ?? [],
+      });
+      await appendApprovalResolutionEvent({
+        workspaceDir,
+        nowIso,
+        agentId: options.agentId,
+        request: approvalRequest,
+        resolution: approvalResolution,
+      });
+      if (approvalResolution.status === "allowed_once") {
+        approvedApprovalId = approvalResolution.approvalId;
+        decisionRecords = buildPromotionDecisionRecords({
+          candidates: rehydratedSelected,
+          agentId: options.agentId,
+          workspaceDir,
+          nowIso,
+          operation,
+          approvalContext: {
+            ...options.approvalContext,
+            approved: true,
+          },
+        });
+      }
+    }
+
+    const allowedSelected = decisionRecords
+      .filter((record) => record.decision.decision === "allow")
+      .map((record) => record.candidate);
+    const deniedRecords = decisionRecords.filter((record) => record.decision.decision === "deny");
+    const approvalRequiredRecords = decisionRecords.filter(
+      (record) => record.decision.decision === "approval_required",
+    );
+    const decisionResults = decisionRecords.map((record) => ({
+      key: record.candidate.key,
+      decision: record.decision.decision,
+      reasons: record.decision.reasons,
+      ...(approvedApprovalId && record.decision.decision === "allow"
+        ? { approvalId: approvedApprovalId }
+        : {}),
+    }));
+
+    for (const record of [...deniedRecords, ...approvalRequiredRecords]) {
+      await appendMemoryHostEvent(workspaceDir, record.decision.telemetryEvent);
+    }
+
+    if (allowedSelected.length === 0) {
+      return {
+        memoryPath,
+        applied: 0,
+        appended: 0,
+        reconciledExisting: 0,
+        appliedCandidates: [],
+        denied: deniedRecords.length,
+        approvalRequired: approvalRequiredRecords.length,
+        approvalRequests,
+        decisionResults,
       };
     }
 
@@ -1633,10 +1860,10 @@ export async function applyShortTermPromotions(
       throw err;
     });
     const existingMarkers = extractPromotionMarkers(existingMemory);
-    const alreadyWritten = rehydratedSelected.filter((candidate) =>
+    const alreadyWritten = allowedSelected.filter((candidate) =>
       existingMarkers.has(candidate.key),
     );
-    const toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
+    const toAppend = allowedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
 
     if (toAppend.length > 0) {
       const header = existingMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
@@ -1648,7 +1875,7 @@ export async function applyShortTermPromotions(
       );
     }
 
-    for (const candidate of rehydratedSelected) {
+    for (const candidate of allowedSelected) {
       const entry = store.entries[candidate.key];
       if (!entry) {
         continue;
@@ -1660,12 +1887,15 @@ export async function applyShortTermPromotions(
     }
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
+    for (const record of decisionRecords.filter((record) => record.decision.decision === "allow")) {
+      await appendMemoryHostEvent(workspaceDir, record.decision.telemetryEvent);
+    }
     await appendMemoryHostEvent(workspaceDir, {
       type: "memory.promotion.applied",
       timestamp: nowIso,
       memoryPath,
-      applied: rehydratedSelected.length,
-      candidates: rehydratedSelected.map((candidate) => ({
+      applied: allowedSelected.length,
+      candidates: allowedSelected.map((candidate) => ({
         key: candidate.key,
         path: candidate.path,
         startLine: candidate.startLine,
@@ -1677,10 +1907,14 @@ export async function applyShortTermPromotions(
 
     return {
       memoryPath,
-      applied: rehydratedSelected.length,
+      applied: allowedSelected.length,
       appended: toAppend.length,
       reconciledExisting: alreadyWritten.length,
-      appliedCandidates: rehydratedSelected,
+      appliedCandidates: allowedSelected,
+      denied: deniedRecords.length,
+      approvalRequired: approvalRequiredRecords.length,
+      approvalRequests,
+      decisionResults,
     };
   });
 }

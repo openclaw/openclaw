@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { appendMemoryHostEvent } from "../../memory-host-sdk/events.js";
 
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
@@ -656,6 +657,110 @@ describe("doctor.memory.status", () => {
         }),
         undefined,
       );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes count-only Memory Curator guard health in dreaming status", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-curator-"));
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.curator.decision.deny",
+      timestamp: "2026-04-05T14:00:00.000Z",
+      agentId: "memory-knowledge-curator",
+      operation: "cli_promote_apply",
+      decision: "deny",
+      targetRelativePath: "MEMORY.md",
+      sourcePath: "memory/2026-04-05.md",
+      sourceStartLine: 1,
+      sourceEndLine: 1,
+      evidenceStatus: "Confirmed",
+      confidence: "high",
+      freshness: "current",
+      sensitivityClass: "secret",
+      privateOrSharedScope: "private",
+      reasons: ["token-like field detected"],
+      redactedPreview: "token=[REDACTED]",
+    });
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.curator.decision.approval_required",
+      timestamp: "2026-04-05T15:00:00.000Z",
+      agentId: "memory-knowledge-curator",
+      operation: "dreaming_deep",
+      decision: "approval_required",
+      targetRelativePath: "MEMORY.md",
+      sourcePath: "memory/2026-04-04.md",
+      sourceStartLine: 2,
+      sourceEndLine: 4,
+      evidenceStatus: "Confirmed",
+      confidence: "medium",
+      freshness: "current",
+      sensitivityClass: "private",
+      privateOrSharedScope: "shared",
+      reasons: ["private memory requires approval before shared/global promotion"],
+      redactedPreview: "private preference",
+    });
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.curator.private_memory_blocked",
+      timestamp: "2026-04-05T16:00:00.000Z",
+      agentId: "memory-knowledge-curator",
+      operation: "dreaming_deep",
+      targetRelativePath: "MEMORY.md",
+      reasons: ["do not leak private raw note"],
+      redactedPreview: "private [REDACTED]",
+    });
+
+    getRuntimeConfig.mockReturnValue({} as OpenClawConfig);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryStatus(respond);
+      const payload = respond.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(payload).toEqual(
+        expect.objectContaining({
+          dreaming: expect.objectContaining({
+            curatorGuard: {
+              totalDecisions: 2,
+              allowed: 0,
+              denied: 1,
+              approvalRequired: 1,
+              redactions: 1,
+              privateBlocks: 1,
+              staleRecalls: 0,
+              contradictions: 0,
+              approvalRequests: 0,
+              pendingApprovals: 0,
+              approvalsAllowedOnce: 0,
+              approvalDenials: 0,
+              approvalExpirations: 0,
+              approvalReplayBlocks: 0,
+              lastDecisionAt: "2026-04-05T16:00:00.000Z",
+              trendBuckets: [],
+              alerts: [
+                {
+                  id: "memory-curator.private-blocks-threshold",
+                  severity: "critical",
+                  metric: "privateBlocks",
+                  value: 1,
+                  threshold: 1,
+                  message: "Private memory blocks reached 1 (threshold 1).",
+                },
+              ],
+            },
+          }),
+        }),
+      );
+      expect(JSON.stringify(payload)).not.toContain("token-like field detected");
+      expect(JSON.stringify(payload)).not.toContain("token=[REDACTED]");
+      expect(JSON.stringify(payload)).not.toContain("private preference");
+      expect(JSON.stringify(payload)).not.toContain("private raw note");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

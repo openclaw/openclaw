@@ -171,6 +171,7 @@ import {
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type {
   DreamingStatus,
+  MemoryCuratorApprovalsState,
   WikiImportInsights,
   WikiMemoryPalace,
 } from "./controllers/dreaming.ts";
@@ -499,6 +500,13 @@ export class OpenClawApp extends LitElement {
   @state() wikiMemoryPalaceLoading = false;
   @state() wikiMemoryPalaceError: string | null = null;
   @state() wikiMemoryPalace: WikiMemoryPalace | null = null;
+  @state() memoryCuratorApprovals: MemoryCuratorApprovalsState = {
+    loading: false,
+    error: null,
+    items: [],
+    resolvingId: null,
+    actionMessage: null,
+  };
   @state() configFormDirty = false;
   @state() configSettingsMode: "quick" | "advanced" = "quick";
   @state() configFormMode: "form" | "raw" = "form";

@@ -14,6 +14,7 @@ import {
   errorShape,
   formatValidationErrors,
   validatePluginApprovalRequestParams,
+  validatePluginApprovalConsumeAllowOnceParams,
   validatePluginApprovalResolveParams,
 } from "../protocol/index.js";
 import {
@@ -62,6 +63,7 @@ export function createPluginApprovalHandlers(
         severity?: string | null;
         toolName?: string | null;
         toolCallId?: string | null;
+        metadata?: Record<string, unknown> | null;
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
@@ -88,6 +90,7 @@ export function createPluginApprovalHandlers(
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: p.toolName ?? null,
         toolCallId: p.toolCallId ?? null,
+        metadata: p.metadata ?? null,
         ...(Array.isArray(p.allowedDecisions)
           ? {
               allowedDecisions: resolvePluginApprovalRequestAllowedDecisions({
@@ -154,6 +157,110 @@ export function createPluginApprovalHandlers(
         inputId: (params as { id?: string }).id,
         respond,
       });
+    },
+
+    "plugin.approval.consumeAllowOnce": async ({ params, respond }) => {
+      if (!validatePluginApprovalConsumeAllowOnceParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid plugin.approval.consumeAllowOnce params: ${formatValidationErrors(
+              validatePluginApprovalConsumeAllowOnceParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      const p = params as {
+        id: string;
+        pluginId?: string | null;
+        toolName?: string | null;
+        toolCallId?: string | null;
+      };
+      const snapshot = manager.getSnapshot(p.id);
+      if (!snapshot) {
+        respond(
+          true,
+          {
+            id: p.id,
+            consumed: false,
+            reason: "expired",
+          },
+          undefined,
+        );
+        return;
+      }
+      const expected = [
+        ["pluginId", p.pluginId, snapshot.request.pluginId],
+        ["toolName", p.toolName, snapshot.request.toolName],
+        ["toolCallId", p.toolCallId, snapshot.request.toolCallId],
+      ] as const;
+      const mismatch = expected.find(
+        ([, requested, actual]) =>
+          typeof requested === "string" && requested.length > 0 && requested !== actual,
+      );
+      if (mismatch) {
+        respond(
+          true,
+          {
+            id: p.id,
+            consumed: false,
+            reason: "mismatch",
+            field: mismatch[0],
+          },
+          undefined,
+        );
+        return;
+      }
+      if (snapshot.consumedDecision === "allow-once" && snapshot.decision !== "allow-once") {
+        respond(
+          true,
+          {
+            id: p.id,
+            consumed: false,
+            reason: "replay",
+          },
+          undefined,
+        );
+        return;
+      }
+      if (snapshot.decision === "deny") {
+        respond(
+          true,
+          {
+            id: p.id,
+            consumed: false,
+            reason: "denied",
+          },
+          undefined,
+        );
+        return;
+      }
+      if (snapshot.decision !== "allow-once") {
+        respond(
+          true,
+          {
+            id: p.id,
+            consumed: false,
+            reason: "pending",
+          },
+          undefined,
+        );
+        return;
+      }
+      const consumed = manager.consumeAllowOnce(p.id);
+      respond(
+        true,
+        {
+          id: p.id,
+          consumed,
+          reason: consumed ? null : "replay",
+          decision: consumed ? "allow-once" : null,
+        },
+        undefined,
+      );
     },
 
     "plugin.approval.resolve": async ({ params, respond, client, context }) => {

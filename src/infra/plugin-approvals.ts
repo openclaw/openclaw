@@ -8,6 +8,7 @@ export type PluginApprovalRequestPayload = {
   toolName?: string | null;
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
+  metadata?: Record<string, unknown> | null;
   agentId?: string | null;
   sessionKey?: string | null;
   turnSourceChannel?: string | null;

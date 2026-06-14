@@ -14,6 +14,7 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     severity: Type.Optional(Type.String({ enum: ["info", "warning", "critical"] })),
     toolName: Type.Optional(Type.String()),
     toolCallId: Type.Optional(Type.String()),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     allowedDecisions: Type.Optional(
       Type.Array(Type.String({ enum: ["allow-once", "allow-always", "deny"] }), {
         minItems: 1,
@@ -36,6 +37,16 @@ export const PluginApprovalResolveParamsSchema = Type.Object(
   {
     id: NonEmptyString,
     decision: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const PluginApprovalConsumeAllowOnceParamsSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    pluginId: Type.Optional(Type.String()),
+    toolName: Type.Optional(Type.String()),
+    toolCallId: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

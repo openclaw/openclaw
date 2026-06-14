@@ -43,10 +43,70 @@ export type MemoryHostDreamCompletedEvent = {
   storageMode: "inline" | "separate" | "both";
 };
 
+export type MemoryCuratorDecisionEvent = {
+  type:
+    | "memory.curator.decision.allow"
+    | "memory.curator.decision.deny"
+    | "memory.curator.decision.approval_required";
+  timestamp: string;
+  agentId?: string;
+  operation: "daily_flush" | "durable_promotion" | "dreaming_deep" | "cli_promote_apply";
+  decision: "allow" | "deny" | "approval_required";
+  targetRelativePath: string;
+  sourcePath?: string;
+  sourceStartLine?: number;
+  sourceEndLine?: number;
+  evidenceStatus: "Confirmed" | "Inferred" | "Unknown";
+  confidence: "high" | "medium" | "low" | "Unknown";
+  freshness: "current" | "recent" | "stale" | "Unknown";
+  sensitivityClass: "public" | "internal" | "private" | "secret" | "Unknown";
+  privateOrSharedScope: "private" | "shared" | "global" | "Unknown";
+  reasons: string[];
+  redactedPreview: string;
+  score?: number;
+  recallCount?: number;
+  uniqueQueries?: number;
+};
+
+export type MemoryCuratorSignalEvent = {
+  type:
+    | "memory.curator.redacted"
+    | "memory.curator.private_memory_blocked"
+    | "memory.curator.stale_recall"
+    | "memory.curator.contradiction_detected";
+  timestamp: string;
+  agentId?: string;
+  operation: "daily_flush" | "durable_promotion" | "dreaming_deep" | "cli_promote_apply";
+  targetRelativePath: string;
+  sourcePath?: string;
+  reasons: string[];
+  redactedPreview?: string;
+};
+
+export type MemoryCuratorApprovalEvent = {
+  type:
+    | "memory.curator.approval.requested"
+    | "memory.curator.approval.allowed_once"
+    | "memory.curator.approval.denied"
+    | "memory.curator.approval.expired"
+    | "memory.curator.approval.replay_blocked";
+  timestamp: string;
+  agentId?: string;
+  operation: "durable_promotion" | "dreaming_deep" | "cli_promote_apply";
+  approvalId?: string;
+  approvalToolCallId?: string;
+  candidateCount: number;
+  sensitivityClasses: string[];
+  reasons: string[];
+};
+
 export type MemoryHostEvent =
   | MemoryHostRecallRecordedEvent
   | MemoryHostPromotionAppliedEvent
-  | MemoryHostDreamCompletedEvent;
+  | MemoryHostDreamCompletedEvent
+  | MemoryCuratorDecisionEvent
+  | MemoryCuratorSignalEvent
+  | MemoryCuratorApprovalEvent;
 
 export function resolveMemoryHostEventLogPath(workspaceDir: string): string {
   return path.join(workspaceDir, MEMORY_HOST_EVENT_LOG_RELATIVE_PATH);
