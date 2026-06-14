@@ -1,4 +1,5 @@
 // Doctor scanner for empty allowlist policies across configured channels and accounts.
+import { hasAllowFromEntries } from "./allowlist.js";
 import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
@@ -18,6 +19,50 @@ function isDisabledRecord(value: unknown): boolean {
     Boolean(value && typeof value === "object" && !Array.isArray(value)) &&
     (value as { enabled?: unknown }).enabled === false
   );
+}
+
+/**
+ * Check whether every non-disabled account under a channel has its own
+ * populated allowlist (groupAllowFrom or allowFrom), so the top-level
+ * channel group allowlist warning is a false positive — group messages
+ * are already covered by per-account entries.
+ */
+function allTopLevelAccountsCoverGroupPolicy(
+  channelConfig: DoctorAccountRecord,
+): boolean {
+  const accounts = asObjectRecord(channelConfig.accounts);
+  if (!accounts || Object.keys(accounts).length === 0) {
+    return false;
+  }
+
+  let hasEnabledAccount = false;
+
+  for (const account of Object.values(accounts)) {
+    if (!account || typeof account !== "object") {
+      continue;
+    }
+    if (isDisabledRecord(account)) {
+      continue;
+    }
+    hasEnabledAccount = true;
+
+    const acct = account as DoctorAccountRecord;
+    const rawGroupAllowFrom = acct.groupAllowFrom as DoctorAllowFromList | undefined;
+    const rawAllowFrom = acct.allowFrom as DoctorAllowFromList | undefined;
+    const acctDm = asObjectRecord(acct.dm);
+    const acctDmAllowFrom = acctDm?.allowFrom as DoctorAllowFromList | undefined;
+    if (
+      hasAllowFromEntries(rawGroupAllowFrom) ||
+      hasAllowFromEntries(rawAllowFrom) ||
+      hasAllowFromEntries(acctDmAllowFrom)
+    ) {
+      continue;
+    }
+
+    return false;
+  }
+
+  return hasEnabledAccount;
 }
 
 /** Scan all configured channels/accounts for empty allowlist policy warnings. */
@@ -88,7 +133,15 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
+    // When every non-disabled account has its own populated allowlist, skip
+    // the top-level checkAccount — its group allowlist warning would be a
+    // false positive since per-account entries handle group message routing.
+    // Per-account checks still run to catch per-account issues.
+    const accountsAreCovered = allTopLevelAccountsCoverGroupPolicy(channelConfig);
+
+    if (!accountsAreCovered) {
+      checkAccount(channelConfig, `channels.${channelName}`, channelName);
+    }
 
     const accounts = asObjectRecord(channelConfig.accounts);
     if (!accounts) {
