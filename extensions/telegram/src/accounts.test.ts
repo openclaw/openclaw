@@ -173,6 +173,50 @@ describe("resolveTelegramAccount", () => {
     expect(accounts[0]?.token).toBe("tok-default");
     expect(accounts[0]?.tokenSource).toBe("config");
   });
+
+  it("routes omitted-account sends through the configured defaultAccount (#61012)", () => {
+    const account = resolveAccountWithEnv(
+      { TELEGRAM_BOT_TOKEN: "" },
+      {
+        channels: {
+          telegram: {
+            // Top-level token gives the implicit "default" account a credential,
+            // which previously shadowed the configured defaultAccount on send.
+            botToken: "tok-default-bot",
+            defaultAccount: "secondary",
+            accounts: {
+              primary: { botToken: "tok-primary-bot" },
+              secondary: { botToken: "tok-secondary-bot" },
+            },
+          },
+        },
+      },
+    );
+    expect(account.accountId).toBe("secondary");
+    expect(account.token).toBe("tok-secondary-bot");
+    expect(account.tokenSource).toBe("config");
+  });
+
+  it("routes explicit-account sends through the requested account (#61012)", () => {
+    const account = resolveAccountWithEnv(
+      { TELEGRAM_BOT_TOKEN: "" },
+      {
+        channels: {
+          telegram: {
+            botToken: "tok-default-bot",
+            defaultAccount: "secondary",
+            accounts: {
+              primary: { botToken: "tok-primary-bot" },
+              secondary: { botToken: "tok-secondary-bot" },
+            },
+          },
+        },
+      },
+      "primary",
+    );
+    expect(account.accountId).toBe("primary");
+    expect(account.token).toBe("tok-primary-bot");
+  });
 });
 
 describe("resolveDefaultTelegramAccountId", () => {
