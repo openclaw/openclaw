@@ -120,4 +120,30 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     ).toEqual(["moonshot/kimi-k2.6"]);
     expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
+
+  it("skips unreadable manifest rows while filtering by provider plugin id", async () => {
+    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
+    const unreadablePluginId = {
+      get id() {
+        throw new Error("manifest catalog plugin id exploded");
+      },
+    };
+    mocks.getPluginRecord.mockReturnValueOnce({ pluginId: "moonshot" });
+    mocks.isPluginEnabled.mockReturnValueOnce(true);
+
+    expect(
+      loadStaticManifestCatalogRowsForList({
+        cfg: {},
+        providerFilter: "moonshot",
+        metadataSnapshot: {
+          index: { plugins: [], diagnostics: [] },
+          manifestRegistry: {
+            plugins: [unreadablePluginId, openrouterPlugin, moonshotPlugin],
+            diagnostics: [],
+          },
+          plugins: [],
+        } as never,
+      }).map((row) => row.ref),
+    ).toEqual(["moonshot/kimi-k2.6"]);
+  });
 });
