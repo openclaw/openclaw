@@ -78,6 +78,7 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   deleteMediaBuffer,
@@ -1344,6 +1345,32 @@ function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[
 // Returned paths are absolute media-store paths when no sandbox is active, or
 // sandbox-relative paths plus `workspaceDir` when sandboxing is active. Host-side
 // media-understanding uses MediaWorkspaceDir to resolve those relative paths.
+// Optional sandbox staging is a convenience copy into the container; a managed
+// inbound media-store PDF is already host-readable (the managed media dir is a
+// default media-understanding local root, resolved via the absolute path when
+// MediaWorkspaceDir is unset). When staging is unavailable/incomplete we can
+// therefore pass those absolute managed paths through instead of deleting the
+// buffers and failing the send (#90097). Gated all-or-nothing to managed-inbound
+// PDFs so a single non-managed or non-PDF ref cannot bypass staging; reuses the
+// same resolveInboundMediaReference allow-check stageSandboxMedia applies.
+async function resolveManagedInboundPdfFallback(
+  refs: readonly OffloadedRef[],
+): Promise<{ paths: string[]; types: string[] } | null> {
+  for (const ref of refs) {
+    if (ref.mimeType !== "application/pdf") {
+      return null;
+    }
+    const managed = await resolveInboundMediaReference(ref.path).catch(() => null);
+    if (!managed) {
+      return null;
+    }
+  }
+  return {
+    paths: refs.map((ref) => ref.path),
+    types: refs.map((ref) => ref.mimeType),
+  };
+}
+
 async function prestageMediaPathOffloads(params: {
   offloadedRefs: OffloadedRef[];
   includeImageRefs?: boolean;
@@ -1377,9 +1404,14 @@ async function prestageMediaPathOffloads(params: {
     // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
     // session receiving a file between the two caps would otherwise
     // pass parse, fail staging, and surface as a retryable 5xx even though
-    // retry cannot succeed. Reject here as a client-side 4xx instead.
+    // retry cannot succeed. Managed inbound PDFs are already host-readable, so
+    // let the managed-PDF fallback handle them before rejecting everything else.
     const oversizedForSandbox = mediaPathRefs.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
     if (oversizedForSandbox.length > 0) {
+      const managedPdfFallback = await resolveManagedInboundPdfFallback(mediaPathRefs);
+      if (managedPdfFallback) {
+        return managedPdfFallback;
+      }
       const details = oversizedForSandbox
         .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
         .join(", ");
@@ -1395,13 +1427,24 @@ async function prestageMediaPathOffloads(params: {
       MediaType: mediaPathRefs[0].mimeType,
       MediaTypes: mediaPathRefs.map((ref) => ref.mimeType),
     };
-    const stageResult = await stageSandboxMedia({
-      ctx: stagingCtx,
-      sessionCtx: stagingCtx as TemplateContext,
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      workspaceDir,
-    });
+    let stageResult: Awaited<ReturnType<typeof stageSandboxMedia>>;
+    try {
+      stageResult = await stageSandboxMedia({
+        ctx: stagingCtx,
+        sessionCtx: stagingCtx as TemplateContext,
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        workspaceDir,
+      });
+    } catch (stageErr) {
+      // Staging is optional; pass managed-inbound PDFs through rather than
+      // deleting buffers + failing the send. Rethrow otherwise (#90097).
+      const managedPdfFallback = await resolveManagedInboundPdfFallback(mediaPathRefs);
+      if (managedPdfFallback) {
+        return managedPdfFallback;
+      }
+      throw stageErr;
+    }
 
     // stageSandboxMedia silently keeps unstaged entries as their original
     // absolute path, so length parity with `nonImage` does not prove every
@@ -1412,6 +1455,12 @@ async function prestageMediaPathOffloads(params: {
     const stagedSources = stageResult.staged;
     const missing = mediaPathRefs.filter((ref) => !stagedSources.has(ref.path));
     if (missing.length > 0) {
+      // Incomplete staging: pass managed-inbound PDFs through (host-readable)
+      // rather than failing the send. Fail otherwise as before (#90097).
+      const managedPdfFallback = await resolveManagedInboundPdfFallback(mediaPathRefs);
+      if (managedPdfFallback) {
+        return managedPdfFallback;
+      }
       throw new Error(
         `attachment staging incomplete: ${stagedSources.size}/${mediaPathRefs.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
       );
