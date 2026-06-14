@@ -91,7 +91,7 @@ jobs:
             -f request_id="$request_id"
           run_id=""
           for _ in $(seq 1 30); do
-            run_id="$(BEFORE="$before" EXPECTED_TITLE="$expected_title" gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --event workflow_dispatch --limit 50 --json databaseId,displayTitle --jq 'map(select(.displayTitle == env.EXPECTED_TITLE and ((env.BEFORE | fromjson | index(.databaseId)) | not))) | first | .databaseId // empty')"
+            run_id="$(BEFORE="$before" EXPECTED_TITLE="$expected_title" gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --event workflow_dispatch --limit 50 --json databaseId,displayTitle --jq 'map(select(.databaseId as $candidate_run_id | .displayTitle == env.EXPECTED_TITLE and ((env.BEFORE | fromjson | index($candidate_run_id)) | not))) | first | .databaseId // empty')"
             [ -n "$run_id" ] && break
             sleep 2
           done
@@ -122,7 +122,7 @@ jobs:
             -f request_id="$request_id"
           run_id=""
           for _ in $(seq 1 30); do
-            run_id="$(BEFORE="$before" EXPECTED_TITLE="$expected_title" gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --event workflow_dispatch --limit 50 --json databaseId,displayTitle --jq 'map(select(.displayTitle == env.EXPECTED_TITLE and ((env.BEFORE | fromjson | index(.databaseId)) | not))) | first | .databaseId // empty')"
+            run_id="$(BEFORE="$before" EXPECTED_TITLE="$expected_title" gh run list --repo Rockielab/platform-context --workflow sync-skills-to-hetzner.yml --event workflow_dispatch --limit 50 --json databaseId,displayTitle --jq 'map(select(.databaseId as $candidate_run_id | .displayTitle == env.EXPECTED_TITLE and ((env.BEFORE | fromjson | index($candidate_run_id)) | not))) | first | .databaseId // empty')"
             [ -n "$run_id" ] && break
             sleep 2
           done
