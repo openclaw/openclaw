@@ -1765,8 +1765,13 @@ function hasUnavailableMemoryResultInSessionRecord(
     details?.unavailable === true ||
     details?.success === false ||
     Boolean(details?.error);
-  if (unavailable || details?.persistedDetailsTruncated !== true) {
-    return unavailable;
+  if (unavailable) {
+    return true;
+  }
+  const hasExplicitResultState =
+    details && ["disabled", "unavailable", "success", "error"].some((key) => key in details);
+  if (hasExplicitResultState) {
+    return false;
   }
   const content = extractTextContent(message.content);
   try {

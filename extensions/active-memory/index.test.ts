@@ -3809,6 +3809,48 @@ describe("active-memory plugin", () => {
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
   });
 
+  it("rejects completed output after a configured custom tool reports a content-only failure", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1_000,
+      toolsAllow: ["memory_lookup_custom"],
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:custom-tool-content-failure";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-custom-tool-content-failure",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_lookup_custom",
+            content: [
+              {
+                type: "text",
+                text: '{"success":false,"error":"backend unavailable"}',
+              },
+            ],
+          },
+        },
+      ]);
+      return { payloads: [{ text: "This ungrounded summary must not become recalled context." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? custom content failure", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=unavailable");
+  });
+
   it("does not recover arbitrary assistant text without successful memory evidence", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     testing.setMinimumTimeoutMsForTests(1);
