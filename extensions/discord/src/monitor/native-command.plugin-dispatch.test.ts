@@ -951,6 +951,7 @@ describe("Discord native plugin command dispatch", () => {
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: { final: 0, block: 0, tool: 0 },
       queuedFinal: false,
+      noVisibleReplyFallbackEligible: true,
     } as never);
     const command = await createNativeCommand(cfg, {
       name: "new",
@@ -964,6 +965,27 @@ describe("Discord native plugin command dispatch", () => {
       content: "⚠️ Command produced no visible reply.",
       ephemeral: true,
     });
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when dispatch completes without a fallback-eligible visible reply", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: false,
+      noVisibleReplyFallbackEligible: false,
+    } as never);
+    const command = await createNativeCommand(cfg, {
+      name: "compact",
+      description: "Compact the active session.",
+      acceptsArgs: false,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expectNoFollowUpContent(interaction, "Command produced no visible reply.");
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
