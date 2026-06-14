@@ -600,6 +600,7 @@ async function maybeSteerSubagentAnnounce(params: {
   deliveryTimeoutMs?: number;
   requesterSessionKey: string;
   steerMessage: string;
+  expectsCompletionMessage: boolean;
   signal?: AbortSignal;
 }): Promise<
   { status: "steered"; deliveredAt?: number; enqueuedAt?: number } | { status: "none" | "dropped" }
@@ -630,6 +631,9 @@ async function maybeSteerSubagentAnnounce(params: {
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
+    ...(params.expectsCompletionMessage
+      ? { waitForAssistantResponseAfterTranscriptCommit: true }
+      : {}),
   };
   const queueOutcome = await resolveActiveWakeWithRetries(
     sessionId,
@@ -1688,6 +1692,7 @@ export async function deliverSubagentAnnouncement(params: {
         ),
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
+        expectsCompletionMessage: params.expectsCompletionMessage,
         signal: params.signal,
       }),
     direct: async () =>
