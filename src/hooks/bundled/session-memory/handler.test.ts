@@ -812,4 +812,106 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
   });
+
+  it("deduplicates consecutive assistant messages with identical text content", async () => {
+    // Simulate the thinking-stripped duplicate pattern: the session JSONL
+    // stores the original assistant message (with thinking blocks) followed
+    // by a stripped copy (without thinking blocks, same text content).
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        id: "msg-1",
+        parentId: null,
+        message: {
+          role: "user",
+          content: "What is 2+2?",
+        },
+      }),
+      // Original assistant with thinking blocks
+      JSON.stringify({
+        type: "message",
+        id: "msg-2",
+        parentId: "msg-1",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "The user asks a simple math question." },
+            { type: "text", text: "2+2 equals 4" },
+          ],
+        },
+      }),
+      // Stripped copy (thinking removed, parent points to original)
+      JSON.stringify({
+        type: "message",
+        id: "msg-3",
+        parentId: "msg-2",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "2+2 equals 4" }],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "msg-4",
+        parentId: "msg-3",
+        message: {
+          role: "user",
+          content: "Thanks!",
+        },
+      }),
+      // Next assistant response (different content, should be kept)
+      JSON.stringify({
+        type: "message",
+        id: "msg-5",
+        parentId: "msg-4",
+        message: {
+          role: "assistant",
+          content: "You're welcome!",
+        },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    // The duplicate "2+2 equals 4" assistant message should be filtered out.
+    // Count occurrences of the assistant text.
+    const matches = memoryContent?.match(/assistant: 2\+2 equals 4/g);
+    expect(matches).not.toBeNull();
+    expect(matches!.length).toBe(1);
+    // Other messages should still be present.
+    expect(memoryContent).toContain("user: What is 2+2?");
+    expect(memoryContent).toContain("user: Thanks!");
+    expect(memoryContent).toContain("assistant: You're welcome!");
+  });
+
+  it("does not deduplicate non-consecutive identical assistant texts", async () => {
+    // A legitimate repeat of the same answer (e.g. "OK") across different
+    // turns should not be dropped.
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "First question" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "OK" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Second question" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "OK" },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    // Both "OK" assistant messages should be present because a user message
+    // separates them.
+    const matches = memoryContent?.match(/assistant: OK/g);
+    expect(matches).not.toBeNull();
+    expect(matches!.length).toBe(2);
+    expect(memoryContent).toContain("user: First question");
+    expect(memoryContent).toContain("user: Second question");
+  });
 });

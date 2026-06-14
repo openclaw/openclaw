@@ -31,6 +31,7 @@ export async function getRecentSessionContent(
     const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];
+    let lastAssistantText: string | null = null;
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
@@ -47,6 +48,21 @@ export async function getRecentSessionContent(
             }
             const text = extractTextMessageContent(msg.content);
             if (text && !text.startsWith("/")) {
+              if (role === "assistant") {
+                // When thinking/reasoning is enabled, the session transcript may
+                // contain a duplicate assistant message with the same text content
+                // (original with thinking blocks + stripped copy). Skip consecutive
+                // duplicates to avoid doubling every assistant reply in memory files.
+                if (text === lastAssistantText) {
+                  continue;
+                }
+                lastAssistantText = text;
+              } else if (role === "user") {
+                // Reset the duplicate guard when a user message separates
+                // assistant turns so that legitimate repeats (e.g. "OK" in
+                // different turns) are not dropped.
+                lastAssistantText = null;
+              }
               allMessages.push(`${role}: ${text}`);
             }
           }
