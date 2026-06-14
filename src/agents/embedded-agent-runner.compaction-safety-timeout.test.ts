@@ -46,6 +46,28 @@ describe("compactWithSafetyTimeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("preserves cooperative partial progress produced by timeout cancellation", async () => {
+    vi.useFakeTimers();
+    const compactPromise = compactWithSafetyTimeout(
+      (signal) =>
+        new Promise<string>((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              queueMicrotask(() => resolve("partial summary after chunk 1"));
+            },
+            { once: true },
+          );
+        }),
+      30,
+    );
+    const assertion = expect(compactPromise).resolves.toBe("partial summary after chunk 1");
+
+    await vi.advanceTimersByTimeAsync(30);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("preserves compaction errors and clears timer", async () => {
     vi.useFakeTimers();
     const error = new Error("provider exploded");

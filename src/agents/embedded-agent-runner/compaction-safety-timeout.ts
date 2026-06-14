@@ -1,10 +1,12 @@
 /**
  * Wraps compaction calls with a safety timeout and abort cleanup.
  */
-import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  finiteSecondsToTimerSafeMilliseconds,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
-import { withTimeout } from "../../node-host/with-timeout.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
@@ -86,54 +88,58 @@ export async function compactWithSafetyTimeout<T>(
     }
   };
 
-  return await withTimeout(
-    async (timeoutSignal) => {
-      let timeoutListener: (() => void) | undefined;
-      let externalAbortListener: (() => void) | undefined;
-      let externalAbortPromise: Promise<never> | undefined;
-      const abortSignal = opts?.abortSignal;
-      const composedAbortSignal = composeAbortSignals(timeoutSignal, abortSignal);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+  const timeoutController = resolvedTimeoutMs ? new AbortController() : undefined;
+  const abortSignal = opts?.abortSignal;
+  const composedAbortSignal = composeAbortSignals(timeoutController?.signal, abortSignal);
+  let timeout: NodeJS.Timeout | undefined;
+  let externalAbortListener: (() => void) | undefined;
 
-      if (timeoutSignal) {
-        timeoutListener = () => {
-          cancel();
-        };
-        timeoutSignal.addEventListener("abort", timeoutListener, { once: true });
-      }
+  try {
+    if (abortSignal?.aborted) {
+      cancel();
+      throw createAbortError(abortSignal);
+    }
 
-      if (abortSignal) {
-        if (abortSignal.aborted) {
-          cancel();
-          throw createAbortError(abortSignal);
-        }
-        externalAbortPromise = new Promise((_, reject) => {
+    const compactPromise = compact(composedAbortSignal.signal);
+    const contenders: Array<Promise<T> | Promise<never>> = [compactPromise];
+
+    if (resolvedTimeoutMs && timeoutController) {
+      const timeoutError = new Error("Compaction timed out");
+      contenders.push(
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            timeoutController.abort(timeoutError);
+            cancel();
+            queueMicrotask(() => reject(timeoutError));
+          }, resolvedTimeoutMs);
+          timeout.unref?.();
+        }),
+      );
+    }
+
+    if (abortSignal) {
+      contenders.push(
+        new Promise<never>((_, reject) => {
           externalAbortListener = () => {
             cancel();
             reject(createAbortError(abortSignal));
           };
           abortSignal.addEventListener("abort", externalAbortListener, { once: true });
-        });
-      }
+        }),
+      );
+    }
 
-      try {
-        const compactPromise = compact(composedAbortSignal.signal);
-        if (externalAbortPromise) {
-          return await Promise.race([compactPromise, externalAbortPromise]);
-        }
-        return await compactPromise;
-      } finally {
-        composedAbortSignal.cleanup();
-        if (timeoutListener) {
-          timeoutSignal?.removeEventListener("abort", timeoutListener);
-        }
-        if (externalAbortListener) {
-          abortSignal?.removeEventListener("abort", externalAbortListener);
-        }
-      }
-    },
-    timeoutMs,
-    "Compaction",
-  );
+    return await Promise.race(contenders);
+  } finally {
+    composedAbortSignal.cleanup();
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    if (externalAbortListener) {
+      abortSignal?.removeEventListener("abort", externalAbortListener);
+    }
+  }
 }
 
 /** Parameters for a single {@link ContextEngine.compact} invocation. */
