@@ -56,22 +56,43 @@ const annotationOnlyFormats = [
   "uuid",
 ] as const;
 
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invalidSchemaError(message: string): Error {
+  return new Error(sanitizeTerminalText(`invalid schema: ${message}`));
+}
+
+function runSchemaOperation<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("invalid schema:")) {
+      throw error;
+    }
+    throw invalidSchemaError(`schema is unreadable (${formatUnknownError(error)})`);
+  }
+}
+
 function fingerprintSchema(schema: JsonSchemaValue): string {
-  return JSON.stringify(schema);
+  return runSchemaOperation(() => JSON.stringify(schema));
 }
 
 function schemaHasDefaults(schema: unknown): boolean {
-  if (!schema || typeof schema !== "object") {
-    return false;
-  }
-  if (Array.isArray(schema)) {
-    return schema.some((item) => schemaHasDefaults(item));
-  }
-  const record = schema as Record<string, unknown>;
-  if (Object.hasOwn(record, "default")) {
-    return true;
-  }
-  return Object.values(record).some((value) => schemaHasDefaults(value));
+  return runSchemaOperation(() => {
+    if (!schema || typeof schema !== "object") {
+      return false;
+    }
+    if (Array.isArray(schema)) {
+      return schema.some((item) => schemaHasDefaults(item));
+    }
+    const record = schema as Record<string, unknown>;
+    if (Object.hasOwn(record, "default")) {
+      return true;
+    }
+    return Object.values(record).some((value) => schemaHasDefaults(value));
+  });
 }
 
 function cloneValidationValue<T>(value: T): T {
@@ -337,30 +358,42 @@ export function validateJsonSchemaValue(params: {
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const schemaError = findJsonSchemaShapeError(params.schema);
+  let schemaError: string | undefined;
+  try {
+    schemaError = findJsonSchemaShapeError(params.schema);
+  } catch (error) {
+    schemaError = `schema is unreadable (${formatUnknownError(error)})`;
+  }
   if (schemaError) {
-    throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+    throw invalidSchemaError(schemaError);
   }
 
   const useCache = params.cache !== false;
   if (!useCache) {
-    const validate = compileSchema(params.schema);
+    const validate = runSchemaOperation(() => compileSchema(params.schema));
     const value =
       params.applyDefaults && schemaHasDefaults(params.schema)
-        ? applyDefaultsWithPluginFormatSemantics(params.schema, cloneValidationValue(params.value))
+        ? runSchemaOperation(() =>
+            applyDefaultsWithPluginFormatSemantics(
+              params.schema,
+              cloneValidationValue(params.value),
+            ),
+          )
         : params.value;
-    const errors = checkSchema(validate, value);
+    const errors = runSchemaOperation(() => checkSchema(validate, value));
     if (!errors) {
       return { ok: true, value };
     }
     if (
       params.applyDefaults &&
       value !== params.value &&
-      isDefaultActivatedConditionalFailure({
-        schema: params.schema,
-        originalValue: params.value,
-        defaultedValue: value,
-      })
+      runSchemaOperation(() =>
+        isDefaultActivatedConditionalFailure({
+          schema: params.schema,
+          originalValue: params.value,
+          defaultedValue: value,
+        }),
+      )
     ) {
       // Defaults can select a conditional branch that requires the defaulted property;
       // keep the hydrated value when the original input was valid before hydration.
@@ -377,7 +410,7 @@ export function validateJsonSchemaValue(params: {
     !cached ||
     (cached.schema !== params.schema && cached.schemaFingerprint !== schemaFingerprint)
   ) {
-    const validate = compileSchema(params.schema);
+    const validate = runSchemaOperation(() => compileSchema(params.schema));
     cached = {
       hasDefaults: params.applyDefaults ? schemaHasDefaults(params.schema) : false,
       validate,
@@ -391,20 +424,24 @@ export function validateJsonSchemaValue(params: {
 
   const value =
     params.applyDefaults && cached.hasDefaults
-      ? applyDefaultsWithPluginFormatSemantics(params.schema, cloneValidationValue(params.value))
+      ? runSchemaOperation(() =>
+          applyDefaultsWithPluginFormatSemantics(params.schema, cloneValidationValue(params.value)),
+        )
       : params.value;
-  const errors = checkSchema(cached.validate, value);
+  const errors = runSchemaOperation(() => checkSchema(cached.validate, value));
   if (!errors) {
     return { ok: true, value };
   }
   if (
     params.applyDefaults &&
     value !== params.value &&
-    isDefaultActivatedConditionalFailure({
-      schema: params.schema,
-      originalValue: params.value,
-      defaultedValue: value,
-    })
+    runSchemaOperation(() =>
+      isDefaultActivatedConditionalFailure({
+        schema: params.schema,
+        originalValue: params.value,
+        defaultedValue: value,
+      }),
+    )
   ) {
     // Same conditional-default exception as the uncached path; cache only changes validator reuse.
     return { ok: true, value };

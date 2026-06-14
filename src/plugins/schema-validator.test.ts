@@ -241,6 +241,34 @@ describe("schema validator", () => {
     ).toThrow("invalid schema");
   });
 
+  it("rejects unreadable JSON Schema objects with a schema error", () => {
+    const createSchema = () =>
+      new Proxy<Record<string, unknown>>(
+        {
+          type: "object",
+          properties: {
+            url: { type: "string" },
+          },
+        },
+        {
+          ownKeys() {
+            throw new Error("schema keys exploded");
+          },
+        },
+      );
+
+    for (const cache of [true, false]) {
+      expect(() =>
+        validateJsonSchemaValue({
+          cacheKey: `schema-validator.test.unreadable-schema.${cache}`,
+          schema: createSchema() as never,
+          value: { url: "https://example.test" },
+          cache,
+        }),
+      ).toThrow("invalid schema");
+    }
+  });
+
   it("rejects invalid JSON Schema constraint keyword values", () => {
     for (const [cacheKey, schema] of [
       [
