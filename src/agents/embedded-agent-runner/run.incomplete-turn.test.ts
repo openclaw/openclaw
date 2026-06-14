@@ -2078,6 +2078,91 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
+  it("retries replay-safe post-tool empty final turns after pre-tool narration", () => {
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "ollama",
+      model: "gemma4:31b",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "ollama",
+      modelId: "gemma4:31b",
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking the scheduler now."],
+        toolMetas: [{ toolName: "search" }],
+        currentAttemptAssistant: finalAssistant,
+        lastAssistant: finalAssistant,
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry post-tool turns with a visible final assistant answer", () => {
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "custom",
+      model: "composer-2.5",
+      content: [{ type: "text", text: "There are zero matches." }],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "custom",
+      modelId: "composer-2.5",
+      modelApi: "custom-api",
+      payloadCount: 2,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking the scheduler now.", "There are zero matches."],
+        toolMetas: [{ toolName: "search" }],
+        currentAttemptAssistant: finalAssistant,
+        lastAssistant: finalAssistant,
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("surfaces exhausted post-tool empty final turns without replacing terminal output", () => {
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "custom",
+      model: "composer-2.5",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    const attempt = makeAttemptResult({
+      assistantTexts: ["Checking the scheduler now."],
+      toolMetas: [{ toolName: "search" }],
+      currentAttemptAssistant: finalAssistant,
+      lastAssistant: finalAssistant,
+    });
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+    expect(
+      resolveEmptyResponseRetryInstruction({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        payloadCount: 1,
+        aborted: false,
+        timedOut: false,
+        attempt: { ...attempt, toolMediaUrls: ["file:///tmp/render.png"] },
+      }),
+    ).toBeNull();
+  });
+
   it("does not retry clean zero-token Ollama stop turns", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "ollama",
@@ -3239,7 +3324,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("working");
   });
 
-  it("retries post-tool openai-compatible empty stop turns even when empty silence is allowed", async () => {
+  it("retries post-tool empty final turns after pre-tool narration even when silence is allowed", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedResolveModelAsync.mockResolvedValue({
       model: {
@@ -3254,18 +3339,20 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       },
       modelRegistry: {},
     });
+    const finalAssistant = {
+      role: "assistant",
+      api: "openai-completions",
+      stopReason: "stop",
+      provider: "stepfun",
+      model: "step-router-v1",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        assistantTexts: [],
+        assistantTexts: ["Checking the scheduler now."],
         toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
-        lastAssistant: {
-          role: "assistant",
-          api: "openai-completions",
-          stopReason: "stop",
-          provider: "stepfun",
-          model: "step-router-v1",
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: finalAssistant,
+        lastAssistant: finalAssistant,
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
