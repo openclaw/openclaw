@@ -5,6 +5,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable } from "./ports.js";
+import { resolveSystemBin } from "./resolve-system-bin.js";
 
 export type SshParsedTarget = {
   user?: string;
@@ -117,6 +118,14 @@ export async function startSshPortForward(opts: {
     throw new Error(`invalid SSH target: ${opts.target}`);
   }
 
+  // Resolve ssh from trusted system directories only (never a PATH-controlled
+  // binary). Fail closed with a clear diagnostic when no system ssh client is
+  // present, e.g. a Windows host without the built-in OpenSSH feature installed.
+  const sshPath = resolveSystemBin("ssh", { trust: "strict" });
+  if (sshPath === null) {
+    throw new Error("no trusted SSH client found in system directories");
+  }
+
   let localPort = opts.localPortPreferred;
   try {
     await ensurePortAvailable(localPort);
@@ -157,7 +166,7 @@ export async function startSshPortForward(opts: {
   args.push("--", userHost);
 
   const stderr: string[] = [];
-  const child = spawn("/usr/bin/ssh", args, {
+  const child = spawn(sshPath, args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
   child.stderr?.setEncoding("utf8");

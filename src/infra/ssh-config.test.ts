@@ -2,6 +2,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveSystemBin } from "./resolve-system-bin.js";
 
 type MockSpawnChild = EventEmitter & {
   stdout?: EventEmitter & { setEncoding?: (enc: string) => void };
@@ -45,7 +46,12 @@ vi.mock("node:child_process", async () => {
   );
 });
 
+vi.mock("./resolve-system-bin.js", () => ({
+  resolveSystemBin: vi.fn(() => "/usr/bin/ssh"),
+}));
+
 const spawnMock = vi.mocked(spawn);
+const resolveSystemBinMock = vi.mocked(resolveSystemBin);
 
 function requireSpawnArgs(index: number): string[] {
   const args = spawnMock.mock.calls[index]?.[1] as string[] | undefined;
@@ -98,6 +104,8 @@ describe("ssh-config", () => {
     expect(config?.port).toBe(2222);
     expect(config?.identityFiles).toEqual(["/tmp/id_ed25519"]);
     expect(requireSpawnArgs(0).slice(-2)).toEqual(["--", "me@alias"]);
+    expect(resolveSystemBinMock).toHaveBeenCalledWith("ssh", { trust: "strict" });
+    expect(spawnMock.mock.calls[0]?.[0]).toBe("/usr/bin/ssh");
   });
 
   it("adds non-default port and trimmed identity arguments", async () => {
@@ -137,6 +145,16 @@ describe("ssh-config", () => {
     );
 
     await expect(resolveSshConfig({ user: "me", host: "bad-host", port: 22 })).resolves.toBeNull();
+  });
+
+  it("returns null without spawning when no trusted ssh client is found", async () => {
+    resolveSystemBinMock.mockReturnValueOnce(null);
+    spawnMock.mockClear();
+
+    const config = await resolveSshConfig({ user: "me", host: "alias", port: 22 });
+
+    expect(config).toBeNull();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("rejects oversized ssh -G output while preserving the parser contract", () => {

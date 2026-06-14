@@ -1,6 +1,7 @@
 // Reads effective SSH target config from the local ssh client.
 import { spawn } from "node:child_process";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
+import { resolveSystemBin } from "./resolve-system-bin.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
 
 export const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
@@ -76,7 +77,12 @@ export async function resolveSshConfig(
   target: SshParsedTarget,
   opts: { identity?: string; timeoutMs?: number } = {},
 ): Promise<SshResolvedConfig | null> {
-  const sshPath = "/usr/bin/ssh";
+  // Resolve ssh from trusted system directories only (never a PATH-controlled
+  // binary). Best-effort config read: skip enrichment when no system ssh exists.
+  const sshPath = resolveSystemBin("ssh", { trust: "strict" });
+  if (sshPath === null) {
+    return null;
+  }
   const args = ["-G"];
   if (target.port > 0 && target.port !== 22) {
     args.push("-p", String(target.port));

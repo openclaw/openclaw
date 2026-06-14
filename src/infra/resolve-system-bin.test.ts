@@ -202,6 +202,29 @@ describe("trusted directory list", () => {
     }
   });
 
+  it("includes the Windows built-in OpenSSH directory and resolves ssh.exe there", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    resetWindowsInstallRootsForTests({
+      queryRegistryValue: (key, valueName) =>
+        key === "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" &&
+        valueName === "SystemRoot"
+          ? "D:\\Windows"
+          : null,
+    });
+    try {
+      const sshExe = path.win32.join("D:\\Windows", "System32", "OpenSSH", "ssh.exe");
+      resetResolveSystemBin((p: string) => p === sshExe);
+      expect(getTrustedDirsForTest()).toContain(
+        path.win32.join("D:\\Windows", "System32", "OpenSSH"),
+      );
+      expect(resolveSystemBin("ssh")).toBe(sshExe);
+    } finally {
+      platformSpy.mockRestore();
+      resetResolveSystemBin();
+      resetWindowsInstallRootsForTests();
+    }
+  });
+
   it("resolves machine-wide Chocolatey shims only with standard trust on Windows", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     resetWindowsInstallRootsForTests({
