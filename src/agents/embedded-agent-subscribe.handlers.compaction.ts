@@ -192,19 +192,65 @@ export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   return reconcile(params);
 }
 
+function parseCompactionTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 // Compaction rewrites history, so assistant usage snapshots can refer to the
 // old context. Keep the usage field shape but zero it for fresh accounting.
+// Only clear usage for messages that existed before the latest compaction;
+// messages created after compaction carry valid LLM usage data. (#50795)
 function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedAgentSubscribeContext): void {
   const messages = ctx.params.session.messages;
   if (!Array.isArray(messages)) {
     return;
   }
-  for (const message of messages) {
-    if (!message || typeof message !== "object") {
+
+  let latestCompactionIndex = -1;
+  let latestCompactionTimestamp: number | null = null;
+  for (let i = 0; i < messages.length; i += 1) {
+    const entry = messages[i];
+    if (!entry || typeof entry !== "object") {
       continue;
     }
-    const candidate = message as { role?: unknown; usage?: unknown };
-    if (candidate.role !== "assistant") {
+    if ((entry as { role?: unknown }).role !== "compactionSummary") {
+      continue;
+    }
+    latestCompactionIndex = i;
+    latestCompactionTimestamp = parseCompactionTimestamp(
+      (entry as { timestamp?: unknown }).timestamp ?? null,
+    );
+  }
+  if (latestCompactionIndex === -1) {
+    return;
+  }
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const candidate = messages[i] as
+      | { role?: unknown; usage?: unknown; timestamp?: unknown }
+      | undefined;
+    if (!candidate || candidate.role !== "assistant") {
+      continue;
+    }
+    if (!candidate.usage || typeof candidate.usage !== "object") {
+      continue;
+    }
+    const messageTimestamp = parseCompactionTimestamp(candidate.timestamp);
+    const staleByTimestamp =
+      latestCompactionTimestamp !== null &&
+      messageTimestamp !== null &&
+      messageTimestamp <= latestCompactionTimestamp;
+    const staleByOrdering = i < latestCompactionIndex;
+    if (!staleByTimestamp && !staleByOrdering) {
       continue;
     }
     candidate.usage = makeZeroUsageSnapshot();
