@@ -1917,7 +1917,7 @@ function shouldUseFullCheckoutForCleanRemoteSync(commandArgs, _providerName) {
   if (commandArgs[0] !== "run") {
     return false;
   }
-  if (hasOption(commandArgs, "--no-sync") || hasOption(commandArgs, "--id")) {
+  if (hasOption(commandArgs, "--no-sync")) {
     return false;
   }
   if (!isWorktreeClean()) {
