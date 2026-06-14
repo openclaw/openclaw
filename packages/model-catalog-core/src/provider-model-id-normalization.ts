@@ -35,7 +35,13 @@ export function collectManifestModelIdNormalizationPolicies(
 ): Map<string, ManifestModelIdNormalizationProvider> {
   const policies = new Map<string, ManifestModelIdNormalizationProvider>();
   for (const plugin of plugins) {
-    for (const [provider, policy] of Object.entries(plugin.modelIdNormalization?.providers ?? {})) {
+    let providers: Record<string, ManifestModelIdNormalizationProvider> | undefined;
+    try {
+      providers = plugin.modelIdNormalization?.providers;
+    } catch {
+      continue;
+    }
+    for (const [provider, policy] of Object.entries(providers ?? {})) {
       policies.set(normalizeLowercaseStringOrEmpty(provider), policy);
     }
   }

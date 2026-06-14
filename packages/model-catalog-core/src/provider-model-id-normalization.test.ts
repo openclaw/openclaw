@@ -7,6 +7,24 @@ import {
   stripSelfProviderModelPrefix,
 } from "./provider-model-id-normalization.js";
 
+function poisonedModelIdNormalizationRecord() {
+  return Object.defineProperty({}, "modelIdNormalization", {
+    get() {
+      throw new Error("model id normalization metadata exploded");
+    },
+  });
+}
+
+function poisonedModelIdNormalizationProvidersRecord() {
+  return {
+    modelIdNormalization: Object.defineProperty({}, "providers", {
+      get() {
+        throw new Error("model id normalization providers exploded");
+      },
+    }),
+  };
+}
+
 describe("provider model id policy normalization", () => {
   it("applies manifest policies before built-in provider normalization", () => {
     const policies = collectManifestModelIdNormalizationPolicies([
@@ -23,6 +41,40 @@ describe("provider model id policy normalization", () => {
       },
     ]);
 
+    expect(normalizeStaticProviderModelIdWithPolicies("google-vertex", "pro", policies)).toBe(
+      "gemini-3.1-pro-preview",
+    );
+  });
+
+  it("skips unreadable manifest model id normalization records", () => {
+    const policies = collectManifestModelIdNormalizationPolicies([
+      {
+        modelIdNormalization: {
+          providers: {
+            custom: {
+              prefixWhenBare: "vendor",
+            },
+          },
+        },
+      },
+      poisonedModelIdNormalizationRecord(),
+      poisonedModelIdNormalizationProvidersRecord(),
+      {
+        modelIdNormalization: {
+          providers: {
+            "Google-Vertex": {
+              aliases: {
+                pro: "gemini-3-pro",
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(normalizeStaticProviderModelIdWithPolicies("custom", "latest", policies)).toBe(
+      "vendor/latest",
+    );
     expect(normalizeStaticProviderModelIdWithPolicies("google-vertex", "pro", policies)).toBe(
       "gemini-3.1-pro-preview",
     );
