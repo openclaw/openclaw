@@ -43,11 +43,7 @@ export function tryAcquireMemoryReindexLock(dbPath: string): MemoryReindexLockHa
     // container dies, so ownership never depends on PID namespaces or leases.
     lockDb.exec("BEGIN EXCLUSIVE");
   } catch (err) {
-    try {
-      lockDb.close();
-    } catch (closeError) {
-      throw closeError;
-    }
+    lockDb.close();
     if (isSqliteBusyError(err)) {
       return undefined;
     }
@@ -67,7 +63,7 @@ export function tryAcquireMemoryReindexLock(dbPath: string): MemoryReindexLockHa
         releaseError ??= err;
       }
       if (releaseError) {
-        throw releaseError;
+        throw new Error("Failed to release memory reindex lock", { cause: releaseError });
       }
     },
   };
