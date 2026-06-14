@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
+import { Type } from "typebox";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
   canonicalPathFromExistingAncestor,
@@ -35,7 +36,13 @@ import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
+import {
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+  withFileMutationQueue,
+} from "./sessions/index.js";
+import { resolveToCwd } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -845,10 +852,12 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
 
 /** Create a sandbox-backed write tool with required-parameter validation. */
 export function createSandboxedWriteTool(params: SandboxToolParams) {
+  const ops = createSandboxWriteOperations(params);
   const base = createWriteTool(params.root, {
-    operations: createSandboxWriteOperations(params),
+    operations: ops,
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  const validated = wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolWriteWithAppend(validated, { appendFile: ops.appendFile, root: params.root });
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
@@ -861,10 +870,10 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
 
 /** Create a host workspace write tool using guarded filesystem operations. */
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
-  const base = createWriteTool(root, {
-    operations: createHostWriteOperations(root, options),
-  }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  const ops = createHostWriteOperations(root, options);
+  const base = createWriteTool(root, { operations: ops }) as unknown as AnyAgentTool;
+  const validated = wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolWriteWithAppend(validated, { appendFile: ops.appendFile, root });
 }
 
 /** Create a host workspace edit tool using guarded filesystem operations. */
@@ -928,6 +937,49 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   } as const;
 }
 
+function createAbortError(): Error {
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function throwAbortError(): never {
+  throw createAbortError();
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throwAbortError();
+  }
+}
+
+async function appendFileWithAbort(
+  signal: AbortSignal | undefined,
+  append: () => Promise<void>,
+): Promise<void> {
+  if (signal?.aborted) {
+    throwAbortError();
+  }
+
+  let aborted = false;
+  const onAbort = () => {
+    aborted = true;
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    await append();
+  } catch (error: unknown) {
+    if (aborted || signal?.aborted) {
+      throwAbortError();
+    }
+    throw error instanceof Error ? error : new Error(String(error));
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
+
+}
+
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return {
     mkdir: async (dir: string) => {
@@ -940,6 +992,25 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     statFile: (absolutePath: string) =>
       params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
+    appendFile: async (absolutePath: string, content: string) => {
+      let existing = "";
+      try {
+        const buf = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+        existing = buf.toString("utf8");
+      } catch (err) {
+        // Only treat genuine missing-file errors as empty; re-throw safety and I/O failures.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/ENOENT|no such file/i.test(msg)) {
+          throw err;
+        }
+      }
+      await params.bridge.mkdirp({ filePath: path.dirname(absolutePath), cwd: params.root });
+      await params.bridge.writeFile({
+        filePath: absolutePath,
+        cwd: params.root,
+        data: existing + content,
+      });
+    },
   } as const;
 }
 
@@ -1006,6 +1077,12 @@ async function writeWorkspaceFile(
   await (await rootPromise).write(relative, content, { mkdir: true });
 }
 
+async function appendHostFile(absolutePath: string, content: string) {
+  const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.appendFile(resolved, content, "utf-8");
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -1021,6 +1098,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
       statFile: (absolutePath: string) =>
         statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
+      appendFile: appendHostFile,
     } as const;
   }
 
@@ -1043,7 +1121,62 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       const relative = toRelativeWorkspacePath(root, absolutePath);
       return statHostFile(path.resolve(root, relative));
     },
+    appendFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      await (await rootPromise).append(relative, content, { mkdir: true });
+    },
   } as const;
+}
+
+export function wrapToolWriteWithAppend(
+  tool: AnyAgentTool,
+  ops: { appendFile: (absolutePath: string, content: string) => Promise<void>; root: string },
+): AnyAgentTool {
+  return {
+    ...tool,
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
+      content: Type.String({ description: "Content to write to the file" }),
+      append: Type.Optional(
+        Type.Boolean({
+          description:
+            "When true, append content to the existing file instead of overwriting it. If the file does not exist it is created.",
+        }),
+      ),
+    }),
+    description: `${tool.description} Pass \`append: true\` to append to an existing file instead of overwriting it.`,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      if (record && Object.hasOwn(record, "append") && typeof record.append !== "boolean") {
+        throw new Error(
+          "Invalid append parameter: expected boolean when provided. Supply correct parameters before retrying.",
+        );
+      }
+      const doAppend = record?.append === true;
+      if (!doAppend) {
+        return tool.execute(toolCallId, args, signal, onUpdate);
+      }
+      // Delegate validation of required params to the underlying tool when append is missing.
+      const filePath = typeof record?.path === "string" ? record.path : undefined;
+      const content = typeof record?.content === "string" ? record.content : undefined;
+      if (!filePath || !filePath.trim() || content === undefined || !content.trim()) {
+        return tool.execute(toolCallId, args, signal, onUpdate);
+      }
+      const normalizedPath = stripMalformedXmlArgValueSuffix(filePath);
+      if (!normalizedPath.trim()) {
+        throw malformedXmlArgValuePathError("path");
+      }
+      const resolved = resolveToCwd(normalizedPath, ops.root);
+      await withFileMutationQueue(resolved, async () => {
+        throwIfAborted(signal);
+        await appendFileWithAbort(signal, () => ops.appendFile(resolved, content));
+      });
+      return {
+        content: [{ type: "text", text: `Appended to ${normalizedPath}.` }],
+        details: { path: normalizedPath, append: true },
+      };
+    },
+  };
 }
 
 function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
