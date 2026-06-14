@@ -83,6 +83,9 @@ describe("scripts/test-live-shard", () => {
   });
 
   it("keeps slow gateway backend and media-capable extension files in their own shards", () => {
+    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
+      "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
+    );
     expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
       "src/agents/zai.live.test.ts",
     ]);
