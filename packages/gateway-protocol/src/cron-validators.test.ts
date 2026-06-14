@@ -84,6 +84,31 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts fail-on-tool-failure agent turn payloads", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "run nightly check",
+          failOnToolFailure: true,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            failOnToolFailure: false,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);

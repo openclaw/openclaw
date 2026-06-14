@@ -878,6 +878,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   payload_allow_unsafe_external_content INTEGER,
   payload_external_content_source_json TEXT,
   payload_light_context INTEGER,
+  payload_fail_on_tool_failure INTEGER,
   payload_tools_allow_json TEXT,
   delivery_mode TEXT,
   delivery_channel TEXT,

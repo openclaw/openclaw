@@ -294,6 +294,31 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("persists agentTurn payload.failOnToolFailure updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-fail-on-tool", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      failOnToolFailure: false,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        failOnToolFailure: true,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.failOnToolFailure).toBe(true);
+    }
+  });
+
   it("persists agentTurn payload.fallbacks updates when editing existing jobs", () => {
     const job = createIsolatedAgentTurnJob("job-fallbacks", {
       mode: "announce",

@@ -265,6 +265,9 @@ function coercePayload(payload: UnknownRecord) {
   ) {
     delete next.allowUnsafeExternalContent;
   }
+  if ("failOnToolFailure" in next && typeof next.failOnToolFailure !== "boolean") {
+    delete next.failOnToolFailure;
+  }
   if (next.kind === "systemEvent") {
     delete next.message;
     delete next.model;
@@ -272,6 +275,7 @@ function coercePayload(payload: UnknownRecord) {
     delete next.thinking;
     delete next.timeoutSeconds;
     delete next.lightContext;
+    delete next.failOnToolFailure;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
     delete next.argv;
@@ -295,6 +299,7 @@ function coercePayload(payload: UnknownRecord) {
     delete next.fallbacks;
     delete next.thinking;
     delete next.lightContext;
+    delete next.failOnToolFailure;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
   }
