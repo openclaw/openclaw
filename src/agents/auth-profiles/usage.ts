@@ -32,6 +32,7 @@ import {
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 export {
+  clampStaleBillingDisable,
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
@@ -444,9 +445,14 @@ function resolveAuthCooldownConfig(params: {
   cfg?: OpenClawConfig;
   providerId: string;
 }): ResolvedAuthCooldownConfig {
+  // Billing defaults stay short on purpose: a multi-hour persisted lockout (see
+  // #70903) blocks users for the full window even after they top up credit,
+  // because the call layer filters disabled profiles before any probe can run
+  // and `markAuthProfileSuccess` is what clears `disabledUntil`. Operators can
+  // still raise these via `auth.cooldowns.*` config; the cap stays bounded.
   const defaults = {
-    billingBackoffHours: 5,
-    billingMaxHours: 24,
+    billingBackoffHours: 5 / 60, // 5 minutes
+    billingMaxHours: 15 / 60, // 15 minutes
     authPermanentBackoffMinutes: 10,
     authPermanentMaxMinutes: 60,
     failureWindowHours: 24,
@@ -497,6 +503,18 @@ function resolveAuthCooldownConfig(params: {
     authPermanentMaxMs: authPermanentMaxMinutes * 60 * 1000,
     failureWindowMs: failureWindowHours * 60 * 60 * 1000,
   };
+}
+
+/**
+ * Resolve the effective billing-disable ceiling (ms) for a provider, given the
+ * active config. Used at read time to clamp stale persisted `disabledUntil`
+ * windows that were written by an older OpenClaw default (see #70903).
+ */
+export function resolveBillingDisableCeilingMs(params: {
+  cfg?: OpenClawConfig;
+  providerId: string;
+}): number {
+  return resolveAuthCooldownConfig(params).billingMaxMs;
 }
 
 function calculateDisabledLaneBackoffMs(params: {

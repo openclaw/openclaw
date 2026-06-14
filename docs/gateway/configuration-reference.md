@@ -1018,9 +1018,12 @@ Notes:
 {
   auth: {
     cooldowns: {
-      billingBackoffHours: 5,
-      billingBackoffHoursByProvider: { anthropic: 3, openai: 8 },
-      billingMaxHours: 24,
+      // Default: ~5 minutes (field unit is hours).
+      billingBackoffHours: 0.0833,
+      // Optional per-provider overrides, in hours.
+      billingBackoffHoursByProvider: { anthropic: 0.0833, openai: 0.25 },
+      // Default: 15 minutes.
+      billingMaxHours: 0.25,
       authPermanentBackoffMinutes: 10,
       authPermanentMaxMinutes: 60,
       failureWindowHours: 24,
@@ -1033,14 +1036,19 @@ Notes:
 ```
 
 - `billingBackoffHours`: base backoff in hours when a profile fails due to true
-  billing/insufficient-credit errors (default: `5`). Explicit billing text can
+  billing/insufficient-credit errors (default: `0.0833`, i.e. ~5 minutes). The
+  field unit is hours, but the default is intentionally sub-hour so a provider
+  whose billing is fixed is retried within minutes instead of being locked out
+  for hours (see #70903). Explicit billing text can
   still land here even on `401`/`403` responses, but provider-specific text
   matchers stay scoped to the provider that owns them (for example OpenRouter
   `Key limit exceeded`). Retryable HTTP `402` usage-window or
   organization/workspace spend-limit messages stay in the `rate_limit` path
   instead.
-- `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
-- `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
+- `billingBackoffHoursByProvider`: optional per-provider overrides for billing
+  backoff hours.
+- `billingMaxHours`: cap in hours for billing backoff exponential growth
+  (default: `0.25`, i.e. 15 minutes).
 - `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).
 - `authPermanentMaxMinutes`: cap in minutes for `auth_permanent` backoff growth (default: `60`).
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).

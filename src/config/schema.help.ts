@@ -1102,10 +1102,11 @@ export const FIELD_HELP: Record<string, string> = {
   "auth.cooldowns":
     "Cooldown/backoff controls for temporary profile suppression after billing-related failures and retry windows. Use these to prevent rapid re-selection of profiles that are still blocked.",
   "auth.cooldowns.billingBackoffHours":
-    "Base backoff (hours) when a profile fails due to billing/insufficient credits (default: 5).",
+    "Base backoff (hours) when a profile fails due to billing/insufficient credits. Default: ~5 minutes (0.083 hours). The default stays tight because disabled profiles are skipped before any probe runs, so a multi-hour persisted lockout blocks users for the full window even after billing is fixed.",
   "auth.cooldowns.billingBackoffHoursByProvider":
     "Optional per-provider overrides for billing backoff (hours).",
-  "auth.cooldowns.billingMaxHours": "Cap (hours) for billing backoff (default: 24).",
+  "auth.cooldowns.billingMaxHours":
+    "Cap (hours) for billing backoff. Default: ~15 minutes (0.25 hours). See billingBackoffHours for why this stays bounded.",
   "auth.cooldowns.authPermanentBackoffMinutes":
     "Base backoff (minutes) for high-confidence auth_permanent failures (default: 10). Keep this shorter than billing so providers recover automatically after transient upstream auth incidents.",
   "auth.cooldowns.authPermanentMaxMinutes":
