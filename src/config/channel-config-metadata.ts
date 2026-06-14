@@ -7,6 +7,8 @@ import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 
 type ChannelMetadataRecord = ChannelUiMetadata & {
+  pluginId?: string;
+  preferOver?: readonly string[];
   originRank: number;
 };
 
@@ -17,6 +19,27 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   global: 2,
   bundled: 3,
 };
+
+function comparablePluginId(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function channelConfigPrefersCurrentOwner(params: {
+  channelId: string;
+  channelConfigPreferOver?: readonly string[];
+  current: ChannelMetadataRecord;
+}): boolean {
+  const preferred = new Set(
+    (params.channelConfigPreferOver ?? []).map(comparablePluginId).filter(Boolean),
+  );
+  if (preferred.size === 0) {
+    return false;
+  }
+  return (
+    preferred.has(comparablePluginId(params.current.pluginId)) ||
+    preferred.has(comparablePluginId(params.channelId))
+  );
+}
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
 export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
@@ -87,12 +110,29 @@ export function collectChannelSchemaMetadata(
         // advertises the same channel id.
         continue;
       }
+      if (
+        current &&
+        current.originRank === originRank &&
+        (current.configSchema !== undefined || current.configUiHints !== undefined) &&
+        !channelConfigPrefersCurrentOwner({
+          channelId,
+          channelConfigPreferOver: channelConfig.preferOver,
+          current,
+        })
+      ) {
+        // Same-origin replacement channel plugins can explicitly supersede bundled channel
+        // metadata with preferOver. Without that signal, keep the first schema so registry
+        // traversal order cannot accidentally erase the active replacement schema.
+        continue;
+      }
       byChannelId.set(channelId, {
         id: channelId,
         label: channelConfig.label ?? rootLabel ?? current?.label,
         description: channelConfig.description ?? rootDescription ?? current?.description,
         configSchema: channelConfig.schema,
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
+        pluginId: record.id,
+        preferOver: channelConfig.preferOver,
         originRank,
       });
     }
@@ -100,5 +140,8 @@ export function collectChannelSchemaMetadata(
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ originRank: _originRank, ...entry }) => entry);
+    .map(
+      ({ pluginId: _pluginId, preferOver: _preferOver, originRank: _originRank, ...entry }) =>
+        entry,
+    );
 }
