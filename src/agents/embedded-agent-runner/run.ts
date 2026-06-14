@@ -151,6 +151,7 @@ import {
   shouldWarnEmbeddedRunStageSummary,
 } from "./run/attempt-stage-timing.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
+import { EMBEDDED_ABORT_SETTLE_TIMEOUT_MS } from "./run/attempt.subscription-cleanup.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
@@ -2157,14 +2158,38 @@ async function runEmbeddedAgentInternal(
             };
           };
           const drainToolLoopAbortTerminalEvents = async (): Promise<void> => {
+            const terminalDrain = currentAttemptTerminalDrain;
+            if (!terminalDrain) {
+              return;
+            }
+            let timeout: ReturnType<typeof setTimeout> | undefined;
             try {
-              await currentAttemptTerminalDrain?.();
+              const outcome = await Promise.race([
+                terminalDrain().then(() => "settled" as const),
+                new Promise<"timed_out">((resolve) => {
+                  timeout = setTimeout(
+                    () => resolve("timed_out"),
+                    EMBEDDED_ABORT_SETTLE_TIMEOUT_MS,
+                  );
+                }),
+              ]);
+              if (outcome === "timed_out") {
+                currentAttemptTerminalDrainFailed = true;
+                log.warn(
+                  `tool loop abort terminal drain timed out: runId=${params.runId} ` +
+                    `sessionId=${params.sessionId} timeoutMs=${EMBEDDED_ABORT_SETTLE_TIMEOUT_MS}`,
+                );
+              }
             } catch (drainError) {
               currentAttemptTerminalDrainFailed = true;
               log.warn(
                 `tool loop abort terminal drain failed: runId=${params.runId} ` +
                   `sessionId=${params.sessionId} err=${String(drainError)}`,
               );
+            } finally {
+              if (timeout) {
+                clearTimeout(timeout);
+              }
             }
           };
           const rawAttempt = await runEmbeddedAttemptWithBackend({

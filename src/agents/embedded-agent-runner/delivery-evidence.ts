@@ -366,9 +366,6 @@ export function getMessagingToolResultContentDeliveryState(
       if (!receipt) {
         continue;
       }
-      if (hasExplicitNonDeliveryEvidenceAtDepth(receipt, 0)) {
-        return "non_delivery";
-      }
       const status = readLowercaseString(receipt.status);
       const deliveryStatus =
         readLowercaseString(receipt.deliveryStatus) ?? readLowercaseString(receipt.delivery_status);
@@ -385,6 +382,10 @@ export function getMessagingToolResultContentDeliveryState(
         deliveryStatus === "completed";
       if (hasExplicitSuccess && hasCommittedMessagingToolResultDetails(receipt)) {
         sawCommittedReceipt = true;
+        continue;
+      }
+      if (hasExplicitNonDeliveryEvidenceAtDepth(receipt, 0)) {
+        return "non_delivery";
       }
     } catch {
       // Ignore non-JSON text blocks.

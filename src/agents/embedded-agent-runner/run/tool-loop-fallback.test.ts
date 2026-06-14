@@ -1322,6 +1322,26 @@ describe("tool-loop terminal fallback", () => {
     });
   });
 
+  it("bounds the combined mixed-tool fallback payload", () => {
+    const fallback = resolveSuccessfulToolTerminalFallback({
+      observations: Array.from({ length: 64 }, (_, index) => ({
+        toolName: `status_probe_${index}`,
+        argsHash: `status-${index}`,
+        resultHash: `status-result-${index}`,
+        terminalSummary: {
+          privacy: "public" as const,
+          text: `${index}: ${"s".repeat(4_000)}`,
+        },
+      })),
+    });
+
+    expect(fallback?.payload.text).toHaveLength(4_000);
+    expect(fallback?.payload.text).toContain(
+      "Tool work completed, but the model did not provide a final answer.",
+    );
+    expect(fallback?.payload.text).not.toContain("Result from status_probe_63");
+  });
+
   it("omits undeclared and opted-out tool text from mixed fallback payloads", () => {
     expect(
       resolveSuccessfulToolTerminalFallback({

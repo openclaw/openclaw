@@ -44,4 +44,25 @@ describe("classifyEmbeddedAgentRunResultForModelFallback delivery evidence", () 
       expect(result).toBeNull();
     },
   );
+
+  it("does not fallback after a directly sent block reply with an error payload", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.1",
+      hasDirectlySentBlockReply: true,
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: '{"success":false,"code":"CE-011","message":"access denied"}',
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
 });

@@ -663,12 +663,6 @@ function extractMessagingToolSourceReplyPayload(
   ) {
     return undefined;
   }
-  const status =
-    normalizeOptionalLowercaseString(details.deliveryStatus) ??
-    normalizeOptionalLowercaseString(details.delivery_status);
-  if (status && status !== "sent") {
-    return undefined;
-  }
   const payload: MessagingToolSourceReplyPayload = {};
   const text = readStringField(sourceReply, "text") ?? readStringField(details, "message");
   if (text) {

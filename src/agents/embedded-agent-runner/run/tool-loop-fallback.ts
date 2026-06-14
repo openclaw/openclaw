@@ -443,10 +443,13 @@ function buildCompletedWithoutSafeSummaryPayload(params: {
   const subject = params.toolName ? `${params.toolName} completed` : "Tool work completed";
   if (resultBlocks.length > 0) {
     return {
-      text: [
-        `${subject}, but the model did not provide a final answer.`,
-        ...resultBlocks.map((block) => `Result from ${block.toolName}:\n${block.text}`),
-      ].join("\n\n"),
+      text: truncateUtf16Safe(
+        [
+          `${subject}, but the model did not provide a final answer.`,
+          ...resultBlocks.map((block) => `Result from ${block.toolName}:\n${block.text}`),
+        ].join("\n\n"),
+        MAX_RETAINED_PUBLIC_TEXT_CHARS,
+      ),
     };
   }
   return {

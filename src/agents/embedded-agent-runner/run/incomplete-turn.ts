@@ -169,7 +169,7 @@ const ACTIONABLE_PROMPT_REQUEST_RE =
 const ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE =
   /\b(?:i|we)\s+(?:need|want|would like)\s+you(?:\s+to)?\b/i;
 const NON_AUTHORIZING_NEGATED_ACTION_REQUEST_RE =
-  /\b(?:(?:can|could|would|will)\s+you|(?:i|we)\s+(?:need|want|would like)\s+you\s+to)\s+(?:(?:please\s+)?(?:not|never|avoid|refrain\s+from)\b|[^?\n]{0,80}\b(?:ensure|make\s+sure)\b[^?\n]{0,80}(?:\b(?:not|never)\b|\bdo\s+not\b|\bdon['’]t\b))/i;
+  /\b(?:(?:can|could|would|will)\s+you|(?:i|we)\s+(?:need|want|would like)\s+you(?:\s+to)?)\s+(?:(?:please\s+)?(?:not|never|avoid|refrain\s+from)\b|[^?\n]{0,80}\b(?:ensure|make\s+sure)\b[^?\n]{0,80}(?:\b(?:not|never)\b|\bdo\s+not\b|\bdon['’]t\b))/i;
 const NON_AUTHORIZING_ADVISORY_PROMPT_RE =
   /^(?:(?:hey|hi|hello)\b[\s,!:-]*)?(?:please[\s,]+)?(?:(?:(?:what|which|how|why|where|who|whom|whose)\b[^?\n]{0,200}\b|when\s+)(?:can|could|would|will|should|do|does|did|are|is)\s+you\b|(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:(?:explain|describe|walk\s+me\s+through|help\s+me\s+understand)\b|(?:tell\s+me|show\s+me)\b[^?\n]{0,200}\b(?:how|why|what|which|when|where|whether|steps?|procedure|instructions?)\b)|(?:(?:can|could|would|will|should|do)\s+you\s+)?(?:please\s+)?(?:advise|recommend)\b)/i;
 const EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE =

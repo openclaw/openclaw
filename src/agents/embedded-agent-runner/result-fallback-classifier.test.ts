@@ -309,11 +309,10 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("does not let block replies suppress planning-only harness classifications", () => {
+  it("does not let undelivered block reply pipeline output suppress planning-only classifications", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "xai",
       model: "grok-composer-2.5-fast",
-      hasDirectlySentBlockReply: true,
       hasBlockReplyPipelineOutput: true,
       result: {
         payloads: [],
@@ -328,6 +327,23 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       reason: "format",
       code: "planning_only_result",
     });
+  });
+
+  it("lets directly sent block replies suppress planning-only harness classifications", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      hasDirectlySentBlockReply: true,
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 42,
+          agentHarnessResultClassification: "planning-only",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
   });
 
   it("lets delivered block replies suppress empty harness classifications", () => {

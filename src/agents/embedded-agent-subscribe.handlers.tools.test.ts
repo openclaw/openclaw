@@ -2095,6 +2095,46 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
+  it("commits content-only partial delivery receipts when one result was sent", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-plugin-partial-content-receipt",
+      args: {
+        action: "send",
+        to: "channel:mattermost",
+        content: "partially sent through plugin",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-plugin-partial-content-receipt",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "partial_failed",
+              results: [{ status: "sent", messageId: "message-1" }, { status: "failed" }],
+            }),
+          },
+        ],
+        details: undefined,
+      },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["partially sent through plugin"]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:mattermost",
+      text: "partially sent through plugin",
+    });
+  });
+
   it.each([
     ["ordinary text", "sent through plugin"],
     [
@@ -2637,6 +2677,33 @@ describe("messaging tool media URL tracking", () => {
         idempotencyKey: "stable-source-reply",
       },
     ]);
+  });
+
+  it("commits internal-ui source replies with provider-specific success statuses", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-provider-source-reply",
+      args: { action: "send", message: "visible in tui" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-provider-source-reply",
+      isError: false,
+      result: {
+        details: {
+          deliveryStatus: "delivered",
+          messageId: "provider-message-1",
+          sourceReplySink: "internal-ui",
+          sourceReply: { text: "visible in tui" },
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([{ text: "visible in tui" }]);
   });
 
   it("does not commit failed, dry-run, or external message sends as internal-ui source replies", async () => {

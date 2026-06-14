@@ -1186,6 +1186,61 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.messagingToolSentTargets).toEqual([sharedTarget, lateTarget]);
   });
 
+  it("times out a stalled terminal drain before returning a loop-abort result", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params: unknown) => {
+      const attemptParams = params as {
+        abortSignal?: AbortSignal;
+        onTerminalDrainReady?: (drain: () => Promise<void>) => void;
+        onToolOutcome?: (observation: {
+          toolName: string;
+          argsHash: string;
+          resultHash: string;
+          resultText?: string;
+          terminalResultFallback?: { mode: "safe_text"; prefix?: string };
+          blockedReason?: string;
+          blockedMessage?: string;
+        }) => void;
+      };
+      attemptParams.onTerminalDrainReady?.(() => new Promise<void>(() => undefined));
+      attemptParams.onToolOutcome?.({
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "status-result",
+        resultText: "healthy",
+        terminalResultFallback: { mode: "safe_text", prefix: "Status:" },
+      });
+      attemptParams.onToolOutcome?.({
+        toolName: "status",
+        argsHash: "current",
+        resultHash: "blocked-result",
+        blockedReason: "tool-loop",
+        blockedMessage: "CRITICAL: repeated status calls.",
+      });
+      expect(attemptParams.abortSignal?.aborted).toBe(true);
+      throw new Error("Request was aborted.");
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "xai",
+      model: "grok-composer-2.5-fast",
+      runId: "run-tool-loop-stalled-terminal-drain",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "I stopped because repeated tool calls did not make progress. No user-facing result text was provided.",
+        isError: true,
+      },
+      {
+        text: "⚠️ Some tool actions may have already been executed — please verify before retrying.",
+        isError: true,
+      },
+    ]);
+    expectWarnMessageWith("tool loop abort terminal drain timed out");
+  });
+
   it("drains late parallel tool outcomes before returning a resolved loop-abort fallback", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const setTerminalLifecycleMeta = vi.fn();
@@ -7133,6 +7188,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Could you please avoid restarting production?",
     "Can you ensure you don't delete the file?",
     "I need you to not delete the backups.",
+    "I need you not to delete the backups.",
     "We want you to avoid restarting production.",
     "I would like you to ensure you don't remove the database.",
   ])("does not treat a negated action request as authorization to act: %s", (prompt) => {

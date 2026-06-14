@@ -80,9 +80,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (!isEmbeddedAgentRunResult(params.result)) {
     return null;
   }
-  const blockReplyCanSuppressFallback =
-    (params.hasDirectlySentBlockReply === true || params.hasBlockReplyPipelineOutput === true) &&
-    !hasErrorAgentPayload(params.result);
+  if (params.hasDirectlySentBlockReply === true) {
+    return null;
+  }
+  const blockReplyPipelineCanSuppressFallback =
+    params.hasBlockReplyPipelineOutput === true && !hasErrorAgentPayload(params.result);
   if (
     params.result.meta.aborted ||
     hasVisibleAgentPayload(params.result, {
@@ -117,11 +119,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     harnessClassification && "code" in harnessClassification ? harnessClassification.code : null;
   if (
     harnessClassification &&
-    !(blockReplyCanSuppressFallback && harnessClassificationCode === "empty_result")
+    !(blockReplyPipelineCanSuppressFallback && harnessClassificationCode === "empty_result")
   ) {
     return harnessClassification;
   }
-  if (blockReplyCanSuppressFallback) {
+  if (blockReplyPipelineCanSuppressFallback) {
     return null;
   }
 
