@@ -187,6 +187,7 @@ export type RunEmbeddedAgentParams = {
     itemId?: string;
     firstModelCallStarted?: boolean;
   }) => void;
+  onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onRunProgress?: (info: {
     reason: string;
     provider?: string;
