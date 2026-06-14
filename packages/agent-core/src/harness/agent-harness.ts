@@ -197,6 +197,27 @@ function normalizeHookError(error: unknown): AgentHarnessError {
   return normalizeHarnessError(error, "hook");
 }
 
+function createToolRegistry<TTool extends AgentTool>(
+  tools: TTool[],
+): { map: Map<string, TTool>; names: string[] } {
+  const map = new Map<string, TTool>();
+  const names: string[] = [];
+  for (const tool of tools) {
+    let name: unknown;
+    try {
+      name = tool.name;
+    } catch {
+      continue;
+    }
+    if (typeof name !== "string" || name.length === 0) {
+      continue;
+    }
+    map.set(name, tool);
+    names.push(name);
+  }
+  return { map, names };
+}
+
 interface AgentHarnessTurnState<
   TSkill extends Skill = Skill,
   TPromptTemplate extends PromptTemplate = PromptTemplate,
@@ -249,13 +270,11 @@ export class CoreAgentHarness<
     this.systemPrompt = options.systemPrompt;
     this.getApiKeyAndHeaders = options.getApiKeyAndHeaders;
     this.runtime = options.runtime;
-    for (const tool of options.tools ?? []) {
-      this.tools.set(tool.name, tool);
-    }
+    const initialToolRegistry = createToolRegistry(options.tools ?? []);
+    this.tools = initialToolRegistry.map;
     this.model = options.model;
     this.thinkingLevel = options.thinkingLevel ?? "off";
-    this.activeToolNames =
-      options.activeToolNames ?? (options.tools ?? []).map((tool) => tool.name);
+    this.activeToolNames = options.activeToolNames ?? initialToolRegistry.names;
     this.steeringQueueMode = options.steeringMode ?? "one-at-a-time";
     this.followUpQueueMode = options.followUpMode ?? "one-at-a-time";
   }
@@ -1119,7 +1138,7 @@ export class CoreAgentHarness<
 
   async setTools(tools: TTool[], activeToolNames?: string[]): Promise<void> {
     try {
-      const nextTools = new Map(tools.map((tool) => [tool.name, tool]));
+      const nextTools = createToolRegistry(tools).map;
       const nextActiveToolNames = activeToolNames ? [...activeToolNames] : this.activeToolNames;
       this.validateToolNames(nextActiveToolNames, nextTools);
       this.tools = nextTools;
