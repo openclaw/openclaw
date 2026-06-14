@@ -19,7 +19,7 @@
     "install": {
       "npmSpec": "@openclaw/memory-external-reranker",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.31"
+      "minHostVersion": ">=2026.6.2"
     },
     "compat": {
       "pluginApi": ">=2026.6.2"
