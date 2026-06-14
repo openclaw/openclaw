@@ -171,8 +171,8 @@ const ACTIONABLE_PROMPT_DIRECTIVE_RE =
   /^\s*(?:(?:ok(?:ay)?|please|pls)\s+)?(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE =
   /\bplease\s+(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
-const ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE =
-  /^\s*(?:(?:hey|hi|hello)\b[\s,!:-]*)?please\s+(?!(?:(?:be|wait|say|reply|respond|answer|acknowledg(?:e|ement)|confirm|keep|remember|note|consider|advise|recommend|help|let|do\s+not|don['’]t|not|never|avoid|refrain)\b|take\s+care\b|have\s+(?:a\s+)?(?:good|great|nice|wonderful)\b))[a-z][a-z'-]*\b/i;
+const ACTIONABLE_PROMPT_ADDITIONAL_POLITE_DIRECTIVE_RE =
+  /^\s*(?:(?:hey|hi|hello)\b[\s,!:-]*)?please\s+(?:archive|build|cancel|charge|commit|configure|copy|create|delete|disable|enable|install|migrate|move|rename|reset|ship|stop|test|uninstall|upload|verify)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:(?:can|could|would|will)\s+you(?:\s+please)?|help\s+me(?:\s+please)?)\b/i;
 const ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE =
@@ -673,6 +673,7 @@ export function resolveTerminalToolResultReplyPayload(params: {
     params.aborted ||
     params.timedOut ||
     (params.attempt.toolMetas?.length ?? 0) === 0 ||
+    !hasCompletedToolActivity(params.attempt) ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
@@ -1187,7 +1188,7 @@ function isLikelyActionableUserPrompt(text: string): boolean {
     hasExplicitAdvisoryFollowUpAction(actionableText) ||
     ACTIONABLE_PROMPT_DIRECTIVE_RE.test(actionableText) ||
     ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE.test(actionableText) ||
-    ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE.test(actionableText) ||
+    ACTIONABLE_PROMPT_ADDITIONAL_POLITE_DIRECTIVE_RE.test(actionableText) ||
     (ACTIONABLE_PROMPT_REQUEST_RE.test(actionableText) &&
       PLANNING_ONLY_ACTION_VERB_RE.test(actionableText)) ||
     (ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE.test(actionableText) &&

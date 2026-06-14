@@ -323,6 +323,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "exec" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         messagesSnapshot: [
           {
             role: "toolResult",
@@ -352,6 +353,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "exec" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         messagesSnapshot: [
           {
             role: "toolResult",
@@ -381,6 +383,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       attempt: makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "exec" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         messagesSnapshot: [
           {
             role: "toolResult",
@@ -677,12 +680,45 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(payload).toBeNull();
   });
 
+  it("does not reuse an older tool result from stale current-attempt tool metadata", () => {
+    const payload = resolveTerminalToolResultReplyPayload({
+      isCronTrigger: false,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "previous request completed" }],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "user",
+            content: [{ type: "text", text: "Current request" }],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toBeNull();
+  });
+
   it("treats exact NO_REPLY tool output as a quiet cron success when the final assistant is empty", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "exec" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         messagesSnapshot: [
           {
             role: "toolResult",
@@ -727,6 +763,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       makeAttemptResult({
         assistantTexts: [],
         toolMetas: [{ toolName: "exec" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         messagesSnapshot: [
           {
             role: "toolResult",
@@ -4098,6 +4135,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     { prompt: "Please wait.", assistantText: "Understood." },
     { prompt: "Please take care.", assistantText: "Will do." },
     { prompt: "Please have a nice day.", assistantText: "Will do." },
+    { prompt: "Please understand that deployment is delayed.", assistantText: "Understood." },
     { prompt: "I want you to know the deployment is delayed.", assistantText: "Got it." },
     { prompt: "I need you to keep replies short.", assistantText: "Understood." },
   ])(
