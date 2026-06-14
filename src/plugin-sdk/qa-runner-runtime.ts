@@ -18,6 +18,12 @@ type QaRunnerRuntimeSurface = {
   qaRunnerCliRegistrations?: readonly QaRunnerCliRegistration[];
 };
 
+type QaRunnerDeclaration = NonNullable<PluginManifestRecord["qaRunners"]>[number];
+
+type DeclaredQaRunnerPlugin = Pick<PluginManifestRecord, "id" | "origin" | "rootDir"> & {
+  qaRunners: QaRunnerDeclaration[];
+};
+
 type QaRuntimeSurface = {
   defaultQaRuntimeModelForMode: (
     mode: string,
@@ -92,19 +98,12 @@ export function isQaRuntimeAvailable(): boolean {
 
 function listDeclaredQaRunnerPlugins(
   env: NodeJS.ProcessEnv | undefined = resolvePrivateQaBundledPluginsEnv(),
-): Array<
-  PluginManifestRecord & {
-    qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
-  }
-> {
+): DeclaredQaRunnerPlugin[] {
   return loadPluginManifestRegistry(env ? { env } : {})
-    .plugins.filter(
-      (
-        plugin,
-      ): plugin is PluginManifestRecord & {
-        qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
-      } => Array.isArray(plugin.qaRunners) && plugin.qaRunners.length > 0,
-    )
+    .plugins.flatMap((plugin) => {
+      const record = readDeclaredQaRunnerPlugin(plugin);
+      return record ? [record] : [];
+    })
     .toSorted((left, right) => {
       const idCompare = left.id.localeCompare(right.id);
       if (idCompare !== 0) {
@@ -112,6 +111,70 @@ function listDeclaredQaRunnerPlugins(
       }
       return left.rootDir.localeCompare(right.rootDir);
     });
+}
+
+function readDeclaredQaRunnerPlugin(plugin: unknown): DeclaredQaRunnerPlugin | null {
+  if (!plugin || typeof plugin !== "object") {
+    return null;
+  }
+
+  try {
+    const candidate = plugin as {
+      id?: unknown;
+      origin?: unknown;
+      qaRunners?: unknown;
+      rootDir?: unknown;
+    };
+    const { id, origin, qaRunners, rootDir } = candidate;
+    if (typeof id !== "string" || id.length === 0) {
+      return null;
+    }
+    if (!isPluginOrigin(origin)) {
+      return null;
+    }
+    if (typeof rootDir !== "string" || rootDir.length === 0) {
+      return null;
+    }
+    if (!Array.isArray(qaRunners)) {
+      return null;
+    }
+    const runners = qaRunners.flatMap((runner) => {
+      const declaration = readQaRunnerDeclaration(runner);
+      return declaration ? [declaration] : [];
+    });
+    if (runners.length === 0) {
+      return null;
+    }
+    return { id, origin, qaRunners: runners, rootDir };
+  } catch {
+    return null;
+  }
+}
+
+function isPluginOrigin(value: unknown): value is PluginManifestRecord["origin"] {
+  return value === "bundled" || value === "global" || value === "workspace" || value === "config";
+}
+
+function readQaRunnerDeclaration(runner: unknown): QaRunnerDeclaration | null {
+  if (!runner || typeof runner !== "object") {
+    return null;
+  }
+
+  try {
+    const candidate = runner as {
+      commandName?: unknown;
+      description?: unknown;
+    };
+    if (typeof candidate.commandName !== "string" || candidate.commandName.length === 0) {
+      return null;
+    }
+    return {
+      commandName: candidate.commandName,
+      ...(typeof candidate.description === "string" ? { description: candidate.description } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function indexRuntimeRegistrations(
@@ -135,7 +198,7 @@ function indexRuntimeRegistrations(
 }
 
 function loadQaRunnerRuntimeSurface(
-  plugin: PluginManifestRecord,
+  plugin: Pick<PluginManifestRecord, "id" | "origin">,
   env?: NodeJS.ProcessEnv,
 ): QaRunnerRuntimeSurface | null {
   if (plugin.origin === "bundled") {

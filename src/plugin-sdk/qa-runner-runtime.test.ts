@@ -162,6 +162,66 @@ describe("plugin-sdk qa-runner-runtime", () => {
     });
   });
 
+  it("skips unreadable manifest rows when discovering qa runner registrations", async () => {
+    const register = vi.fn((qa: Command) => qa);
+    const unreadableQaRunners = Object.defineProperty(
+      {
+        id: "poisoned-qa-runners",
+        origin: "bundled",
+        rootDir: "/tmp/poisoned-qa-runners",
+      },
+      "qaRunners",
+      {
+        get() {
+          throw new Error("qa runner metadata exploded");
+        },
+      },
+    );
+    const unreadableRootDir = Object.defineProperty(
+      {
+        id: "qa-matrix",
+        origin: "bundled",
+        qaRunners: [{ commandName: "matrix" }],
+      },
+      "rootDir",
+      {
+        get() {
+          throw new Error("qa runner root metadata exploded");
+        },
+      },
+    );
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        unreadableQaRunners,
+        unreadableRootDir,
+        {
+          id: "qa-matrix",
+          origin: "bundled",
+          qaRunners: [{ commandName: "matrix" }],
+          rootDir: "/tmp/qa-matrix",
+        },
+      ],
+      diagnostics: [],
+    });
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      qaRunnerCliRegistrations: [{ commandName: "matrix", register }],
+    });
+
+    const module = await import("./qa-runner-runtime.js");
+
+    expect(module.listQaRunnerCliContributions()).toEqual([
+      {
+        pluginId: "qa-matrix",
+        commandName: "matrix",
+        status: "available",
+        registration: {
+          commandName: "matrix",
+          register,
+        },
+      },
+    ]);
+  });
+
   it("reports declared runners as blocked when the plugin is present but not activated", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
