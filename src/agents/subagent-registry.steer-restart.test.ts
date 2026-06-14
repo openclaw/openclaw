@@ -842,20 +842,27 @@ describe("subagent registry steer restarts", () => {
         expect(announceSpy).toHaveBeenCalledTimes(1);
         expect(listMainRuns()[0]?.delivery?.attemptCount).toBe(1);
 
-        await vi.advanceTimersByTimeAsync(999);
-        expect(announceSpy).toHaveBeenCalledTimes(1);
-        await vi.advanceTimersByTimeAsync(1);
+        // Retry 1: jitter mock returns 750ms (75% of 1000ms base)
+        await vi.advanceTimersByTimeAsync(1_000);
         expect(announceSpy).toHaveBeenCalledTimes(2);
         expect(listMainRuns()[0]?.delivery?.attemptCount).toBe(2);
 
-        await vi.advanceTimersByTimeAsync(1_999);
-        expect(announceSpy).toHaveBeenCalledTimes(2);
-        await vi.advanceTimersByTimeAsync(1);
+        // Retry 2: jitter mock returns 1500ms (75% of 2000ms base)
+        await vi.advanceTimersByTimeAsync(2_000);
         expect(announceSpy).toHaveBeenCalledTimes(3);
         expect(listMainRuns()[0]?.delivery?.attemptCount).toBe(3);
 
-        await vi.advanceTimersByTimeAsync(4_001);
-        expect(announceSpy).toHaveBeenCalledTimes(3);
+        // Retry 3: jitter mock returns 3000ms (75% of 4000ms base)
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(announceSpy).toHaveBeenCalledTimes(4);
+        expect(listMainRuns()[0]?.delivery?.attemptCount).toBe(4);
+
+        // Retry 4: jitter mock returns 6000ms (75% of 8000ms base)
+        await vi.advanceTimersByTimeAsync(8_000);
+        expect(announceSpy).toHaveBeenCalledTimes(5);
+        expect(listMainRuns()[0]?.delivery?.attemptCount).toBe(5);
+
+        // After 5 retries, should suspend
         await waitForRegistrySideEffect(() => {
           const run = listMainRuns()[0];
           expect(run?.delivery?.status).toBe("suspended");
