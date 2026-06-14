@@ -410,6 +410,41 @@ describe("dispatchOutbound", () => {
     }
   });
 
+  it("resolves relative gateway qqmedia block replies against the agent workspace", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-workspace-"));
+    try {
+      const filePath = path.join(tmpRoot, "relative-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver({ text: `<qqmedia>relative-report.docx</qqmedia>` }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it("threads agent scoped media roots through gateway tool media forwarding", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-tool-root-"));
     try {

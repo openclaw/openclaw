@@ -10,6 +10,7 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -132,11 +133,18 @@ export async function dispatchOutbound(
   const { runtime, cfg, account, log } = deps;
   const { event, qualifiedTarget } = inbound;
 
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
-    cfg as OpenClawConfig,
-    inbound.route.agentId,
-  );
-  const gatewayMediaContext = mediaLocalRoots.length > 0 ? { mediaLocalRoots } : {};
+  const routeAgentId = inbound.route.agentId;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg as OpenClawConfig, routeAgentId);
+  const workspaceDir = routeAgentId
+    ? resolveAgentWorkspaceDir(cfg as OpenClawConfig, routeAgentId)
+    : undefined;
+  const gatewayMediaContext =
+    mediaLocalRoots.length > 0 || workspaceDir
+      ? {
+          ...(mediaLocalRoots.length > 0 ? { mediaLocalRoots } : {}),
+          ...(workspaceDir ? { mediaAccess: { workspaceDir } } : {}),
+        }
+      : {};
   const replyTarget = {
     type: event.type,
     senderId: event.senderId,
