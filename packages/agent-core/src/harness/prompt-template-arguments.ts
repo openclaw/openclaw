@@ -11,13 +11,26 @@ function canCloseApostropheSpan(chars: string[], index: number): boolean {
   return !isWordCharacter(chars[index + 1]);
 }
 
+function isStandaloneApostropheOpener(chars: string[], index: number): boolean {
+  if (chars[index] !== "'" || !canOpenApostropheSpan(chars, index)) {
+    return false;
+  }
+  const prev = chars[index - 1];
+  return prev === undefined || /\s/.test(prev);
+}
+
 function opensQuotedSpan(chars: string[], index: number): boolean {
   const quote = chars[index];
   if (quote === "'") {
     if (!canOpenApostropheSpan(chars, index)) {
       return false;
     }
+    const prev = chars[index - 1];
+    const attachedToWord = prev !== undefined && !/\s/.test(prev);
     for (let j = index + 1; j < chars.length; j++) {
+      if (attachedToWord && isStandaloneApostropheOpener(chars, j)) {
+        return false;
+      }
       if (chars[j] === "'" && canCloseApostropheSpan(chars, j)) {
         return true;
       }
@@ -39,8 +52,11 @@ function opensQuotedSpan(chars: string[], index: number): boolean {
  * quoted span only when quoted content follows immediately (a trailing apostrophe like `users'`
  * stays literal), and closes one only when it is not inside a word (so a contraction like `it's`
  * stays literal even inside a span). A span is honored only when a valid opener and closer pair up;
- * otherwise the apostrophes are literal. This keeps shell-style grouping (`foo'bar baz'`,
- * `foo='bar baz'`) while preserving contractions and possessives (`don't`, `users'`, `O'Brien's`).
+ * otherwise the apostrophes are literal. A word-attached apostrophe (`don't`, `foo'bar`) yields to a
+ * later standalone span opener (a whitespace-delimited `'`), so a contraction cannot steal the quotes
+ * of a self-delimited phrase that follows (`don't 'quoted text'` keeps the contraction literal and
+ * groups the phrase). This keeps shell-style grouping (`foo'bar baz'`, `foo='bar baz'`) while
+ * preserving contractions and possessives (`don't`, `users'`, `O'Brien's`).
  */
 export function parseCommandArgs(argsString: string): string[] {
   const args: string[] = [];

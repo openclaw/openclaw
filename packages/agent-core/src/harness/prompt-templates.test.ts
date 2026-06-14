@@ -85,6 +85,13 @@ describe("prompt template argument substitution", () => {
     expect(substituteArgs("[$1][$2]", args)).toBe("[it's a test][next]");
   });
 
+  it("keeps a contraction literal before a later standalone quoted span", () => {
+    expect(parseCommandArgs("don't 'quoted text' next")).toEqual(["don't", "quoted text", "next"]);
+    expect(parseCommandArgs("it's a 'test case' here")).toEqual(["it's", "a", "test case", "here"]);
+    const args = parseCommandArgs("don't 'quoted text' next");
+    expect(substituteArgs("[$1][$2][$3]", args)).toBe("[don't][quoted text][next]");
+  });
+
   it("rejects unsafe positional placeholders", () => {
     expect(substituteArgs("$9007199254740992", ["first", "second"])).toBe("");
   });
