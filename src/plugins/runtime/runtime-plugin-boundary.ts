@@ -19,6 +19,10 @@ type PluginRuntimeRecord = {
   source: string;
 };
 
+type ManifestRuntimePluginRecord = PluginRuntimeRecord & {
+  id: string;
+};
+
 export function readPluginBoundaryConfigSafely() {
   try {
     return getRuntimeConfig();
@@ -34,18 +38,16 @@ export function resolvePluginRuntimeRecord(
   const manifestRegistry = loadPluginManifestRegistry({
     config: readPluginBoundaryConfigSafely(),
   });
-  const record = manifestRegistry.plugins.find((plugin) => plugin.id === pluginId);
-  if (!record?.source) {
-    if (onMissing) {
-      onMissing();
+  for (const plugin of manifestRegistry.plugins) {
+    const record = readManifestRuntimePluginRecord(plugin);
+    if (record?.id === pluginId) {
+      return toPluginRuntimeRecord(record);
     }
-    return null;
   }
-  return {
-    ...(record.origin ? { origin: record.origin } : {}),
-    rootDir: record.rootDir,
-    source: record.source,
-  };
+  if (onMissing) {
+    onMissing();
+  }
+  return null;
 }
 
 export function resolvePluginRuntimeRecordByEntryBaseNames(
@@ -55,18 +57,13 @@ export function resolvePluginRuntimeRecordByEntryBaseNames(
   const manifestRegistry = loadPluginManifestRegistry({
     config: readPluginBoundaryConfigSafely(),
   });
-  const matches = manifestRegistry.plugins.filter((plugin) => {
-    if (!plugin?.source) {
-      return false;
+  const matches: ManifestRuntimePluginRecord[] = [];
+  for (const plugin of manifestRegistry.plugins) {
+    const record = readManifestRuntimePluginRecord(plugin);
+    if (record && hasRuntimeEntryBaseNames(record, entryBaseNames)) {
+      matches.push(record);
     }
-    const record = {
-      rootDir: plugin.rootDir,
-      source: plugin.source,
-    };
-    return entryBaseNames.every(
-      (entryBaseName) => resolvePluginRuntimeModulePath(record, entryBaseName) !== null,
-    );
-  });
+  }
   if (matches.length === 0) {
     if (onMissing) {
       onMissing();
@@ -80,6 +77,57 @@ export function resolvePluginRuntimeRecordByEntryBaseNames(
     );
   }
   const record = matches[0];
+  return toPluginRuntimeRecord(record);
+}
+
+function readManifestRuntimePluginRecord(plugin: unknown): ManifestRuntimePluginRecord | null {
+  if (!plugin || typeof plugin !== "object") {
+    return null;
+  }
+
+  try {
+    const candidate = plugin as {
+      id?: unknown;
+      origin?: unknown;
+      rootDir?: unknown;
+      source?: unknown;
+    };
+    const { id, origin, rootDir, source } = candidate;
+    if (typeof id !== "string" || id.length === 0) {
+      return null;
+    }
+    if (typeof source !== "string" || source.length === 0) {
+      return null;
+    }
+    return {
+      id,
+      ...(isPluginOrigin(origin) ? { origin } : {}),
+      ...(typeof rootDir === "string" && rootDir.length > 0 ? { rootDir } : {}),
+      source,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isPluginOrigin(value: unknown): value is PluginOrigin {
+  return value === "bundled" || value === "global" || value === "workspace" || value === "config";
+}
+
+function hasRuntimeEntryBaseNames(
+  record: Pick<PluginRuntimeRecord, "rootDir" | "source">,
+  entryBaseNames: string[],
+) {
+  try {
+    return entryBaseNames.every(
+      (entryBaseName) => resolvePluginRuntimeModulePath(record, entryBaseName) !== null,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function toPluginRuntimeRecord(record: PluginRuntimeRecord): PluginRuntimeRecord {
   return {
     ...(record.origin ? { origin: record.origin } : {}),
     rootDir: record.rootDir,
