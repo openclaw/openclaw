@@ -1,7 +1,11 @@
 // Gateway Protocol tests cover channels.schema behavior.
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
-import { ChannelsStatusResultSchema, WebLoginWaitParamsSchema } from "./schema/channels.js";
+import {
+  ChannelsStatusResultSchema,
+  TalkCatalogResultSchema,
+  WebLoginWaitParamsSchema,
+} from "./schema/channels.js";
 
 /**
  * Channel schema regressions for browser login and status diagnostics.
@@ -67,6 +71,38 @@ describe("ChannelsStatusResultSchema", () => {
           delayMaxMs: 62_000,
           utilization: 0.98,
           cpuCoreRatio: 1.2,
+        },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("TalkCatalogResultSchema", () => {
+  const validate = Compile(TalkCatalogResultSchema);
+
+  it("accepts realtime provider speech-start event capability metadata", () => {
+    expect(
+      validate.Check({
+        modes: ["realtime"],
+        transports: ["gateway-relay"],
+        brains: ["agent-consult"],
+        speech: { providers: [] },
+        transcription: { providers: [] },
+        realtime: {
+          activeProvider: "openai",
+          providers: [
+            {
+              id: "openai",
+              label: "OpenAI Realtime",
+              configured: true,
+              modes: ["realtime"],
+              transports: ["gateway-relay"],
+              brains: ["agent-consult"],
+              supportsBrowserSession: false,
+              supportsBargeIn: true,
+              emitsSpeechStartedEvent: true,
+            },
+          ],
         },
       }),
     ).toBe(true);
