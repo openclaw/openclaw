@@ -38,15 +38,18 @@ type RuntimeToolEntryRead<TTool extends Pick<AnyAgentTool, "name" | "parameters"
 
 type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
 
+const MAX_RUNTIME_TOOL_ENTRY_READS = 10_000;
+
 function unreadableRuntimeToolEntry(
   toolIndex: number,
+  violation = `tool[${toolIndex}] is unreadable`,
 ): RuntimeToolEntryRead<Pick<AnyAgentTool, "name" | "parameters">> {
   return {
     ok: false,
     diagnostic: {
       toolName: `tool[${toolIndex}]`,
       toolIndex,
-      violations: [`tool[${toolIndex}] is unreadable`],
+      violations: [violation],
     },
   };
 }
@@ -59,6 +62,24 @@ function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "param
     length = tools.length;
   } catch {
     return [unreadableRuntimeToolEntry(0) as RuntimeToolEntryRead<TTool>];
+  }
+  if (!Number.isSafeInteger(length) || length < 0) {
+    return [
+      unreadableRuntimeToolEntry(
+        0,
+        "runtime tool list length is invalid",
+      ) as RuntimeToolEntryRead<TTool>,
+    ];
+  }
+  // Projection is a safety check for plugin-controlled tool lists. Reject
+  // hostile array-like lengths before diagnostics become an unbounded loop.
+  if (length > MAX_RUNTIME_TOOL_ENTRY_READS) {
+    return [
+      unreadableRuntimeToolEntry(
+        MAX_RUNTIME_TOOL_ENTRY_READS,
+        `runtime tool list length exceeds ${MAX_RUNTIME_TOOL_ENTRY_READS}`,
+      ) as RuntimeToolEntryRead<TTool>,
+    ];
   }
   const entries: RuntimeToolEntryRead<TTool>[] = [];
   for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
