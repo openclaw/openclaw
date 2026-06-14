@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Command } from "commander";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import {
@@ -119,6 +120,10 @@ function resolveOfficialExternalInstallRecoveryMetadata(
       request.normalizedSpec,
       rawNpmPrefixSpec ?? "",
       normalizedNpmPrefixSpec ?? "",
+      parseRegistryNpmSpec(request.rawSpec)?.name ?? "",
+      parseRegistryNpmSpec(request.normalizedSpec)?.name ?? "",
+      rawNpmPrefixSpec ? parseRegistryNpmSpec(rawNpmPrefixSpec)?.name : "",
+      normalizedNpmPrefixSpec ? parseRegistryNpmSpec(normalizedNpmPrefixSpec)?.name : "",
     ]),
   );
   if (values.size === 0) {

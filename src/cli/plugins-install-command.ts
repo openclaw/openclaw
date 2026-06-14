@@ -35,7 +35,7 @@ import {
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { shortenHomePath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
@@ -522,6 +522,52 @@ function buildInvalidPluginInstallConfigError(message: string): Error {
   return error;
 }
 
+function extractMissingPluginLoadPath(issue: { path?: string; message?: string }): string | null {
+  if (issue.path !== "plugins.load.paths" || typeof issue.message !== "string") {
+    return null;
+  }
+  const marker = "plugin path not found:";
+  const markerIndex = issue.message.indexOf(marker);
+  if (markerIndex < 0) {
+    return null;
+  }
+  const value = issue.message.slice(markerIndex + marker.length).trim();
+  return value || null;
+}
+
+function removeMissingPluginLoadPaths(
+  cfg: OpenClawConfig,
+  issues: readonly { path?: string; message?: string }[],
+  env: NodeJS.ProcessEnv = process.env,
+): OpenClawConfig {
+  const missingPaths = new Set(
+    issues
+      .map(extractMissingPluginLoadPath)
+      .filter((value): value is string => Boolean(value))
+      .map((value) => resolveUserPath(value, env)),
+  );
+  const paths = cfg.plugins?.load?.paths;
+  if (missingPaths.size === 0 || !Array.isArray(paths)) {
+    return cfg;
+  }
+  const nextPaths = paths.filter(
+    (entry) => typeof entry !== "string" || !missingPaths.has(resolveUserPath(entry, env)),
+  );
+  if (nextPaths.length === paths.length) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      load: {
+        ...cfg.plugins?.load,
+        paths: nextPaths,
+      },
+    },
+  };
+}
+
 async function loadConfigFromSnapshotForInstall(
   request: PluginInstallRequestContext,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
@@ -553,6 +599,7 @@ async function loadConfigFromSnapshotForInstall(
   })) {
     nextConfig = mutation.config;
   }
+  nextConfig = removeMissingPluginLoadPaths(nextConfig, snapshot.issues, process.env);
   return {
     config: nextConfig,
     baseHash: snapshot.hash,

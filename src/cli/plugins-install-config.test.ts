@@ -150,6 +150,46 @@ describe("loadConfigForInstall", () => {
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
   });
 
+  it("allows versioned official npm spec reinstall recovery", async () => {
+    const snapshotCfg = {
+      plugins: {
+        installs: { discord: { source: "npm", installPath: "/gone" } },
+        load: { paths: ["/gone", "/keep"] },
+      },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { plugins: { installs: { discord: {} }, load: { paths: ["/gone", "/keep"] } } },
+        config: snapshotCfg,
+        issues: [
+          { path: "channels.discord", message: "unknown channel id: discord" },
+          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
+        ],
+      }),
+    );
+
+    const request = resolvePluginInstallRequestContext({
+      rawSpec: "@openclaw/discord@2026.5.22",
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+
+    expect(request.request.bundledPluginId).toBe("discord");
+    expect(request.request.allowInvalidConfigRecovery).toBe(true);
+    const result = await loadConfigForInstall(request.request);
+    expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
+    expect(result).toEqual({
+      config: {
+        plugins: {
+          installs: { discord: { source: "npm", installPath: "/gone" } },
+          load: { paths: ["/keep"] },
+        },
+      },
+      baseHash: "abc",
+    });
+  });
+
   it("allows official plugin reinstall recovery from source-only runtime shadows", async () => {
     const snapshotCfg = {
       plugins: { installs: { discord: { source: "npm", installPath: "/bad/discord" } } },
