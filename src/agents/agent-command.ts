@@ -1597,7 +1597,10 @@ async function agentCommandInternal(
       })
     ) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
-      if (explicitThink) {
+      // Subagent spawns are fire-and-forget; the orchestrator already got an
+      // "accepted" ack, so throwing here strands the run and half-fails fan-outs.
+      // Clamp like the embedded runner; interactive --thinking keeps the throw.
+      if (explicitThink && !isSubagentSessionKey(sessionKey)) {
         throw new Error(
           `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
         );
