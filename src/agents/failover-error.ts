@@ -38,6 +38,8 @@ export class FailoverError extends Error {
   readonly sessionId?: string;
   readonly lane?: string;
   readonly suspend?: boolean;
+  /** Pre-constructed user-facing message for delivery via channel when a failover occurs. */
+  readonly userMessage?: string;
 
   constructor(
     message: string,
@@ -54,6 +56,7 @@ export class FailoverError extends Error {
       lane?: string;
       cause?: unknown;
       suspend?: boolean;
+      userMessage?: string;
     },
   ) {
     super(message, { cause: params.cause });
@@ -69,6 +72,7 @@ export class FailoverError extends Error {
     this.sessionId = params.sessionId;
     this.lane = params.lane;
     this.suspend = params.suspend;
+    this.userMessage = params.userMessage;
   }
 }
 
@@ -665,6 +669,32 @@ export function describeFailoverError(err: unknown): {
 }
 
 /** Convert a classified raw error into a FailoverError with optional request context. */
+/** Build a concise user-facing message for a failover reason. */
+function humanizeFailoverReason(params: {
+  reason: FailoverReason;
+  provider?: string;
+  model?: string;
+  suspend?: boolean;
+}): string {
+  const label = params.model
+    ? `${params.provider ?? ""}/${params.model}`.replace(/^\//, "")
+    : params.provider ?? "the primary model";
+  const recovery = params.suspend ? "约 30 分钟后自动恢复" : "正在切换备用模型";
+  switch (params.reason) {
+    case "rate_limit":
+      return `⚠️ ${label} 触发速率限制，${recovery}。`;
+    case "overloaded":
+      return `⚠️ ${label} 暂时过载，${recovery}。`;
+    case "billing":
+      return `⚠️ ${label} 账户配额用尽，${recovery}。`;
+    case "auth":
+    case "auth_permanent":
+      return `⚠️ ${label} 鉴权失败，${recovery}。`;
+    default:
+      return `⚠️ ${label} 暂时不可用（${params.reason}），${recovery}。`;
+  }
+}
+
 export function coerceToFailoverError(
   err: unknown,
   context?: {
@@ -692,6 +722,13 @@ export function coerceToFailoverError(
   const shouldSuspend =
     Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
 
+  const userMessage = humanizeFailoverReason({
+    reason,
+    provider: context?.provider ?? signal.provider,
+    model: context?.model,
+    suspend: shouldSuspend,
+  });
+
   return new FailoverError(message, {
     reason,
     provider: context?.provider ?? signal.provider,
@@ -704,5 +741,6 @@ export function coerceToFailoverError(
     rawError: message,
     cause: err instanceof Error ? err : undefined,
     suspend: shouldSuspend,
+    userMessage,
   });
 }
