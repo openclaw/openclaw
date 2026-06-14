@@ -33,6 +33,8 @@ vi.mock("openclaw/plugin-sdk/media-store", () => ({
 }));
 
 let downloadLineMedia: typeof import("./download.js").downloadLineMedia;
+let LineMediaDownloadTimeoutError: typeof import("./download.js").LineMediaDownloadTimeoutError;
+let LINE_DOWNLOAD_IDLE_TIMEOUT_MS: typeof import("./download.js").LINE_DOWNLOAD_IDLE_TIMEOUT_MS;
 
 async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
   for (const part of parts) {
@@ -60,7 +62,8 @@ function detectMockContentType(buffer: Buffer, contentType?: string): string | u
 
 describe("downloadLineMedia", () => {
   beforeAll(async () => {
-    ({ downloadLineMedia } = await import("./download.js"));
+    ({ downloadLineMedia, LineMediaDownloadTimeoutError, LINE_DOWNLOAD_IDLE_TIMEOUT_MS } =
+      await import("./download.js"));
   });
 
   afterAll(() => {
@@ -161,5 +164,110 @@ describe("downloadLineMedia", () => {
     saveMediaStreamMock.mockRejectedValueOnce(new Error("Media exceeds 0MB limit"));
 
     await expect(downloadLineMedia("mid-bad", "token")).rejects.toThrow(/Media exceeds/i);
+  });
+
+  describe("chunk-idle timeout", () => {
+    function neverYieldingStream(): AsyncIterable<Buffer> {
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            next(): Promise<IteratorResult<Buffer>> {
+              return new Promise<IteratorResult<Buffer>>(() => {});
+            },
+          };
+        },
+      };
+    }
+
+    function delayedStream(payload: Buffer, delayMs: number): AsyncIterable<Buffer> {
+      let yielded = false;
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            async next(): Promise<IteratorResult<Buffer>> {
+              if (yielded) {
+                return { value: undefined as unknown as Buffer, done: true };
+              }
+              await new Promise((r) => setTimeout(r, delayMs));
+              yielded = true;
+              return { value: payload, done: false };
+            },
+          };
+        },
+      };
+    }
+
+    it("rejects with LineMediaDownloadTimeoutError when the stream stalls past chunkTimeoutMs", async () => {
+      getMessageContentMock.mockResolvedValueOnce(neverYieldingStream());
+      const promise = downloadLineMedia("mid-stall", "token", 1024 * 1024, {
+        chunkTimeoutMs: 50,
+      });
+      await expect(promise).rejects.toBeInstanceOf(LineMediaDownloadTimeoutError);
+      await expect(promise.catch((e) => e.chunkTimeoutMs)).resolves.toBe(50);
+    });
+
+    it("rejects when getMessageContent headers never arrive", async () => {
+      getMessageContentMock.mockReturnValueOnce(new Promise(() => {}));
+      const promise = downloadLineMedia("mid-stall-headers", "token", 1024 * 1024, {
+        chunkTimeoutMs: 50,
+      });
+      await expect(promise).rejects.toBeInstanceOf(LineMediaDownloadTimeoutError);
+    });
+
+    it("does not reject when chunks arrive within chunkTimeoutMs", async () => {
+      const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+      getMessageContentMock.mockResolvedValueOnce(delayedStream(jpeg, 10));
+      const result = await downloadLineMedia("mid-slow-but-progressing", "token", 1024 * 1024, {
+        chunkTimeoutMs: 500,
+      });
+      expect(result.contentType).toBe("image/jpeg");
+    });
+
+    it("exposes LINE_DOWNLOAD_IDLE_TIMEOUT_MS = 30s aligned with TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS", () => {
+      expect(LINE_DOWNLOAD_IDLE_TIMEOUT_MS).toBe(30_000);
+    });
+
+    it("calls iterator.return() exactly once on timeout so the upstream Readable is destroyed", async () => {
+      const returnSpy = vi.fn(async () => ({ value: undefined as unknown as Buffer, done: true }));
+      const stream: AsyncIterable<Buffer> = {
+        [Symbol.asyncIterator]() {
+          return {
+            next(): Promise<IteratorResult<Buffer>> {
+              return new Promise<IteratorResult<Buffer>>(() => {});
+            },
+            return: returnSpy as () => Promise<IteratorResult<Buffer>>,
+          };
+        },
+      };
+      getMessageContentMock.mockResolvedValueOnce(stream);
+      await expect(
+        downloadLineMedia("mid-return-spy", "token", 1024 * 1024, { chunkTimeoutMs: 50 }),
+      ).rejects.toBeInstanceOf(LineMediaDownloadTimeoutError);
+      expect(returnSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects when a second chunk stalls after a successful first chunk (partial-then-stall)", async () => {
+      const jpegPart = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+      let yieldedFirst = false;
+      const stream: AsyncIterable<Buffer> = {
+        [Symbol.asyncIterator]() {
+          return {
+            async next(): Promise<IteratorResult<Buffer>> {
+              if (!yieldedFirst) {
+                yieldedFirst = true;
+                return { value: jpegPart, done: false };
+              }
+              return new Promise<IteratorResult<Buffer>>(() => {});
+            },
+          };
+        },
+      };
+      getMessageContentMock.mockResolvedValueOnce(stream);
+      const promise = downloadLineMedia("mid-partial-stall", "token", 1024 * 1024, {
+        chunkTimeoutMs: 50,
+      });
+      await expect(promise).rejects.toBeInstanceOf(LineMediaDownloadTimeoutError);
+      await expect(promise.catch((e) => e.chunkTimeoutMs)).resolves.toBe(50);
+    });
   });
 });
