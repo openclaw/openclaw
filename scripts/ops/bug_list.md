@@ -46,13 +46,13 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-06-12 06:00:12 UTC · hosts:eu us_
+_Last automated scan: 2026-06-14 06:00:10 UTC · hosts:eu us_
 
 | Pri | Host   | Agent                          | Issue                | Detail                                                                 |
 | --- | ------ | ------------------------------ | -------------------- | ---------------------------------------------------------------------- |
-| P1  | eu     | -                              | Heavy swap usage     | 1469MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
-| P1  | models | nvidia/deepseek-ai/deepseek-r1 | Model not responding | NOT_FOUND (HTTP 404, 0.2s) on a 1-token probe via nvidia API.          |
-| P1  | models | nvidia/minimaxai/minimax-m2.7  | Model not responding | TIMEOUT (HTTP 000, 45.0s) on a 1-token probe via nvidia API.           |
-| P1  | us     | -                              | Heavy swap usage     | 1783MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| P1  | eu     | -                              | Heavy swap usage     | 1413MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| P1  | models | nvidia/deepseek-ai/deepseek-r1 | Model not responding | NOT_FOUND (HTTP 404, 0.1s) on a 1-token probe via nvidia API.          |
+| P1  | us     | -                              | Heavy swap usage     | 1681MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| P2  | us     | -                              | Disk filling         | Root fs 85% used (warn>=80%).                                          |
 
 <!-- AUTOSCAN:END -->
