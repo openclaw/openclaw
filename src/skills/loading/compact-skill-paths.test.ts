@@ -56,7 +56,7 @@ describe("compactSkillPaths", () => {
     expect(prompt).toContain("A test skill for path compaction");
   });
 
-  it("does not compact AlphaClaw state-root managed skill paths to OS-home tilde paths", () => {
+  it("does not compact explicit state-root managed skill paths to OS-home tilde paths", () => {
     const root = path.parse(os.homedir()).root;
     const osHome = path.join(root, "data");
     const stateDir = path.join(osHome, ".openclaw");
@@ -79,7 +79,7 @@ describe("compactSkillPaths", () => {
     expect(prompt).not.toContain("~/.openclaw/skills/world-cup-soccer-openclaw-skill/SKILL.md");
   });
 
-  it("does not compact AlphaClaw state-root plugin skill paths to OS-home tilde paths", () => {
+  it("does not compact explicit state-root plugin skill paths to OS-home tilde paths", () => {
     const root = path.parse(os.homedir()).root;
     const osHome = path.join(root, "data");
     const stateDir = path.join(osHome, ".openclaw");
