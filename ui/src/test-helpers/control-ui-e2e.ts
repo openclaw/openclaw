@@ -433,6 +433,23 @@ function installControlUiMockGateway(input: {
         };
       case "agents.files.get":
         return null;
+      case "sessions.files.list":
+        return {
+          browser: {
+            entries: [],
+            path: "",
+          },
+          files: [],
+          root: "",
+          sessionKey:
+            isRecord(params) && typeof params.sessionKey === "string" ? params.sessionKey : "main",
+        };
+      case "sessions.files.get":
+        return null;
+      case "artifacts.list":
+        return { artifacts: [] };
+      case "artifacts.download":
+        return null;
       case "chat.history":
         return {
           messages: scenario.historyMessages,

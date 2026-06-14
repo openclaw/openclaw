@@ -13,6 +13,7 @@ import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
 } from "../../execution-contract.js";
+import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
@@ -48,6 +49,11 @@ type IncompleteTurnAttempt = Pick<
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "heartbeatToolResponse"
+  | "toolMediaUrls"
+  | "toolAudioAsVoice"
+  | "toolTrustedLocalMedia"
+  | "didDeliverSourceReplyViaMessageTool"
   | "didSendViaMessagingTool"
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
@@ -403,6 +409,35 @@ function hasCompletedSideEffectProgressEvidence(attempt: IncompleteTurnAttempt):
   });
 }
 
+type TerminalAttemptState = Pick<
+  EmbeddedRunAttemptResult,
+  | "clientToolCalls"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "heartbeatToolResponse"
+  | "lastToolError"
+  | "toolMediaUrls"
+  | "toolAudioAsVoice"
+  | "toolTrustedLocalMedia"
+  | "didDeliverSourceReplyViaMessageTool"
+  | "messagingToolSourceReplyPayloads"
+>;
+
+function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean {
+  return Boolean(
+    attempt.clientToolCalls ||
+    attempt.yieldDetected ||
+    attempt.didSendDeterministicApprovalPrompt ||
+    attempt.heartbeatToolResponse ||
+    attempt.lastToolError ||
+    attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
+    attempt.toolAudioAsVoice ||
+    attempt.toolTrustedLocalMedia ||
+    attempt.didDeliverSourceReplyViaMessageTool ||
+    attempt.messagingToolSourceReplyPayloads?.length,
+  );
+}
+
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -416,19 +451,23 @@ export function resolveIncompleteTurnPayloadText(params: {
   // turn check in that case — the final post-tool response was never
   // produced. (#76477)
   const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
   const emptyResponseAssistant = isEmptyResponseAssistantTurn({
     payloadCount: params.payloadCount,
     attempt: params.attempt,
   });
-  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
-    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
-  );
-  const unsignedThinkingOnlyAssistant = isUnsignedThinkingOnlyAssistantTurn(
-    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
-  );
+  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
+  // Reasoning payloads can count toward payloadCount without providing a
+  // visible answer. Do not replace real terminal state with an incomplete-turn
+  // warning when another path already delivered progress or output.
+  const thinkingOnlyTerminal =
+    params.payloadCount !== 0 &&
+    !joinAssistantTexts(params.attempt.assistantTexts).length &&
+    !hasAttemptTerminalState(params.attempt) &&
+    Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
   const nonVisiblePostToolAssistant =
     emptyResponseAssistant ||
-    unsignedThinkingOnlyAssistant ||
+    thinkingOnlyTerminal ||
     (reasoningOnlyAssistant && hasCompletedToolActivity(params.attempt));
 
   if (
@@ -467,7 +506,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
-    !unsignedThinkingOnlyAssistant &&
+    !thinkingOnlyTerminal &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -753,25 +792,48 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
 }
 
-function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
+export function shouldRetrySilentErrorAssistantTurn(params: {
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    | "assistantTexts"
+    | "clientToolCalls"
+    | "yieldDetected"
+    | "didSendDeterministicApprovalPrompt"
+    | "heartbeatToolResponse"
+    | "lastToolError"
+    | "toolMediaUrls"
+    | "toolAudioAsVoice"
+    | "toolTrustedLocalMedia"
+    | "didDeliverSourceReplyViaMessageTool"
+    | "messagingToolSourceReplyPayloads"
+    | "replayMetadata"
+  >;
+  assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
+}): boolean {
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return false;
   }
-  return (
-    assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking" &&
-    hasThinkingContentBlock(message)
-  );
-}
+  if (hasAttemptTerminalState(params.attempt)) {
+    return false;
+  }
+  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
+    return false;
+  }
 
-function hasThinkingContentBlock(message: object): boolean {
-  const content = (message as { content?: unknown }).content;
-  return (
-    Array.isArray(content) &&
-    content.some(
-      (block) =>
-        block && typeof block === "object" && (block as { type?: unknown }).type === "thinking",
-    )
-  );
+  const assistant = params.assistant;
+  if (!assistant || assistant.stopReason !== "error") {
+    return false;
+  }
+
+  const content = (assistant as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return !hasPositiveOutputTokenUsage(assistant);
+  }
+
+  return hasOnlyAssistantReasoningContent(assistant);
 }
 
 function isEmptyResponseAssistantTurn(params: {

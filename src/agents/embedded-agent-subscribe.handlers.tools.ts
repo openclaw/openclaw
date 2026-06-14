@@ -10,6 +10,7 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
   AgentApprovalEventData,
   AgentCommandOutputEventData,
@@ -53,6 +54,7 @@ import {
   extractToolResultMediaArtifact,
   extractToolErrorCode,
   extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolErrorMessage,
   extractToolResultText,
   filterToolResultMediaUrls,
@@ -361,6 +363,36 @@ function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean
   return [record.result, record.results, record.payloadOutcomes].some((entry) =>
     hasMessagingToolNonDeliveryEvidence(entry, depth + 1),
   );
+}
+
+function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  if (
+    toolName !== "message" ||
+    readStringValue(args.provider) ||
+    readStringValue(args.channel) ||
+    !currentProvider
+  ) {
+    return args;
+  }
+  return { ...args, provider: currentProvider };
+}
+
+function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
+  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+  if (toolSend === undefined) {
+    return result;
+  }
+  return {
+    ...readRecordField(result),
+    details: {
+      ...readToolResultDetailsRecord(result),
+      toolSend,
+    },
+  };
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
@@ -702,26 +734,30 @@ function extractMessagingToolSourceReplyPayload(
 }
 
 function hasCommittedMessagingToolSendResult(result: unknown): boolean {
+  const resultRecord = readRecordField(result);
   const details = readToolResultDetailsRecord(result);
   const contentDeliveryState = getMessagingToolResultContentDeliveryState(result);
   if (contentDeliveryState === "non_delivery") {
     return false;
   }
   const contentReceipt = contentDeliveryState === "committed";
-  if (!details) {
-    return contentReceipt;
-  }
-  if (details.dryRun === true) {
-    return false;
-  }
-  if (hasCommittedMessagingToolResultDetails(details)) {
+  if (
+    hasCommittedMessagingToolResultDetails(resultRecord) ||
+    hasCommittedMessagingToolResultDetails(details)
+  ) {
     return true;
   }
-  if (hasMessagingToolNonDeliveryEvidence(details)) {
+  if (
+    hasMessagingToolNonDeliveryEvidence(resultRecord) ||
+    hasMessagingToolNonDeliveryEvidence(details)
+  ) {
     return false;
   }
   if (contentReceipt) {
     return true;
+  }
+  if (!details) {
+    return false;
   }
   const status = normalizeOptionalLowercaseString(details?.status);
   return details.ok === true || details.success === true || status === "ok";
@@ -1138,7 +1174,22 @@ export function handleToolExecutionStart(
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
       if (isMessagingSend) {
-        const sendTarget = extractMessagingToolSend(toolName, argsRecord);
+        const telemetryArgs = applyCurrentMessageProvider(
+          toolName,
+          argsRecord,
+          ctx.params.messageChannel,
+        );
+        const sendTarget = extractMessagingToolSend(toolName, telemetryArgs, {
+          config: ctx.params.config,
+          currentChannelId: ctx.params.currentChannelId,
+          currentMessagingTarget: ctx.params.currentMessagingTarget,
+          currentThreadId:
+            ctx.params.currentThreadId ??
+            parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+          currentMessageId: ctx.params.currentMessageId,
+          replyToMode: ctx.params.replyToMode,
+          hasRepliedRef: ctx.params.hasRepliedRef,
+        });
         if (sendTarget) {
           ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
         }
@@ -1271,6 +1322,7 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
+  const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
   const approvalUnavailable =
@@ -1377,8 +1429,22 @@ export async function handleToolExecutionEnd(
   const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
   const executedMessagingSend =
     isMessagingTool(toolName) && isMessagingToolSendAction(toolName, executedArgs);
+  const executedMessagingTelemetryArgs = applyCurrentMessageProvider(
+    toolName,
+    executedArgs,
+    ctx.params.messageChannel,
+  );
   const executedMessagingTarget = executedMessagingSend
-    ? extractMessagingToolSend(toolName, executedArgs)
+    ? extractMessagingToolSend(toolName, executedMessagingTelemetryArgs, {
+        config: ctx.params.config,
+        currentChannelId: ctx.params.currentChannelId,
+        currentMessagingTarget: ctx.params.currentMessagingTarget,
+        currentThreadId:
+          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        currentMessageId: ctx.params.currentMessageId,
+        replyToMode: ctx.params.replyToMode,
+        hasRepliedRef: ctx.params.hasRepliedRef,
+      })
     : undefined;
   const executedMessagingText =
     typeof executedArgs.content === "string"
@@ -1431,7 +1497,10 @@ export async function handleToolExecutionEnd(
     ctx.state.pendingMessagingTargets.delete(toolCallId);
   }
   if (hasCommittedMessagingSend) {
-    const committedTarget = executedMessagingTarget;
+    const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
+    const committedTarget = executedMessagingTarget
+      ? extractMessagingToolSendResult(executedMessagingTarget, extractionResult)
+      : undefined;
     if (committedTarget) {
       ctx.state.messagingToolSentTargets.push({
         ...committedTarget,

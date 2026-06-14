@@ -85,6 +85,8 @@ export type RunEmbeddedAgentParams = {
   senderIsOwner?: boolean;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */

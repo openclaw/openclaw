@@ -443,7 +443,7 @@ export function startGatewayConfigReloader(opts: {
       handleWatcherError(next, err);
     });
     watcher = next;
-    watcherUsesPolling = usePolling;
+    watcherUsesPolling = next.options.usePolling;
     hotReloadStatus = "active";
   };
 

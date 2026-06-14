@@ -341,6 +341,7 @@ function buildOpenClawCodingToolsOptions(
       workspaceDir,
     }),
     currentChannelId: a.currentChannelId,
+    currentMessagingTarget: a.currentMessagingTarget,
     currentThreadTs: a.currentThreadTs,
     currentMessageId: a.currentMessageId,
     replyToMode: a.replyToMode,

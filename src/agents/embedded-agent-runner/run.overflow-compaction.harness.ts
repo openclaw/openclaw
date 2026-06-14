@@ -226,6 +226,9 @@ export const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
 export const mockedIsFailoverErrorMessage = vi.fn(() => false);
+export const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
+  /^\s*an unknown error occurred\.?\s*$/i.test(raw),
+);
 export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
   const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
   return (
@@ -414,6 +417,10 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsFailoverAssistantError.mockReturnValue(false);
   mockedIsFailoverErrorMessage.mockReset();
   mockedIsFailoverErrorMessage.mockReturnValue(false);
+  mockedIsGenericUnknownStreamErrorMessage.mockReset();
+  mockedIsGenericUnknownStreamErrorMessage.mockImplementation((raw: string) =>
+    /^\s*an unknown error occurred\.?\s*$/i.test(raw),
+  );
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
     const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
@@ -644,6 +651,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
     isFailoverAssistantError: mockedIsFailoverAssistantError,
     isFailoverErrorMessage: mockedIsFailoverErrorMessage,
+    isGenericUnknownStreamErrorMessage: mockedIsGenericUnknownStreamErrorMessage,
     parseImageSizeError: mockedParseImageSizeError,
     parseImageDimensionError: mockedParseImageDimensionError,
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,

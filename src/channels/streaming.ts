@@ -443,6 +443,7 @@ export function buildChannelProgressDraftLine(
 ): ChannelProgressDraftLine | undefined {
   switch (input.event) {
     case "tool": {
+      const itemId = input.itemId ?? (input.toolCallId ? `tool:${input.toolCallId}` : undefined);
       return buildNamedProgressLine(
         input.event,
         input.name,
@@ -453,7 +454,7 @@ export function buildChannelProgressDraftLine(
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
-        { id: input.itemId ?? input.toolCallId },
+        { id: itemId },
       );
     }
     case "item": {

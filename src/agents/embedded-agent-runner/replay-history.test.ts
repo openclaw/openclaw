@@ -154,6 +154,79 @@ describe("normalizeAssistantReplayContent", () => {
     expect(out[2]).toBe(length);
   });
 
+  it("drops reasoning-only length turns before provider replay", () => {
+    const reasoningOnly = bedrockAssistant(
+      [
+        {
+          type: "thinking",
+          thinking: "partial hidden reasoning",
+          thinkingSignature: "partial-signature",
+        },
+        { type: "text", text: "  " },
+      ],
+      "length",
+      { output: 42, totalTokens: 42 },
+    );
+    const messages = [userMessage("before"), reasoningOnly, userMessage("continue")];
+
+    const out = normalizeAssistantReplayContent(messages);
+
+    expect(out).toEqual([messages[0], messages[2]]);
+    expect(JSON.stringify(out)).not.toContain("partial-signature");
+  });
+
+  it("drops length turns that become reasoning-only after content normalization", () => {
+    const messages = [
+      userMessage("before"),
+      bedrockAssistant(
+        [
+          {
+            type: "thinking",
+            thinking: "partial hidden reasoning",
+            thinkingSignature: "partial-signature",
+          },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        "length",
+      ),
+      {
+        ...bedrockAssistant([], "length"),
+        content: {
+          type: "thinking",
+          thinking: "partial object reasoning",
+          thinkingSignature: "partial-object-signature",
+        },
+      },
+      userMessage("continue"),
+    ] as AgentMessage[];
+
+    const out = normalizeAssistantReplayContent(messages);
+
+    expect(out).toEqual([messages[0], messages[3]]);
+  });
+
+  it("preserves length turns with visible text or tool calls", () => {
+    const visible = bedrockAssistant(
+      [
+        { type: "thinking", thinking: "partial reasoning", thinkingSignature: "sig_visible" },
+        { type: "text", text: "partial visible answer" },
+      ],
+      "length",
+    );
+    const toolCall = bedrockAssistant(
+      [
+        { type: "thinking", thinking: "partial reasoning", thinkingSignature: "sig_tool" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      ],
+      "length",
+    );
+    const messages = [userMessage("before"), visible, toolCall, userMessage("continue")];
+
+    const out = normalizeAssistantReplayContent(messages);
+
+    expect(out).toBe(messages);
+  });
+
   it("wraps legacy string assistant content as a single text block (regression)", () => {
     const messages = [userMessage("hi"), bedrockAssistant("plain string content")];
     const out = normalizeAssistantReplayContent(messages);

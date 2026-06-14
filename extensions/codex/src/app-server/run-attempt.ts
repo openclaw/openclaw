@@ -149,6 +149,7 @@ import {
   includeForcedCodexDynamicToolAllow,
   isCodexNativeExecutionBlockedByNodeExecHost,
   resolveCodexAppServerHookChannelId,
+  resolveCodexMessageToolProvider,
   resolveOpenClawCodingToolsSessionKeys,
   resetOpenClawCodingToolsFactoryForTests,
   setOpenClawCodingToolsFactoryForTests,
@@ -724,6 +725,12 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
+      currentChannelProvider: resolveCodexMessageToolProvider(params),
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadId: params.currentThreadTs,
+      replyToMode: params.replyToMode,
+      hasRepliedRef: params.hasRepliedRef,
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
@@ -1688,13 +1695,17 @@ export async function runCodexAppServerAttempt(
     return notificationQueue;
   };
 
+  const nativeSubagentCodexHome =
+    appServer.start.transport === "stdio"
+      ? (appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir))
+      : undefined;
   registerCodexNativeSubagentMonitor({
     client,
     parentThreadId: thread.threadId,
     requesterSessionKey: params.sessionKey,
     taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
     agentId: params.agentId,
-    codexHome: appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir),
+    codexHome: nativeSubagentCodexHome,
   });
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
