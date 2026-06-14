@@ -709,7 +709,7 @@ describe("lookupContextTokens", () => {
     ]);
 
     const cfg = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
-    const { resolveContextTokensForModel, lookupContextTokens } = await importContextModule();
+    const { resolveContextTokensForModel } = await importContextModule();
 
     // Act 1: First call with cfg triggers warming (allowAsyncLoad not set)
     const firstResult = resolveContextTokensForModel({

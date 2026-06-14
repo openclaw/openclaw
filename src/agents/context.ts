@@ -25,6 +25,8 @@ import {
   beginContextWindowCacheRefresh,
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
+import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
+import { loadModelCatalog } from "./model-catalog.runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export {
@@ -46,9 +48,6 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0,
 };
-const loadModelCatalogRuntime = () => import("./model-catalog.runtime.js");
-const loadStaticModelCatalogRuntime = () =>
-  import("./embedded-agent-runner/model.static-catalog.js");
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -210,8 +209,6 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
       try {
         // Read-only catalog loading overlays current config and manifest rows
         // onto persisted discovery without rewriting models.json.
-        const [{ loadModelCatalog }, { loadBundledProviderStaticCatalogContextModels }] =
-          await Promise.all([loadModelCatalogRuntime(), loadStaticModelCatalogRuntime()]);
         const [modelsResult, providerStaticModelsResult] = await Promise.allSettled([
           loadModelCatalog({ config: cfg, readOnly: true }),
           loadBundledProviderStaticCatalogContextModels({ cfg }),
