@@ -571,7 +571,35 @@ function shouldRecoverAnthropicThinkingError(
   error: unknown,
   sessionMeta: RecoverySessionMeta,
 ): boolean {
-  return shouldRecoverAnthropicThinkingErrorMessage(formatErrorMessage(error), sessionMeta);
+  // Collect error message candidates from the raw error chain before genericization.
+  // The formatted error may lose provider-level details (e.g. "Invalid signature in
+  // thinking block" is rewritten to "LLM request failed: provider rejected the request
+  // schema or tool payload."), so we also check the original Error message and its
+  // cause chain so that THINKING_BLOCK_ERROR_PATTERN can still match.
+  const candidates: string[] = [];
+  if (typeof error === "object" && error !== null) {
+    const err = error as Record<string, unknown>;
+    if (typeof err.message === "string") {
+      candidates.push(err.message);
+    }
+    // Traverse the cause chain for embedded provider-level details.
+    let cause: unknown = err.cause;
+    while (cause && typeof cause === "object" && cause !== null) {
+      const causeObj = cause as Record<string, unknown>;
+      if (typeof causeObj.message === "string") {
+        candidates.push(causeObj.message);
+      }
+      cause = causeObj.cause;
+    }
+  }
+  candidates.push(formatErrorMessage(error));
+
+  for (const candidate of candidates) {
+    if (shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function shouldRecoverAnthropicThinkingErrorMessage(
