@@ -9,6 +9,7 @@ import {
 import {
   isProtectedSessionMaintenanceEntry,
   resolveMaintenanceConfigFromInput,
+  resolveQuotaSuspensionEntryMaintenance,
   resolveSessionEntryMaintenanceHighWater,
 } from "./store-maintenance.js";
 import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } from "./store.js";
@@ -74,6 +75,72 @@ describe("pruneStaleEntries", () => {
     expect(store).toHaveProperty("agent:main:slack:channel:C999");
     expect(store).toHaveProperty("agent:main:telegram:group:-100123");
     expect(store).toHaveProperty("agent:main:discord:channel:ops");
+  });
+});
+
+describe("resolveQuotaSuspensionEntryMaintenance", () => {
+  it("returns an entry-scoped patch when a suspended session should resume", () => {
+    const now = Date.now();
+    const result = resolveQuotaSuspensionEntryMaintenance({
+      entry: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 30_000,
+          expectedResumeBy: now - 1,
+          state: "suspended",
+          reason: "quota_exhausted",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      now,
+      ttlMs: 30_000,
+    });
+
+    expect(result).toEqual({
+      patch: {
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 30_000,
+          expectedResumeBy: now - 1,
+          state: "resuming",
+          reason: "quota_exhausted",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      resumed: { laneId: "main" },
+      cleared: false,
+    });
+  });
+
+  it("returns an entry-scoped cleanup patch after the resume window expires", () => {
+    const now = Date.now();
+    const result = resolveQuotaSuspensionEntryMaintenance({
+      entry: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 61_000,
+          expectedResumeBy: now - 31_000,
+          state: "active",
+          reason: "circuit_open",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      now,
+      ttlMs: 30_000,
+    });
+
+    expect(result).toEqual({
+      patch: { quotaSuspension: undefined },
+      cleared: true,
+    });
   });
 });
 

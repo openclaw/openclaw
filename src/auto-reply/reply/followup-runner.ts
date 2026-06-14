@@ -24,7 +24,8 @@ import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -767,16 +768,33 @@ export function createFollowupRunner(params: {
         if (!storePath) {
           return;
         }
-        await updateSessionStore(storePath, (store) => {
-          const persistedEntry = store[replySessionKey];
-          if (!persistedEntry) {
-            return;
-          }
+        await updateSessionEntry({ storePath, sessionKey: replySessionKey }, (persistedEntry) => {
           if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
-            return;
+            return null;
           }
+          const shouldClearAuthProfile =
+            persistedEntry.authProfileOverrideSource === "auto" ||
+            (persistedEntry.authProfileOverrideSource === undefined &&
+              persistedEntry.authProfileOverrideCompactionCount !== undefined);
           clearAutoFallbackPrimaryProbeSelection(persistedEntry);
-          store[replySessionKey] = persistedEntry;
+          return {
+            providerOverride: undefined,
+            modelOverride: undefined,
+            modelOverrideSource: undefined,
+            modelOverrideFallbackOriginProvider: undefined,
+            modelOverrideFallbackOriginModel: undefined,
+            ...(shouldClearAuthProfile
+              ? {
+                  authProfileOverride: undefined,
+                  authProfileOverrideSource: undefined,
+                  authProfileOverrideCompactionCount: undefined,
+                }
+              : {}),
+            fallbackNoticeSelectedModel: undefined,
+            fallbackNoticeActiveModel: undefined,
+            fallbackNoticeReason: undefined,
+            updatedAt: persistedEntry.updatedAt,
+          };
         });
       };
       fallbackProvider = run.provider;
