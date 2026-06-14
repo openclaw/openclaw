@@ -136,7 +136,33 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    if (typeof parsed.seamColor === "string" && parsed.seamColor) {
+      applySeamColor(parsed.seamColor);
+    }
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
+  }
+}
+
+function applySeamColor(hex: string): void {
+  const root = document.documentElement;
+  root.style.setProperty("--accent", hex);
+  root.style.setProperty("--accent-muted", hex);
+  root.style.setProperty("--primary", hex);
+  root.style.setProperty(
+    "--accent-subtle",
+    `color-mix(in srgb, ${hex} 12%, transparent)`,
+  );
+  root.style.setProperty(
+    "--accent-glow",
+    `color-mix(in srgb, ${hex} 20%, transparent)`,
+  );
+  try {
+    root.style.setProperty(
+      "--accent-hover",
+      `oklch(from ${hex} calc(l + 0.1) c h)`,
+    );
+  } catch {
+    /* relative color syntax not supported */
   }
 }
