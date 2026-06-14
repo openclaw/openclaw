@@ -4137,25 +4137,61 @@ describe("handleFeishuMessage command authorization", () => {
   });
 });
 
-describe("createFeishuMessageReceiveHandler media dedupe", () => {
+describe("createFeishuMessageReceiveHandler", () => {
+  function createReceiveHandlerChannelRuntime() {
+    return {
+      debounce: {
+        resolveInboundDebounceMs: vi.fn(() => 0),
+        createInboundDebouncer: vi.fn(
+          (options: { onFlush: (entries: FeishuMessageEvent[]) => Promise<void> | void }) => ({
+            enqueue: async (event: FeishuMessageEvent) => {
+              await options.onFlush([event]);
+            },
+          }),
+        ),
+      },
+      commands: {
+        isControlCommandMessage: vi.fn(() => false),
+      },
+    };
+  }
+
+  function createDeferred() {
+    let resolve: (() => void) | undefined;
+    const promise = new Promise<void>((res) => {
+      resolve = res;
+    });
+    if (!resolve) {
+      throw new Error("Expected deferred resolver to be initialized");
+    }
+    return { promise, resolve };
+  }
+
+  function createReceiveTextEvent(params: {
+    messageId: string;
+    text: string;
+    chatId?: string;
+  }): FeishuMessageEvent {
+    return {
+      sender: {
+        sender_id: {
+          open_id: "ou-receive-text",
+        },
+      },
+      message: {
+        message_id: params.messageId,
+        chat_id: params.chatId ?? "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: params.text }),
+      },
+    };
+  }
+
   it("keeps same-id media variants distinct at receive time", async () => {
     const handleMessage = vi.fn(async () => undefined);
     const core = {
-      channel: {
-        debounce: {
-          resolveInboundDebounceMs: vi.fn(() => 0),
-          createInboundDebouncer: vi.fn(
-            (options: { onFlush: (entries: FeishuMessageEvent[]) => Promise<void> | void }) => ({
-              enqueue: async (event: FeishuMessageEvent) => {
-                await options.onFlush([event]);
-              },
-            }),
-          ),
-        },
-        text: {
-          hasControlCommand: vi.fn(() => false),
-        },
-      },
+      channel: createReceiveHandlerChannelRuntime(),
     } as unknown as PluginRuntime;
     const createAudioEvent = (fileKey: string): FeishuMessageEvent => ({
       sender: {
@@ -4204,5 +4240,63 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     }>(handleMessage, 1, 0);
     expect(secondCall.event).toEqual(secondEvent);
     expect(secondCall.processingClaimHeld).toBe(true);
+  });
+
+  it("lets same-chat followups reach the gateway while an ordinary queue task is active", async () => {
+    const firstStarted = createDeferred();
+    const firstCanFinish = createDeferred();
+    const secondStarted = createDeferred();
+    const handleMessage = vi.fn(
+      async ({ event }: { event?: FeishuMessageEvent; processingClaimHeld?: boolean }) => {
+        if (event?.message.message_id === "msg-active-run") {
+          firstStarted.resolve();
+          await firstCanFinish.promise;
+        }
+        if (event?.message.message_id === "msg-followup") {
+          secondStarted.resolve();
+        }
+      },
+    );
+    const core = {
+      channel: createReceiveHandlerChannelRuntime(),
+    } as unknown as PluginRuntime;
+    const handler = createFeishuMessageReceiveHandler({
+      cfg: { channels: { feishu: { dmPolicy: "open" } } } as ClawdbotConfig,
+      channelRuntime: core.channel,
+      accountId: "receive-active-followup",
+      chatHistories: new Map(),
+      handleMessage,
+      resolveDebounceText: ({ event }) => JSON.parse(event.message.content).text,
+      hasProcessedMessage: vi.fn(async () => false),
+      recordProcessedMessage: vi.fn(async () => true),
+    });
+
+    const firstPromise = handler(
+      createReceiveTextEvent({
+        messageId: "msg-active-run",
+        text: "start a long run",
+      }),
+    );
+    await firstStarted.promise;
+
+    await handler(
+      createReceiveTextEvent({
+        messageId: "msg-followup",
+        text: "please include this",
+      }),
+    );
+    await secondStarted.promise;
+
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(
+      mockCallArg<{ event?: FeishuMessageEvent; processingClaimHeld?: boolean }>(
+        handleMessage,
+        1,
+        0,
+      ).event?.message.message_id,
+    ).toBe("msg-followup");
+
+    firstCanFinish.resolve();
+    await firstPromise;
   });
 });
