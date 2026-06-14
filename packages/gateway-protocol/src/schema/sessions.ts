@@ -216,6 +216,7 @@ export const SessionsPreviewParamsSchema = Type.Object(
 export const SessionsDescribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     includeDerivedTitles: Type.Optional(Type.Boolean()),
     includeLastMessage: Type.Optional(Type.Boolean()),
   },
