@@ -5,6 +5,7 @@ import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
+import { formatUnknownText } from "../format.ts";
 import { icons } from "../icons.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
@@ -66,8 +67,14 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.text === "string") {
     return item.text;
   }
+  if (item.text != null && typeof item.text === "object") {
+    return formatUnknownText(item.text, { pretty: true });
+  }
   if (typeof item.content === "string") {
     return item.content;
+  }
+  if (item.content != null && typeof item.content === "object" && !Array.isArray(item.content)) {
+    return formatUnknownText(item.content, { pretty: true });
   }
   if (Array.isArray(item.content)) {
     const parts = item.content.flatMap((entry) => {
