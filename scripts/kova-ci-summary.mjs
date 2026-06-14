@@ -29,6 +29,8 @@ const keyMetricIds = [
   "agentCleanupP95Ms",
   "runtimeDepsStagingMs",
 ];
+const rssMetricIds = ["peakRssMb", "resourcePeakGatewayRssMb"];
+const cpuMetricIds = ["cpuPercentMax"];
 
 const reportPath = path.resolve(args.report);
 const report = JSON.parse(await readFile(reportPath, "utf8"));
@@ -177,7 +179,27 @@ function validateKovaSummaryReport(reportLocal) {
   if (records.length === 0 && groups.length === 0) {
     return "missing records or performance groups";
   }
+  if (groups.length > 0 && !hasExplicitResourceCollectionSkip(reportLocal)) {
+    if (!groups.some((group) => hasSampledMetric(group, rssMetricIds))) {
+      return "missing sampled RSS metric in performance groups";
+    }
+    if (!groups.some((group) => hasSampledMetric(group, cpuMetricIds))) {
+      return "missing sampled CPU metric in performance groups";
+    }
+  }
   return null;
+}
+
+function hasExplicitResourceCollectionSkip(reportLocal) {
+  const reason = reportLocal.performance?.resourceCollectionSkippedReason;
+  return typeof reason === "string" && reason.trim().length > 0;
+}
+
+function hasSampledMetric(group, metricIds) {
+  return metricIds.some((metricId) => {
+    const metric = group?.metrics?.[metricId];
+    return metric && Number(metric.count) > 0;
+  });
 }
 
 function collectViolations(records) {
@@ -219,12 +241,16 @@ function value(input) {
 
 function parseArgs(argv) {
   const parsed = {};
+  const knownKeys = new Set(["report", "output", "lane", "reporturl", "artifacturl"]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg.startsWith("--")) {
       usage(`unexpected argument: ${arg}`);
     }
     const key = arg.slice(2).replaceAll("-", "");
+    if (!knownKeys.has(key)) {
+      usage(`unknown argument: ${arg}`);
+    }
     const valueLocal = argv[index + 1];
     if (!valueLocal || valueLocal.startsWith("--")) {
       usage(`${arg} requires a value`);
@@ -243,7 +269,7 @@ function parseArgs(argv) {
 
 function usage(message, status = 2) {
   const text =
-    "usage: node scripts/kova-ci-summary.mjs --report <report.json> [--output <summary.md>] [--lane <name>]\n";
+    "usage: node scripts/kova-ci-summary.mjs --report <report.json> [--output <summary.md>] [--lane <name>] [--report-url <url>] [--artifact-url <url>]\n";
   if (message) {
     console.error(`error: ${message}`);
   }

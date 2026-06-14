@@ -3,8 +3,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 function numericCount(value) {
-  const count = Number(value);
-  return Number.isFinite(count) ? count : undefined;
+  if (typeof value !== "number") {
+    return undefined;
+  }
+  return Number.isFinite(value) ? value : undefined;
+}
+
+const rssMetricIds = ["peakRssMb", "resourcePeakGatewayRssMb"];
+const cpuMetricIds = ["cpuPercentMax"];
+
+function hasSampledMetric(group, metricIds) {
+  return metricIds.some((metricId) => {
+    const metric = group?.metrics?.[metricId];
+    return metric && Number(metric.count) > 0;
+  });
 }
 
 export function evaluateToleratedPartialKovaReport(report) {
@@ -16,15 +28,21 @@ export function evaluateToleratedPartialKovaReport(report) {
     return { ok: false, reason: `gate verdict was ${JSON.stringify(gate.verdict)}` };
   }
 
-  const blockingCount = numericCount(gate.blockingCount ?? 0);
-  if (blockingCount === undefined || blockingCount !== 0) {
+  const blockingCount = numericCount(gate.blockingCount);
+  if (blockingCount === undefined) {
+    return { ok: false, reason: "missing blocking count" };
+  }
+  if (blockingCount !== 0) {
     return { ok: false, reason: `blocking count was ${JSON.stringify(gate.blockingCount)}` };
   }
 
   const baselineRegressionCount = numericCount(
-    report?.baseline?.comparison?.regressionCount ?? report?.gate?.baseline?.regressionCount ?? 0,
+    report?.baseline?.comparison?.regressionCount ?? report?.gate?.baseline?.regressionCount,
   );
-  if (baselineRegressionCount === undefined || baselineRegressionCount !== 0) {
+  if (baselineRegressionCount === undefined) {
+    return { ok: false, reason: "missing baseline regression count" };
+  }
+  if (baselineRegressionCount !== 0) {
     return {
       ok: false,
       reason: `baseline regression count was ${JSON.stringify(baselineRegressionCount)}`,
@@ -51,6 +69,24 @@ export function evaluateToleratedPartialKovaReport(report) {
         .map(([status, count]) => `${status}=${count}`)
         .join(", ")}`,
     };
+  }
+
+  const records = Array.isArray(report?.records) ? report.records : [];
+  if (records.length === 0) {
+    return { ok: false, reason: "missing selected scenario records" };
+  }
+
+  const groups = Array.isArray(report?.performance?.groups) ? report.performance.groups : [];
+  if (groups.length === 0) {
+    return { ok: false, reason: "missing performance groups" };
+  }
+
+  if (!groups.some((group) => hasSampledMetric(group, rssMetricIds))) {
+    return { ok: false, reason: "missing sampled RSS metric in performance groups" };
+  }
+
+  if (!groups.some((group) => hasSampledMetric(group, cpuMetricIds))) {
+    return { ok: false, reason: "missing sampled CPU metric in performance groups" };
   }
 
   return { ok: true };

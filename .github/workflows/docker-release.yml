@@ -88,11 +88,30 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
+      - name: Pre-pull BuildKit image
+        shell: bash
+        env:
+          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if docker pull "${BUILDKIT_IMAGE}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "4" ]]; then
+              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 10))
+            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "${sleep_seconds}"
+          done
+
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -279,11 +298,30 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
 
+      - name: Pre-pull BuildKit image
+        shell: bash
+        env:
+          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if docker pull "${BUILDKIT_IMAGE}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "4" ]]; then
+              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 10))
+            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "${sleep_seconds}"
+          done
+
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -468,7 +506,7 @@ jobs:
           fetch-depth: 0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -561,11 +599,30 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Pre-pull BuildKit image
+        shell: bash
+        env:
+          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if docker pull "${BUILDKIT_IMAGE}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "4" ]]; then
+              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 10))
+            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "${sleep_seconds}"
+          done
+
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}

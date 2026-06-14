@@ -26,10 +26,14 @@ function positiveIntegerFlag(flag, key) {
       if (argv[index] !== flag) {
         return null;
       }
+      const rawValue = argv[index + 1];
+      if (!rawValue || rawValue.startsWith("--")) {
+        throw new Error(`${flag} requires a value`);
+      }
       return {
         nextIndex: index + 1,
         apply(target) {
-          target[key] = parsePositiveInteger(argv[index + 1], flag);
+          target[key] = parsePositiveInteger(rawValue, flag);
         },
       };
     },
@@ -51,7 +55,6 @@ export function parseArgs(argv) {
       positiveIntegerFlag("--max-workers", "maxWorkers"),
     ],
     {
-      allowUnknownOptions: true,
       onUnhandledArg(arg, target) {
         if (arg === "--no-rss") {
           target.rss = false;
@@ -116,6 +119,21 @@ export function formatRss(valueBytes) {
   return `${(valueBytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
+export function resolveBenchRssResult({ label, output, rss, status }) {
+  if (!rss) {
+    return { maxRssBytes: null, output, status };
+  }
+  const maxRssBytes = parseMaxRssBytes(output);
+  if (status === 0 && maxRssBytes === null) {
+    return {
+      maxRssBytes,
+      output: `${output}${output.endsWith("\n") ? "" : "\n"}[bench-test-changed] ${label} missing maximum resident set size from /usr/bin/time -l output\n`,
+      status: 1,
+    };
+  }
+  return { maxRssBytes, output, status };
+}
+
 function runBenchCommand(params) {
   const env = { ...process.env };
   if (typeof params.maxWorkers === "number") {
@@ -135,11 +153,17 @@ function runBenchCommand(params) {
   );
   const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  const normalized = resolveBenchRssResult({
+    label: params.label,
+    output,
+    rss: params.rss,
+    status: result.status ?? 1,
+  });
   return {
     elapsedMs,
-    maxRssBytes: params.rss ? parseMaxRssBytes(output) : null,
-    status: result.status ?? 1,
-    output,
+    maxRssBytes: normalized.maxRssBytes,
+    status: normalized.status,
+    output: normalized.output,
   };
 }
 
@@ -196,6 +220,7 @@ function main() {
   const routed = runBenchCommand({
     command: routedCommand,
     cwd: opts.cwd,
+    label: "routed",
     rss: opts.rss,
     ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
   });
@@ -208,6 +233,7 @@ function main() {
   const root = runBenchCommand({
     command: rootCommand,
     cwd: opts.cwd,
+    label: "root",
     rss: opts.rss,
     ...(typeof opts.maxWorkers === "number" ? { maxWorkers: opts.maxWorkers } : {}),
   });

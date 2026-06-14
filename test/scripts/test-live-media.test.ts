@@ -4,6 +4,7 @@ import {
   MEDIA_SUITES,
   findSkippedExplicitProviderSelections,
   parseArgs,
+  runCli,
 } from "../../scripts/test-live-media.ts";
 
 describe("scripts/test-live-media", () => {
@@ -44,6 +45,13 @@ describe("scripts/test-live-media", () => {
     });
   });
 
+  it("parses the explicit empty-run escape hatch", () => {
+    expect(parseArgs(["--allow-empty"])).toMatchObject({
+      allowEmpty: true,
+      requireAuth: true,
+    });
+  });
+
   it("fails explicit suite selections that auth filtering would skip", () => {
     const options = parseArgs([
       "image",
@@ -78,5 +86,33 @@ describe("scripts/test-live-media", () => {
     ]);
 
     expect(skipped).toEqual([]);
+  });
+
+  it("fails default live media runs when auth filtering leaves no providers", async () => {
+    await expect(
+      runCli(["image"], {
+        buildRunPlanImpl: () => [
+          {
+            providers: [],
+            skippedReason: "no providers with usable auth",
+            suite: MEDIA_SUITES.image,
+          },
+        ],
+      }),
+    ).resolves.toBe(1);
+  });
+
+  it("allows empty live media runs only with an explicit escape hatch", async () => {
+    await expect(
+      runCli(["image", "--allow-empty"], {
+        buildRunPlanImpl: () => [
+          {
+            providers: [],
+            skippedReason: "no providers with usable auth",
+            suite: MEDIA_SUITES.image,
+          },
+        ],
+      }),
+    ).resolves.toBe(0);
   });
 });

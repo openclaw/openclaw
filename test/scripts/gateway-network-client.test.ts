@@ -6,6 +6,22 @@ import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/
 import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mjs";
 
 describe("gateway network WebSocket open guard", () => {
+  function healthResponse() {
+    return {
+      ok: true,
+      payload: {
+        agents: [],
+        channelOrder: [],
+        channels: {},
+        defaultAgentId: "codex",
+        durationMs: 3,
+        ok: true,
+        sessions: { count: 0, path: "/state/sessions", recent: [] },
+        ts: Date.now(),
+      },
+    };
+  }
+
   it("rejects loose client timeout env values instead of parsing prefixes", () => {
     expect(() =>
       readGatewayNetworkClientConnectTimeoutMs({
@@ -129,7 +145,7 @@ describe("gateway network WebSocket open guard", () => {
   }
 
   it("proves health after the authenticated connect handshake", async () => {
-    const harness = createNetworkClientHarness([{ ok: true }, { ok: true }]);
+    const harness = createNetworkClientHarness([{ ok: true }, healthResponse()]);
 
     await runGatewayNetworkClient(
       { token: "secret-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
@@ -138,6 +154,21 @@ describe("gateway network WebSocket open guard", () => {
 
     expect(harness.sentMethods).toEqual(["connect", "health"]);
     expect(harness.stdout).toEqual(["ok"]);
+    expect(harness.closeCount).toBe(1);
+  });
+
+  it("fails a connected socket whose health success lacks summary evidence", async () => {
+    const harness = createNetworkClientHarness([{ ok: true }, { ok: true }]);
+
+    await expect(
+      runGatewayNetworkClient(
+        { token: "secret-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
+        harness.deps,
+      ),
+    ).rejects.toThrow("health failed: missing health summary payload");
+
+    expect(harness.sentMethods).toEqual(["connect", "health"]);
+    expect(harness.stdout).toEqual([]);
     expect(harness.closeCount).toBe(1);
   });
 

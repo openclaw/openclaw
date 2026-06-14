@@ -10,9 +10,12 @@ import {
   loadRunOverflowCompactionHarness,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
+  mockedIsFailoverAssistantError,
+  mockedIsRateLimitAssistantError,
   mockedLog,
   mockedRunEmbeddedAttempt,
   mockedResolveModelAsync,
+  mockedSleepWithAbort,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
@@ -38,6 +41,7 @@ import {
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
   shouldRetryMissingAssistantTurn,
+  shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -408,6 +412,71 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   });
 
+  it("records same-model rate-limit retries without a profile-rotation trace", async () => {
+    const rateLimitMessage =
+      "429 rate_limit_exceeded: requests per minute exceeded; Retry-After: 30";
+    mockedClassifyFailoverReason.mockImplementation((raw) =>
+      raw.includes("429") ? "rate_limit" : null,
+    );
+    mockedIsFailoverAssistantError.mockImplementation((assistant) =>
+      Boolean(assistant?.errorMessage?.includes("429")),
+    );
+    mockedIsRateLimitAssistantError.mockImplementation((assistant) =>
+      Boolean(assistant?.errorMessage?.includes("429")),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "openai",
+          model: "gpt-5.5",
+          errorMessage: rateLimitMessage,
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered after a short rate-limit wait."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Recovered after a short rate-limit wait." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-same-model-rate-limit-trace",
+    });
+
+    expect(mockedSleepWithAbort).toHaveBeenCalledWith(30_000, undefined);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
+    expect(result.meta.executionTrace?.attempts).toMatchObject([
+      {
+        provider: "openai",
+        model: "gpt-5.5",
+        result: "same_model_rate_limit",
+        reason: "rate_limit",
+        stage: "assistant",
+      },
+      {
+        provider: "openai",
+        model: "gpt-5.5",
+        result: "success",
+        stage: "assistant",
+      },
+    ]);
+  });
+
   it("auto-activates strict-agentic for unconfigured GPT-5 openai runs and surfaces the blocked state", async () => {
     // Criterion 1 of the GPT-5.4 parity gate ("no stalls after planning") must
     // cover out-of-the-box installs, not only users who opted in. An
@@ -625,7 +694,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it("does not retry reasoning-only turns when the assistant ended in error", async () => {
+  it("retries reasoning-only turns when the assistant ended in error", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -646,6 +715,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Recovered." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
 
     const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
@@ -654,9 +735,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runId: "run-reasoning-only-assistant-error",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("Please try again");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
   });
 
   it("does not retry reasoning-only turns for non-strict-agentic providers", async () => {
@@ -2461,6 +2541,191 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
+  it("surfaces incomplete-turn text for errored signed-thinking-only turns with payloads", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "anthropic",
+          model: "claude-opus-4-8",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning before provider error",
+              thinkingSignature: JSON.stringify({ id: "rs_error_payload", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
+  it.each([
+    [
+      "heartbeat responses",
+      {
+        heartbeatToolResponse: {
+          outcome: "progress" as const,
+          notify: false,
+          summary: "Still working",
+        },
+      },
+    ],
+    ["tool media", { toolMediaUrls: ["file:///tmp/render.png"] }],
+    ["voice media", { toolAudioAsVoice: true }],
+    ["trusted local media", { toolTrustedLocalMedia: true }],
+    [
+      "source reply payloads",
+      { messagingToolSourceReplyPayloads: [{ text: "Delivered through the source reply." }] },
+    ],
+    ["delivered source replies", { didDeliverSourceReplyViaMessageTool: true }],
+  ] satisfies Array<[string, Partial<EmbeddedRunAttemptResult>]>)(
+    "does not replace terminal %s with an incomplete-turn warning",
+    (_label, attemptState) => {
+      const incompleteTurnText = resolveIncompleteTurnPayloadText({
+        payloadCount: 1,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          ...attemptState,
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "error",
+            provider: "anthropic",
+            model: "claude-opus-4-8",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal reasoning before provider error",
+                thinkingSignature: JSON.stringify({
+                  id: "rs_terminal_payload",
+                  type: "reasoning",
+                }),
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      });
+
+      expect(incompleteTurnText).toBeNull();
+    },
+  );
+
+  it("retries replay-safe errored turns that only emitted thinking blocks", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning before provider error",
+          thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+        },
+        { type: "redacted_thinking", data: "opaque" },
+        { type: "text", text: " " },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not retry errored empty turns when non-zero output may indicate progress", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      content: [],
+      usage: { input: 100, output: 12, totalTokens: 112 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "visible text",
+      content: [
+        { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+        { type: "text", text: "partial answer" },
+      ],
+    },
+    {
+      name: "tool call",
+      content: [
+        { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
+      ],
+    },
+    {
+      name: "unknown block",
+      content: [{ type: "provider_metadata", value: "opaque" }],
+    },
+  ])("does not retry errored turns containing $name", ({ content }) => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content,
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not retry errored thinking-only turns after side effects", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "redacted_thinking",
+          data: "opaque",
+        },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
   it("detects empty openai-compatible stop turns with non-zero output usage", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "llamacpp",
@@ -2638,6 +2903,62 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
+  it("treats exact NO_REPLY assistant turns as silent only when the caller allows it", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(true);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: false,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats post-tool exact NO_REPLY assistant turns as intentional silence", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: ["NO_REPLY"],
+      toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(true);
+  });
+
   it("does not treat error or side-effect empty turns as silent", () => {
     const errorAttempt = makeAttemptResult({
       assistantTexts: [],
@@ -2647,6 +2968,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         provider: "openai",
         model: "gpt-5.5",
         content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    const silentErrorAttempt = makeAttemptResult({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "error",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "NO_REPLY" }],
       } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
     });
     const sideEffectAttempt = makeAttemptResult({
@@ -2659,6 +2990,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         provider: "openai",
         model: "gpt-5.5",
         content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    const postToolEmptyAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+      lastAssistant: {
+        role: "assistant",
+        api: "openai-completions",
+        stopReason: "stop",
+        provider: "stepfun",
+        model: "step-router-v1",
+        content: [],
       } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
     });
 
@@ -2677,7 +3020,25 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         payloadCount: 0,
         aborted: false,
         timedOut: false,
+        attempt: silentErrorAttempt,
+      }),
+    ).toBe(false);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
         attempt: sideEffectAttempt,
+      }),
+    ).toBe(false);
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: postToolEmptyAttempt,
       }),
     ).toBe(false);
   });
@@ -2709,6 +3070,154 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const onlyCall = runAttemptCall(0);
     expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
+    expect(result.meta.terminalReplyKind).toBe("silent-empty");
+    expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("returns NO_REPLY without retrying exact silent assistant replies when silence is allowed", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({ id: "rs_exact_silent", type: "reasoning" }),
+            },
+            { type: "text", text: "NO_REPLY" },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      allowEmptyAssistantReplyAsSilent: true,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-exact-silent-assistant-reply",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    const onlyCall = runAttemptCall(0);
+    expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expectNoWarnMessageWith("empty response detected");
+    expectNoWarnMessageWith("incomplete turn detected");
+    expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
+    expect(result.meta.terminalReplyKind).toBe("silent-empty");
+    expect(result.meta.livenessState).toBe("working");
+  });
+
+  it("retries post-tool openai-compatible empty stop turns even when empty silence is allowed", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "step-router-v1",
+        provider: "stepfun",
+        contextWindow: 200000,
+        api: "openai-completions",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "stepfun",
+          model: "step-router-v1",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible StepFun answer."],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "stepfun",
+          model: "step-router-v1",
+          content: [{ type: "text", text: "Visible StepFun answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      allowEmptyAssistantReplyAsSilent: true,
+      provider: "stepfun",
+      model: "step-router-v1",
+      runId: "run-post-tool-openai-compatible-empty-stop",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expect(result.meta.terminalReplyKind).toBeUndefined();
+    expect(result.meta.finalAssistantVisibleText).toBe("Visible StepFun answer.");
+    expectWarnMessageWith("empty response detected");
+  });
+
+  it("returns NO_REPLY without retrying post-tool exact silent assistant replies", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "step-router-v1",
+        provider: "stepfun",
+        contextWindow: 200000,
+        api: "openai-completions",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["NO_REPLY"],
+        toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "stepfun",
+          model: "step-router-v1",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      allowEmptyAssistantReplyAsSilent: true,
+      provider: "stepfun",
+      model: "step-router-v1",
+      runId: "run-post-tool-exact-silent-retry",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    const onlyCall = runAttemptCall(0);
+    expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expectNoWarnMessageWith("empty response detected");
+    expectNoWarnMessageWith("incomplete turn detected");
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
     expect(result.meta.terminalReplyKind).toBe("silent-empty");
     expect(result.meta.livenessState).toBe("working");

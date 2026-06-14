@@ -4,7 +4,8 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
 
@@ -21,7 +22,6 @@ function textContent(
 describe("read tool", () => {
   it("reads managed inbound media refs as image files", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const mediaId = `read-tool-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
     const mediaPath = path.join(stateDir, "media", "inbound", mediaId);
     await fs.mkdir(path.dirname(mediaPath), { recursive: true });
@@ -29,26 +29,27 @@ describe("read tool", () => {
 
     const tool = createReadToolDefinition("/workspace", { autoResizeImages: false });
     try {
-      const result = await tool.execute(
-        "call-1",
-        { path: `media://inbound/${mediaId}` },
-        undefined,
-        undefined,
-        {} as never,
-      );
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const result = await tool.execute(
+          "call-1",
+          { path: `media://inbound/${mediaId}` },
+          undefined,
+          undefined,
+          {} as never,
+        );
 
-      expect(result.content).toHaveLength(2);
-      expect(result.content[0]).toStrictEqual({
-        type: "text",
-        text: "Read image file [image/png]",
-      });
-      expect(result.content[1]).toStrictEqual({
-        type: "image",
-        data: ONE_PIXEL_PNG_BASE64,
-        mimeType: "image/png",
+        expect(result.content).toHaveLength(2);
+        expect(result.content[0]).toStrictEqual({
+          type: "text",
+          text: "Read image file [image/png]",
+        });
+        expect(result.content[1]).toStrictEqual({
+          type: "image",
+          data: ONE_PIXEL_PNG_BASE64,
+          mimeType: "image/png",
+        });
       });
     } finally {
-      vi.unstubAllEnvs();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

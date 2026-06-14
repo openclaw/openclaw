@@ -29,6 +29,7 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { isReasoningOnlyLengthAssistantTurn } from "../replay-turn-classification.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -361,12 +362,19 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (Array.isArray(replayContent)) {
       const normalized = normalizeAssistantReplayBlockContent(assistantMessage, replayContent);
       if (normalized !== assistantMessage) {
-        if (normalized) {
-          out.push(normalized);
-        }
         touched = true;
-        continue;
+        if (!normalized) {
+          continue;
+        }
+        assistantMessage = normalized as AssistantReplayMessage;
+        replayContent = assistantMessage.content;
       }
+    }
+    if (isReasoningOnlyLengthAssistantTurn(assistantMessage)) {
+      // Token-limited thinking is incomplete provider state. Replaying it can
+      // resend a partial signature, while visible text or tool calls remain useful.
+      touched = true;
+      continue;
     }
     if (Array.isArray(replayContent) && replayContent.length === 0) {
       // An assistant turn can legitimately end with `content: []` — for
@@ -705,6 +713,7 @@ export async function sanitizeSessionHistory(params: {
       sanitizeToolCallIds:
         policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
       toolCallIdMode: policy.toolCallIdMode,
+      duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
       preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
@@ -769,6 +778,7 @@ export async function sanitizeSessionHistory(params: {
     policy.sanitizeToolCallIds && policy.toolCallIdMode
       ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
           preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
           allowedToolNames: params.allowedToolNames,
         })

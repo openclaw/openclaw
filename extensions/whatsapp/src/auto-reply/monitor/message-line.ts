@@ -1,15 +1,19 @@
 // Whatsapp plugin module implements message line behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getPrimaryIdentityId, getReplyContext, getSenderIdentity } from "../../identity.js";
-import type { WebInboundMsg } from "../types.js";
+import {
+  getPrimaryIdentityId,
+  getReplyContext,
+  getSenderIdentity,
+  type WhatsAppReplyContext,
+} from "../../identity.js";
+import type { WebInboundMessage } from "../../inbound/types.js";
 import {
   formatInboundEnvelope,
   resolveMessagePrefix,
   type EnvelopeFormatOptions,
 } from "./message-line.runtime.js";
 
-export function formatReplyContext(msg: WebInboundMsg) {
-  const replyTo = getReplyContext(msg);
+function formatReplyTarget(replyTo: WhatsAppReplyContext | null) {
   if (!replyTo?.body) {
     return null;
   }
@@ -18,12 +22,17 @@ export function formatReplyContext(msg: WebInboundMsg) {
   return `[Replying to ${sender}${idPart}]\n${replyTo.body}\n[/Replying]`;
 }
 
+export function formatReplyContext(msg: WebInboundMessage) {
+  return formatReplyTarget(getReplyContext(msg));
+}
+
 export function buildInboundLine(params: {
   cfg: OpenClawConfig;
-  msg: WebInboundMsg;
+  msg: WebInboundMessage;
   agentId: string;
   previousTimestamp?: number;
   envelope?: EnvelopeFormatOptions;
+  visibleReplyTo?: WhatsAppReplyContext | null;
 }) {
   const { cfg, msg, agentId, previousTimestamp, envelope } = params;
   // WhatsApp inbound prefix: channels.whatsapp.messagePrefix > legacy messages.messagePrefix > identity/defaults
@@ -32,15 +41,18 @@ export function buildInboundLine(params: {
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
   });
   const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
-  const replyContext = formatReplyContext(msg);
-  const baseLine = `${prefixStr}${msg.body}${replyContext ? `\n\n${replyContext}` : ""}`;
+  const replyContext =
+    params.visibleReplyTo === undefined
+      ? formatReplyContext(msg)
+      : formatReplyTarget(params.visibleReplyTo);
+  const baseLine = `${prefixStr}${msg.payload.body}${replyContext ? `\n\n${replyContext}` : ""}`;
   const sender = getSenderIdentity(msg);
 
   // Wrap with standardized envelope for the agent.
   return formatInboundEnvelope({
     channel: "WhatsApp",
     from: msg.chatType === "group" ? msg.from : msg.from?.replace(/^whatsapp:/, ""),
-    timestamp: msg.timestamp,
+    timestamp: msg.event.timestamp,
     body: baseLine,
     chatType: msg.chatType,
     sender: {
@@ -50,6 +62,6 @@ export function buildInboundLine(params: {
     },
     previousTimestamp,
     envelope,
-    fromMe: msg.fromMe,
+    fromMe: msg.platform.fromMe,
   });
 }

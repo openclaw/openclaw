@@ -151,7 +151,7 @@ Use `rerun_group` to avoid repeating unrelated release boxes:
 | `package`           | Package Acceptance.                                                                             |
 | `qa`                | QA parity plus QA live lanes.                                                                   |
 | `qa-parity`         | QA parity lanes and report only.                                                                |
-| `qa-live`           | QA live Matrix and Telegram only.                                                               |
+| `qa-live`           | QA live Matrix/Telegram plus gated Discord, WhatsApp, and Slack lanes when enabled.             |
 | `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |
 
 Use `live_suite_filter` with `rerun_group=live-e2e` when one live suite failed.
@@ -172,10 +172,14 @@ summaries include per-phase timings for packaged upgrade lanes, and long-running
 commands print heartbeat lines so a stuck Windows update is visible before the
 job timeout.
 
-QA release-check lanes are advisory except the standard runtime tool coverage
-gate. Required OpenClaw dynamic tool drift in the standard tier blocks the
-release-check verifier; other QA-only failures are reported as warnings. Rerun
-`rerun_group=qa`, `qa-parity`, or `qa-live` when you need fresh QA evidence.
+QA release-check failures block normal release validation. Required OpenClaw
+dynamic tool drift in the standard tier also blocks the release-check verifier.
+Tideclaw alpha runs may still treat non-package-safety release-check lanes as
+advisory. When `live_suite_filter` explicitly requests a gated QA live lane such
+as Discord, WhatsApp, or Slack, the matching
+`OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo variable must be enabled; otherwise
+input capture fails instead of silently skipping the lane. Rerun `rerun_group=qa`,
+`qa-parity`, or `qa-live` when you need fresh QA evidence.
 
 ## Evidence to keep
 

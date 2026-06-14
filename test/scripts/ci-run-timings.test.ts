@@ -257,9 +257,23 @@ describe("scripts/ci-run-timings.mjs", () => {
       ["--limit=1e3"],
       ["--recent", "recent"],
       ["--recent", "0"],
-      ["--recent"],
     ]) {
       expect(() => parseRunTimingArgs(args)).toThrow("must be a positive integer");
     }
+  });
+
+  it("rejects missing monitor limits instead of treating flags as values", () => {
+    for (const args of [["--limit"], ["--limit", "--recent", "4"], ["--recent"]]) {
+      expect(() => parseRunTimingArgs(args)).toThrow("requires a value");
+    }
+  });
+
+  it("rejects unknown monitor flags and duplicate run ids", () => {
+    expect(() => parseRunTimingArgs(["--run-id", "123456"])).toThrow(
+      "Unknown CI run timing option: --run-id",
+    );
+    expect(() => parseRunTimingArgs(["123456", "789012"])).toThrow(
+      "Unexpected CI run id argument: 789012",
+    );
   });
 });

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { normalizeConfigPatchReplacePath } from "../config/patch-replace-paths.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -111,6 +112,7 @@ function expectConfigMutationCall(params: {
   action: "config.apply" | "config.patch";
   raw: string;
   sessionKey: string;
+  replacePaths?: string[];
 }) {
   // Config writes must include the base hash from a preceding config.get read.
   expect(params.callGatewayTool.mock.calls.some(([method]) => method === "config.get")).toBe(true);
@@ -122,6 +124,7 @@ function expectConfigMutationCall(params: {
     raw: params.raw.trim(),
     baseHash: "hash-1",
     sessionKey: params.sessionKey,
+    ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
   });
 }
 
@@ -319,6 +322,7 @@ describe("gateway tool", () => {
     const result = await tool.execute("call4", {
       action: "config.patch",
       raw,
+      replacePaths: ["channels.telegram.groups"],
     });
 
     expect(result.details).toEqual({
@@ -334,6 +338,7 @@ describe("gateway tool", () => {
       action: "config.patch",
       raw,
       sessionKey,
+      replacePaths: ["channels.telegram.groups"],
     });
   });
 
@@ -348,6 +353,57 @@ describe("gateway tool", () => {
     ).rejects.toThrow("gateway config.patch cannot change protected config paths: tools.exec.ask");
     expectGatewayMethodCalled("config.get");
     expectGatewayMethodNotCalled("config.patch");
+  });
+
+  it("normalizes replacePaths before config.patch policy checks", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            agents: {
+              list: [
+                { id: "main", default: true, workspace: "/tmp/main" },
+                { id: "work", workspace: "/tmp/work" },
+              ],
+            },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    const tool = requireGatewayTool(sessionKey);
+
+    const raw = '{ agents: { list: [{ id: "main", model: "openai/gpt-5.5" }] } }';
+    const result = await tool.execute("call-indexed-replace-path", {
+      action: "config.patch",
+      raw,
+      replacePaths: ["agents.list[0]"],
+    });
+
+    expect(result.details).toMatchObject({ ok: true });
+    expectConfigMutationCall({
+      callGatewayTool: vi.mocked(callGatewayTool),
+      action: "config.patch",
+      raw,
+      sessionKey,
+      replacePaths: ["agents.list[0]"],
+    });
+  });
+
+  it("distinguishes explicit terminal array consent from indexed consent", () => {
+    expect(normalizeConfigPatchReplacePath("bindings[]")).toBe("bindings");
+    expect(normalizeConfigPatchReplacePath("bindings[0]")).toBe("bindings[0]");
+    expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe(
+      "agents.list[].skills",
+    );
+    expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[]"))).toBe(
+      "bindings",
+    );
+    expect(
+      normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[0]")),
+    ).toBe("bindings[0]");
   });
 
   it("rejects config.patch when it changes safe bin approval paths", async () => {

@@ -26,7 +26,13 @@ function writeQaSuiteSummary(
       counts,
       metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
       run: { completedAt: "2026-01-01T00:00:01.000Z", startedAt: "2026-01-01T00:00:00.000Z" },
-      scenarios: [{ id: "channel-chat-baseline", status: counts.failed > 0 ? "fail" : "pass" }],
+      scenarios: [
+        {
+          id: "channel-chat-baseline",
+          status: counts.failed > 0 ? "fail" : "pass",
+          ...(counts.failed > 0 ? {} : { steps: [{ name: "mock step", status: "pass" }] }),
+        },
+      ],
     })}\n`,
   );
 }
@@ -74,6 +80,20 @@ describe("gateway CPU scenario guard", () => {
     expect(() =>
       testing.parseArgs(["--output-dir", makeTempRoot(), "--cpu-core-warn", "1e3"]),
     ).toThrow("--cpu-core-warn must be a positive number");
+  });
+
+  it("rejects missing valued options instead of consuming the next flag", () => {
+    for (const flag of [
+      "--output-dir",
+      "--startup-case",
+      "--qa-scenario",
+      "--runs",
+      "--warmup",
+      "--cpu-core-warn",
+      "--hot-wall-warn-ms",
+    ]) {
+      expect(() => testing.parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+    }
   });
 
   it("prepares CLI startup artifacts before running the startup bench", async () => {
