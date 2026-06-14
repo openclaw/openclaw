@@ -557,10 +557,26 @@ function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
 }
 
 export function shouldRetrySilentErrorAssistantTurn(params: {
-  attempt: Pick<EmbeddedRunAttemptResult, "assistantTexts" | "replayMetadata">;
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    | "assistantTexts"
+    | "clientToolCalls"
+    | "yieldDetected"
+    | "didSendDeterministicApprovalPrompt"
+    | "lastToolError"
+    | "replayMetadata"
+  >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
   if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+    return false;
+  }
+  if (
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError
+  ) {
     return false;
   }
   if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {

@@ -301,4 +301,39 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
   });
+
+  it.each([
+    [
+      "client tool calls",
+      { clientToolCalls: [{ name: "browser", params: { url: "https://example.com" } }] },
+    ],
+    ["yield", { yieldDetected: true }],
+    ["approval prompts", { didSendDeterministicApprovalPrompt: true }],
+    ["tool errors", { lastToolError: { toolName: "read", error: "read failed" } }],
+  ] satisfies Array<[string, Partial<EmbeddedRunAttemptResult>]>)(
+    "does not retry after terminal %s",
+    async (_label, attemptState) => {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          ...emptyErrorAttempt("anthropic", "claude-opus-4-8", 1120, [
+            {
+              type: "thinking",
+              thinking: "internal reasoning before provider error",
+              thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+            },
+          ]),
+          ...attemptState,
+        }),
+      );
+
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+        runId: `run-empty-error-retry-terminal-${_label.replaceAll(" ", "-")}`,
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    },
+  );
 });

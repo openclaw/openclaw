@@ -9,6 +9,12 @@ coverage:
     - runtime.anthropic-thinking-error-recovery
   secondary:
     - runtime.retry-policy
+gatewayConfigPatch:
+  agents:
+    defaults:
+      models:
+        anthropic/claude-opus-4-8:
+          params: {}
 objective: Verify an Anthropic stream error after signed thinking and a replay-safe read retries the same prompt into a visible answer.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.
@@ -24,7 +30,8 @@ execution:
   kind: flow
   summary: Verify Anthropic stream errors after signed thinking recover after a replay-safe read.
   config:
-    requiredProvider: mock-openai
+    requiredProviderMode: mock-openai
+    anthropicModelRef: anthropic/claude-opus-4-8
     promptSnippet: Anthropic thinking error QA check
     prompt: "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK."
     expectedReply: ANTHROPIC-THINKING-ERROR-RECOVERED-OK
@@ -49,6 +56,9 @@ steps:
       - set: sessionKey
         value:
           expr: "`agent:qa:anthropic-thinking-error:${randomUUID().slice(0, 8)}`"
+      - set: modelAck
+        value:
+          expr: "await env.gateway.call('sessions.patch', { key: sessionKey, model: config.anthropicModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
       - call: runAgentPrompt
         args:
           - ref: env
