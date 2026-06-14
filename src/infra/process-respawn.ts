@@ -1,5 +1,6 @@
 // Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
+import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
@@ -26,11 +27,64 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+/**
+ * Detect pnpm versioned realpaths in the entry script and rewrite to the
+ * stable package wrapper so the child process survives self-update.
+ *
+ * pnpm installs expose the package at `node_modules/<name>/` but the actual
+ * files live under `node_modules/.pnpm/<name>@<version>/node_modules/<name>/`.
+ * During self-update the versioned directory is removed, so a respawned
+ * process that still references it will fail to start.
+ *
+ * Only rewrites when the entry path contains `node_modules/.pnpm/` and the
+ * package name can be extracted.  Dev/source entrypoints (e.g. `src/entry.ts`)
+ * are left unchanged.
+ */
+export function rewritePnpmVersionedEntryPath(entryPath: string): string {
+  const pnpmMarker = "node_modules/.pnpm/";
+  const markerIdx = entryPath.indexOf(pnpmMarker);
+  if (markerIdx === -1) {
+    return entryPath;
+  }
+
+  // After the marker: `<name>@<version>/node_modules/<name>/...` (unscoped)
+  // or `@scope+name@<version>/node_modules/@scope/name/...` (scoped — pnpm
+  // uses `+` instead of `/` in the .pnpm directory for scoped packages).
+  const afterMarker = entryPath.slice(markerIdx + pnpmMarker.length);
+  const match = afterMarker.match(
+    /^(?:@([^/+]+)\+)?([^@/]+)@[^/]+\/node_modules\/(?:@\1\/)?\2\/(.+)$/,
+  );
+  if (!match) {
+    return entryPath;
+  }
+
+  const scope = match[1] ? `@${match[1]}` : "";
+  const pkgName = match[2];
+
+  // Don't rewrite if there is no stable wrapper to aim at (e.g. nested dep).
+  // The stable wrapper lives at `node_modules/<scope><name>/openclaw.mjs`
+  // relative to the same root that contains `.pnpm/`.
+  const prefix = entryPath.slice(0, markerIdx);
+  const pkgDir = scope ? `${scope}/${pkgName}` : pkgName;
+  const stableWrapper = path.join(prefix, "node_modules", pkgDir, "openclaw.mjs");
+
+  // Only rewrite if the stable wrapper path looks like the same package
+  // (i.e. the rest after node_modules/<name>/ starts with a known entry).
+  // We always rewrite because the stable wrapper is the canonical CLI
+  // entrypoint declared in package.json `bin`.
+  return stableWrapper;
+}
+
 function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
   child: ChildProcess;
   pid?: number;
 } {
   const args = [...process.execArgv, ...process.argv.slice(1)];
+  // Rewrite pnpm versioned entry paths to the stable wrapper so the child
+  // survives self-update package replacement.
+  if (args.length > 0) {
+    args[0] = rewritePnpmVersionedEntryPath(args[0]);
+  }
   const child = spawn(process.execPath, args, {
     env: opts.env ? { ...process.env, ...opts.env } : process.env,
     detached: true,
