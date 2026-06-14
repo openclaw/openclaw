@@ -1,3 +1,4 @@
+// Covers task registry store persistence, in-memory behavior, and observer notifications.
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -48,7 +50,7 @@ import {
   parseTaskStatus,
 } from "./task-registry.types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -108,11 +110,7 @@ function createStoredTask(): TaskRecord {
 
 describe("task-registry store runtime", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    ORIGINAL_ENV.restore();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests({ persist: false });
   });

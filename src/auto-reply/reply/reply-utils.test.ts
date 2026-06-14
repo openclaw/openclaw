@@ -1,3 +1,4 @@
+// Tests reply utility helpers for response normalization and send decisions.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -149,7 +150,7 @@ describe("normalizeReplyPayload", () => {
     expect(reply.channelData).toEqual(payload.channelData);
   });
 
-  it("records skip reasons for silent/empty payloads", () => {
+  it("records skip reasons for silent, empty, and internal artifact payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
       {
@@ -158,6 +159,21 @@ describe("normalizeReplyPayload", () => {
         reason: "silent",
       },
       { name: "empty", payload: { text: "   " }, reason: "empty" },
+      {
+        name: "internalArtifact <channel|>",
+        payload: { text: "<channel|>" },
+        reason: "silent",
+      },
+      {
+        name: "internalArtifact set-thought",
+        payload: { text: "set-thought <channel|>" },
+        reason: "silent",
+      },
+      {
+        name: "internalArtifact box-drawing separator",
+        payload: { text: "───" },
+        reason: "silent",
+      },
     ] as const;
     for (const testCase of cases) {
       const reasons: string[] = [];

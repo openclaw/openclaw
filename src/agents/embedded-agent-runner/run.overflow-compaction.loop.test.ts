@@ -1,3 +1,4 @@
+// Coverage for the overflow compaction retry loop in runEmbeddedAgent.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeAttemptResult,
@@ -13,6 +14,7 @@ import {
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
   mockedLog,
+  mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
@@ -33,6 +35,8 @@ function requireMockCallArg(
   mock: { mock: { calls: unknown[][] } },
   index: number,
 ): Record<string, unknown> {
+  // Compaction tests inspect positional mock params from the runner loop; fail
+  // fast with a readable label when expected calls are missing.
   const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`expected mock call ${index}`);
@@ -49,6 +53,8 @@ function expectLogExcludes(mock: { mock: { calls: unknown[][] } }, fragment: str
 }
 
 function expectRetryContinuesFromTranscript() {
+  // Once the inbound user message was persisted, retry must continue from the
+  // transcript instead of re-persisting the original prompt.
   const retryParams = requireMockCallArg(mockedRunEmbeddedAttempt, 1);
   expect(String(retryParams.prompt)).toContain("Continue from the current transcript");
   expect(retryParams.suppressNextUserMessagePersistence).toBe(true);
@@ -106,6 +112,34 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("uses provider thinking policy for configless embedded MiniMax-M3 runs", async () => {
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "MiniMax-M3",
+        provider: "minimax",
+        contextWindow: 1_000_000,
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...baseParams,
+      config: undefined,
+      provider: "minimax",
+      model: "MiniMax-M3",
+      runId: "run-configless-minimax-m3-thinking-default",
+    });
+
+    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 0).thinkLevel).toBe("adaptive");
+  });
+
   it("continues from transcript after compaction when the current inbound message was persisted", async () => {
     const overflowError = makeOverflowError();
 
@@ -140,6 +174,8 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("does not suppress the next user turn when precheck overflow never persisted it", async () => {
+    // Precheck overflow happens before the inbound message enters the transcript,
+    // so the retry should still persist the original prompt.
     const overflowError = makeOverflowError(
       "Context overflow: prompt too large for the model (precheck).",
     );
@@ -624,6 +660,7 @@ describe("overflow compaction in run loop", () => {
       livenessState: "abandoned",
       timeoutPhase: "provider",
       providerStarted: true,
+      aborted: true,
     });
   });
 

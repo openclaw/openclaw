@@ -1,3 +1,4 @@
+// Voice Call tests cover media stream plugin behavior.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -196,6 +197,39 @@ describe("MediaStreamHandler security hardening", () => {
     expect((error as Error).message).toBe("Twilio media stream message was malformed JSON");
     expect(error).not.toBeInstanceOf(SyntaxError);
     expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+  });
+
+  it("rejects start frames when no stream acceptance validator is configured", async () => {
+    const createSession = vi.fn(() => createStubSession());
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession,
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-unvalidated",
+          start: { callSid: "CA-unvalidated" },
+        }),
+      );
+
+      const closed = await waitForClose(ws);
+
+      expect(closed.code).toBe(1008);
+      expect(closed.reason).toBe("Unauthorized stream");
+      expect(createSession).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
   });
 
   it("emits common Talk events for telephony STT/TTS sessions", async () => {

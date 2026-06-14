@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime behavior.
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_SECONDARY_ROOM_KEY,
@@ -76,6 +77,7 @@ import {
   runImageUnderstandingAttachmentScenario,
   runMediaTypeCoverageScenario,
   runUnsupportedMediaSafeScenario,
+  runVoicePreflightMentionScenario,
 } from "./scenario-runtime-media.js";
 import {
   runReactionNotAReplyScenario,
@@ -247,6 +249,8 @@ export async function runMatrixQaScenario(
       return await runGeneratedImageDeliveryScenario(context);
     case "matrix-media-type-coverage":
       return await runMediaTypeCoverageScenario(context);
+    case "matrix-voice-preflight-mention":
+      return await runVoicePreflightMentionScenario(context);
     case "matrix-attachment-only-ignored":
       return await runAttachmentOnlyIgnoredScenario(context);
     case "matrix-unsupported-media-safe":

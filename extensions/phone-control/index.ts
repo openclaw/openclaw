@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Phone Control plugin entrypoint registers its OpenClaw integration.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -166,7 +166,7 @@ async function disarmNow(params: {
   if (!state) {
     return { changed: false, restored: [], removed: [] };
   }
-  const cfg = api.runtime.config.current() as OpenClawConfig;
+  const cfg = api.runtime.config.current();
   const allow = new Set(normalizeAllowList(cfg));
   const deny = new Set(normalizeDenyList(cfg));
   const removed: string[] = [];
@@ -430,7 +430,7 @@ export default definePluginEntry({
           }
 
           const commands = resolveCommandsForGroup(group);
-          const cfg = api.runtime.config.current() as OpenClawConfig;
+          const cfg = api.runtime.config.current();
           const allowSet = new Set(normalizeAllowList(cfg));
           const denySet = new Set(normalizeDenyList(cfg));
 

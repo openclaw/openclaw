@@ -1,8 +1,12 @@
-import { resolveAgentConfig } from "../../agents/agent-scope.js";
+/** Model selection state for reply runs, including catalog and override handling. */
+import {
+  hasLegacyAutoFallbackWithoutOrigin,
+  resolveAgentConfig,
+} from "../../agents/agent-scope.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
@@ -53,8 +57,11 @@ type ModelSelectionState = {
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
   needsModelCatalog: boolean;
+  modelContextWindow?: number;
+  modelContextTokens?: number;
 };
 
+/** Creates minimal model-selection state for fast test mode. */
 export function createFastTestModelSelectionState(params: {
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   provider: string;
@@ -71,6 +78,8 @@ export function createFastTestModelSelectionState(params: {
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
     needsModelCatalog: false,
+    modelContextWindow: undefined,
+    modelContextTokens: undefined,
   };
 }
 
@@ -106,6 +115,7 @@ function findSelectedCatalogEntry(params: {
   return params.catalog?.find((entry) => modelKey(entry.provider, entry.id) === selectedKey);
 }
 
+/** Resolves provider/model, allowlist, catalog, and thinking defaults for a reply run. */
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -215,8 +225,23 @@ export async function createModelSelectionState(params: {
     primaryHarnessPolicy.runtime === "codex" &&
     normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, directStoredModelOverride.model).model ===
       normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, primaryModel).model;
+  const normalizedCurrentSelection = normalizeRuntimeModelRef(provider, model);
+  const normalizedDirectOverride = directStoredModelOverride
+    ? normalizeRuntimeModelRef(directStoredModelOverride.provider, directStoredModelOverride.model)
+    : null;
+  // Only treat the legacy auto pin as stale when the current selection differs from the stored
+  // override. The current==stored case is the turn that deliberately re-applies the pin (e.g. an
+  // explicit run override); clearing there would fight that intent, so the guard must stay.
+  const staleLegacyAutoFallbackWithoutOrigin =
+    directStoredModelOverride?.source === "session" &&
+    hasLegacyAutoFallbackWithoutOrigin(sessionEntry) &&
+    normalizedDirectOverride !== null &&
+    modelKey(normalizedCurrentSelection.provider, normalizedCurrentSelection.model) !==
+      modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model);
   const staleDirectStoredOverride =
-    staleHeartbeatAutoFallbackOverride || staleLegacyOpenAICodexAutoOverride;
+    staleHeartbeatAutoFallbackOverride ||
+    staleLegacyOpenAICodexAutoOverride ||
+    staleLegacyAutoFallbackWithoutOrigin;
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -283,14 +308,10 @@ export async function createModelSelectionState(params: {
     }
   }
   if (staleDirectStoredOverride) {
-    const normalizedCurrentSelection = normalizeRuntimeModelRef(provider, model);
     const currentSelectionKey = modelKey(
       normalizedCurrentSelection.provider,
       normalizedCurrentSelection.model,
     );
-    const normalizedDirectOverride = directStoredOverride
-      ? normalizeRuntimeModelRef(directStoredOverride.provider, directStoredOverride.model)
-      : null;
     const directStoredOverrideKey = normalizedDirectOverride
       ? modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model)
       : undefined;
@@ -547,6 +568,11 @@ export async function createModelSelectionState(params: {
     });
     return defaultReasoningLevel;
   };
+  const selectedCatalogEntry = findSelectedCatalogEntry({
+    catalog: modelCatalog ?? allowedModelCatalog,
+    provider,
+    model,
+  });
 
   return {
     provider,
@@ -559,19 +585,26 @@ export async function createModelSelectionState(params: {
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,
     needsModelCatalog,
+    modelContextWindow: selectedCatalogEntry?.contextWindow,
+    modelContextTokens: selectedCatalogEntry?.contextTokens,
   };
 }
 
+/** Resolves the context window token count for the selected provider/model. */
 export function resolveContextTokens(params: {
   cfg: OpenClawConfig;
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   provider: string;
   model: string;
+  modelContextWindow?: number;
+  modelContextTokens?: number;
 }): number {
   const modelContextTokens = resolveContextTokensForModel({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
+    modelContextWindow: params.modelContextWindow,
+    modelContextTokens: params.modelContextTokens,
     allowAsyncLoad: false,
   });
   const agentContextTokens =

@@ -1,8 +1,13 @@
+// Gateway auth surface resolver.
+// Centralizes credential precedence for probes and interactive clients.
 import type { OpenClawConfig } from "../config/types.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined, type ExplicitGatewayAuth } from "./credentials.js";
 import { resolveConfiguredSecretInputString } from "./resolve-configured-secret-input-string.js";
 
+// Gateway auth is resolved differently for passive probes and interactive
+// clients. This module owns the shared precedence so CLI, UI, and remote
+// surfaces do not silently choose different token/password sources.
 type GatewayCredentialPath =
   | "gateway.auth.token"
   | "gateway.auth.password"
@@ -43,6 +48,7 @@ function withDiagnostics<T extends object>(params: {
     : params.result;
 }
 
+/** Resolves best-effort credentials for non-mutating local/remote gateway probes. */
 export async function resolveGatewayProbeSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -53,6 +59,8 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   const authMode = params.config.gateway?.auth?.mode;
 
   if (params.surface === "remote") {
+    // Remote probes prefer remote.token and only read remote.password when no
+    // token was available. This matches managed gateway auth precedence.
     const remoteToken = await resolveGatewayCredential({
       config: params.config,
       env,
@@ -128,6 +136,8 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   if (envPassword) {
     return withDiagnostics({ diagnostics, result: { password: envPassword } });
   }
+  // In implicit local mode, config password is the final fallback after token
+  // sources and env auth have been exhausted.
   const password = await resolveGatewayCredential({
     config: params.config,
     env,
@@ -141,6 +151,7 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   });
 }
 
+/** Resolves credentials for client paths that must either authenticate or explain the failure. */
 export async function resolveGatewayInteractiveSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -164,6 +175,8 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
     : trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
 
   if (params.surface === "remote") {
+    // Interactive remote clients allow explicit/env password fallback because
+    // users may connect to a gateway they do not own locally.
     const remoteToken = explicitToken
       ? { value: explicitToken }
       : await resolveGatewayCredential({

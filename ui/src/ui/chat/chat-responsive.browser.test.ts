@@ -1,3 +1,4 @@
+// Control UI tests cover chat responsive behavior.
 import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -115,6 +116,35 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
   `;
 }
 
+function composerControlsHtml() {
+  return `
+    <div class="agent-chat__composer-controls">
+      <div class="chat-composer-model-control">
+        <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+          <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
+            <span class="chat-controls__inline-select-label">Default model · Off</span>
+            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined">
+            <div class="chat-controls__combined-model-list">
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option chat-controls__inline-select-option--selected">Default model</button>
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">gpt-5.5</button>
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">claude-sonnet-4-6</button>
+            </div>
+          </div>
+        </details>
+      </div>
+      <div class="chat-settings-popover-wrapper">
+        <button class="chat-settings-chip" type="button" aria-label="Chat settings">
+          <span class="chat-settings-chip__icon">${iconSvg()}</span>
+          <span class="chat-settings-chip__text">Chat settings</span>
+          <span class="chat-settings-chip__chevron">${iconSvg()}</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 function chatHeaderControlsHtml(hidden = false) {
   return `
     <main class="content content--chat" data-chat-header-responsive-fixture>
@@ -206,11 +236,11 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
               <div class="agent-chat__toolbar-left">
                 <button class="agent-chat__input-btn">${iconSvg()}</button>
                 <button class="agent-chat__input-btn">${iconSvg()}</button>
+                <button class="agent-chat__input-btn">${iconSvg()}</button>
                 <span class="agent-chat__token-count">8</span>
               </div>
+              ${composerControlsHtml()}
               <div class="agent-chat__toolbar-right">
-                <button class="btn btn--ghost">${iconSvg()}</button>
-                <button class="btn btn--ghost">${iconSvg()}</button>
                 <button class="chat-send-btn">${iconSvg()}</button>
               </div>
             </div>
@@ -266,6 +296,18 @@ async function getTextContentRect(page: Page, selector: string) {
   });
   expectFiniteRect({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
   return rect;
+}
+
+function rectsOverlap(
+  first: Pick<ControlRect, "x" | "y" | "width" | "height">,
+  second: Pick<ControlRect, "x" | "y" | "width" | "height">,
+) {
+  return (
+    first.x < second.x + second.width &&
+    first.x + first.width > second.x &&
+    first.y < second.y + second.height &&
+    first.y + first.height > second.y
+  );
 }
 
 async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
@@ -523,6 +565,64 @@ describeBrowserLayout("chat responsive browser layout", () => {
       await page.close();
     }
   });
+
+  it.each([
+    [320, 568],
+    [393, 852],
+    [568, 320],
+  ] as const)(
+    "keeps current composer model, settings, and send controls from overlapping at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height);
+      try {
+        await expectNoHorizontalOverflow(page);
+        const controls = await page.evaluate(() => {
+          const rectFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              display: getComputedStyle(node).display,
+            };
+          };
+          return {
+            input: rectFor(".agent-chat__input"),
+            left: rectFor(".agent-chat__toolbar-left"),
+            model: rectFor(".chat-composer-model-control"),
+            settings: rectFor(".chat-settings-chip"),
+            settingsLabel: rectFor(".chat-settings-chip__text"),
+            send: rectFor(".chat-send-btn"),
+          };
+        });
+
+        const input = expectControlRect(controls.input, "composer");
+        const left = expectControlRect(controls.left, "composer left controls");
+        const model = expectControlRect(controls.model, "composer model control");
+        const settings = expectControlRect(controls.settings, "composer settings control");
+        const send = expectControlRect(controls.send, "composer send control");
+        const settingsLabel = expectControlRect(controls.settingsLabel, "settings label");
+
+        for (const control of [left, model, settings, send]) {
+          expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
+          expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
+        }
+        expect(rectsOverlap(model, settings)).toBe(false);
+        expect(rectsOverlap(model, send)).toBe(false);
+        expect(rectsOverlap(settings, send)).toBe(false);
+        expect(settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(settingsLabel.display).toBe("none");
+      } finally {
+        await page.close();
+      }
+    },
+  );
 
   it("uses the compact mobile grid when the agent filter is not rendered", async () => {
     const page = await openFixture(320, 568, { singleAgent: true });

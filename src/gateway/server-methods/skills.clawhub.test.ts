@@ -1,4 +1,7 @@
+// ClawHub skills tests cover install/update/detail/status flows, security
+// verdicts, local skill cards, and workspace skill status reports.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const loadConfigMock = vi.fn(() => ({}));
 const resolveDefaultAgentIdMock = vi.fn(() => "main");
@@ -46,16 +49,7 @@ vi.mock("../../infra/clawhub.js", () => ({
 
 const { skillsHandlers } = await import("./skills.js");
 
-const makeContext = () => ({ getRuntimeConfig: () => ({}) });
 type SkillsHandlerName = keyof typeof skillsHandlers;
-type SkillHandler = (options: {
-  params: unknown;
-  req: never;
-  client: never;
-  isWebchatConnect: () => boolean;
-  context: never;
-  respond: (success: boolean, result?: unknown, err?: unknown) => void;
-}) => Promise<void> | void;
 
 function emptySkillStatusReport() {
   return {
@@ -65,26 +59,8 @@ function emptySkillStatusReport() {
   };
 }
 
-async function callSkillsHandler(method: SkillsHandlerName, params: unknown) {
-  let ok: boolean | null = null;
-  let response: unknown;
-  let error: unknown;
-  const handler = skillsHandlers[method] as SkillHandler;
-
-  await handler({
-    params,
-    req: {} as never,
-    client: null as never,
-    isWebchatConnect: () => false,
-    context: makeContext() as never,
-    respond: (success, result, err) => {
-      ok = success;
-      response = result;
-      error = err;
-    },
-  });
-
-  return { ok, response, error };
+async function callSkillsHandler(method: SkillsHandlerName, params: Record<string, unknown>) {
+  return callGatewayHandler(skillsHandlers, method, params);
 }
 
 function expectEmptySecurityVerdicts(response: unknown): void {
@@ -273,6 +249,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      config: {},
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
@@ -285,7 +262,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.version).toBe("1.2.3");
   });
 
-  it("forwards dangerous override for local skill installs", async () => {
+  it("accepts deprecated unsafe override without forwarding it to skill installs", async () => {
     installSkillMock.mockResolvedValue({
       ok: true,
       message: "Installed",
@@ -305,7 +282,6 @@ describe("skills gateway handlers (clawhub)", () => {
       workspaceDir: "/tmp/workspace",
       skillName: "calendar",
       installId: "deps",
-      dangerouslyForceUnsafeInstall: true,
       timeoutMs: 120_000,
       config: {},
     });
@@ -336,6 +312,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
+      config: {},
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();

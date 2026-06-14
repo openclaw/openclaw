@@ -56,7 +56,7 @@ jobs:
     steps:
       - name: Require maintainer-level repository access
         id: permission
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const allowed = new Set(["admin", "maintain", "write"]);
@@ -91,7 +91,7 @@ jobs:
     steps:
       - name: Resolve refs and target PR
         id: resolve
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const defaultBaseline = "synthetic-reverted-thread-filepath-fix";
@@ -451,8 +451,17 @@ jobs:
 
           capture_candidate_discord_web
 
-          baseline_status="$(jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/baseline/discord-qa-summary.json")"
-          candidate_status="$(jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/candidate/discord-qa-summary.json")"
+          read_discord_thread_attachment_status() {
+            local lane="$1"
+            if [[ -f "$root/$lane/qa-evidence.json" ]]; then
+              jq -r '.entries[] | select(.test.id == "discord-thread-reply-filepath-attachment") | .result.status' "$root/$lane/qa-evidence.json"
+              return
+            fi
+            jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/$lane/discord-qa-summary.json"
+          }
+
+          baseline_status="$(read_discord_thread_attachment_status baseline)"
+          candidate_status="$(read_discord_thread_attachment_status candidate)"
           comparison_status="fail"
           if [[ "$baseline_status" == "fail" && "$candidate_status" == "pass" ]]; then
             comparison_status="pass"
@@ -603,7 +612,7 @@ jobs:
       issues: write
     steps:
       - name: Remove workflow eyes reaction
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;

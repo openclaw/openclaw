@@ -1,3 +1,4 @@
+// Markdown Core module implements render aware chunking behavior.
 import {
   chunkMarkdownIR,
   sliceMarkdownIR,
@@ -8,15 +9,21 @@ import {
 
 /** A rendered chunk paired with the Markdown IR slice that produced it. */
 export type RenderedMarkdownChunk<TRendered> = {
+  /** Rendered payload for this chunk after caller-specific escaping/link rewriting. */
   rendered: TRendered;
+  /** Source IR slice used to produce the rendered payload. */
   source: MarkdownIR;
 };
 
 /** Inputs for chunking Markdown IR against the final rendered payload size. */
 export type RenderMarkdownIRChunksWithinLimitOptions<TRendered> = {
+  /** Parsed Markdown IR to split. */
   ir: MarkdownIR;
+  /** Maximum measured size for each rendered chunk. */
   limit: number;
+  /** Returns the size unit enforced by the target transport. */
   measureRendered: (rendered: TRendered) => number;
+  /** Renders a candidate IR slice for measuring and final output. */
   renderChunk: (ir: MarkdownIR) => TRendered;
 };
 
@@ -38,6 +45,13 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
 ): RenderedMarkdownChunk<TRendered>[] {
   if (!options.ir.text) {
     return [];
+  }
+
+  // Callers pass Infinity to mean "no size cap" (e.g. a media caption that must not be
+  // split). resolveIntegerOption rejects non-finite values and would fall back to 1,
+  // shattering the text into one chunk per character; emit the whole IR as one chunk.
+  if (options.limit === Number.POSITIVE_INFINITY) {
+    return [{ source: options.ir, rendered: options.renderChunk(options.ir) }];
   }
 
   const normalizedLimit = resolveIntegerOption(options.limit, 1, { min: 1 });
@@ -139,6 +153,8 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
 
   for (let index = start; index < maxEnd; index += 1) {
     const char = text[index];
+    // Parenthesized text often carries rewritten file/link references; prefer
+    // keeping it intact unless no outside break exists in the current window.
     if (char === "(") {
       sawNonWhitespace = true;
       parenDepth += 1;
@@ -157,6 +173,7 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
       continue;
     }
     if (char === "\n") {
+      // Newlines preserve markdown block structure better than other spaces.
       lastAnyNewlineBreak = index + 1;
       if (parenDepth === 0) {
         lastOutsideParenNewlineBreak = index + 1;

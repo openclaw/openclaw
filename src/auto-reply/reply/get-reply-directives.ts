@@ -1,3 +1,4 @@
+// Coordinates parsed reply directives before get-reply executes commands or agents.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -584,6 +585,8 @@ export async function resolveReplyDirectives(params: {
         agentCfg,
         provider,
         model,
+        modelContextWindow: modelState.modelContextWindow,
+        modelContextTokens: modelState.modelContextTokens,
       });
 
   const initialModelLabel = `${provider}/${model}`;

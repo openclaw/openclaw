@@ -1,3 +1,4 @@
+// Validates normalized OpenClaw config and reports user-facing errors.
 import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
@@ -49,8 +50,19 @@ import { coerceSecretRef } from "./types.secrets.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+const LEGACY_REMOVED_PLUGIN_IDS = new Set([
+  "google-antigravity-auth",
+  "google-gemini-cli-auth",
+  "skill-workshop",
+]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
+
+function formatRemovedPluginConfigWarning(pluginId: string): string {
+  if (pluginId === "skill-workshop") {
+    return "plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Use skills.workshop settings and openclaw skills workshop commands, then remove this plugins config entry)";
+  }
+  return `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`;
+}
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -1712,7 +1724,7 @@ function validateConfigObjectWithPluginsBase(
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
         path: pathLocal,
-        message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+        message: formatRemovedPluginConfigWarning(pluginId),
       });
       return;
     }

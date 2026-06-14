@@ -1,3 +1,8 @@
+/**
+ * Durable channel message sender.
+ *
+ * Sends rendered reply payloads, records live preview state, and classifies delivery outcomes.
+ */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
@@ -131,6 +136,8 @@ function toDurablePayloadOutcomes(
 
 export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
   durability?: Exclude<MessageDurabilityPolicy, "disabled">;
+  /** Runs after the durable queue intent exists and before platform delivery starts. */
+  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
   preview?: LiveMessageState<ReplyPayload>;
   onPreviewUpdate?: (
     rendered: RenderedMessageBatch<ReplyPayload>,
@@ -159,6 +166,7 @@ export async function withDurableMessageSendContext<T>(
     attempt,
     durability,
     onDeleteReceipt,
+    onDeliveryIntent,
     onEditReceipt,
     onCommitReceipt,
     onPreviewUpdate,
@@ -210,7 +218,9 @@ export async function withDurableMessageSendContext<T>(
           },
           onDeliveryIntent: (intent) => {
             deliveryIntent = intent;
-            ctx.intent = toDurableMessageIntent(intent, rendered);
+            const durableIntent = toDurableMessageIntent(intent, rendered);
+            ctx.intent = durableIntent;
+            onDeliveryIntent?.(durableIntent);
           },
         });
         const receipt = createMessageReceiptFromOutboundResults({

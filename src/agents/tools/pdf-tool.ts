@@ -1,3 +1,8 @@
+/**
+ * pdf built-in tool.
+ *
+ * Loads local/web PDFs, extracts pages/text, and analyzes them with native or fallback media-understanding models.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -20,6 +25,7 @@ import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.help
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
+  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
@@ -54,7 +60,6 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
-const PDF_REMOTE_READ_IDLE_TIMEOUT_MS = 120_000;
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
@@ -457,7 +462,7 @@ export function createPdfTool(options?: {
           : await loadWebMediaRaw(resolvedPathInfo.resolved, {
               maxBytes,
               localRoots,
-              ...(isHttpUrl ? { readIdleTimeoutMs: PDF_REMOTE_READ_IDLE_TIMEOUT_MS } : {}),
+              ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
               ssrfPolicy: remoteMediaSsrfPolicy,
             });
 

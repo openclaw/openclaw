@@ -1,3 +1,8 @@
+/**
+ * Tests shared OAuth credential overlay/replacement policy.
+ * Covers runtime-only provenance, cloned store isolation, and stale credential
+ * replacement decisions.
+ */
 import { describe, expect, it, vi } from "vitest";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {
@@ -119,6 +124,38 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
 
     expect(overlaid.runtimeExternalProfileIds).toEqual(["minimax:minimax-cli"]);
     expect(overlaid.runtimeExternalProfileIdsAuthoritative).toBe(true);
+  });
+
+  it("removes persisted provenance for every externally overlaid profile", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      runtimePersistedProfileIds: ["openai:default"],
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          expires: 1,
+        },
+      },
+    };
+
+    const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
+      {
+        profileId: "openai:default",
+        persistence: "persisted",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "external-access",
+          refresh: "external-refresh",
+          expires: 2,
+        },
+      },
+    ]);
+
+    expect(overlaid.runtimePersistedProfileIds).toBeUndefined();
   });
 
   it("replaces an existing OAuth credential with an out-of-range expiry", () => {

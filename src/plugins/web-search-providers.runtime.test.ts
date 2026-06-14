@@ -1,3 +1,4 @@
+/** Covers runtime loading and sorting for plugin web search providers. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type RegistryModule = typeof import("./registry.js");
@@ -20,6 +21,7 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "firecrawl", id: "firecrawl", order: 60 },
   { pluginId: "exa", id: "exa", order: 65 },
   { pluginId: "tavily", id: "tavily", order: 70 },
+  { pluginId: "parallel", id: "parallel", order: 75 },
   { pluginId: "duckduckgo", id: "duckduckgo", order: 100 },
 ] as const;
 
@@ -50,6 +52,7 @@ const EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS = [
   "google:gemini",
   "xai:grok",
   "moonshot:kimi",
+  "parallel:parallel",
   "perplexity:perplexity",
   "tavily:tavily",
 ] as const;

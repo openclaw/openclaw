@@ -1,10 +1,16 @@
+// MCP loopback tool schema projection.
+// Converts gateway-scoped tools into MCP tools/list-compatible schemas.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logWarn } from "../logger.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
+// MCP loopback schema projection adapts gateway tool definitions into MCP
+// tools/list entries. It flattens provider-hostile union schemas into object
+// schemas because some MCP clients cannot render anyOf/oneOf controls.
 export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
 
+/** MCP tools/list schema entry derived from a gateway loopback tool. */
 export type McpToolSchemaEntry = {
   name: string;
   description: string | undefined;
@@ -19,6 +25,7 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
   }
 }
 
+/** Safely reads and normalizes a loopback tool name from plugin-provided tool objects. */
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
   const value = readLoopbackToolField(tool, "name");
   if (typeof value !== "string") {
@@ -51,6 +58,8 @@ function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unkno
 }
 
 function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknown> {
+  // MCP clients vary in union-schema support. Merge only safe object variants
+  // and keep common required fields so generated forms remain usable.
   const variants = (raw.anyOf ?? raw.oneOf) as unknown[] | undefined;
   if (!Array.isArray(variants) || variants.length === 0) {
     return raw;
@@ -136,6 +145,7 @@ function isPropertySchema(value: unknown): value is boolean | Record<string, unk
   return typeof value === "boolean" || isRecord(value);
 }
 
+/** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
   return tools.flatMap((tool) => {
     const name = readMcpLoopbackToolName(tool);

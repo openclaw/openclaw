@@ -87,7 +87,7 @@ execution:
     livePrompt: "Kitchen Sink OpenAI marker. Reply exactly: KITCHEN-SINK-OPENAI-OK"
     expectedAdversarialDiagnostics:
       - agent event subscription registration requires id and handle
-      - only bundled plugins can register agent tool result middleware
+      - agent tool result middleware must be a function
       - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods
       - channel "kitchen-sink-channel-probe" registration missing required config helpers
       - cli registration missing explicit commands metadata
@@ -95,15 +95,18 @@ execution:
       - compaction provider "kitchen-sink-compaction-provider" registration missing summarize
       - context engine registration missing id
       - control UI descriptor registration requires id, surface, label, and valid optional fields
+      - hosted media resolver registration missing resolver
       - "http route registration missing or invalid auth: /kitchen-sink/http-route"
+      - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
       - "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider"
+      - "trusted tool policy registration requires id, description, and evaluate()"
       - memory prompt supplement registration missing builder
+      - model catalog provider registration missing provider
       - node invoke policy registration missing commands
       - session extension registration requires namespace and description
       - session scheduler job registration requires unique id, sessionKey, and kind
       - "plugin must declare contracts.tools for: kitchen-sink-tool"
       - tool metadata registration missing toolName
-      - only bundled plugins can register trusted tool policies
 ```
 
 ```yaml qa-flow

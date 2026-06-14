@@ -1,9 +1,13 @@
+// Memory embedding provider contract tests cover memory plugin embedding provider behavior.
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
-import { getRegisteredMemoryEmbeddingProvider } from "../memory-embedding-providers.js";
+import {
+  getRegisteredMemoryEmbeddingProvider,
+  type MemoryEmbeddingBatchOptions,
+} from "../memory-embedding-providers.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 
 describe("memory embedding provider registration", () => {
@@ -76,6 +80,58 @@ describe("memory embedding provider registration", () => {
     const provider = getRegisteredMemoryEmbeddingProvider("demo-embedding");
     expect(provider?.adapter.id).toBe("demo-embedding");
     expect(provider?.ownerPluginId).toBe("memory-core");
+  });
+
+  it("keeps source-wide batch embedding behind an explicit runtime opt-in", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "source-wide-memory",
+      name: "Source Wide Memory",
+      contracts: {
+        memoryEmbeddingProviders: ["source-wide-memory"],
+      },
+      register(api) {
+        api.registerMemoryEmbeddingProvider({
+          id: "source-wide-memory",
+          create: async () => ({
+            provider: {
+              id: "source-wide-memory",
+              model: "test-embedding",
+              embedQuery: async (text: string) => [text.length],
+              embedBatch: async (texts: string[]) => texts.map((text) => [text.length]),
+            },
+            runtime: {
+              id: "source-wide-memory",
+              sourceWideBatchEmbed: true,
+              batchEmbed: async (batch: MemoryEmbeddingBatchOptions) =>
+                batch.chunks.map((chunk, index) => [index, chunk.text.length]),
+            },
+          }),
+        });
+      },
+    });
+
+    const adapter = getRegisteredMemoryEmbeddingProvider("source-wide-memory")?.adapter;
+    const result = await adapter?.create({ config, model: "test-embedding" });
+
+    expect(result?.runtime?.sourceWideBatchEmbed).toBe(true);
+    await expect(
+      result?.runtime?.batchEmbed?.({
+        agentId: "main",
+        chunks: [{ text: "alpha" }, { text: "beta" }],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1000,
+        timeoutMs: 60_000,
+        debug: () => {},
+      }),
+    ).resolves.toEqual([
+      [0, 5],
+      [1, 4],
+    ]);
   });
 
   it("keeps companion embedding providers available during tool discovery", () => {

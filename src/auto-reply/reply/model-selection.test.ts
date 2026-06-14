@@ -1,5 +1,9 @@
+// Tests model selection resolution from directives, config, and session state.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MODEL_CONTEXT_TOKEN_CACHE } from "../../agents/context-cache.js";
+import {
+  MODEL_CONTEXT_TOKEN_CACHE,
+  providerContextTokenCacheKey,
+} from "../../agents/context-cache.js";
 import {
   loadManifestModelCatalog,
   loadModelCatalog as loadModelCatalogLocal,
@@ -461,6 +465,39 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
   });
 
+  it("carries catalog context limits into cold model selection", async () => {
+    vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        contextWindow: 1_000_000,
+        contextTokens: 272_000,
+      },
+    ]);
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: { contextTokens: 1_000_000 },
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      hasModelDirective: true,
+    });
+
+    expect(
+      resolveContextTokens({
+        cfg: {} as OpenClawConfig,
+        agentCfg: { contextTokens: 1_000_000 },
+        provider: state.provider,
+        model: state.model,
+        modelContextWindow: state.modelContextWindow,
+        modelContextTokens: state.modelContextTokens,
+      }),
+    ).toBe(272_000);
+  });
+
   it("uses the first visible provider wildcard model when the configured primary is filtered out", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
@@ -612,7 +649,10 @@ describe("createModelSelectionState catalog loading", () => {
 describe("resolveContextTokens", () => {
   it("prefers provider-qualified cache keys over bare model ids", () => {
     MODEL_CONTEXT_TOKEN_CACHE.set("gemini-3.1-pro-preview", 200_000);
-    MODEL_CONTEXT_TOKEN_CACHE.set("google-gemini-cli/gemini-3.1-pro-preview", 1_000_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set(
+      providerContextTokenCacheKey("google-gemini-cli", "gemini-3.1-pro-preview"),
+      1_000_000,
+    );
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,
@@ -625,7 +665,7 @@ describe("resolveContextTokens", () => {
   });
 
   it("treats agent contextTokens as a cap, not an expansion beyond the model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("openai/gpt-5.5", 272_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("openai", "gpt-5.5"), 272_000);
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,
@@ -638,7 +678,7 @@ describe("resolveContextTokens", () => {
   });
 
   it("allows agent contextTokens to lower a larger model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("qwen/qwen3.6-plus", 1_000_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("qwen", "qwen3.6-plus"), 1_000_000);
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,
@@ -1120,19 +1160,56 @@ describe("createModelSelectionState auto-failover overrides", () => {
     return { state, sessionEntry, sessionStore };
   }
 
-  it("preserves auto-failover overrides across turns until reset", async () => {
+  it("clears legacy auto-failover overrides without origin metadata on normal turns", async () => {
     const { state, sessionStore } = await resolveStateWithOverride({
       providerOverride: "openrouter",
       modelOverride: "minimax/minimax-m2.7",
       modelOverrideSource: "auto",
     });
 
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
+  });
+
+  it("preserves auto-failover overrides that still carry origin metadata on normal turns", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: defaultProvider,
+      modelOverrideFallbackOriginModel: defaultModel,
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+    });
+
     expect(state.provider).toBe("openrouter");
     expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(state.resetModelOverride).toBe(false);
     expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
+  });
+
+  it("keeps a legacy auto pin when the current selection already matches it", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+    });
+
+    expect(state.provider).toBe("openrouter");
+    expect(state.model).toBe("minimax/minimax-m2.7");
     expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
   });
 
   it("clears stale auto-created legacy openai route pins when primary is canonical openai", async () => {

@@ -1,16 +1,13 @@
+// Whatsapp tests cover auto reply.web auto reply.last route plugin behavior.
 import "./test-helpers.js";
-import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createAcceptedWhatsAppSendResult,
-  installWebAutoReplyUnitTestHooks,
-  makeSessionStore,
-} from "./auto-reply.test-harness.js";
+import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
 import { createEchoTracker } from "./auto-reply/monitor/echo.js";
 import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
+import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
 
@@ -78,23 +75,26 @@ function buildInboundMessage(params: {
   senderName?: string;
   selfE164?: string;
 }) {
-  return {
-    id: params.id,
+  return createTestWebInboundMessage({
+    event: {
+      id: params.id,
+      timestamp: params.timestamp,
+    },
+    payload: {
+      body: params.body ?? "hello",
+    },
+    platform: {
+      chatJid: params.chatId,
+      recipientJid: params.to ?? "+2000",
+      senderE164: params.senderE164,
+      senderName: params.senderName,
+      selfE164: params.selfE164,
+    },
     from: params.from,
     conversationId: params.conversationId,
-    to: params.to ?? "+2000",
-    body: params.body ?? "hello",
-    timestamp: params.timestamp,
     chatType: params.chatType,
-    chatId: params.chatId,
     accountId: params.accountId ?? "default",
-    senderE164: params.senderE164,
-    senderName: params.senderName,
-    selfE164: params.selfE164,
-    sendComposing: vi.fn().mockResolvedValue(undefined),
-    reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1")),
-    sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1")),
-  };
+  });
 }
 
 describe("web auto-reply last-route", () => {
@@ -151,17 +151,6 @@ describe("web auto-reply last-route", () => {
       to: "+1000",
       accountId: "default",
     });
-    const body = formatInboundEnvelope({
-      channel: "WhatsApp",
-      from: "+1000",
-      timestamp: now,
-      body: "hello",
-      chatType: "direct",
-      sender: {
-        e164: "+1000",
-        id: "+1000",
-      },
-    });
     expect(ctx).toMatchObject({
       From: "+1000",
       To: "+2000",
@@ -178,7 +167,7 @@ describe("web auto-reply last-route", () => {
       SenderE164: "+1000",
       SenderId: "+1000",
       RawBody: "hello",
-      Body: body,
+      Body: expect.stringMatching(/^\[WhatsApp \+1000 .+\] \+1000: hello$/u),
       BodyForAgent: "hello",
       CommandBody: "hello",
       Timestamp: now,

@@ -1,3 +1,4 @@
+// Telegram User Crabbox Proof tests cover telegram user crabbox proof script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,8 +9,11 @@ import {
   createOpenClawGatewaySpawnSpec,
   readLogTail,
   readTelegramUserProofLogTailBytes,
+  recordProbeVideo,
   REMOTE_SETUP_COMMAND_TIMEOUT_MS,
+  renderLaunchDesktop,
   runCommand,
+  startLocalSut,
   waitForLog,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
 
@@ -29,6 +33,10 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function writeExecutable(pathname: string, content: string): void {
+  fs.writeFileSync(pathname, content, { mode: 0o755 });
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
@@ -149,6 +157,15 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(message).not.toContain("old-secret");
   });
 
+  it("bounds remote Telegram Desktop launch diagnostics", () => {
+    const script = renderLaunchDesktop();
+
+    expect(script).toContain("print_desktop_log_tail() {");
+    expect(script).toContain('tail -c 262144 "$log_file"');
+    expect(script).toContain("print_desktop_log_tail\n  exit 1");
+    expect(script).not.toContain('cat "$root/telegram-desktop.log"');
+  });
+
   posixIt("kills timed-out command process groups when the leader exits first", async () => {
     const root = makeTempDir();
     const scriptPath = path.join(root, "trap-term.mjs");
@@ -176,26 +193,140 @@ setInterval(() => {}, 1000);
       args: [scriptPath, grandchildPidPath],
       command: process.execPath,
       cwd: root,
-      timeoutKillGraceMs: 25,
-      timeoutMs: 100,
+      timeoutKillGraceMs: 100,
+      timeoutMs: 500,
     });
+    const runResult = runPromise.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ error, ok: false as const }),
+    );
 
     try {
-      await waitFor(() => fs.existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(fs.readFileSync(grandchildPidPath, "utf8"), 10);
+      await waitFor(() => {
+        if (!fs.existsSync(grandchildPidPath)) {
+          return false;
+        }
+        grandchildPid = Number.parseInt(fs.readFileSync(grandchildPidPath, "utf8"), 10);
+        return Number.isInteger(grandchildPid) && isProcessAlive(grandchildPid);
+      });
       expect(Number.isInteger(grandchildPid)).toBe(true);
-      expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toMatchObject({
-        code: "ETIMEDOUT",
-        message: expect.stringContaining("timed out after 100ms"),
+      const result = await runResult;
+      expect(result).toMatchObject({
+        error: {
+          code: "ETIMEDOUT",
+          message: expect.stringContaining("timed out after 500ms"),
+        },
+        ok: false,
       });
       await waitFor(() => !isProcessAlive(grandchildPid));
     } finally {
-      await runPromise.catch(() => {});
+      await runResult.catch(() => {});
       if (grandchildPid && isProcessAlive(grandchildPid)) {
         process.kill(grandchildPid, "SIGKILL");
       }
     }
+  });
+
+  posixIt("cleans local SUT children when gateway startup fails", async () => {
+    const root = makeTempDir();
+    const outputDir = makeTempDir();
+    const mockScript = path.join(root, "scripts/e2e/mock-openai-server.mjs");
+    const gatewayScript = path.join(root, "gateway-fail.mjs");
+    const mockPidPath = path.join(root, "mock.pid");
+    const mockTermPath = path.join(root, "mock.term");
+    fs.mkdirSync(path.dirname(mockScript), { recursive: true });
+    writeExecutable(
+      mockScript,
+      `
+import fs from "node:fs";
+
+fs.writeFileSync(${JSON.stringify(mockPidPath)}, String(process.pid));
+process.stdout.write("mock-openai listening\\n");
+process.on("SIGTERM", () => {
+  fs.writeFileSync(${JSON.stringify(mockTermPath)}, "terminated");
+  process.exit(0);
+});
+setInterval(() => {}, 1000);
+`,
+    );
+    writeExecutable(
+      gatewayScript,
+      `
+process.stderr.write("gateway startup failed\\n");
+process.exit(2);
+`,
+    );
+
+    await expect(
+      startLocalSut(
+        {
+          gatewayPort: 19042,
+          groupId: "group",
+          mockPort: 19043,
+          mockResponseText: "ok",
+          outputDir,
+          repoRoot: root,
+          sutToken: "token",
+          testerId: "tester",
+        },
+        {
+          createGatewaySpawnSpec: () => ({
+            args: [gatewayScript],
+            command: process.execPath,
+            options: { cwd: root, env: process.env },
+          }),
+          drainUpdates: async () => ({
+            drained: 0,
+            webhookUrlSet: false,
+          }),
+        },
+      ),
+    ).rejects.toThrow("gateway exited before ready");
+
+    await waitFor(() => fs.existsSync(mockTermPath));
+    const mockPid = Number.parseInt(fs.readFileSync(mockPidPath, "utf8"), 10);
+    await waitFor(() => !isProcessAlive(mockPid));
+  });
+
+  posixIt("stops Crabbox recording when the desktop probe fails", async () => {
+    const root = makeTempDir();
+    const recorderPath = path.join(root, "fake-crabbox-recorder.mjs");
+    const recorderPidPath = path.join(root, "recorder.pid");
+    const recorderTermPath = path.join(root, "recorder.term");
+    writeExecutable(
+      recorderPath,
+      `#!/usr/bin/env node
+import fs from "node:fs";
+
+fs.writeFileSync(${JSON.stringify(recorderPidPath)}, String(process.pid));
+process.on("SIGTERM", () => {
+  fs.writeFileSync(${JSON.stringify(recorderTermPath)}, "terminated");
+  process.exit(0);
+});
+setInterval(() => {}, 1000);
+`,
+    );
+
+    await expect(
+      recordProbeVideo({
+        crabboxBin: recorderPath,
+        cwd: root,
+        durationSeconds: 30,
+        leaseId: "cbx_test",
+        outputPath: path.join(root, "proof.mp4"),
+        provider: "aws",
+        runProbe: async () => {
+          await waitFor(() => fs.existsSync(recorderPidPath));
+          throw new Error("probe failed");
+        },
+        startDelayMs: 0,
+        target: "linux",
+      }),
+    ).rejects.toThrow("probe failed");
+
+    await waitFor(() => fs.existsSync(recorderTermPath));
+    const recorderPid = Number.parseInt(fs.readFileSync(recorderPidPath, "utf8"), 10);
+    await waitFor(() => !isProcessAlive(recorderPid));
   });
 });

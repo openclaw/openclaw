@@ -1,3 +1,4 @@
+/** Channel presence and gateway startup plugin id helpers. */
 export {
   hasConfiguredChannelsForReadOnlyScope,
   hasExplicitChannelConfig,
@@ -13,6 +14,9 @@ export {
 } from "./channel-presence-policy.js";
 
 export {
+  collectConfiguredMemoryEmbeddingProviderIds,
+  collectConfiguredMemoryEmbeddingStartupProviderOwners,
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
   resolveChannelPluginIds,
   resolveChannelPluginIdsFromRegistry,
   resolveConfiguredDeferredChannelPluginIds,

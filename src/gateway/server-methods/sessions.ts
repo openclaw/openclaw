@@ -1,3 +1,5 @@
+// Sessions gateway methods implement list/create/patch/delete/reset/compact/
+// restore/preview/send flows over session stores, transcripts, and active runs.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -47,7 +49,6 @@ import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
-  loadSessionStore,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   resolveMainSessionKey,
@@ -98,7 +99,6 @@ import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
-  loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readRecentSessionMessagesWithStatsAsync,
@@ -122,6 +122,7 @@ import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -259,6 +260,22 @@ function resolveGatewaySessionTargetFromKey(
   return { cfg, target, storePath: target.storePath };
 }
 
+function loadSessionEntriesForTarget(params: {
+  key: string;
+  cfg: OpenClawConfig;
+  agentId?: string;
+}) {
+  const target = resolveGatewaySessionStoreTargetWithStore({
+    cfg: params.cfg,
+    key: params.key,
+    clone: false,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+  const store = target.store;
+  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  return { target, storePath: target.storePath, store, entry };
+}
+
 function resolveOptionalInitialSessionMessage(params: {
   task?: unknown;
   message?: unknown;
@@ -281,103 +298,6 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
       ? (params.payload as { status?: unknown }).status
       : undefined;
   return status === "started";
-}
-
-function emitSessionsChanged(
-  context: Pick<
-    GatewayRequestContext,
-    | "broadcastToConnIds"
-    | "chatAbortControllers"
-    | "getRuntimeConfig"
-    | "getSessionEventSubscriberConnIds"
-  >,
-  payload: { sessionKey?: string; agentId?: string; reason: string; compacted?: boolean },
-) {
-  const connIds = context.getSessionEventSubscriberConnIds();
-  if (connIds.size === 0) {
-    return;
-  }
-  const sessionRow = payload.sessionKey
-    ? loadGatewaySessionRow(
-        payload.sessionKey,
-        payload.sessionKey === "global" && payload.agentId
-          ? { agentId: payload.agentId }
-          : undefined,
-      )
-    : null;
-  const omitUnscopedGlobalGoal = payload.sessionKey === "global" && !payload.agentId;
-  const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
-  context.broadcastToConnIds(
-    "sessions.changed",
-    {
-      ...payload,
-      ts: Date.now(),
-      ...(sessionRow
-        ? {
-            updatedAt: sessionRow.updatedAt ?? undefined,
-            sessionId: sessionRow.sessionId,
-            kind: sessionRow.kind,
-            channel: sessionRow.channel,
-            subject: sessionRow.subject,
-            groupChannel: sessionRow.groupChannel,
-            space: sessionRow.space,
-            chatType: sessionRow.chatType,
-            origin: sessionRow.origin,
-            spawnedBy: sessionRow.spawnedBy,
-            spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
-            spawnedCwd: sessionRow.spawnedCwd,
-            forkedFromParent: sessionRow.forkedFromParent,
-            spawnDepth: sessionRow.spawnDepth,
-            subagentRole: sessionRow.subagentRole,
-            subagentControlScope: sessionRow.subagentControlScope,
-            label: sessionRow.label,
-            displayName: sessionRow.displayName,
-            deliveryContext: sessionRow.deliveryContext,
-            parentSessionKey: sessionRow.parentSessionKey,
-            childSessions: sessionRow.childSessions,
-            thinkingLevel: sessionRow.thinkingLevel,
-            fastMode: sessionRow.fastMode,
-            verboseLevel: sessionRow.verboseLevel,
-            traceLevel: sessionRow.traceLevel,
-            reasoningLevel: sessionRow.reasoningLevel,
-            elevatedLevel: sessionRow.elevatedLevel,
-            sendPolicy: sessionRow.sendPolicy,
-            systemSent: sessionRow.systemSent,
-            abortedLastRun: sessionRow.abortedLastRun,
-            inputTokens: sessionRow.inputTokens,
-            outputTokens: sessionRow.outputTokens,
-            lastChannel: sessionRow.lastChannel,
-            lastTo: sessionRow.lastTo,
-            lastAccountId: sessionRow.lastAccountId,
-            lastThreadId: sessionRow.lastThreadId,
-            totalTokens: sessionRow.totalTokens,
-            totalTokensFresh: sessionRow.totalTokensFresh,
-            ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
-            contextTokens: sessionRow.contextTokens,
-            estimatedCostUsd: sessionRow.estimatedCostUsd,
-            responseUsage: sessionRow.responseUsage,
-            modelProvider: sessionRow.modelProvider,
-            model: sessionRow.model,
-            status: sessionRow.status,
-            hasActiveRun: hasTrackedActiveSessionRun({
-              context,
-              requestedKey: payload.sessionKey ?? sessionRow.key,
-              canonicalKey: sessionRow.key,
-              agentId: sessionRow.key === "global" ? payload.agentId : undefined,
-              defaultAgentId,
-            }),
-            startedAt: sessionRow.startedAt,
-            endedAt: sessionRow.endedAt,
-            runtimeMs: sessionRow.runtimeMs,
-            compactionCheckpointCount: sessionRow.compactionCheckpointCount,
-            latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
-            pluginExtensions: sessionRow.pluginExtensions,
-          }
-        : {}),
-    },
-    connIds,
-    { dropIfSlow: true },
-  );
 }
 
 function emitSessionOperation(
@@ -880,9 +800,12 @@ async function handleSessionSend(params: {
   }
   const requestedAgentId = requestedAgent.agentId;
   const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
+  const { legacyKey } = loaded;
   let { entry, canonicalKey, storePath } = loaded;
   // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey);
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
+    acpMetadataSessionKey: legacyKey ?? canonicalKey,
+  });
   if (deletedAgentId !== null) {
     params.respond(
       false,
@@ -1307,9 +1230,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg);
-    const store = loadSessionStore(storePath);
-    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+    const { target, storePath, store, entry } = loadSessionEntriesForTarget({ key, cfg });
     if (!entry) {
       respond(true, { session: null }, undefined);
       return;
@@ -2512,11 +2433,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
+    const { storePath, entry } = loadSessionEntriesForTarget({
+      key,
+      cfg,
       agentId: requestedAgent.agentId,
     });
-    const store = loadSessionStore(storePath);
-    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
     if (!entry?.sessionId) {
       respond(true, { messages: [] }, undefined);
       return;
@@ -2528,6 +2449,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         maxMessages: limit,
         maxLines: limit * 20 + 20,
+        allowResetArchiveFallback: true,
       },
     );
     respond(true, { messages }, undefined);
@@ -2648,6 +2570,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           config: cfg,
           provider: resolvedModel.provider,
           model: resolvedModel.model,
+          authProfileId: entry?.authProfileOverride,
           agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
           thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
           reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),

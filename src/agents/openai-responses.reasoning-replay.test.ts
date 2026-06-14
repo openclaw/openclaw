@@ -1,3 +1,4 @@
+// Verifies OpenAI Responses replay preserves reasoning and response item ids.
 import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { stream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
@@ -19,6 +20,17 @@ function buildModel(): Model<"openai-responses"> {
   };
 }
 
+function buildStorelessCustomModel(): Model<"openai-responses"> {
+  return {
+    ...buildModel(),
+    provider: "custom-openai-responses",
+    baseUrl: "https://custom.example.invalid/v1",
+    compat: {
+      supportsStore: false,
+    } as never,
+  };
+}
+
 function extractInput(payload: Record<string, unknown> | undefined) {
   return Array.isArray(payload?.input) ? payload.input : [];
 }
@@ -36,7 +48,8 @@ function extractInputMessages(input: unknown[]) {
     (item): item is Record<string, unknown> =>
       Boolean(item) &&
       typeof item === "object" &&
-      (item as Record<string, unknown>).type === "message",
+      (item as Record<string, unknown>).type === "message" &&
+      (item as Record<string, unknown>).role === "assistant",
   );
 }
 
@@ -87,13 +100,16 @@ async function runAbortedOpenAIResponsesStream(params: {
     parameters: ReturnType<typeof Type.Object>;
   }>;
   replayResponsesItemIds?: boolean;
+  usePolicyReplayDefault?: boolean;
+  model?: Model<"openai-responses">;
 }) {
+  // Abort after payload capture so tests inspect serialization without network I/O.
   const controller = new AbortController();
   controller.abort();
   let payload: Record<string, unknown> | undefined;
 
   const responseStream = stream(
-    buildModel(),
+    params.model ?? buildModel(),
     {
       systemPrompt: "system",
       messages: params.messages,
@@ -101,7 +117,9 @@ async function runAbortedOpenAIResponsesStream(params: {
     },
     {
       apiKey: "test",
-      replayResponsesItemIds: params.replayResponsesItemIds ?? true,
+      ...(params.usePolicyReplayDefault
+        ? {}
+        : { replayResponsesItemIds: params.replayResponsesItemIds ?? true }),
       signal: controller.signal,
       onPayload: (nextPayload: unknown) => {
         payload = nextPayload as Record<string, unknown>;
@@ -118,6 +136,83 @@ async function runAbortedOpenAIResponsesStream(params: {
 }
 
 describe("openai-responses reasoning replay", () => {
+  it("omits Responses item ids for storeless custom providers while preserving tool call ids", async () => {
+    const assistantToolOnly = buildAssistantMessage({
+      stopReason: "toolUse",
+      content: [
+        buildReasoningPart("rs_storeless"),
+        {
+          type: "text",
+          text: "Checking.",
+          textSignature: JSON.stringify({ v: 1, id: "msg_storeless", phase: "final_answer" }),
+        },
+        {
+          type: "toolCall",
+          id: "call_storeless|fc_storeless",
+          name: "noop",
+          arguments: {},
+        },
+      ],
+    });
+
+    const toolResult: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_storeless|fc_storeless",
+      toolName: "noop",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      timestamp: Date.now(),
+    };
+
+    const { input, types } = await runAbortedOpenAIResponsesStream({
+      model: buildStorelessCustomModel(),
+      usePolicyReplayDefault: true,
+      messages: [
+        { role: "user", content: "Call noop.", timestamp: Date.now() },
+        assistantToolOnly,
+        toolResult,
+        { role: "user", content: "Now reply with ok.", timestamp: Date.now() },
+      ],
+      tools: [
+        {
+          name: "noop",
+          description: "no-op",
+          parameters: Type.Object({}, { additionalProperties: false }),
+        },
+      ],
+    });
+
+    expect(types).toContain("message");
+    expect(types).toContain("function_call");
+    expect(types).toContain("function_call_output");
+
+    const replayedItemIds = input.filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) &&
+        typeof item === "object" &&
+        ["reasoning", "message", "function_call"].includes(
+          String((item as Record<string, unknown>).type),
+        ) &&
+        typeof (item as Record<string, unknown>).id === "string",
+    );
+    expect(replayedItemIds).toEqual([]);
+
+    const functionCall = input.find(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "function_call",
+    ) as Record<string, unknown> | undefined;
+    const functionCallOutput = input.find(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "function_call_output",
+    ) as Record<string, unknown> | undefined;
+    expect(functionCall?.call_id).toBeTruthy();
+    expect(functionCallOutput?.call_id).toBe(functionCall?.call_id);
+  });
+
   it("replays reasoning for tool-call-only turns (OpenAI requires it)", async () => {
     const assistantToolOnly = buildAssistantMessage({
       stopReason: "toolUse",
@@ -224,6 +319,7 @@ describe("openai-responses reasoning replay", () => {
   });
 
   it("does not replay a signed assistant message id after its reasoning item was pruned", async () => {
+    // Signed message ids are only safe to replay when their preceding reasoning item survived.
     expect(
       resolveReplayableResponsesMessageId({
         replayResponsesItemIds: true,

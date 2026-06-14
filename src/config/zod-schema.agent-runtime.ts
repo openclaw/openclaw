@@ -1,3 +1,4 @@
+// Defines Zod schema fragments for per-agent runtime configuration.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -675,7 +676,7 @@ const ToolSearchSchema = z
     z
       .object({
         enabled: z.boolean().optional(),
-        mode: z.enum(["code", "tools"]).optional(),
+        mode: z.enum(["code", "tools", "directory"]).optional(),
         codeTimeoutMs: z.number().int().positive().optional(),
         searchDefaultLimit: z.number().int().positive().optional(),
         maxSearchLimit: z.number().int().positive().optional(),

@@ -1,3 +1,4 @@
+// Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -154,29 +155,11 @@ function createSignalProcess() {
 }
 
 async function waitForAgentCommandCall(expectedCalls = 1) {
-  for (
-    let attempt = 0;
-    attempt < 50 && agentCommand.mock.calls.length < expectedCalls;
-    attempt += 1
-  ) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-  }
-  expect(agentCommand).toHaveBeenCalledTimes(expectedCalls);
+  await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(expectedCalls));
 }
 
 async function waitForGatewayCall(expectedCalls = 1) {
-  for (
-    let attempt = 0;
-    attempt < 50 && callGateway.mock.calls.length < expectedCalls;
-    attempt += 1
-  ) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-  }
-  expect(callGateway).toHaveBeenCalledTimes(expectedCalls);
+  await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(expectedCalls));
 }
 
 function mockMessages(mock: unknown): string[] {
@@ -1711,6 +1694,7 @@ describe("agentCliCommand", () => {
       );
       expect(localOpts.cleanupBundleMcpOnRunEnd).toBe(true);
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
+      expect(localOpts.oneShotCliRun).toBe(true);
       expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
@@ -1806,6 +1790,7 @@ describe("agentCliCommand", () => {
       );
       expect(fallbackOpts.cleanupBundleMcpOnRunEnd).toBe(true);
       expect(fallbackOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
+      expect(fallbackOpts.oneShotCliRun).toBe(false);
     });
   });
 });

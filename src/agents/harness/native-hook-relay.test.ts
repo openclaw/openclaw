@@ -1,3 +1,4 @@
+// Covers native hook relay registration, bridge invocation, and approval state.
 import { randomUUID } from "node:crypto";
 import { rmSync, statSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -37,6 +38,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  // Relay bridge payloads cross a process boundary. Tests narrow unknown JSON
+  // before making assertions so malformed bridge responses fail clearly.
   if (!isRecord(value)) {
     throw new Error(`Expected ${label} to be an object`);
   }
@@ -90,6 +93,8 @@ async function writeForeignNativeHookRelayBridgeRecordForTests(
     expiresAtMs: number;
   },
 ): Promise<string> {
+  // Foreign bridge records simulate another process owning the relay server,
+  // without starting a second OpenClaw process in the unit test.
   const bridgeDir = testing.getNativeHookRelayBridgeDirForTests();
   await fs.mkdir(bridgeDir, { recursive: true, mode: 0o700 });
   const registryPath = testing.getNativeHookRelayBridgeRegistryPathForTests(relayId);
@@ -191,6 +196,8 @@ type NativeHookRelaySharedStateForTests = {
 };
 
 function getNativeHookRelaySharedStateForTests(): NativeHookRelaySharedStateForTests {
+  // Native relay state is intentionally shared on globalThis so duplicate
+  // module imports in one process still see one approval/bridge registry.
   const state = (
     globalThis as typeof globalThis & {
       [key: symbol]: NativeHookRelaySharedStateForTests | undefined;
@@ -239,6 +246,14 @@ describe("native hook relay registry", () => {
       },
     );
     expect(relay.commandForEvent("pre_tool_use")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
+    );
+    expect(relay.commandForEvent("pre_tool_use", { timeoutMs: 900 })).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 900`,
+    );
+    expect(relay.commandForEvent("pre_tool_use", { timeoutMs: 2_000 })).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
         `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
     );

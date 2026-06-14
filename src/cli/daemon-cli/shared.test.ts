@@ -1,8 +1,10 @@
+// Daemon shared tests cover shared daemon CLI helpers and validation.
 import { describe, expect, it } from "vitest";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   filterContainerGenericHints,
   parsePortFromArgs,
+  renderRuntimeHints,
   renderGatewayServiceStartHints,
   resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
@@ -33,6 +35,15 @@ describe("parsePortFromArgs", () => {
 });
 
 describe("renderGatewayServiceStartHints", () => {
+  it("uses GUI session wording for installed LaunchAgents that cannot access gui/$UID", () => {
+    expect(
+      renderRuntimeHints(
+        { missingSupervision: true, missingGuiSession: true },
+        {} as NodeJS.ProcessEnv,
+      ).join("\n"),
+    ).toContain("logged-in macOS GUI session");
+  });
+
   it("resolves daemon container context from either env key", () => {
     expect(
       resolveDaemonContainerContext({

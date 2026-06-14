@@ -1,3 +1,4 @@
+/** Formats stable cron timeout and execution error messages. */
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import type { CronAgentExecutionStarted } from "../types.js";
 
@@ -21,6 +22,11 @@ export function setupTimeoutErrorMessage(execution?: CronAgentExecutionStarted):
     return "cron: isolated agent setup timed out before runner start";
   }
   return `cron: isolated agent setup timed out before runner start (last phase: ${phase})`;
+}
+
+/** Returns true for the setup-timeout class that fires before the isolated runner starts. */
+export function isSetupTimeoutErrorText(error: string): boolean {
+  return error.startsWith("cron: isolated agent setup timed out before runner start");
 }
 
 /** Formats timeout text for runs that stalled after setup but before execution start. */

@@ -1,3 +1,4 @@
+// Telegram tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { TelegramConfigSchema } from "../config-api.js";
 
@@ -84,22 +85,16 @@ describe("telegram custom commands schema", () => {
     expectTelegramConfigIssue({ mediaGroupFlushMs: 60_001 }, "mediaGroupFlushMs");
   });
 
-  it("accepts Telegram native tool-progress draft config only on Telegram", () => {
+  it("accepts Telegram progress commentary config", () => {
     expectTelegramConfigValid({
       streaming: {
-        preview: {
-          toolProgress: true,
-          nativeToolProgress: true,
-          nativeToolProgressAllowFrom: ["123456789"],
-        },
+        mode: "progress",
+        progress: { commentary: true },
       },
       accounts: {
         ops: {
           streaming: {
-            preview: {
-              nativeToolProgress: true,
-              nativeToolProgressAllowFrom: [123456789],
-            },
+            progress: { commentary: true },
           },
         },
       },

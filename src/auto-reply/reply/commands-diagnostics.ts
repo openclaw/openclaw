@@ -1,3 +1,4 @@
+/** Handles diagnostics commands and private owner routing for sensitive diagnostics output. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
@@ -10,7 +11,10 @@ import type { InteractiveReply, MessagePresentationAction } from "../../interact
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
 import type { ReplyPayload } from "../types.js";
-import { buildCurrentOpenClawCliCommand } from "./commands-openclaw-cli.js";
+import {
+  buildCurrentOpenClawCliCommand,
+  buildCurrentOpenClawCliExecEnv,
+} from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
@@ -58,6 +62,7 @@ const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
   deliverPrivateDiagnosticsReply,
 };
 
+/** Creates a diagnostics command handler with injectable private-route dependencies. */
 export function createDiagnosticsCommandHandler(
   deps: Partial<DiagnosticsCommandDeps> = {},
 ): CommandHandler {
@@ -69,6 +74,7 @@ export function createDiagnosticsCommandHandler(
     await handleDiagnosticsCommandWithDeps(resolvedDeps, params, allowTextCommands);
 }
 
+/** Default diagnostics command handler. */
 export const handleDiagnosticsCommand: CommandHandler = createDiagnosticsCommandHandler();
 
 async function handleDiagnosticsCommandWithDeps(
@@ -320,6 +326,7 @@ async function requestGatewayDiagnosticsExportApproval(
     });
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
       command,
+      env: buildCurrentOpenClawCliExecEnv(),
       security: "allowlist",
       ask: "always",
       background: true,

@@ -1,3 +1,4 @@
+// Whatsapp tests cover connection controller registry plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 type RegistryModule = typeof import("./connection-controller-registry.js");
@@ -14,6 +15,8 @@ describe("WhatsApp connection controller registry", () => {
     const second = await importRegistryModule(`second-${Date.now()}`);
     const controller = {
       getActiveListener: vi.fn(() => null),
+      getCurrentSock: vi.fn(() => null),
+      getSelfIdentity: vi.fn(() => null),
     };
 
     first.registerWhatsAppConnectionController("work", controller);
