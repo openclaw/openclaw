@@ -132,6 +132,7 @@ vi.mock("../apply-patch.js", () => ({
 
 vi.mock("../agent-tools.before-tool-call.js", () => ({
   wrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
+  copyBeforeToolCallHookMarker: vi.fn(),
 }));
 
 vi.mock("../agent-tools.abort.js", () => ({
