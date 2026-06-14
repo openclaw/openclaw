@@ -152,6 +152,21 @@ export function resolveCompletionFromSessionEntry(
       reason: SUBAGENT_ENDED_REASON_KILLED,
     };
   }
+  // Archived/running sessions have a terminal timestamp even when the status
+  // field wasn't updated to "done" before archival. Treat them as completed
+  // so the sweeper doesn't falsely report "lost active execution context"
+  // when the subagent already produced deliverable output.
+  if (status === "running" && typeof sessionEntry?.endedAt === "number") {
+    if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
+      return null;
+    }
+    return {
+      startedAt,
+      endedAt,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    };
+  }
   if (status !== "running" && typeof sessionEntry?.endedAt === "number") {
     if (!isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
       return null;
