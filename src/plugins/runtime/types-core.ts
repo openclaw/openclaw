@@ -92,6 +92,7 @@ type RuntimeSessionStoreEntryUpdateParams = {
   ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
+  requireWriteSuccess?: boolean;
 };
 export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
