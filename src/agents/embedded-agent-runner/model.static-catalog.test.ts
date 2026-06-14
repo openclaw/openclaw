@@ -463,8 +463,8 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       staticCatalog: { run: vi.fn() },
     };
     providerMocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
-      ({ provider }: { provider: string }) =>
-        provider === "google" || provider === "google-gemini-cli" ? ["google"] : undefined,
+      ({ provider: providerId }: { provider: string }) =>
+        providerId === "google" || providerId === "google-gemini-cli" ? ["google"] : undefined,
     );
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
