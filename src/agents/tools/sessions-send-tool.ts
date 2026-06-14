@@ -555,13 +555,25 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const sameSessionA2A = requesterSessionKey === resolvedKey;
+      // An isolated cron run is the only requester for which the A2A ping-pong
+      // is harmful: feeding the target's reply back as a new turn corrupts the
+      // isolated run (#92257). Detect it by its session-key marker / channel
+      // (see src/cron/isolated-agent/run.ts and subagent-registry.ts), not by
+      // timeoutSeconds, so normal cross-session fire-and-forget A2A is kept.
+      const isIsolatedCronRequester =
+        (requesterSessionKey?.includes(":cron:") ?? false) || requesterChannel === "cron";
 
       // Capture the pre-run assistant snapshot before starting the nested run.
       // Fast in-process test doubles and short-circuit agent paths can finish
       // before we reach the post-run read, which would otherwise make the new
       // reply look like the baseline and hide it from the caller.
       // Fire-and-forget same-session sends still need this baseline because the
-      // A2A follow-up may deliver directly to the source channel.
+      // A2A follow-up may deliver directly to the source channel. Isolated cron
+      // requesters also need it cross-session: without a baseline fingerprint
+      // any pre-existing assistant text in the target session (e.g. an
+      // unrelated concurrent cron's output) would be misattributed as "the
+      // reply" (#92257). Tolerate read failures on the fire-and-forget path so
+      // a snapshot error never blocks accepting the send.
       const baselineReply =
         timeoutSeconds !== 0
           ? await readLatestAssistantReplySnapshot({
@@ -569,7 +581,7 @@ export function createSessionsSendTool(opts?: {
               limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
               callGateway: gatewayCall,
             })
-          : sameSessionA2A
+          : sameSessionA2A || isIsolatedCronRequester
             ? await readLatestAssistantReplySnapshot({
                 sessionKey: resolvedKey,
                 limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
@@ -658,7 +670,13 @@ export function createSessionsSendTool(opts?: {
           displayKey: flowDisplayKey,
           message,
           announceTimeoutMs,
-          maxPingPongTurns,
+          // An isolated cron requester must not run the ping-pong loop: its
+          // first iteration would inject the target's reply as a new turn into
+          // the isolated cron session, corrupting that run (#92257). Force
+          // turns=0 only for that requester so the A2A flow skips straight to
+          // the announce step; normal cross-session fire-and-forget keeps its
+          // intended ping-pong roundtrip.
+          maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
           baseline: baselineReply,
