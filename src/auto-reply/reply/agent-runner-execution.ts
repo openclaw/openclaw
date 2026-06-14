@@ -1513,6 +1513,7 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
+  rawBody?: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
   replyThreading?: TemplateContext["ReplyThreading"];
@@ -2393,6 +2394,7 @@ export async function runAgentTurnWithFallback(params: {
                     userTurnTranscriptRecorder,
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
+                    rawBody: params.rawBody ?? params.followupRun.rawBody,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                     forceMessageTool:

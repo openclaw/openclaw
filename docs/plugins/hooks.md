@@ -387,6 +387,38 @@ Non-bundled plugins that need raw conversation hooks (`before_model_resolve`,
 Prompt-mutating hooks and durable next-turn injections can be disabled per plugin
 with `plugins.entries.<id>.hooks.allowPromptInjection=false`.
 
+### User raw input: `rawBody`
+
+The `before_prompt_build`, `before_agent_start`, and `agent_end` events
+include an optional `rawBody?: string` field that carries the user's
+original input text before OpenClaw prepends channel structural context
+(sender labels, message annotations), `buildInboundUserContextPrefix()`
+metadata, or any `before_prompt_build` hook-injected content.
+
+`rawBody` is present when the run originates from a user message on a
+channel plugin (Telegram, Discord, Slack, iMessage, and others). It is
+`undefined` when the run originates from CLI invocations, heartbeat
+polls, cron events, or exec events.
+
+When a user steers an already-running turn (`queue.mode=steer` /
+`steer-backlog`), the active run refreshes `rawBody` to the steered
+message's clean text, so subsequent `before_prompt_build` and
+`agent_end` events on that run report the most recent user input rather
+than the turn's original text.
+
+Treat absence as "use the message content instead", not "the user sent
+an empty message":
+
+```ts
+api.on("before_prompt_build", (event) => {
+  const userText = event.rawBody ?? extractText(event.messages);
+  // … inspect or react to the user's input …
+});
+```
+
+All three events use the same field with identical semantics, so plugins
+can share a single extraction helper across hook phases.
+
 ### Session extensions and next-turn injections
 
 Workflow plugins can persist small JSON-compatible session state with

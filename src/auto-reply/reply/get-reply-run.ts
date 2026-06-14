@@ -646,8 +646,9 @@ export async function runPreparedReply(
       ? "none"
       : "generic";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
-  const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
+  // Candidate text for bare reset detection and (when from a user channel) the plugin hook rawBody payload.
+  const rawBodyCandidate = ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const rawBodyTrimmed = rawBodyCandidate.trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   const normalizedCommandBody = command.commandBodyNormalized.trim();
   const softResetTriggered = command.softResetTriggered === true;
@@ -658,6 +659,9 @@ export async function runPreparedReply(
   const isWholeMessageCommand =
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
+  // Gate the plugin hook field to user-originated channel runs; system events (heartbeat, cron, exec)
+  // reuse the system prompt text in Body/CommandBody/RawBody and must not leak it as user rawBody.
+  const rawBodyForPluginEvent = isSystemEventProvider(ctx.Provider) ? undefined : rawBodyCandidate;
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   if (
     allowTextCommands &&
@@ -1260,6 +1264,7 @@ export async function runPreparedReply(
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
+    rawBody: rawBodyForPluginEvent,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -1372,6 +1377,7 @@ export async function runPreparedReply(
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     transcriptCommandBody,
+    rawBody: rawBodyForPluginEvent,
     followupRun,
     queueKey,
     resolvedQueue,
