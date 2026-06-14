@@ -94,7 +94,7 @@ function addTouchedFile(
   files.set(filePath, { path: filePath, kind });
 }
 
-function addPatchFiles(files: Map<string, TouchedFile>, input: unknown) {
+function addRawPatchFiles(files: Map<string, TouchedFile>, input: unknown) {
   if (typeof input !== "string") {
     return;
   }
@@ -106,6 +106,27 @@ function addPatchFiles(files: Map<string, TouchedFile>, input: unknown) {
   for (const match of input.matchAll(moveLinePattern)) {
     addTouchedFile(files, match[1]?.trim(), "modified");
   }
+}
+
+function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unknown) {
+  if (!Array.isArray(changes)) {
+    return;
+  }
+  for (const changeValue of changes) {
+    const change = asRecord(changeValue);
+    addTouchedFile(files, normalizePathValue(change?.path), "modified");
+    const kind = asRecord(change?.kind);
+    addTouchedFile(
+      files,
+      normalizePathValue(kind?.move_path) ?? normalizePathValue(kind?.movePath),
+      "modified",
+    );
+  }
+}
+
+function addPatchFiles(files: Map<string, TouchedFile>, args: Record<string, unknown>) {
+  addRawPatchFiles(files, args.input);
+  addStructuredPatchFiles(files, args.changes);
 }
 
 function isToolCallBlockType(value: unknown): boolean {
@@ -136,7 +157,7 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
     } else if (toolName === "write" || toolName === "edit") {
       addTouchedFile(files, readPathArg(args), "modified");
     } else if (toolName === "apply_patch") {
-      addPatchFiles(files, args.input);
+      addPatchFiles(files, args);
     }
   }
 }
@@ -403,15 +424,14 @@ async function toBrowserEntry(
   if (!kind) {
     return undefined;
   }
+  const sessionKind = relevanceForBrowserPath(browserPath, kind, relevance);
   return {
     path: browserPath,
     name: dirent.name,
     kind,
     ...(kind === "file" ? { size: dirent.size } : {}),
     updatedAtMs: toUpdatedAtMs(dirent.mtimeMs),
-    ...(relevanceForBrowserPath(browserPath, kind, relevance)
-      ? { sessionKind: relevanceForBrowserPath(browserPath, kind, relevance) }
-      : {}),
+    ...(sessionKind ? { sessionKind } : {}),
   };
 }
 
@@ -521,8 +541,7 @@ async function buildBrowserResult(params: {
   }
   const entries = (
     await Promise.all(
-      dirents
-        .toSorted((a, b) => a.name.localeCompare(b.name))
+      sortDirents(dirents)
         .slice(0, MAX_BROWSER_ENTRIES + 1)
         .map((dirent) => {
           const entryPath = browserPath ? `${browserPath}/${dirent.name}` : dirent.name;

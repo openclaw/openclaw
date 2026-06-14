@@ -179,6 +179,37 @@ describe("sessions.files RPC handlers", () => {
     ]);
   });
 
+  it("collects changed files from structured apply_patch changes", async () => {
+    hoisted.visitSessionMessagesAsync.mockImplementation(
+      async (_sessionId, _storePath, _sessionFile, visit) => {
+        visit(
+          assistantToolCall("apply_patch", {
+            changes: [
+              { path: "ui/chat.ts", kind: "update" },
+              { path: "src/readme.md", kind: "delete" },
+              { path: "old-name.md", kind: { type: "update", move_path: "package.json" } },
+            ],
+          }),
+          1,
+        );
+        return 1;
+      },
+    );
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(payload.files.map((file: Record<string, unknown>) => [file.path, file.kind])).toEqual([
+      ["old-name.md", "modified"],
+      ["package.json", "modified"],
+      ["src/readme.md", "modified"],
+      ["ui/chat.ts", "modified"],
+    ]);
+  });
+
   it("prefers the spawned workspace root over a nested spawned cwd", async () => {
     const nestedCwd = path.join(workspaceRoot, "packages/app");
     fs.mkdirSync(nestedCwd, { recursive: true });
