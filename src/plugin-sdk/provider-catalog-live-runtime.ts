@@ -197,7 +197,6 @@ function buildProviderConfig<T extends ModelDefinitionConfig>(
 ): ModelProviderConfig {
   return {
     ...params.providerConfig,
-    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
     models: [...models],
   };
 }
