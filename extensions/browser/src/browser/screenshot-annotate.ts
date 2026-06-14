@@ -193,7 +193,10 @@ function rectsOverlap(
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
-export function buildOverlayInjectionScript(params: { items: OverlayItem[] }): string {
+export function buildOverlayInjectionScript(params: {
+  items: OverlayItem[];
+  captureY?: number;
+}): string {
   const itemsJson = JSON.stringify(
     params.items.map((it) => ({
       ref: it.ref,
@@ -205,8 +208,10 @@ export function buildOverlayInjectionScript(params: { items: OverlayItem[] }): s
   );
   const attr = ANNOTATION_OVERLAY_ATTR;
   const rootId = ANNOTATION_OVERLAY_ROOT_ID;
+  const captureY = Number.isFinite(params.captureY) ? round(params.captureY ?? 0) : 0;
   return `(() => {
   var items = ${itemsJson};
+  var captureY = ${captureY};
   var existing = document.querySelectorAll("[${attr}]");
   for (var k = 0; k < existing.length; k++) existing[k].remove();
   var root = document.createElement("div");
@@ -221,7 +226,8 @@ export function buildOverlayInjectionScript(params: { items: OverlayItem[] }): s
     var tag = document.createElement("div");
     tag.setAttribute("${attr}", "1");
     tag.textContent = String(it.ref);
-    var labelTop = it.y < 14 ? (it.y + 2) : (it.y - 14);
+    var relativeY = it.y - captureY;
+    var labelTop = relativeY < 14 ? (it.y + 2) : (it.y - 14);
     tag.style.cssText = "position:absolute;left:" + it.x + "px;top:" + labelTop + "px;background:#ffb020;color:#1a1a1a;font:bold 11px/14px monospace;padding:0 4px;border-radius:2px;white-space:nowrap;pointer-events:none;";
     root.appendChild(box);
     root.appendChild(tag);

@@ -259,9 +259,20 @@ describe("buildOverlayInjectionScript", () => {
     const script = buildOverlayInjectionScript({
       items: [{ ref: "e1", x: 0, y: 5, w: 10, h: 10 }],
     });
-    // labelTop = it.y < 14 ? it.y + 2 : it.y - 14
-    // The expression literal `it.y < 14 ? (it.y + 2) : (it.y - 14)` is in the script.
-    expect(script).toContain("it.y < 14 ? (it.y + 2) : (it.y - 14)");
+    // labelTop = relativeY < 14 ? it.y + 2 : it.y - 14
+    // The expression literal `relativeY < 14 ? (it.y + 2) : (it.y - 14)` is in the script.
+    expect(script).toContain("relativeY < 14 ? (it.y + 2) : (it.y - 14)");
+  });
+
+  it("uses capture-relative y when deciding whether to flip labels below boxes", () => {
+    const script = buildOverlayInjectionScript({
+      items: [{ ref: "e1", x: 0, y: 1005, w: 10, h: 10 }],
+      captureY: 1000,
+    });
+
+    expect(script).toContain("var captureY = 1000;");
+    expect(script).toContain("var relativeY = it.y - captureY;");
+    expect(script).toContain("relativeY < 14 ? (it.y + 2) : (it.y - 14)");
   });
 });
 

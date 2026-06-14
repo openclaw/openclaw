@@ -1388,7 +1388,8 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
 
   try {
     if (plan.overlayItems.length > 0) {
-      await page.evaluate(buildOverlayInjectionScript({ items: plan.overlayItems }));
+      const captureY = space === "element" ? elementRect?.y : space === "viewport" ? scroll.y : 0;
+      await page.evaluate(buildOverlayInjectionScript({ items: plan.overlayItems, captureY }));
     }
     const buffer =
       space === "element"
