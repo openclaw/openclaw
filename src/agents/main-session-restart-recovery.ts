@@ -919,6 +919,36 @@ export async function recoverStartupOrphanedMainSessions(
   };
 }
 
+async function clearStaleAbortedRunFlags(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+}): Promise<{ cleared: number }> {
+  const result = { cleared: 0 };
+  for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        for (const [sessionKey, entry] of Object.entries(store)) {
+          if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
+            continue;
+          }
+          delete entry.abortedLastRun;
+          entry.updatedAt = Date.now();
+          store[sessionKey] = entry;
+          result.cleared++;
+        }
+      },
+      { skipMaintenance: true },
+    );
+  }
+  if (result.cleared > 0) {
+    log.warn(
+      `cleared stale abortedLastRun from ${result.cleared} session(s) after exhausted restart recovery retries`,
+    );
+  }
+  return result;
+}
+
 export function scheduleRestartAbortedMainSessionRecovery(
   params: {
     cfg?: OpenClawConfig;
@@ -944,6 +974,13 @@ export function scheduleRestartAbortedMainSessionRecovery(
       .then((result) => {
         if (result.failed > 0 && attempt < maxRetries) {
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+        } else if (result.failed > 0 && attempt >= maxRetries) {
+          // All retries exhausted — clear stale abortedLastRun so sessions
+          // are not permanently stuck in "busy" state after restart.
+          void clearStaleAbortedRunFlags({
+            cfg: params.cfg,
+            stateDir: params.stateDir,
+          });
         }
       })
       .catch((err: unknown) => {
@@ -952,6 +989,10 @@ export function scheduleRestartAbortedMainSessionRecovery(
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
         } else {
           log.warn(`main-session restart recovery gave up: ${String(err)}`);
+          void clearStaleAbortedRunFlags({
+            cfg: params.cfg,
+            stateDir: params.stateDir,
+          });
         }
       });
   };
