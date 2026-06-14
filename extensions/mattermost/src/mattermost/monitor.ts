@@ -1,12 +1,14 @@
 // Mattermost plugin module implements monitor behavior.
 import {
+  buildChannelProgressDraftLineForEntry,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
+  formatChannelProgressDraftText,
+  mergeChannelProgressDraftLine,
+  resolveChannelProgressDraftMaxLines,
+  type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  formatChannelProgressDraftLineForEntry,
-  resolveChannelStreamingPreviewToolProgress,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
@@ -38,7 +40,7 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -1682,6 +1684,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             })
           : createDisabledMattermostDraftStream();
         let lastPartialText = "";
+        let progressLines: Array<string | ChannelProgressDraftLine> = [];
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1893,31 +1896,58 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           },
                           onAssistantMessageStart: () => {
                             lastPartialText = "";
+                            progressLines = [];
                           },
                           onReasoningEnd: () => {
                             lastPartialText = "";
+                            progressLines = [];
                           },
                           onReasoningStream: async () => {
                             if (!lastPartialText) {
                               draftStream.update("Thinking…");
                             }
                           },
-                          onToolStart: async (payloadValue) => {
+                          onToolStart: (payloadValue) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
+                            const progressLine = buildChannelProgressDraftLineForEntry(
+                              account.config,
+                              {
+                                event: "tool",
+                                itemId: payloadValue.itemId,
+                                toolCallId: payloadValue.toolCallId,
+                                name: payloadValue.name,
+                                phase: payloadValue.phase,
+                                args: payloadValue.args,
+                              },
+                              payloadValue.detailMode
+                                ? { detailMode: payloadValue.detailMode }
+                                : undefined,
+                            );
+                            if (!progressLine) {
+                              return;
+                            }
+                            progressLines = mergeChannelProgressDraftLine(
+                              progressLines,
+                              progressLine,
+                              {
+                                maxLines: resolveChannelProgressDraftMaxLines(account.config),
+                              },
+                            );
                             draftStream.update(
-                              buildMattermostToolStatusText({
-                                ...payloadValue,
-                                config: account.config,
+                              formatChannelProgressDraftText({
+                                entry: account.config,
+                                lines: progressLines,
+                                seed: `${account.accountId}:${channelId}`,
                               }),
                             );
                           },
-                          onItemEvent: async (payloadLocal) => {
+                          onItemEvent: (payloadLocal) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            const progressText = formatChannelProgressDraftLineForEntry(
+                            const progressLine = buildChannelProgressDraftLineForEntry(
                               account.config,
                               {
                                 event: "item",
@@ -1932,9 +1962,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                                 meta: payloadLocal.meta,
                               },
                             );
-                            if (progressText) {
-                              draftStream.update(progressText);
+                            if (!progressLine) {
+                              return;
                             }
+                            progressLines = mergeChannelProgressDraftLine(
+                              progressLines,
+                              progressLine,
+                              {
+                                maxLines: resolveChannelProgressDraftMaxLines(account.config),
+                              },
+                            );
+                            draftStream.update(
+                              formatChannelProgressDraftText({
+                                entry: account.config,
+                                lines: progressLines,
+                                seed: `${account.accountId}:${channelId}`,
+                              }),
+                            );
                           },
                         },
                       }),

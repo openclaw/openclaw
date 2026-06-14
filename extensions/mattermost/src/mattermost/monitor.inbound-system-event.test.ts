@@ -1,8 +1,19 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import {
+  buildChannelProgressDraftLineForEntry,
+  formatChannelProgressDraftText,
+  mergeChannelProgressDraftLine,
+  resolveChannelProgressDraftMaxLines,
+  type ChannelProgressDraftLine,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { ReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
+
+type CreateReplyDispatcherWithTypingFn =
+  typeof import("openclaw/plugin-sdk/reply-runtime").createReplyDispatcherWithTyping;
 
 class FakeWebSocket {
   public readonly sent: string[] = [];
@@ -159,6 +170,21 @@ function createRuntimeCore(
     createInboundDebouncer?: typeof createInboundDebouncer;
   } = {},
 ) {
+  const createReplyDispatcherWithTypingMock = (
+    params: Parameters<CreateReplyDispatcherWithTypingFn>[0],
+  ): ReturnType<CreateReplyDispatcherWithTypingFn> => ({
+    dispatcher: createReplyDispatcher(),
+    replyOptions: {
+      onReplyStart: params.onReplyStart ?? params.typingCallbacks?.onReplyStart,
+      onTypingCleanup: params.onCleanup ?? params.typingCallbacks?.onCleanup,
+      onTypingController: () => {},
+    },
+    markDispatchIdle: () => {
+      params.typingCallbacks?.onIdle?.();
+      void params.onIdle?.();
+    },
+    markRunComplete: () => {},
+  });
   const dispatchPreparedForTest = vi.fn(
     async (turn: {
       storePath: string;
@@ -270,12 +296,7 @@ function createRuntimeCore(
         buildPairingReply: () => "pairing required",
       },
       reply: {
-        createReplyDispatcherWithTyping: vi.fn(() => ({
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: vi.fn(),
-          markRunComplete: vi.fn(),
-        })),
+        createReplyDispatcherWithTyping: vi.fn(createReplyDispatcherWithTypingMock),
         dispatchReplyFromConfig: mockState.dispatchReplyFromConfig,
         finalizeInboundContext: (context: unknown) => context,
         formatInboundEnvelope: (params: { channel: string; from: string; body: string }) =>
@@ -334,6 +355,18 @@ function createRuntimeCore(
         resolveTextChunkLimit: () => 4000,
       },
     },
+  };
+}
+
+function createReplyDispatcher(): ReplyDispatcher {
+  return {
+    sendToolResult: () => true,
+    sendBlockReply: () => true,
+    sendFinalReply: () => true,
+    getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    markComplete: () => {},
+    waitForIdle: async () => {},
   };
 }
 
@@ -442,6 +475,172 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.MessageSid).toBe("post-1");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
+  });
+
+  it("merges interleaved draft progress lines by identity", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const draftStream = {
+      update: vi.fn(),
+      stop: vi.fn(async () => {}),
+    };
+    mockState.createMattermostDraftStream.mockReturnValue(draftStream);
+
+    const runtimeCore = createRuntimeCore(testConfig);
+    mockState.runtimeCore = runtimeCore;
+
+    runtimeCore.channel.reply.createReplyDispatcherWithTyping = vi.fn(
+      (
+        params: Parameters<CreateReplyDispatcherWithTypingFn>[0],
+      ): ReturnType<CreateReplyDispatcherWithTypingFn> => ({
+        dispatcher: createReplyDispatcher(),
+        replyOptions: {
+          onReplyStart: params.onReplyStart ?? params.typingCallbacks?.onReplyStart,
+          onTypingCleanup: params.onCleanup ?? params.typingCallbacks?.onCleanup,
+          onTypingController: () => {},
+        },
+        markDispatchIdle: () => {
+          params.typingCallbacks?.onIdle?.();
+          void params.onIdle?.();
+        },
+        markRunComplete: () => {},
+      }),
+    );
+    mockState.dispatchReplyFromConfig.mockImplementation(async () => {
+      mockState.abortController?.abort();
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-progress-1",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "show me progress",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions as {
+      onToolStart?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        name?: string;
+        phase?: string;
+        args?: Record<string, unknown>;
+        detailMode?: "explain" | "raw";
+      }) => Promise<void>;
+      onItemEvent?: (payload: {
+        itemId: string;
+        kind: string;
+        title?: string;
+        name?: string;
+        phase?: string;
+        status?: string;
+        summary?: string;
+        progressText?: string;
+        meta?: Record<string, unknown>;
+      }) => Promise<void>;
+    };
+    expect(replyOptions.onToolStart).toBeTypeOf("function");
+    expect(replyOptions.onItemEvent).toBeTypeOf("function");
+
+    await replyOptions.onToolStart?.({
+      itemId: "item-a",
+      toolCallId: "call-a",
+      name: "toolA",
+      phase: "start",
+      args: { city: "Seoul" },
+    });
+    await replyOptions.onToolStart?.({
+      itemId: "item-b",
+      toolCallId: "call-b",
+      name: "toolB",
+      phase: "start",
+      args: { city: "Busan" },
+    });
+    await replyOptions.onItemEvent?.({
+      itemId: "item-a",
+      kind: "tool",
+      title: "Tool A",
+      name: "toolA",
+      phase: "running",
+      status: "running",
+      summary: "Fetched data",
+      progressText: "Fetched data",
+    });
+
+    let expectedLines: Array<string | ChannelProgressDraftLine> = [];
+    const toolALine = buildChannelProgressDraftLineForEntry(testConfig.channels?.mattermost, {
+      event: "tool",
+      itemId: "item-a",
+      toolCallId: "call-a",
+      name: "toolA",
+      phase: "start",
+      args: { city: "Seoul" },
+    });
+    const toolBLine = buildChannelProgressDraftLineForEntry(testConfig.channels?.mattermost, {
+      event: "tool",
+      itemId: "item-b",
+      toolCallId: "call-b",
+      name: "toolB",
+      phase: "start",
+      args: { city: "Busan" },
+    });
+    const toolAUpdateLine = buildChannelProgressDraftLineForEntry(testConfig.channels?.mattermost, {
+      event: "item",
+      itemId: "item-a",
+      itemKind: "tool",
+      title: "Tool A",
+      name: "toolA",
+      phase: "running",
+      status: "running",
+      summary: "Fetched data",
+      progressText: "Fetched data",
+    });
+    for (const line of [toolALine, toolBLine, toolAUpdateLine]) {
+      if (!line) {
+        continue;
+      }
+      expectedLines = mergeChannelProgressDraftLine(expectedLines, line, {
+        maxLines: resolveChannelProgressDraftMaxLines(testConfig.channels?.mattermost),
+      });
+    }
+    const expectedText = formatChannelProgressDraftText({
+      entry: testConfig.channels?.mattermost,
+      lines: expectedLines,
+      seed: "default:chan-1",
+    });
+
+    expect(draftStream.update).toHaveBeenCalledTimes(3);
+    expect(draftStream.update).toHaveBeenLastCalledWith(expectedText);
+    expect(expectedText).toContain("ToolA");
+    expect(expectedText).toContain("ToolB");
   });
 
   it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
