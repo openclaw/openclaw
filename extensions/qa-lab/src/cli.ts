@@ -23,35 +23,40 @@ import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
 
-type QaRunCliOptions = QaLabSelfCheckCommandOptions & {
-  outputDir?: QaProfileCommandOptions["outputDir"];
-  profile?: QaProfileCommandOptions["profile"];
-  surface?: QaProfileCommandOptions["surface"];
-  category?: QaProfileCommandOptions["category"];
-  transport?: QaProfileCommandOptions["transportId"];
-  providerMode?: QaProfileCommandOptions["providerMode"];
-  model?: QaProfileCommandOptions["primaryModel"];
-  altModel?: QaProfileCommandOptions["alternateModel"];
-  concurrency?: QaProfileCommandOptions["concurrency"];
-  allowFailures?: QaProfileCommandOptions["allowFailures"];
-  fast?: QaProfileCommandOptions["fastMode"];
-};
-
-type QaSuiteCliOptions = Omit<
-  QaSuiteCommandOptions,
-  | "transportId"
-  | "primaryModel"
-  | "alternateModel"
-  | "fastMode"
-  | "scenarioIds"
-  | "enabledPluginIds"
-> & {
+type QaScenarioRunCliOptions = {
+  repoRoot?: QaSuiteCommandOptions["repoRoot"];
+  outputDir?: QaSuiteCommandOptions["outputDir"];
   transport?: QaSuiteCommandOptions["transportId"];
+  providerMode?: QaSuiteCommandOptions["providerMode"];
   model?: QaSuiteCommandOptions["primaryModel"];
   altModel?: QaSuiteCommandOptions["alternateModel"];
+  concurrency?: QaSuiteCommandOptions["concurrency"];
+  allowFailures?: QaSuiteCommandOptions["allowFailures"];
   fast?: QaSuiteCommandOptions["fastMode"];
+};
+
+type QaRunCliOptions = QaLabSelfCheckCommandOptions &
+  QaScenarioRunCliOptions & {
+    profile?: QaProfileCommandOptions["profile"];
+    surface?: QaProfileCommandOptions["surface"];
+    category?: QaProfileCommandOptions["category"];
+  };
+
+type QaSuiteCliOptions = QaScenarioRunCliOptions & {
+  runner?: QaSuiteCommandOptions["runner"];
+  thinking?: QaSuiteCommandOptions["thinking"];
+  cliAuthMode?: QaSuiteCommandOptions["cliAuthMode"];
+  parityPack?: QaSuiteCommandOptions["parityPack"];
+  pack?: QaSuiteCommandOptions["pack"];
   scenario?: QaSuiteCommandOptions["scenarioIds"];
   enablePlugin?: QaSuiteCommandOptions["enabledPluginIds"];
+  image?: QaSuiteCommandOptions["image"];
+  cpus?: QaSuiteCommandOptions["cpus"];
+  memory?: QaSuiteCommandOptions["memory"];
+  disk?: QaSuiteCommandOptions["disk"];
+  preflight?: QaSuiteCommandOptions["preflight"];
+  runtimePair?: QaSuiteCommandOptions["runtimePair"];
+  runtimeParityTier?: QaSuiteCommandOptions["runtimeParityTier"];
 };
 
 let qaLabCliRuntimePromise: Promise<QaLabCliRuntime> | null = null;
