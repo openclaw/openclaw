@@ -5,6 +5,7 @@
  */
 import type { Api, Context, Model } from "../llm/types.js";
 import { resolveModelBoundThinkingReplayMode } from "../shared/anthropic-model-contract.js";
+import { isReasoningOnlyLengthAssistantTurn } from "./replay-turn-classification.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -40,22 +41,11 @@ function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
   if (message.role !== "assistant") {
     return false;
   }
-  if (message.stopReason === "error" || message.stopReason === "aborted") {
-    return true;
-  }
-  if (message.stopReason !== "length") {
-    return false;
-  }
-  const content = Array.isArray(message.content) ? message.content : [];
-  return !content.some((block) => {
-    if (block.type === "toolCall") {
-      return true;
-    }
-    if (block.type === "text") {
-      return block.text.trim().length > 0;
-    }
-    return false;
-  });
+  return (
+    message.stopReason === "error" ||
+    message.stopReason === "aborted" ||
+    isReasoningOnlyLengthAssistantTurn(message)
+  );
 }
 
 /** Transforms transcript messages into a provider-safe replay context. */
@@ -168,7 +158,10 @@ export function transformTransportMessages(
   // Preserve the old transport replay filter: failed streamed turns can contain
   // partial text, partial tool calls, or both, and strict providers can treat
   // them as valid assistant context on retry unless we drop the whole turn.
-  const replayable = transformed.filter((msg) => !isFailedAssistantTurn(msg));
+  const replayable = transformed.filter((_, index) => {
+    const original = messages[index];
+    return original ? !isFailedAssistantTurn(original) : true;
+  });
 
   if (!allowSyntheticToolResults) {
     return replayable;
