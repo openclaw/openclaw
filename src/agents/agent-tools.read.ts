@@ -983,9 +983,6 @@ async function appendFileWithAbort(
     signal?.removeEventListener("abort", onAbort);
   }
 
-  if (aborted || signal?.aborted) {
-    throwAbortError();
-  }
 }
 
 function createSandboxWriteOperations(params: SandboxToolParams) {

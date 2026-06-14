@@ -476,7 +476,7 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(mutations).toEqual(["first\n"]);
   });
 
-  it("rejects when an append call aborts during the active append operation", async () => {
+  it("reports success when an append call aborts after the mutation starts and then completes", async () => {
     let markAppendStarted!: () => void;
     let releaseAppend!: () => void;
     const appendStarted = new Promise<void>((resolve) => {
@@ -533,7 +533,14 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(mutations).toEqual(["active\n"]);
 
     releaseAppend();
-    await expect(append).rejects.toMatchObject({ name: "AbortError" });
+    await expect(append).resolves.toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining("Appended to"),
+        },
+      ],
+    });
     await nextAppend;
     expect(mutations).toEqual(["active\n", "next\n"]);
   });
