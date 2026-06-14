@@ -38,42 +38,45 @@ export function createMattermostReplyDeliveryBarrier(params: {
   let activeDmChannelResolutions = 0;
   let queuedDeliveryCount = 0;
   let settledDeliveryCount = 0;
+  const trackDmChannelResolution = (resolution: PromiseLike<unknown>) => {
+    activeDmChannelResolutions += 1;
+    void Promise.resolve(resolution).then(
+      () => {
+        activeDmChannelResolutions -= 1;
+      },
+      () => {
+        activeDmChannelResolutions -= 1;
+      },
+    );
+  };
+  const markDeliverySettled = () => {
+    settledDeliveryCount += 1;
+  };
+  const resolveTimeoutPolicy = (context: {
+    queuedCounts: Readonly<Record<ReplyDispatchKind, number>>;
+    humanDelayBudgetMs: number;
+  }): ReplyFollowupAdmissionBarrierTimeoutPolicy | undefined => {
+    const { queuedCounts } = context;
+    queuedDeliveryCount = Object.values(queuedCounts).reduce((sum, count) => sum + count, 0);
+    const maxTimeoutMs = resolveMattermostReplyDeliveryBarrierTimeoutMs({
+      isDirect: params.isDirect,
+      dmRetryOptions: params.dmRetryOptions,
+      queuedCounts,
+      humanDelayBudgetMs: context.humanDelayBudgetMs,
+    });
+    if (maxTimeoutMs === undefined) {
+      return undefined;
+    }
+    return {
+      maxTimeoutMs,
+      shouldExtend: () =>
+        activeDmChannelResolutions > 0 || settledDeliveryCount < queuedDeliveryCount,
+    };
+  };
   return {
-    trackDmChannelResolution(resolution: PromiseLike<unknown>) {
-      activeDmChannelResolutions += 1;
-      void Promise.resolve(resolution).then(
-        () => {
-          activeDmChannelResolutions -= 1;
-        },
-        () => {
-          activeDmChannelResolutions -= 1;
-        },
-      );
-    },
-    markDeliverySettled() {
-      settledDeliveryCount += 1;
-    },
-    resolveTimeoutPolicy(context: {
-      queuedCounts: Readonly<Record<ReplyDispatchKind, number>>;
-      humanDelayBudgetMs: number;
-    }): ReplyFollowupAdmissionBarrierTimeoutPolicy | undefined {
-      const { queuedCounts } = context;
-      queuedDeliveryCount = Object.values(queuedCounts).reduce((sum, count) => sum + count, 0);
-      const maxTimeoutMs = resolveMattermostReplyDeliveryBarrierTimeoutMs({
-        isDirect: params.isDirect,
-        dmRetryOptions: params.dmRetryOptions,
-        queuedCounts,
-        humanDelayBudgetMs: context.humanDelayBudgetMs,
-      });
-      if (maxTimeoutMs === undefined) {
-        return undefined;
-      }
-      return {
-        maxTimeoutMs,
-        shouldExtend: () =>
-          activeDmChannelResolutions > 0 || settledDeliveryCount < queuedDeliveryCount,
-      };
-    },
+    trackDmChannelResolution,
+    markDeliverySettled,
+    resolveTimeoutPolicy,
   };
 }
 
