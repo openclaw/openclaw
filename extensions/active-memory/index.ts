@@ -60,6 +60,23 @@ const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
 const LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_recall"] as const;
 const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
+const STRUCTURED_MEMORY_FAILURE_STATUSES = new Set([
+  "error",
+  "failed",
+  "failure",
+  "timeout",
+  "timed_out",
+  "denied",
+  "cancelled",
+  "canceled",
+  "aborted",
+  "killed",
+  "invalid",
+  "forbidden",
+  "unavailable",
+  "disabled",
+  "blocked",
+]);
 const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "*",
   "agents_list",
@@ -1766,12 +1783,7 @@ function hasUnavailableMemoryResultInSessionRecord(
     return false;
   }
   const details = asRecord(message.details);
-  const unavailable =
-    message.isError === true ||
-    details?.disabled === true ||
-    details?.unavailable === true ||
-    details?.success === false ||
-    Boolean(details?.error);
+  const unavailable = message.isError === true || readStructuredMemoryFailure(details) === true;
   if (unavailable) {
     return true;
   }
@@ -2362,13 +2374,18 @@ function readStructuredMemoryFailure(source: unknown): boolean | undefined {
   if (!record) {
     return undefined;
   }
-  const hasFailureFields = ["disabled", "unavailable", "success", "error"].some(
-    (key) => key in record,
-  );
+  const status = normalizeOptionalString(record.status)
+    ?.toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  const hasFailureStatus = status !== undefined && STRUCTURED_MEMORY_FAILURE_STATUSES.has(status);
+  const hasFailureFields =
+    hasFailureStatus ||
+    ["disabled", "unavailable", "success", "error"].some((key) => key in record);
   if (!hasFailureFields) {
     return undefined;
   }
   return (
+    hasFailureStatus ||
     record.disabled === true ||
     record.unavailable === true ||
     record.success === false ||

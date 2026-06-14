@@ -2214,6 +2214,70 @@ describe("active-memory plugin", () => {
         ["memory_lookup_custom"],
       ),
     ).toBe(false);
+    for (const status of [
+      "failed",
+      "error",
+      "failure",
+      "timeout",
+      "TIMED OUT",
+      "timed_out",
+      "timed-out",
+      "unavailable",
+      "disabled",
+      "denied",
+      "cancelled",
+      "canceled",
+      "aborted",
+      "killed",
+      "invalid",
+      "forbidden",
+      "blocked",
+    ]) {
+      expect(
+        testing.hasUsableMemoryResultInSessionRecord(
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_lookup_custom",
+              details: { status },
+              content: [{ type: "text", text: "The memory backend is unavailable." }],
+            },
+          },
+          ["memory_lookup_custom"],
+        ),
+      ).toBe(false);
+    }
+    for (const status of ["ok", "error_free", "not_failed", "not_cancelled"]) {
+      expect(
+        testing.hasUsableMemoryResultInSessionRecord(
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_lookup_custom",
+              details: { status },
+              content: [{ type: "text", text: "User usually orders ramen." }],
+            },
+          },
+          ["memory_lookup_custom"],
+        ),
+      ).toBe(true);
+    }
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_lookup_custom",
+            details: {},
+            content: [
+              { type: "text", text: '{"status":"aborted"}' },
+              { type: "text", text: "The memory lookup was cancelled." },
+            ],
+          },
+        },
+        ["memory_lookup_custom"],
+      ),
+    ).toBe(false);
     expect(
       testing.hasUsableMemoryResultInSessionRecord(
         {
@@ -3928,7 +3992,7 @@ describe("active-memory plugin", () => {
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
   });
 
-  it("rejects completed output after a configured custom tool reports a content-only failure", async () => {
+  it("rejects completed output after a configured custom tool reports a content-only timeout", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -3953,7 +4017,7 @@ describe("active-memory plugin", () => {
             content: [
               {
                 type: "text",
-                text: '{"success":false,"error":"backend unavailable"}',
+                text: '{"status":"timed_out"}',
               },
               {
                 type: "text",
