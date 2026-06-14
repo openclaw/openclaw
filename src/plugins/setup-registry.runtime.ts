@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -89,16 +90,7 @@ function resolveBundledSetupCliBackends(
     return cachedBundledSetupCliBackends.entries;
   }
   const entries = snapshot.plugins.flatMap((plugin) => {
-    if (plugin.origin !== "bundled" || !isInstalledPluginEnabled(snapshot.index, plugin.id)) {
-      return [];
-    }
-    return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
-      (backendId) =>
-        ({
-          pluginId: plugin.id,
-          backend: { id: backendId },
-        }) satisfies SetupCliBackendRuntimeEntry,
-    );
+    return readSetupCliBackendRuntimeEntries({ plugin, snapshot, bundledOnly: true });
   });
   if (cacheable && configFingerprint) {
     cachedBundledSetupCliBackends = { configFingerprint, entries };
@@ -119,21 +111,37 @@ function resolveSetupCliBackendDescriptors(
     return cachedSetupCliBackendDescriptors.entries;
   }
   const entries = snapshot.plugins.flatMap((plugin) => {
-    if (!isInstalledPluginEnabled(snapshot.index, plugin.id)) {
-      return [];
-    }
-    return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
-      (backendId) =>
-        ({
-          pluginId: plugin.id,
-          backend: { id: backendId },
-        }) satisfies SetupCliBackendRuntimeEntry,
-    );
+    return readSetupCliBackendRuntimeEntries({ plugin, snapshot });
   });
   if (cacheable && configFingerprint) {
     cachedSetupCliBackendDescriptors = { configFingerprint, entries };
   }
   return entries;
+}
+
+function readSetupCliBackendRuntimeEntries(params: {
+  plugin: PluginManifestRecord;
+  snapshot: PluginMetadataSnapshot;
+  bundledOnly?: boolean;
+}): SetupCliBackendRuntimeEntry[] {
+  try {
+    if (params.bundledOnly && params.plugin.origin !== "bundled") {
+      return [];
+    }
+    const pluginId = params.plugin.id;
+    if (!isInstalledPluginEnabled(params.snapshot.index, pluginId)) {
+      return [];
+    }
+    return [...params.plugin.cliBackends, ...(params.plugin.setup?.cliBackends ?? [])].map(
+      (backendId) =>
+        ({
+          pluginId,
+          backend: { id: backendId },
+        }) satisfies SetupCliBackendRuntimeEntry,
+    );
+  } catch {
+    return [];
+  }
 }
 
 function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {

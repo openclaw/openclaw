@@ -156,6 +156,81 @@ describe("setup-registry runtime fallback", () => {
     });
   });
 
+  it("skips unreadable bundled setup backend metadata in runtime fallback lookups", async () => {
+    const poisonedPlugin = Object.defineProperty({}, "origin", {
+      get() {
+        throw new Error("setup backend origin exploded");
+      },
+    });
+    loadPluginMetadataSnapshotMock.mockReturnValue({
+      index: {
+        diagnostics: [],
+        plugins: [
+          {
+            pluginId: "openai",
+            origin: "bundled",
+            enabled: true,
+          },
+        ],
+      },
+      plugins: [
+        poisonedPlugin,
+        {
+          id: "openai",
+          origin: "bundled",
+          cliBackends: ["Codex-CLI"],
+        },
+      ],
+    });
+
+    const { testing, resolvePluginSetupCliBackendRuntime } =
+      await import("./setup-registry.runtime.js");
+    testing.resetRuntimeState();
+    testing.setRuntimeModuleForTest(null);
+
+    expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toEqual({
+      pluginId: "openai",
+      backend: { id: "Codex-CLI" },
+    });
+  });
+
+  it("skips unreadable setup backend metadata in descriptor lookups", async () => {
+    const poisonedPlugin = Object.defineProperty({}, "id", {
+      get() {
+        throw new Error("setup backend id exploded");
+      },
+    });
+    loadPluginMetadataSnapshotMock.mockReturnValue({
+      index: {
+        diagnostics: [],
+        plugins: [
+          {
+            pluginId: "openai",
+            origin: "bundled",
+            enabled: true,
+          },
+        ],
+      },
+      plugins: [
+        poisonedPlugin,
+        {
+          id: "openai",
+          origin: "bundled",
+          cliBackends: ["Codex-CLI"],
+        },
+      ],
+    });
+
+    const { testing, resolvePluginSetupCliBackendDescriptor } =
+      await import("./setup-registry.runtime.js");
+    testing.resetRuntimeState();
+
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli" })).toEqual({
+      pluginId: "openai",
+      backend: { id: "Codex-CLI" },
+    });
+  });
+
   it("refreshes bundled registry cliBackends when the current metadata snapshot changes", async () => {
     const { testing, resolvePluginSetupCliBackendRuntime } =
       await import("./setup-registry.runtime.js");
