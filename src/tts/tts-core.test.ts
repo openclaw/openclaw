@@ -165,7 +165,7 @@ describe("TTS core", () => {
     expect(result.summary).not.toContain("Internal reasoning");
   });
 
-  it("strips malformed reasoning tags from summarization output", async () => {
+  it("strips multiple reasoning blocks from summarization output", async () => {
     const config = {
       provider: "openai",
       model: {
@@ -185,10 +185,15 @@ describe("TTS core", () => {
     };
     const auth = { kind: "api-key" as const, apiKey: "test-key" };
 
-    // Test malformed/unclosed thinking tag
-    const assistant1 = {
+    // Test multiple reasoning blocks
+    const assistant = {
       role: "assistant" as const,
-      content: [{ type: "text", text: "<think>Unclosed reasoning block.The answer is 42." }],
+      content: [
+        {
+          type: "text",
+          text: "<thinking>First thought.</thinking>Result: <thinking>Second thought.</thinking>Final answer.",
+        },
+      ],
       api: "openai-completions",
       provider: "openai",
       model: "gpt-5.5",
@@ -197,7 +202,7 @@ describe("TTS core", () => {
       timestamp: Date.now(),
     } satisfies AssistantMessage;
 
-    const result1 = await summarizeText(
+    const result = await summarizeText(
       {
         text: "What is the answer?",
         targetLength: 120,
@@ -206,7 +211,7 @@ describe("TTS core", () => {
         timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
       },
       {
-        completeSimple: vi.fn(async () => assistant1),
+        completeSimple: vi.fn(async () => assistant),
         prepareSimpleCompletionModel: vi.fn(
           async () =>
             ({
@@ -223,8 +228,9 @@ describe("TTS core", () => {
       },
     );
 
-    expect(result1.summary).toBe("The answer is 42.");
-    expect(result1.summary).not.toContain("<think>");
-    expect(result1.summary).not.toContain("Unclosed reasoning");
+    expect(result.summary).toBe("Result: Final answer.");
+    expect(result.summary).not.toContain("<thinking>");
+    expect(result.summary).not.toContain("First thought");
+    expect(result.summary).not.toContain("Second thought");
   });
 });
