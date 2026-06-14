@@ -35,6 +35,7 @@ import {
 
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
+const PERPLEXITY_SEARCH_CONTEXT_SIZES = new Set(["low", "medium", "high"]);
 
 type PerplexityConfig = {
   apiKey?: string;
@@ -66,6 +67,22 @@ type PerplexitySearchApiResponse = {
     date?: string;
   }>;
 };
+
+type PerplexitySearchContextSize = "low" | "medium" | "high";
+
+function readPerplexitySearchContextSize(
+  args: Record<string, unknown>,
+): PerplexitySearchContextSize | { error: "invalid_search_context_size" } | undefined {
+  const rawSearchContextSize = readStringParam(args, "search_context_size");
+  if (!rawSearchContextSize) {
+    return undefined;
+  }
+  const normalized = normalizeOptionalString(rawSearchContextSize)?.toLowerCase();
+  if (!normalized || !PERPLEXITY_SEARCH_CONTEXT_SIZES.has(normalized)) {
+    return { error: "invalid_search_context_size" };
+  }
+  return normalized as PerplexitySearchContextSize;
+}
 
 function resolvePerplexityConfig(searchConfig?: SearchConfigRecord): PerplexityConfig {
   const perplexity = searchConfig?.perplexity;
@@ -278,15 +295,10 @@ async function runPerplexitySearch(params: {
   model: string;
   timeoutSeconds: number;
   freshness?: string;
+  searchContextSize?: PerplexitySearchContextSize;
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
-  const body: Record<string, unknown> = {
-    model: resolvePerplexityRequestModel(params.baseUrl, params.model),
-    messages: [{ role: "user", content: params.query }],
-  };
-  if (params.freshness) {
-    body.search_recency_filter = params.freshness;
-  }
+  const body = buildPerplexityChatCompletionsBody(params);
 
   return withTrustedWebSearchEndpoint(
     {
@@ -309,6 +321,26 @@ async function runPerplexitySearch(params: {
       };
     },
   );
+}
+
+function buildPerplexityChatCompletionsBody(params: {
+  query: string;
+  baseUrl: string;
+  model: string;
+  freshness?: string;
+  searchContextSize?: PerplexitySearchContextSize;
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: resolvePerplexityRequestModel(params.baseUrl, params.model),
+    messages: [{ role: "user", content: params.query }],
+  };
+  if (params.freshness) {
+    body.search_recency_filter = params.freshness;
+  }
+  if (params.searchContextSize) {
+    body.web_search_options = { search_context_size: params.searchContextSize };
+  }
+  return body;
 }
 
 export async function executePerplexitySearch(
@@ -357,6 +389,14 @@ export async function executePerplexitySearch(
   const maxTokensPerPage = readPositiveIntegerParam(args, "max_tokens_per_page", {
     message: "max_tokens_per_page must be a positive integer.",
   });
+  const searchContextSize = readPerplexitySearchContextSize(args);
+  if (searchContextSize && typeof searchContextSize === "object") {
+    return {
+      error: "invalid_search_context_size",
+      message: "search_context_size must be low, medium, or high.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
 
   if (!structured) {
     if (country) {
@@ -399,6 +439,13 @@ export async function executePerplexitySearch(
         docs: "https://docs.openclaw.ai/tools/web",
       };
     }
+  } else if (searchContextSize) {
+    return {
+      error: "unsupported_search_context_size",
+      message:
+        "search_context_size is only supported by the Perplexity Sonar chat-completions path. Configure a Perplexity baseUrl/model override or use an OPENROUTER_API_KEY to enable it.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
   }
 
   if (language && !/^[a-z]{2}$/iu.test(language)) {
@@ -474,6 +521,7 @@ export async function executePerplexitySearch(
     domainFilter?.join(","),
     maxTokens,
     maxTokensPerPage,
+    searchContextSize,
   ]);
   const cached = readCachedSearchPayload(cacheKey);
   if (cached) {
@@ -503,6 +551,7 @@ export async function executePerplexitySearch(
               model: runtime.model,
               timeoutSeconds,
               freshness,
+              searchContextSize,
             });
             return {
               content: wrapWebContent(result.content, "web_search"),
@@ -557,6 +606,8 @@ export const testing = {
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
   readPerplexityJsonResponse,
+  readPerplexitySearchContextSize,
+  buildPerplexityChatCompletionsBody,
   normalizeToIsoDate,
   isoToPerplexityDate,
 } as const;

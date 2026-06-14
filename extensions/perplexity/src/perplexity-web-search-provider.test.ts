@@ -10,6 +10,13 @@ const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
 const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
 
+const runtimeMetadata = (perplexityTransport: "chat_completions" | "search_api") => ({
+  providerSource: "configured" as const,
+  selectedProvider: "perplexity",
+  perplexityTransport,
+  diagnostics: [],
+});
+
 describe("perplexity web search provider", () => {
   it("points missing-key users to fetch/browser alternatives", async () => {
     await withEnvAsync(
@@ -170,5 +177,80 @@ describe("perplexity web search provider", () => {
     await expect(
       testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity"),
     ).rejects.toThrow("Perplexity: malformed JSON response");
+  });
+
+  it("advertises search_context_size only for chat-completions transports", () => {
+    const provider = createPerplexityWebSearchProvider();
+    const chatTool = provider.createTool({
+      config: {},
+      searchConfig: {},
+      runtimeMetadata: runtimeMetadata("chat_completions"),
+    });
+    const searchApiTool = provider.createTool({
+      config: {},
+      searchConfig: {},
+      runtimeMetadata: runtimeMetadata("search_api"),
+    });
+
+    if (!chatTool || !searchApiTool) {
+      throw new Error("Expected Perplexity web search tools");
+    }
+
+    const chatParameters = chatTool.parameters as {
+      properties?: { search_context_size?: { enum?: unknown; type?: unknown } };
+    };
+    const searchApiParameters = searchApiTool.parameters as {
+      properties?: { search_context_size?: unknown };
+    };
+
+    expect(chatParameters.properties?.search_context_size).toMatchObject({
+      type: "string",
+      enum: ["low", "medium", "high"],
+    });
+    expect(searchApiParameters.properties?.search_context_size).toBeUndefined();
+  });
+
+  it("forwards search_context_size through Perplexity chat completions", () => {
+    expect(
+      testing.buildPerplexityChatCompletionsBody({
+        query: "OpenClaw",
+        baseUrl: "https://api.perplexity.ai",
+        model: "perplexity/sonar-pro",
+        searchContextSize: "high",
+      }),
+    ).toMatchObject({
+      model: "sonar-pro",
+      messages: [{ role: "user", content: "OpenClaw" }],
+      web_search_options: { search_context_size: "high" },
+    });
+  });
+
+  it("rejects search_context_size on native Search API transport before network calls", async () => {
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({ config: {}, searchConfig: {} });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await expect(
+          tool.execute({ query: "OpenClaw docs", search_context_size: "high" }),
+        ).resolves.toEqual({
+          error: "unsupported_search_context_size",
+          message:
+            "search_context_size is only supported by the Perplexity Sonar chat-completions path. Configure a Perplexity baseUrl/model override or use an OPENROUTER_API_KEY to enable it.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      },
+    );
+  });
+
+  it("validates search_context_size values", () => {
+    expect(testing.readPerplexitySearchContextSize({ search_context_size: "HIGH" })).toBe("high");
+    expect(testing.readPerplexitySearchContextSize({ search_context_size: "deep" })).toEqual({
+      error: "invalid_search_context_size",
+    });
   });
 });

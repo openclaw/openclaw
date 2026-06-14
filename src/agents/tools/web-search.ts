@@ -66,6 +66,12 @@ const WebSearchSchema = {
       description: "Perplexity tokens per page.",
       minimum: 1,
     },
+    search_context_size: {
+      type: "string",
+      enum: ["low", "medium", "high"],
+      description:
+        "Perplexity Sonar compatibility only. Content-budget hint forwarded as web_search_options.search_context_size.",
+    },
   },
 } satisfies Record<string, unknown>;
 

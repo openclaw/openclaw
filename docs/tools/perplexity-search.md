@@ -139,9 +139,11 @@ Per-page token limit.
 
 For the legacy Sonar/OpenRouter compatibility path:
 
-- `query`, `count`, and `freshness` are accepted
+- `query`, `count`, `freshness`, and `search_context_size` are accepted
 - `count` is compatibility-only there; the response is still one synthesized
   answer with citations rather than an N-result list
+- `search_context_size` accepts `low`, `medium`, or `high` and is forwarded to
+  Perplexity Sonar as `web_search_options.search_context_size`
 - Search API-only filters such as `country`, `language`, `date_after`,
   `date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page`
   return explicit errors
@@ -186,6 +188,12 @@ await web_search({
   query: "detailed AI research",
   max_tokens: 50000,
   max_tokens_per_page: 4096,
+});
+
+// Deeper Sonar/OpenRouter compatibility search
+await web_search({
+  query: "AI market landscape",
+  search_context_size: "high",
 });
 ```
 
