@@ -10,6 +10,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
@@ -34,6 +35,9 @@ const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+
+const agentDbLog = createSubsystemLogger("state/agent-db");
+const agentDbChmodWarnedTargets = new Set<string>();
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
@@ -81,6 +85,32 @@ function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): 
   }
 }
 
+function enforcePrivateAgentDbChmodSync(target: string, mode: number): void {
+  try {
+    chmodSync(target, mode);
+  } catch (err) {
+    if (process.platform === "win32") {
+      throw new Error(
+        `OpenClaw agent database ${target} stores credentials and cannot be hardened on this Windows volume (${String(err)}). Windows file modes do not reflect NTFS ACLs, so OpenClaw cannot prove the credential store stays private on a network-backed or SMB location. Move the agent database to a local NTFS path by setting OPENCLAW_STATE_DIR.`,
+        { cause: err },
+      );
+    }
+    if ((statSync(target).mode & 0o077) !== 0) {
+      throw new Error(
+        `OpenClaw agent database ${target} stores credentials and cannot be made private on this volume (${String(err)}). Move the agent database to a filesystem that enforces private permissions by setting OPENCLAW_STATE_DIR to a local directory.`,
+        { cause: err },
+      );
+    }
+    if (agentDbChmodWarnedTargets.has(target)) {
+      return;
+    }
+    agentDbChmodWarnedTargets.add(target);
+    agentDbLog.warn(
+      `agent database ${target} is already private; skipped chmod rejected by this volume: ${String(err)}`,
+    );
+  }
+}
+
 function ensureOpenClawAgentDatabasePermissions(
   pathname: string,
   options: OpenClawAgentDatabaseOptions,
@@ -95,12 +125,12 @@ function ensureOpenClawAgentDatabasePermissions(
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_AGENT_DB_DIR_MODE });
   // Default agent state is private by contract; custom pre-existing dirs keep caller ownership.
   if (isDefaultAgentDatabase || !dirExisted) {
-    chmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
+    enforcePrivateAgentDbChmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
   }
   for (const suffix of OPENCLAW_AGENT_DB_SIDECAR_SUFFIXES) {
     const candidate = `${pathname}${suffix}`;
     if (existsSync(candidate)) {
-      chmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
+      enforcePrivateAgentDbChmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
     }
   }
 }
