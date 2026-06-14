@@ -2083,6 +2083,17 @@ export async function runHeartbeatOnce(opts: {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
+          // Heartbeat-driven agent runs can leave pendingFinalDelivery set;
+          // a successful send completes it, so clear the recovery fields the
+          // same way clearPendingFinalDeliveryAfterSuccess does in
+          // dispatch-from-config.ts.
+          pendingFinalDelivery: undefined,
+          pendingFinalDeliveryText: undefined,
+          pendingFinalDeliveryCreatedAt: undefined,
+          pendingFinalDeliveryLastAttemptAt: undefined,
+          pendingFinalDeliveryAttemptCount: undefined,
+          pendingFinalDeliveryLastError: undefined,
+          pendingFinalDeliveryContext: undefined,
         };
       });
     }
