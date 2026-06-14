@@ -948,7 +948,12 @@ export async function sendMessageIMessage(
     throw new Error("iMessage send requires text or media");
   }
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
-  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
+  // Honor actions.reply === false: when the user explicitly disables
+  // threaded/native reply actions (e.g. because SIP prevents private-API
+  // injection), strip replyToId so the bridge sends a normal top-level
+  // message instead of triggering a SIP-gated reply pathway.
+  const replyActionsEnabled = account.config.actions?.reply !== false;
+  const resolvedReplyToId = replyActionsEnabled ? sanitizeReplyToId(opts.replyToId) : undefined;
   const runCliJson =
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
