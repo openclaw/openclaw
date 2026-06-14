@@ -407,6 +407,119 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
   };
 }
 
+function readNonEmptyString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function readNestedResult(details: Record<string, unknown>): Record<string, unknown> | undefined {
+  return isRecord(details.result) ? details.result : undefined;
+}
+
+function isMessageSendEvent(event: AgentToolResultMiddlewareEvent): boolean {
+  const normalized = event.toolName.trim().toLowerCase();
+  if (normalized === "message.send") {
+    return true;
+  }
+  return normalized === "message" && isRecord(event.args) && event.args.action === "send";
+}
+
+type MessageDeliveryDetails = {
+  ok?: boolean;
+  status?: string;
+  messageId?: string;
+  channelId?: string;
+  threadId?: string;
+  ts?: string;
+  thread_ts?: string;
+  receipt?: {
+    primaryPlatformMessageId?: string;
+    platformMessageIds?: string[];
+  };
+  middlewareWarning: string;
+};
+
+function collectMessageDeliveryDetails(details: unknown): MessageDeliveryDetails | undefined {
+  if (!isRecord(details)) {
+    return undefined;
+  }
+
+  const nestedResult = readNestedResult(details);
+  const sources = nestedResult ? [details, nestedResult] : [details];
+  const readFirst = (key: string) => {
+    for (const source of sources) {
+      const value = readNonEmptyString(source, key);
+      if (value) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+
+  const receiptSource = sources.map((source) => source.receipt).find(isRecord);
+  const receiptPrimary = receiptSource
+    ? readNonEmptyString(receiptSource, "primaryPlatformMessageId")
+    : undefined;
+  const receiptPlatformIds = Array.isArray(receiptSource?.platformMessageIds)
+    ? receiptSource.platformMessageIds.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : undefined;
+
+  const messageId = readFirst("messageId");
+  const ts = readFirst("ts");
+  const hasDeliveryProof = Boolean(
+    messageId || ts || receiptPrimary || (receiptPlatformIds && receiptPlatformIds.length > 0),
+  );
+  if (!hasDeliveryProof) {
+    return undefined;
+  }
+
+  return {
+    ...(typeof details.ok === "boolean" ? { ok: details.ok } : {}),
+    ...(readFirst("status") ? { status: readFirst("status") } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(readFirst("channelId") ? { channelId: readFirst("channelId") } : {}),
+    ...(readFirst("threadId") ? { threadId: readFirst("threadId") } : {}),
+    ...(ts ? { ts } : {}),
+    ...(readFirst("thread_ts") ? { thread_ts: readFirst("thread_ts") } : {}),
+    ...(receiptPrimary || receiptPlatformIds?.length
+      ? {
+          receipt: {
+            ...(receiptPrimary ? { primaryPlatformMessageId: receiptPrimary } : {}),
+            ...(receiptPlatformIds?.length ? { platformMessageIds: receiptPlatformIds } : {}),
+          },
+        }
+      : {}),
+    middlewareWarning: "tool-result middleware failed after message delivery",
+  };
+}
+
+function buildSideEffectSuccessMiddlewareFallback(
+  event: AgentToolResultMiddlewareEvent,
+  result: OpenClawAgentToolResult,
+): OpenClawAgentToolResult | undefined {
+  if (!isMessageSendEvent(event)) {
+    return undefined;
+  }
+  const details = collectMessageDeliveryDetails(result.details);
+  if (!details) {
+    return undefined;
+  }
+  const deliveryId = details.messageId ?? details.ts ?? details.receipt?.primaryPlatformMessageId;
+  return {
+    content: [
+      {
+        type: "text",
+        text: deliveryId
+          ? `Message delivery preserved (${deliveryId}).`
+          : "Message delivery preserved.",
+      },
+    ],
+    details,
+  };
+}
+
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
@@ -440,6 +553,7 @@ export function createAgentToolResultMiddlewareRunner(
         return event.result;
       }
       let current = sanitizeToolResultForMiddleware(event.result);
+      const sideEffectSuccessFallback = buildSideEffectSuccessMiddlewareFallback(event, current);
       for (const handler of handlersForRun) {
         try {
           const next = await handler({ ...event, result: current }, middlewareContext);
@@ -457,7 +571,7 @@ export function createAgentToolResultMiddlewareRunner(
                 120,
               )}`,
             );
-            return buildMiddlewareFailureResult();
+            return sideEffectSuccessFallback ?? buildMiddlewareFailureResult();
           }
         } catch {
           log.warn(
@@ -466,7 +580,7 @@ export function createAgentToolResultMiddlewareRunner(
               120,
             )}`,
           );
-          return buildMiddlewareFailureResult();
+          return sideEffectSuccessFallback ?? buildMiddlewareFailureResult();
         }
       }
       return current;
