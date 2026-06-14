@@ -52,8 +52,9 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
     }
 
     const messageTimestamp = parseCompactionUsageTimestamp(candidate.timestamp);
-    const hasTimestampBoundary = latestCompactionTimestamp !== null && messageTimestamp !== null;
-    const staleByTimestamp = hasTimestampBoundary && messageTimestamp <= latestCompactionTimestamp;
+    const compactionTimestamp = latestCompactionTimestamp;
+    const hasTimestampBoundary = compactionTimestamp !== null && messageTimestamp !== null;
+    const staleByTimestamp = hasTimestampBoundary && messageTimestamp <= compactionTimestamp;
     const staleByLegacyOrdering = !hasTimestampBoundary && i < latestCompactionSummaryIndex;
     if (!staleByTimestamp && !staleByLegacyOrdering) {
       continue;
