@@ -3491,6 +3491,7 @@ export async function runEmbeddedAttempt(
         getPendingToolMediaReply,
         hasToolMediaBlockReply,
         getVisibleBlockReplyCount,
+        getToolExecutionSinceLastBlockReply,
         getSuccessfulCronAdds,
         getReplayState,
         didSendViaMessagingTool,
@@ -5267,6 +5268,9 @@ export async function runEmbeddedAttempt(
         ? 1
         : 0;
       const visibleBlockReplyCount = getVisibleBlockReplyCount();
+      const toolExecutionSinceLastBlockReply = getToolExecutionSinceLastBlockReply();
+      const hasVisibleBlockReplyAfterLastToolExecution =
+        visibleBlockReplyCount > 0 && !toolExecutionSinceLastBlockReply;
       const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
         isCronTrigger: params.trigger === "cron",
         payloadCount: pendingToolMediaPayloadCount,
@@ -5427,6 +5431,7 @@ export async function runEmbeddedAttempt(
         lastAssistant,
         currentAttemptAssistant,
         lastToolError,
+        hasVisibleBlockReplyAfterLastToolExecution,
         didSendViaMessagingTool: didSendViaMessagingTool(),
         didDeliverSourceReplyViaMessageTool,
         didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,

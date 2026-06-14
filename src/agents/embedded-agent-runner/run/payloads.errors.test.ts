@@ -745,6 +745,69 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text: "Status loaded." });
   });
 
+  it("suppresses read-only tool warnings after a visible block reply was already delivered", () => {
+    const payloads = buildPayloads({
+      hasVisibleBlockReplyAfterLastToolExecution: true,
+      lastToolError: {
+        toolName: "bash",
+        meta: 'search "gpt-5.3-codex-spark" in *.md (in ~/openclaw)',
+        error: "rg: /home/clawuser/codex: No such file or directory (os error 2)",
+        mutatingAction: false,
+      },
+      verboseLevel: "full",
+      toolResultFormat: "markdown",
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
+  it("preserves read-only tool warnings when the failure happened after the visible block reply", () => {
+    const payloads = buildPayloads({
+      hasVisibleBlockReplyAfterLastToolExecution: false,
+      lastToolError: {
+        toolName: "browser",
+        error: "connection timeout",
+        mutatingAction: false,
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Browser");
+    expect(payloads[0]?.text).not.toContain("connection timeout");
+  });
+
+  it("keeps mutating tool warnings visible after a visible block reply", () => {
+    const payloads = buildPayloads({
+      hasVisibleBlockReplyAfterLastToolExecution: true,
+      lastToolError: {
+        toolName: "write",
+        error: "permission denied",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Write");
+    expect(payloads[0]?.text).not.toContain("permission denied");
+  });
+
+  it("suppresses mutating tool warnings when a marker-style final reply acknowledges failure", () => {
+    const text = "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        error: "code mode exec did not return fixture note",
+        mutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
   it("dedupes identical tool warning text already present in assistant output", () => {
     const seed = buildPayloads({
       lastToolError: {
