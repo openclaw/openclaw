@@ -209,4 +209,80 @@ describe("config mcp config", () => {
       });
     });
   });
+
+  it("rejects setConfiguredMcpServer when env contains blocked stdio keys", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "blocked",
+        server: {
+          command: "python",
+          args: ["server.py"],
+          env: { PYTHONPATH: "/tmp/workspace", PYTHONUNBUFFERED: "1" },
+        },
+      });
+
+      expect(setResult.ok).toBe(false);
+      if (setResult.ok) {
+        throw new Error("expected blocked env to fail");
+      }
+      expect(setResult.error).toContain("blocked");
+      expect(setResult.error).toContain("PYTHONPATH");
+    });
+  });
+
+  it("accepts stdio MCP config with clean env keys", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "clean",
+        server: {
+          command: "python",
+          args: ["server.py"],
+          env: { PYTHONUNBUFFERED: "1", NODE_ENV: "production" },
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      if (!setResult.ok) {
+        throw new Error(`unexpected rejection: ${setResult.error}`);
+      }
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.clean).toEqual({
+        command: "python",
+        args: ["server.py"],
+        env: { PYTHONUNBUFFERED: "1", NODE_ENV: "production" },
+      });
+    });
+  });
+
+  it("accepts URL-based MCP config with env keys (not stdio, not validated)", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "remote",
+        server: {
+          url: "https://example.com/mcp",
+          transport: "streamable-http",
+          env: { PYTHONPATH: "/tmp/workspace", NODE_ENV: "production" },
+        },
+      });
+
+      // URL/SSE/HTTP servers are not subject to stdio startup safety checks.
+      expect(setResult.ok).toBe(true);
+      if (!setResult.ok) {
+        throw new Error(`unexpected rejection: ${setResult.error}`);
+      }
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.remote).toMatchObject({
+        url: "https://example.com/mcp",
+        transport: "streamable-http",
+      });
+    });
+  });
 });
