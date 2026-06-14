@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { openMemoryDatabaseAtPath } from "./manager-db.js";
+import { openMemoryDatabaseAtPath, sweepStaleMemoryIndexTempFiles } from "./manager-db.js";
 
 describe("openMemoryDatabaseAtPath readOnly probe", () => {
   let fixtureRoot = "";
@@ -61,5 +61,48 @@ describe("openMemoryDatabaseAtPath readOnly probe", () => {
     const reopen = openMemoryDatabaseAtPath(dbPath, false, false);
     expect(reopen).toBeDefined();
     reopen.close();
+  });
+
+  it("sweeps stale atomic reindex temp sqlite triplets", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    await fs.writeFile(dbPath, "live");
+
+    const tempPath = `${dbPath}.tmp-old`;
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await fs.writeFile(`${tempPath}${suffix}`, `temp${suffix}`);
+    }
+
+    const now = Date.now();
+    const liveTime = new Date(now - 120_000);
+    const tempTime = new Date(now - 180_000);
+    await fs.utimes(dbPath, liveTime, liveTime);
+    await fs.utimes(tempPath, tempTime, tempTime);
+
+    expect(sweepStaleMemoryIndexTempFiles(dbPath, { nowMs: now, graceMs: 60_000 })).toBe(3);
+    await expect(fs.access(tempPath)).rejects.toThrow("ENOENT");
+    await expect(fs.access(`${tempPath}-wal`)).rejects.toThrow("ENOENT");
+    await expect(fs.access(`${tempPath}-shm`)).rejects.toThrow("ENOENT");
+  });
+
+  it("keeps young or newer atomic reindex temp sqlite files", async () => {
+    const dbPath = path.join(fixtureRoot, `case-${caseId++}`, "index.sqlite");
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    await fs.writeFile(dbPath, "live");
+
+    const youngTempPath = `${dbPath}.tmp-young`;
+    const newerTempPath = `${dbPath}.tmp-newer`;
+    await fs.writeFile(youngTempPath, "young");
+    await fs.writeFile(newerTempPath, "newer");
+
+    const now = Date.now();
+    const liveTime = new Date(now - 120_000);
+    await fs.utimes(dbPath, liveTime, liveTime);
+    await fs.utimes(youngTempPath, new Date(now - 10_000), new Date(now - 10_000));
+    await fs.utimes(newerTempPath, new Date(now - 30_000), new Date(now - 30_000));
+
+    expect(sweepStaleMemoryIndexTempFiles(dbPath, { nowMs: now, graceMs: 60_000 })).toBe(0);
+    await expect(fs.access(youngTempPath)).resolves.toBeUndefined();
+    await expect(fs.access(newerTempPath)).resolves.toBeUndefined();
   });
 });

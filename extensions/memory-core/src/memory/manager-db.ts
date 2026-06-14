@@ -1,4 +1,5 @@
 // Memory Core plugin module implements manager db behavior.
+import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -8,6 +9,73 @@ import {
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
+const staleReindexTempGraceMs = 60_000;
+const sqliteSidecarSuffixes = ["", "-wal", "-shm"] as const;
+
+export function sweepStaleMemoryIndexTempFiles(
+  dbPath: string,
+  options: { nowMs?: number; graceMs?: number } = {},
+): number {
+  const dir = path.dirname(dbPath);
+  const base = path.basename(dbPath);
+  const prefix = `${base}.tmp-`;
+  const nowMs = options.nowMs ?? Date.now();
+  const graceMs = options.graceMs ?? staleReindexTempGraceMs;
+
+  let liveStat: fs.Stats;
+  try {
+    liveStat = fs.statSync(dbPath);
+  } catch {
+    return 0;
+  }
+
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return 0;
+  }
+
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix) || entry.endsWith("-wal") || entry.endsWith("-shm")) {
+      continue;
+    }
+
+    const tempPath = path.join(dir, entry);
+    let tempStat: fs.Stats;
+    try {
+      tempStat = fs.statSync(tempPath);
+    } catch {
+      continue;
+    }
+    if (!tempStat.isFile()) {
+      continue;
+    }
+    if (nowMs - tempStat.mtimeMs < graceMs) {
+      continue;
+    }
+    if (liveStat.mtimeMs < tempStat.mtimeMs) {
+      continue;
+    }
+
+    for (const suffix of sqliteSidecarSuffixes) {
+      const targetPath = `${tempPath}${suffix}`;
+      if (!fs.existsSync(targetPath)) {
+        continue;
+      }
+      try {
+        fs.rmSync(targetPath, { force: true });
+        removed += 1;
+      } catch {
+        // Startup cleanup is best-effort. If another process still owns the
+        // temp file or the platform refuses deletion, keep opening the live DB.
+      }
+    }
+  }
+  return removed;
+}
+
 export function openMemoryDatabaseAtPath(
   dbPath: string,
   allowExtension: boolean,
@@ -15,6 +83,7 @@ export function openMemoryDatabaseAtPath(
 ): DatabaseSync {
   const dir = path.dirname(dbPath);
   ensureDir(dir);
+  sweepStaleMemoryIndexTempFiles(dbPath);
   const { DatabaseSync } = requireNodeSqlite();
   // When allowCreate is false, probe with readOnly first.
   // DatabaseSync auto-creates the file in read-write mode, which
