@@ -25,20 +25,19 @@ import {
   rotateDeviceToken,
   summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
-import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+import {
+  deniesCrossDeviceManagement,
+  deniesDeviceTokenRoleManagement,
+  pairedDeviceHasNonOperatorRole,
+  requestsNonOperatorDeviceRole,
+  resolveDeviceManagementAuthz,
+  resolveDeviceSessionAuthz,
+} from "./device-management-authz.js";
+import type { DeviceManagementAuthz } from "./device-management-authz.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
 const DEVICE_TOKEN_REVOCATION_DENIED_MESSAGE = "device token revocation denied";
-
-type DeviceSessionAuthz = {
-  callerDeviceId: string | null;
-  callerScopes: string[];
-  isAdminCaller: boolean;
-};
-
-type DeviceManagementAuthz = DeviceSessionAuthz & {
-  normalizedTargetDeviceId: string;
-};
 
 const DEVICE_PAIR_APPROVAL_DENIED_MESSAGE = "device pairing approval denied";
 const DEVICE_PAIR_REJECTION_DENIED_MESSAGE = "device pairing rejection denied";
@@ -88,94 +87,10 @@ function logDeviceTokenRevocationDenied(params: {
   );
 }
 
-function resolveDeviceManagementAuthz(
-  client: GatewayClient | null,
-  targetDeviceId: string,
-): DeviceManagementAuthz {
-  return {
-    ...resolveDeviceSessionAuthz(client),
-    normalizedTargetDeviceId: targetDeviceId.trim(),
-  };
-}
-
-function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceSessionAuthz {
-  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  const rawCallerDeviceId = client?.connect?.device?.id;
-  const callerDeviceId =
-    // Plain shared-auth connections may report device metadata, but only
-    // device-token auth proves ownership for self-service pairing actions.
-    client?.isDeviceTokenAuth && typeof rawCallerDeviceId === "string" && rawCallerDeviceId.trim()
-      ? rawCallerDeviceId.trim()
-      : null;
-  return {
-    callerDeviceId,
-    callerScopes,
-    isAdminCaller: callerScopes.includes("operator.admin"),
-  };
-}
-
-function deniesCrossDeviceManagement(authz: DeviceManagementAuthz): boolean {
-  return Boolean(
-    authz.callerDeviceId &&
-    authz.callerDeviceId !== authz.normalizedTargetDeviceId &&
-    !authz.isAdminCaller,
-  );
-}
-
 function shouldReturnRotatedDeviceToken(authz: DeviceManagementAuthz): boolean {
   // Admins can rotate any token, but only a device rotating itself receives
   // the new token in-band; other rotations are notification/invalidations.
   return Boolean(authz.callerDeviceId && authz.callerDeviceId === authz.normalizedTargetDeviceId);
-}
-
-function deniesDeviceTokenRoleManagement(
-  authz: DeviceManagementAuthz,
-  targetRole: string,
-): boolean {
-  const normalizedTargetRole = targetRole.trim();
-  if (!normalizedTargetRole || authz.isAdminCaller) {
-    return false;
-  }
-  return normalizedTargetRole !== "operator";
-}
-
-function hasNonOperatorDeviceRole(input: { role?: string; roles?: string[] }): boolean {
-  const roles = new Set<string>();
-  const role = input.role?.trim();
-  if (role) {
-    roles.add(role);
-  }
-  for (const entry of input.roles ?? []) {
-    const normalized = entry.trim();
-    if (normalized) {
-      roles.add(normalized);
-    }
-  }
-  return [...roles].some((entry) => entry !== "operator");
-}
-
-function hasNonOperatorDeviceTokenRole(
-  tokens: Record<string, DeviceAuthToken> | undefined,
-): boolean {
-  for (const token of Object.values(tokens ?? {})) {
-    const normalized = token.role.trim();
-    if (normalized && normalized !== "operator") {
-      return true;
-    }
-  }
-  return false;
-}
-
-function requestsNonOperatorDeviceRole(pending: { role?: string; roles?: string[] }): boolean {
-  return hasNonOperatorDeviceRole(pending);
-}
-
-function pairedDeviceHasNonOperatorRole(device: {
-  role?: string;
-  roles?: string[];
-  tokens?: Record<string, DeviceAuthToken>;
-}): boolean {
-  return hasNonOperatorDeviceRole(device) || hasNonOperatorDeviceTokenRole(device.tokens);
 }
 
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
