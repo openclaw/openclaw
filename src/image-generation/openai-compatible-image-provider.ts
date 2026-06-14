@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseOpenAiCompatibleImageResponse } from "./image-assets.js";
+import type { OpenAiCompatibleImageResponsePayload } from "./image-assets.js";
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -269,7 +270,8 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+        const payload = (await response.json()) as OpenAiCompatibleImageResponsePayload;
+        const images = parseOpenAiCompatibleImageResponse(payload, {
           ...options.response,
           malformedResponseError:
             mode === "edit"
@@ -284,7 +286,11 @@ export function createOpenAiCompatibleImageGenerationProvider(
                 : `${options.label} image generation response missing image data`),
           );
         }
-        return { images, model };
+        return {
+          images,
+          model,
+          ...(payload.usage !== undefined ? { metadata: { usage: payload.usage } } : {}),
+        };
       } finally {
         await release();
       }

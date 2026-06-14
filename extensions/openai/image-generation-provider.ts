@@ -5,6 +5,7 @@ import type {
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationResult,
+  OpenAiCompatibleImageResponsePayload,
 } from "openclaw/plugin-sdk/image-generation";
 import {
   parseOpenAiCompatibleImageResponse,
@@ -1010,7 +1011,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           isEdit ? "OpenAI image edit failed" : "OpenAI image generation failed",
         );
 
-        const data = await response.json();
+        const data = (await response.json()) as OpenAiCompatibleImageResponsePayload;
         const output = resolveOutputMime(req.outputFormat);
         const images = parseOpenAiCompatibleImageResponse(data, {
           defaultMimeType: output.mimeType,
@@ -1030,10 +1031,15 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           );
         }
 
+        const metadata = {
+          ...sizeResolution.metadata,
+          ...(data.usage !== undefined ? { usage: data.usage } : {}),
+        };
+
         return {
           images,
           model,
-          ...(sizeResolution.metadata ? { metadata: sizeResolution.metadata } : {}),
+          ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
         };
       } finally {
         await release();

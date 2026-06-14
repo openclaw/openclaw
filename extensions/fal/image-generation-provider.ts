@@ -127,6 +127,9 @@ function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): bool
 function parseFalImageGenerationResponse(payload: unknown): {
   images: Record<string, unknown>[];
   prompt?: string;
+  timings?: unknown;
+  seed?: unknown;
+  has_nsfw_concepts?: unknown;
 } {
   if (!isRecord(payload)) {
     throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
@@ -145,7 +148,13 @@ function parseFalImageGenerationResponse(payload: unknown): {
     }
     images.push(entry);
   }
-  return { images, prompt: normalizeOptionalString(payload.prompt) };
+  return {
+    images,
+    prompt: normalizeOptionalString(payload.prompt),
+    timings: payload.timings,
+    seed: payload.seed,
+    has_nsfw_concepts: payload.has_nsfw_concepts,
+  };
 }
 
 function resolveFalNetworkPolicy(params: {
@@ -668,10 +677,22 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           throw new Error("fal image generation response missing image data");
         }
 
+        const responseMetadata = Object.fromEntries(
+          Object.entries({
+            timings: payload.timings,
+            seed: payload.seed,
+            has_nsfw_concepts: payload.has_nsfw_concepts,
+          }).filter(([, value]) => value !== undefined),
+        );
+        const metadata = {
+          ...(payload.prompt ? { prompt: payload.prompt } : {}),
+          ...(Object.keys(responseMetadata).length > 0 ? { response: responseMetadata } : {}),
+        };
+
         return {
           images,
           model,
-          metadata: payload.prompt ? { prompt: payload.prompt } : undefined,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
         };
       } finally {
         await release();

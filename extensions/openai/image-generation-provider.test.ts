@@ -77,10 +77,11 @@ vi.mock("openclaw/plugin-sdk/logging-core", () => ({
   })),
 }));
 
-function mockGeneratedPngResponse() {
+function mockGeneratedPngResponse(payload: Record<string, unknown> = {}) {
   const response = {
     json: async () => ({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+      ...payload,
     }),
   };
   postJsonRequestMock.mockResolvedValue({
@@ -616,6 +617,24 @@ describe("openai image generation provider", () => {
       size: "3840x2160",
     });
     expect(result.images).toHaveLength(1);
+  });
+
+  it("preserves direct OpenAI image usage metadata when the API returns it", async () => {
+    mockGeneratedPngResponse({
+      usage: { input_tokens: 21, output_tokens: 1120, total_tokens: 1141 },
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "usage accounting",
+      cfg: {},
+    });
+
+    expect(result.metadata).toEqual({
+      usage: { input_tokens: 21, output_tokens: 1120, total_tokens: 1141 },
+    });
   });
 
   it("normalizes legacy gpt-image-1 sizes before native OpenAI generation", async () => {

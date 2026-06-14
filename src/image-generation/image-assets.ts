@@ -26,6 +26,7 @@ export type OpenAiCompatibleImageResponseEntry = {
 
 export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
+  usage?: unknown;
 };
 
 function throwMalformedImageResponse(message: string | undefined): never | undefined {

@@ -118,6 +118,11 @@ describe("Google image-generation provider", () => {
             },
           },
         ],
+        usageMetadata: {
+          promptTokenCount: 5,
+          candidatesTokenCount: 1120,
+          totalTokenCount: 1125,
+        },
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -160,6 +165,13 @@ describe("Google image-generation provider", () => {
         },
       ],
       model: "gemini-3.1-flash-image-preview",
+      metadata: {
+        usageMetadata: {
+          promptTokenCount: 5,
+          candidatesTokenCount: 1120,
+          totalTokenCount: 1125,
+        },
+      },
     });
   });
 
