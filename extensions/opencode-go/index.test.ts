@@ -10,7 +10,11 @@ import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildOpencodeGoLiveProviderConfig } from "./provider-catalog.js";
+import {
+  buildOpencodeGoLiveProviderConfig,
+  buildStaticOpencodeGoProviderConfig,
+  listOpencodeGoModelCatalogEntries,
+} from "./provider-catalog.js";
 import opencodeGoProviderDiscovery from "./provider-discovery.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -212,6 +216,65 @@ describe("opencode-go provider plugin", () => {
     expect(compat.supportsUsageInStreaming).toBe(true);
     expect(compat.supportsReasoningEffort).toBe(true);
     expect(compat.maxTokensField).toBe("max_tokens");
+  });
+
+  it("keeps the static OpenCode Go catalog on the current 13-row set", () => {
+    expect(listOpencodeGoModelCatalogEntries().map((entry) => entry.id)).toEqual([
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "glm-5",
+      "glm-5.1",
+      "kimi-k2.7-code",
+      "kimi-k2.6",
+      "mimo-v2.5",
+      "mimo-v2.5-pro",
+      "minimax-m2.7",
+      "minimax-m3",
+      "qwen3.6-plus",
+      "qwen3.7-max",
+      "qwen3.7-plus",
+    ]);
+    expect(buildStaticOpencodeGoProviderConfig().models).toHaveLength(13);
+  });
+
+  it("keeps shipped OpenCode Go model ids resolving as compatibility rows", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      [
+        "hy3-preview",
+        "kimi-k2.5",
+        "mimo-v2-omni",
+        "mimo-v2-pro",
+        "minimax-m2.5",
+        "qwen3.5-plus",
+      ].map((modelId) => provider.resolveDynamicModel?.({ modelId } as never)?.id),
+    ).toEqual([
+      "hy3-preview",
+      "kimi-k2.5",
+      "mimo-v2-omni",
+      "mimo-v2-pro",
+      "minimax-m2.5",
+      "qwen3.5-plus",
+    ]);
+  });
+
+  it("keeps shipped OpenCode Go compatibility ids in provider-discovery static rows", async () => {
+    const catalog = await opencodeGoProviderDiscovery.staticCatalog?.run({} as never);
+
+    if (!catalog || !("provider" in catalog)) {
+      throw new Error("expected opencode-go static catalog");
+    }
+    expect(catalog.provider.models.map((model) => model.id)).toEqual(
+      expect.arrayContaining([
+        "hy3-preview",
+        "kimi-k2.5",
+        "mimo-v2-omni",
+        "mimo-v2-pro",
+        "minimax-m2.5",
+        "qwen3.5-plus",
+      ]),
+    );
   });
 
   it("loads OpenCode Go model discovery through the provider runtime", () => {

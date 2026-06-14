@@ -29,7 +29,7 @@ type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   input: Array<"text" | "image">;
 };
 
-const OPENCODE_GO_RUNTIME_MODELS = (
+const OPENCODE_GO_ACTIVE_MODELS = (
   [
     {
       id: "deepseek-v4-pro",
@@ -268,6 +268,116 @@ const OPENCODE_GO_RUNTIME_MODELS = (
   ] satisfies OpencodeGoModelDefinition[]
 ).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
 
+const OPENCODE_GO_COMPAT_MODELS = (
+  [
+    {
+      id: "hy3-preview",
+      name: "HY3 Preview",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 32_768,
+    },
+    {
+      id: "kimi-k2.5",
+      name: "Kimi K2.5",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0.6,
+        output: 3,
+        cacheRead: 0.1,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 65_536,
+    },
+    {
+      id: "mimo-v2-omni",
+      name: "MiMo V2 Omni",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 32_000,
+    },
+    {
+      id: "mimo-v2-pro",
+      name: "MiMo V2 Pro",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextWindow: 1_048_576,
+      maxTokens: 32_000,
+    },
+    {
+      id: "minimax-m2.5",
+      name: "MiniMax M2.5",
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0.3,
+        output: 1.2,
+        cacheRead: 0.03,
+        cacheWrite: 0.375,
+      },
+      contextWindow: 204_800,
+      maxTokens: 65_536,
+    },
+    {
+      id: "qwen3.5-plus",
+      name: "Qwen3.5 Plus",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      compat: { thinkingFormat: "qwen" },
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0.2,
+        output: 1.2,
+        cacheRead: 0.02,
+        cacheWrite: 0.25,
+      },
+      contextWindow: 262_144,
+      maxTokens: 65_536,
+    },
+  ] satisfies OpencodeGoModelDefinition[]
+).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
+
+const OPENCODE_GO_RUNTIME_MODELS = [...OPENCODE_GO_ACTIVE_MODELS, ...OPENCODE_GO_COMPAT_MODELS];
+
 export type FetchOpencodeGoLiveModelIdsParams = {
   apiKey?: string;
   discoveryApiKey?: string;
@@ -288,6 +398,10 @@ function buildOpencodeGoProviderConfig(
 }
 
 export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProviderConfig {
+  return buildOpencodeGoProviderConfig(OPENCODE_GO_ACTIVE_MODELS, apiKey);
+}
+
+export function buildStaticOpencodeGoCompatProviderConfig(apiKey?: string): ModelProviderConfig {
   return buildOpencodeGoProviderConfig(OPENCODE_GO_RUNTIME_MODELS, apiKey);
 }
 
@@ -313,7 +427,7 @@ export async function buildOpencodeGoLiveProviderConfig(
 }
 
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
-  return OPENCODE_GO_RUNTIME_MODELS.map((model) => ({
+  return OPENCODE_GO_ACTIVE_MODELS.map((model) => ({
     provider: model.provider,
     id: model.id,
     name: model.name,
