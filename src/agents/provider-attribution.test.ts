@@ -17,7 +17,11 @@ const providerEndpointPlugins = vi.hoisted(() => [
   {
     // Mirrors manifest-declared endpoint metadata without loading real plugins.
     providerEndpoints: [
-      { endpointClass: "openai-public", hosts: ["api.openai.com"] },
+      {
+        endpointClass: "openai-public",
+        hosts: ["api.openai.com"],
+        hostSuffixes: [".api.openai.com"],
+      },
       { endpointClass: "openai", hosts: ["chatgpt.com"] },
       { endpointClass: "azure-openai", hostSuffixes: [".openai.azure.com"] },
       { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
@@ -73,6 +77,15 @@ const providerEndpointPlugins = vi.hoisted(() => [
         hosts: ["integrate.api.nvidia.com"],
         baseUrls: ["https://integrate.api.nvidia.com/v1"],
       },
+      {
+        endpointClass: "xiaomi-native",
+        hosts: [
+          "api.xiaomimimo.com",
+          "token-plan-ams.xiaomimimo.com",
+          "token-plan-cn.xiaomimimo.com",
+          "token-plan-sgp.xiaomimimo.com",
+        ],
+      },
     ],
     providerRequest: {
       providers: {
@@ -90,6 +103,8 @@ const providerEndpointPlugins = vi.hoisted(() => [
         openrouter: { family: "openrouter" },
         qwen: { family: "modelstudio" },
         together: { family: "together" },
+        xiaomi: { family: "xiaomi" },
+        "xiaomi-token-plan": { family: "xiaomi" },
         xai: { family: "xai" },
         zai: { family: "zai" },
       },
@@ -102,6 +117,15 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     plugins: providerEndpointPlugins,
     diagnostics: [],
   }),
+}));
+
+vi.mock("../plugins/manifest-metadata-scan.js", () => ({
+  listOpenClawPluginManifestMetadata: () =>
+    providerEndpointPlugins.map((manifest, index) => ({
+      pluginDir: `provider-endpoint-fixture-${index}`,
+      manifest,
+      origin: "bundled",
+    })),
 }));
 
 import {
@@ -839,6 +863,11 @@ describe("provider attribution", () => {
       hostname: "api.openai.com.attacker.example",
     });
 
+    expectRecordFields(resolveProviderEndpoint("https://attackerapi.openai.com"), {
+      endpointClass: "custom",
+      hostname: "attackerapi.openai.com",
+    });
+
     expectRecordFields(resolveProviderEndpoint("attacker.example/?target=api.openai.com"), {
       endpointClass: "custom",
       hostname: "attacker.example",
@@ -849,6 +878,15 @@ describe("provider attribution", () => {
       hostname: "openrouter.ai.attacker.example",
     });
   });
+
+  it.each(["https://us.api.openai.com/v1", "https://eu.api.openai.com/v1"])(
+    "classifies regional OpenAI endpoint %s as public",
+    (baseUrl) => {
+      expectRecordFields(resolveProviderEndpoint(baseUrl), {
+        endpointClass: "openai-public",
+      });
+    },
+  );
 
   it("ignores non-http schemes when normalizing native comparable base URLs", () => {
     expectRecordFields(resolveProviderEndpoint("javascript:alert(1)"), {

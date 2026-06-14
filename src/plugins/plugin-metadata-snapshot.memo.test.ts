@@ -562,6 +562,30 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
+  it("memoizes derived snapshots across alternating call shapes", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    const workspaceDir = path.join(stateDir, "workspace");
+    // Two call shapes share a persisted index but derive different snapshot
+    // indexes, like the model-catalog build alternating workspace-scoped and
+    // global lookups. Store keys re-derived from snapshot.index never match the
+    // next lookup, so every alternation re-ran the full manifest scan.
+    loadPluginRegistrySnapshotWithMetadata.mockImplementation(
+      (params: { workspaceDir?: string }) => ({
+        source: "derived",
+        snapshot: makeIndex(params.workspaceDir ? "alpha" : "beta"),
+        diagnostics: [],
+      }),
+    );
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps process-stable derived snapshots when derived plugin files change", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);

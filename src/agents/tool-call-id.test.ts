@@ -536,6 +536,36 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(second.id);
     });
 
+    it("uses OpenAI-style ids for repeated native Kimi ids when requested", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
+        },
+        buildToolResult({ toolCallId: "functions.read:0", text: "one" }),
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
+        },
+        buildToolResult({ toolCallId: "functions.read:0", text: "two" }),
+      ]);
+      const options = { duplicateToolCallIdStyle: "openai" as const };
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", options);
+      const firstContent = (out[0] as Extract<AgentMessage, { role: "assistant" }>).content;
+      const secondContent = (out[2] as Extract<AgentMessage, { role: "assistant" }>).content;
+      if (!Array.isArray(firstContent) || !Array.isArray(secondContent)) {
+        throw new Error("Expected assistant tool-call content");
+      }
+      const firstId = (firstContent[0] as { id?: string }).id;
+      const secondId = (secondContent[0] as { id?: string }).id;
+      expect(firstId).toBe("functions.read:0");
+      expect(secondId).toMatch(/^call_[a-f0-9]{24}$/);
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(firstId);
+      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(secondId);
+      expect(sanitizeToolCallIdsForCloudCodeAssist(out, "strict", options)).toBe(out);
+    });
+
     it("does not preserve malformed Kimi-like ids", () => {
       for (const bad of [
         "functions.read",

@@ -145,6 +145,7 @@ function normalizeListRowWithProviderPlugin(params: {
     provider: params.model.provider,
     config: params.context.cfg,
     workspaceDir: params.context.workspaceDir,
+    pluginMetadataSnapshot: params.context.metadataSnapshot,
     context: {
       config: params.context.cfg,
       agentDir: params.context.agentDir,
@@ -177,6 +178,7 @@ async function appendVisibleRow(params: {
   seenKeys?: Set<string>;
   allowProviderAvailabilityFallback?: boolean;
   skipSuppression?: boolean;
+  normalizeWithProviderPlugin?: boolean;
 }): Promise<boolean> {
   if (params.seenKeys?.has(params.key)) {
     return false;
@@ -184,21 +186,18 @@ async function appendVisibleRow(params: {
   if (!matchesRowFilter(params.context, params.model)) {
     return false;
   }
-  const normalizedModel = normalizeListRowWithProviderPlugin({
-    model: params.model,
-    context: params.context,
-  });
-  // Normalize provider-owned runtime model ids before suppression/filtering so
-  // list output matches the model ids users can actually select.
-  if (
-    !params.skipSuppression &&
-    shouldSuppressListModel({ model: normalizedModel, context: params.context })
-  ) {
+  const model = params.normalizeWithProviderPlugin
+    ? normalizeListRowWithProviderPlugin({
+        model: params.model,
+        context: params.context,
+      })
+    : params.model;
+  if (!params.skipSuppression && shouldSuppressListModel({ model, context: params.context })) {
     return false;
   }
   params.rows.push(
     await buildRow({
-      model: normalizedModel,
+      model,
       key: params.key,
       context: params.context,
       allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback,
@@ -375,6 +374,7 @@ export async function appendConfiguredProviderRows(params: {
         context: params.context,
         seenKeys: params.seenKeys,
         allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+        normalizeWithProviderPlugin: true,
       });
     }
   }

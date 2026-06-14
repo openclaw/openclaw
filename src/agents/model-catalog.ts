@@ -3,6 +3,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveClaudeFable5ModelIdentity } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -64,10 +65,12 @@ type DiscoveredModel = {
   id: string;
   name?: string;
   provider: string;
+  api?: ModelCatalogEntry["api"];
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
+  params?: ModelCatalogEntry["params"];
   compat?: ModelCatalogEntry["compat"];
 };
 
@@ -159,18 +162,44 @@ function mergeCatalogCompat(
   return { ...base, ...override };
 }
 
+function mergeCatalogParams(
+  base: ModelCatalogEntry["params"] | undefined,
+  override: ModelCatalogEntry["params"] | undefined,
+): ModelCatalogEntry["params"] | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  return { ...base, ...override };
+}
+
 function overlayCatalogMetadata(
   base: ModelCatalogEntry,
   overlay: ModelCatalogEntry,
 ): ModelCatalogEntry {
+  const params = mergeCatalogParams(base.params, overlay.params);
   return {
     ...base,
+    ...(overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
+    ...(params ? { params } : {}),
     compat: mergeCatalogCompat(base.compat, overlay.compat),
   };
+}
+
+function normalizeCatalogEntryContract(entry: ModelCatalogEntry): ModelCatalogEntry {
+  if (
+    entry.api === "anthropic-messages" &&
+    resolveClaudeFable5ModelIdentity({ id: entry.id, params: entry.params })
+  ) {
+    return { ...entry, reasoning: true };
+  }
+  return entry;
 }
 
 function mergeCatalogEntries(models: ModelCatalogEntry[], entries: ModelCatalogEntry[]): void {
@@ -260,7 +289,7 @@ export function loadManifestModelCatalog(params: {
 }
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return entries.toSorted((a, b) => {
+  return entries.map(normalizeCatalogEntryContract).toSorted((a, b) => {
     const p = a.provider.localeCompare(b.provider);
     if (p !== 0) {
       return p;
@@ -273,6 +302,7 @@ function normalizePersistedModelCatalogEntry(
   providerRaw: string,
   entry: Record<string, unknown>,
   defaults?: {
+    api?: ModelCatalogEntry["api"];
     contextWindow?: number;
     contextTokens?: number;
   },
@@ -303,6 +333,8 @@ function normalizePersistedModelCatalogEntry(
         ? defaults.contextTokens
         : undefined;
   const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : false;
+  const api =
+    typeof entry?.api === "string" ? (entry.api as ModelCatalogEntry["api"]) : defaults?.api;
   const parsedInput = Array.isArray(entry?.input)
     ? entry.input.filter((value): value is ModelInputType =>
         ["text", "image", "audio", "video", "document"].includes(String(value)),
@@ -313,14 +345,20 @@ function normalizePersistedModelCatalogEntry(
     entry?.compat && typeof entry.compat === "object"
       ? (entry.compat as ModelCatalogEntry["compat"])
       : undefined;
+  const modelParams =
+    entry?.params && typeof entry.params === "object"
+      ? (entry.params as ModelCatalogEntry["params"])
+      : undefined;
   return {
     id,
     name,
     provider,
+    ...(api ? { api } : {}),
     contextWindow,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     reasoning,
     input,
+    ...(modelParams ? { params: modelParams } : {}),
     compat,
   };
 }
@@ -402,11 +440,16 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
       typeof providerConfig?.contextTokens === "number" && providerConfig.contextTokens > 0
         ? providerConfig.contextTokens
         : undefined;
+    const providerApi =
+      typeof providerConfig?.api === "string"
+        ? (providerConfig.api as ModelCatalogEntry["api"])
+        : undefined;
     for (const entry of providerConfig.models as Record<string, unknown>[]) {
       const normalized = normalizePersistedModelCatalogEntry(
         providerRaw,
         entry,
         {
+          api: providerApi,
           contextWindow: providerContextWindow,
           contextTokens: providerContextTokens,
         },
@@ -644,16 +687,21 @@ export async function loadModelCatalog(params?: {
             ? entry.contextTokens
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
+        const api = typeof entry?.api === "string" ? entry.api : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
+        const modelParams =
+          entry?.params && typeof entry.params === "object" ? entry.params : undefined;
         const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
         models.push({
           id,
           name,
           provider,
+          ...(api ? { api } : {}),
           contextWindow,
           ...(contextTokens !== undefined ? { contextTokens } : {}),
           reasoning,
           input,
+          ...(modelParams ? { params: modelParams } : {}),
           compat,
         });
       }

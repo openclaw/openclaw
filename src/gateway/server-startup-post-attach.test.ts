@@ -776,7 +776,21 @@ describe("startGatewayPostAttachRuntime", () => {
       testing.resolveGatewayMemoryStartupPolicy({
         memory: { backend: "qmd", qmd: { update: { startup: "immediate", onBoot: false } } },
       } as never),
-    ).toEqual({ mode: "off" });
+    ).toEqual({ mode: "immediate" });
+  });
+
+  it("allows qmd startup initialization when manager-start boot sync is disabled", async () => {
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      gatewayPluginConfigAtStart: {
+        hooks: { internal: { enabled: false } },
+        memory: { backend: "qmd", qmd: { update: { startup: "immediate", onBoot: false } } },
+      } as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.startGatewayMemoryBackend).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("starts the qmd memory backend when startup refresh is immediate", async () => {

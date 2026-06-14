@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   buildCommitmentExtractionPrompt,
   parseCommitmentExtractionOutput,
@@ -15,11 +16,14 @@ import type { CommitmentCandidate, CommitmentExtractionItem } from "./types.js";
 
 describe("commitment extraction", () => {
   const tmpDirs: string[] = [];
+  let stateDirEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
 
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    stateDirEnvSnapshot?.restore();
+    stateDirEnvSnapshot = undefined;
     await Promise.all(tmpDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     tmpDirs.length = 0;
   });
@@ -27,7 +31,8 @@ describe("commitment extraction", () => {
   async function createConfig(): Promise<OpenClawConfig> {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commitments-"));
     tmpDirs.push(tmpDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+    stateDirEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
     return {
       commitments: {
         enabled: true,

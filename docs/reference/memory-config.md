@@ -498,8 +498,8 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | ------------------------- | --------- | ------- | ------------------------------------- |
     | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
     | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; also gates opt-in startup refresh |
-    | `update.startup`          | `string`  | `off`   | Optional gateway-start refresh: `off`, `idle`, or `immediate` |
+    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; set false to skip the immediate boot update |
+    | `update.startup`          | `string`  | `off`   | Optional gateway-start QMD initialization: `off`, `idle`, or `immediate` |
     | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
     | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
     | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
@@ -548,7 +548,7 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
   </Accordion>
 </AccordionGroup>
 
-QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager still owns the regular file watcher and interval timers when memory search is opened for interactive use.
+When gateway-start QMD initialization is enabled, OpenClaw starts QMD only for eligible agents. If `update.onBoot` is true and no interval/embed maintenance is configured, startup uses a one-shot manager for the boot refresh and closes it. If an update or embed interval is configured, startup opens the long-lived QMD manager so it can own the watcher and interval timers; `update.onBoot: false` skips only the immediate boot refresh.
 
 ### Full QMD example
 

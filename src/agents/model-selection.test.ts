@@ -889,6 +889,31 @@ describe("model-selection", () => {
       expect(model?.reasoning).toBe(true);
     });
 
+    it("carries configured model params into catalog entries for provider policy", () => {
+      const cfg = {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              models: [
+                {
+                  id: "company-fable",
+                  name: "Company Fable",
+                  params: {
+                    canonicalModelId: "claude-fable-5",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "amazon-bedrock" && entry.id === "company-fable",
+      );
+      expect(model?.params).toEqual({ canonicalModelId: "claude-fable-5" });
+    });
+
     it("does not infer reasoning from non-vLLM thinking compat", () => {
       const cfg = {
         models: {

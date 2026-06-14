@@ -126,10 +126,41 @@ export async function handleDynamicToolCallWithTimeout(params: {
   toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall">;
   signal: AbortSignal;
   timeoutMs: number;
+  onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
   onTimeout?: () => void;
 }): Promise<CodexDynamicToolCallResponse> {
+  // Timeout or run abort can win while a tool ignores cancellation. Keep the
+  // private observer terminal result exactly once across those competing paths.
+  let didNotifyAgentToolResult = false;
+  const notifyAgentToolResult = (
+    event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentToolResult"]>>[0],
+  ) => {
+    if (didNotifyAgentToolResult) {
+      return;
+    }
+    didNotifyAgentToolResult = true;
+    try {
+      params.onAgentToolResult?.(event);
+    } catch (error) {
+      embeddedAgentLog.warn(
+        `onAgentToolResult handler failed: tool=${params.call.tool} error=${String(error)}`,
+      );
+    }
+  };
+  const notifyFailedToolResult = (message: string) => {
+    notifyAgentToolResult({
+      toolName: params.call.tool,
+      result: {
+        content: [{ type: "text", text: message }],
+        details: { status: "failed", error: message },
+      },
+      isError: true,
+    });
+  };
   if (params.signal.aborted) {
-    return failedDynamicToolResponse("OpenClaw dynamic tool call aborted before execution.");
+    const message = "OpenClaw dynamic tool call aborted before execution.";
+    notifyFailedToolResult(message);
+    return failedDynamicToolResponse(message);
   }
 
   const controller = new AbortController();
@@ -139,6 +170,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
   const abortFromRun = () => {
     const message = "OpenClaw dynamic tool call aborted.";
     controller.abort(params.signal.reason ?? new Error(message));
+    notifyFailedToolResult(message);
     resolveAbort?.(failedDynamicToolResponse(message, { sideEffectEvidence: true }));
   };
   const abortPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
@@ -155,6 +187,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
         ...timeoutDetails.meta,
         consoleMessage: timeoutDetails.consoleMessage,
       });
+      notifyFailedToolResult(timeoutDetails.responseMessage);
       resolve(
         failedDynamicToolResponse(timeoutDetails.responseMessage, { sideEffectEvidence: true }),
       );
@@ -167,13 +200,22 @@ export async function handleDynamicToolCallWithTimeout(params: {
     if (params.signal.aborted) {
       abortFromRun();
     }
-    return await Promise.race([
-      params.toolBridge.handleToolCall(params.call, { signal: controller.signal }),
+    const response = await Promise.race([
+      params.toolBridge.handleToolCall(params.call, {
+        signal: controller.signal,
+        onAgentToolResult: notifyAgentToolResult,
+      }),
       abortPromise,
       timeoutPromise,
     ]);
+    if (!response.success && !didNotifyAgentToolResult) {
+      notifyFailedToolResult(readDynamicToolResponseText(response));
+    }
+    return response;
   } catch (error) {
-    return failedDynamicToolResponse(error instanceof Error ? error.message : String(error), {
+    const message = error instanceof Error ? error.message : String(error);
+    notifyFailedToolResult(message);
+    return failedDynamicToolResponse(message, {
       sideEffectEvidence: true,
     });
   } finally {
@@ -186,6 +228,16 @@ export async function handleDynamicToolCallWithTimeout(params: {
       controller.abort(new Error("OpenClaw dynamic tool call finished."));
     }
   }
+}
+
+function readDynamicToolResponseText(response: CodexDynamicToolCallResponse): string {
+  const text = response.contentItems
+    .flatMap((item) =>
+      item.type === "inputText" && typeof item.text === "string" ? [item.text] : [],
+    )
+    .join("\n")
+    .trim();
+  return text || "OpenClaw dynamic tool call failed.";
 }
 
 function failedDynamicToolResponse(

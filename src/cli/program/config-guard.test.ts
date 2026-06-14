@@ -227,6 +227,22 @@ describe("ensureConfigReady", () => {
     });
   });
 
+  it("runs doctor flow before agent commands when default exec approvals must move to a custom state dir", async () => {
+    const root = useTempOpenClawHome();
+    const stateDir = path.join(root, "custom-state");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    writeStateMarker(root, "exec-approvals.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
   it.each([
     ["Discord model picker preferences", "discord/model-picker-preferences.json"],
     ["Discord thread bindings", "discord/thread-bindings.json"],

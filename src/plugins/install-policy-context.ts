@@ -1,4 +1,4 @@
-// Builds install policy context for plugin install checks.
+// Builds payloads for the plugin-runtime before_install lifecycle hook.
 import type {
   PluginHookBeforeInstallBuiltinScan,
   PluginHookBeforeInstallContext,

@@ -160,6 +160,23 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   );
 }
 
+/** Returns whether the current attempt should synchronously wait for media tasks. */
+export function shouldWaitForCompletionRequiredAsyncTasks(params: {
+  sessionKey: string | undefined;
+  toolMetas: readonly AsyncStartedToolMeta[];
+  yieldDetected?: boolean;
+}): boolean {
+  if (params.yieldDetected === true) {
+    // sessions_yield pauses the turn so the completion event can wake it later;
+    // waiting here would reuse the internal abort signal and turn the pause into AbortError.
+    return false;
+  }
+  return requiresCompletionRequiredAsyncTaskWait({
+    sessionKey: params.sessionKey,
+    toolMetas: params.toolMetas,
+  });
+}
+
 /**
  * Polls completion-required async tasks until they reach terminal state, time
  * out at the run deadline, or abort. Newly discovered task run ids are folded

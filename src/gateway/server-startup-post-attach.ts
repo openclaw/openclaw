@@ -155,9 +155,6 @@ function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemorySt
   if (cfg.memory?.backend !== "qmd") {
     return { mode: "off" };
   }
-  if (cfg.memory.qmd?.update?.onBoot === false) {
-    return { mode: "off" };
-  }
   const startup = cfg.memory.qmd?.update?.startup;
   if (startup === "immediate") {
     return { mode: "immediate" };

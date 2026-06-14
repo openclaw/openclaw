@@ -120,6 +120,14 @@ describe("embedded-agent runner run registry", () => {
     expect(abortB).toHaveBeenCalledTimes(1);
   });
 
+  it("passes restart ownership to every aborted run", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun("session-restart", createRunHandle({ abort }));
+
+    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
+    expect(abort).toHaveBeenCalledWith("restart");
+  });
+
   it("resolves active embedded runs by canonical session file", async () => {
     // Session-file lookup canonicalizes symlinks so heartbeat/diagnostic callers
     // can find the active handle from the file path they observe.

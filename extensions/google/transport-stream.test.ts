@@ -913,6 +913,46 @@ describe("google transport stream", () => {
     expect(new Headers(guardedInit.headers).has("x-goog-api-key")).toBe(false);
   });
 
+  it("strips redundant google provider prefixes from Google Vertex model paths", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-prefix-"));
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.transport-token");
+    const tokenFetchMock = vi.fn();
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGoogleVertexModel({ id: "google/gemini-3.1-pro-preview" }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gcp-vertex-credentials",
+          fetch: tokenFetchMock,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    // The provider prefix must be stripped from the Vertex model path, matching
+    // resolveGoogleModelPath; otherwise the id becomes models/google%2F... (404).
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toContain(
+      "/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent",
+    );
+    expect(guardedCall[0]).not.toContain("google%2F");
+  });
+
   it("refreshes authorized_user ADC before Google Vertex requests", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");

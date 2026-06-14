@@ -97,6 +97,7 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
+import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -671,9 +672,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           profileId: apiKeyInfo.profileId,
         },
       });
-      if (preparedAuth?.baseUrl) {
-        runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
-      }
+      runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
       hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
       if (!runtimeApiKey) {
@@ -846,6 +845,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           : undefined,
       sessionId: params.sessionId,
       runId: params.runId,
+      oneShotCliRun: params.oneShotCliRun,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -1022,6 +1022,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       model: `${provider}/${modelId}`,
       shell: detectRuntimeShell(),
       channel: runtimeChannel,
+      chatType: params.chatType,
       capabilities: runtimeCapabilities,
       channelActions,
       activeProcessSessions: listActiveProcessSessionReferences({

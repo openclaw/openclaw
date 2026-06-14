@@ -264,4 +264,5 @@ export function setFeishuClientRuntimeForTest(overrides?: {
   feishuClientSdk = overrides?.sdk
     ? { ...defaultFeishuClientSdk, ...overrides.sdk }
     : defaultFeishuClientSdk;
+  clearClientCache();
 }

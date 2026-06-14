@@ -164,6 +164,7 @@ export type EmbeddedRunAttemptResult = {
   messagesSnapshot: AgentMessage[];
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;
     meta?: string;

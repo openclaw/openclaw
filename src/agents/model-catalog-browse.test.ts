@@ -68,19 +68,35 @@ describe("loadModelCatalogForBrowse", () => {
     expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
   });
 
-  it("uses the full catalog when configured visibility has provider wildcards", async () => {
+  it("uses the read-only catalog when configured visibility has provider wildcards", async () => {
     const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
       readOnly ? readOnlyCatalog : fullCatalog,
     );
 
     await expect(
       loadModelCatalogForBrowse({ cfg: config({ providerWildcard: true }), loadCatalog }),
+    ).resolves.toBe(readOnlyCatalog);
+
+    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
+  });
+
+  it("uses the full catalog for configured views with provider wildcards", async () => {
+    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
+      readOnly ? readOnlyCatalog : fullCatalog,
+    );
+
+    await expect(
+      loadModelCatalogForBrowse({
+        cfg: config({ providerWildcard: true }),
+        view: "configured",
+        loadCatalog,
+      }),
     ).resolves.toBe(fullCatalog);
 
     expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
   });
 
-  it("returns an empty catalog when read-only catalog loading times out", async () => {
+  it("returns an empty catalog when read-only catalog loading times out with provider wildcards", async () => {
     const onTimeout = vi.fn();
     const timeoutHandle = { unref: vi.fn() } as unknown as NodeJS.Timeout;
     const clearTimeout = vi.fn();
@@ -94,7 +110,7 @@ describe("loadModelCatalogForBrowse", () => {
     const loadCatalog = vi.fn(() => new Promise<ModelCatalogEntry[]>(() => {}));
 
     const resultPromise = loadModelCatalogForBrowse({
-      cfg: config(),
+      cfg: config({ providerWildcard: true }),
       loadCatalog,
       timeoutMs: 5,
       onTimeout,

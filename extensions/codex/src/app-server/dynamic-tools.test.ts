@@ -18,6 +18,7 @@ import {
 import {
   createEmptyPluginRegistry,
   createMockPluginRegistry,
+  createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -222,6 +223,7 @@ describe("createCodexDynamicToolBridge", () => {
 
   it("can register a durable tool schema while denying execution for the current turn", async () => {
     const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const onAgentToolResult = vi.fn();
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "message" })],
       registeredTools: [
@@ -237,14 +239,17 @@ describe("createCodexDynamicToolBridge", () => {
       HEARTBEAT_RESPONSE_TOOL_NAME,
     ]);
 
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
-      arguments: {},
-    });
+    const result = await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+        arguments: {},
+      },
+      { onAgentToolResult },
+    );
 
     expect(result).toEqual({
       success: false,
@@ -256,6 +261,22 @@ describe("createCodexDynamicToolBridge", () => {
       ],
     });
     expect(heartbeatExecute).not.toHaveBeenCalled();
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+          },
+        ],
+        details: {
+          status: "failed",
+          error: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+        },
+      },
+      isError: true,
+    });
   });
 
   it("keeps available and registered schemas paired with their tools", () => {
@@ -778,6 +799,163 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
+  it("records the current provider and transport thread for implicit message sends", async () => {
+    const hasRepliedRef = { value: false };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            id: "slack",
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            threading: {
+              resolveAutoThreadId: ({
+                to,
+                toolContext,
+              }: {
+                to: string;
+                toolContext?: {
+                  currentChannelId?: string;
+                  currentMessagingTarget?: string;
+                  currentThreadTs?: string;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                  hasRepliedRef?: { value: boolean };
+                };
+              }) => {
+                if (
+                  to !== toolContext?.currentMessagingTarget &&
+                  to !== toolContext?.currentChannelId
+                ) {
+                  return undefined;
+                }
+                if (
+                  (toolContext?.replyToMode === "first" ||
+                    toolContext?.replyToMode === "batched") &&
+                  !toolContext.hasRepliedRef?.value
+                ) {
+                  return toolContext.currentThreadTs;
+                }
+                return undefined;
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "message",
+          execute: vi.fn(async () => {
+            hasRepliedRef.value = true;
+            return textToolResult("Sent.");
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+      hookContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "D1",
+        currentMessagingTarget: "user:u1",
+        currentThreadId: "171.222",
+        replyToMode: "first",
+        hasRepliedRef,
+      },
+    });
+
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      to: "user:U1",
+      text: "hello from Codex",
+    });
+
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "slack",
+        to: "user:u1",
+        threadId: "171.222",
+        threadImplicit: true,
+        text: "hello from Codex",
+      },
+    ]);
+  });
+
+  it("records the provider-confirmed route for successful message sends", async () => {
+    const registry = createTestRegistry([
+      {
+        pluginId: "mattermost",
+        plugin: {
+          id: "mattermost",
+          messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+          actions: {
+            extractToolSend: ({ args }: { args: Record<string, unknown> }) =>
+              args.action === "send" && typeof args.to === "string"
+                ? { to: args.to, threadImplicit: true }
+                : null,
+            extractToolSendResult: ({ result }: { result: unknown }) => {
+              const details = requireRecord(
+                requireRecord(result, "message result").details,
+                "message details",
+              );
+              const toolSend = requireRecord(details.toolSend, "tool send details");
+              return {
+                to: String(toolSend.to),
+                threadId: String(toolSend.threadId),
+              };
+            },
+          },
+        },
+        source: "test",
+      },
+    ]);
+    const middleware = vi.fn(async (event: { result: AgentToolResult<unknown> }) => {
+      const details = requireRecord(event.result.details, "middleware details");
+      const toolSend = requireRecord(details.toolSend, "middleware tool send");
+      toolSend.to = "channel:corrupted";
+      toolSend.threadId = "corrupted-root";
+      return undefined;
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "route-details-stripper",
+      pluginName: "Route details stripper",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", {
+        toolSend: {
+          to: "channel:resolved-id",
+          threadId: "root-post-id",
+        },
+      }),
+    );
+
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      provider: "mattermost",
+      to: "town-square",
+      text: "hello from Codex",
+    });
+
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "mattermost",
+        to: "channel:resolved-id",
+        threadId: "root-post-id",
+        threadImplicit: undefined,
+        threadSuppressed: undefined,
+        text: "hello from Codex",
+      },
+    ]);
+  });
+
   it("records message tool media attachment aliases as delivery evidence", async () => {
     const toolResult = {
       content: [{ type: "text", text: "Sent." }],
@@ -1025,6 +1203,152 @@ describe("createCodexDynamicToolBridge", () => {
     const event = requireRecord(callArg(handler, 0, 0, "middleware event"), "middleware event");
     expect(event.isError).toBe(true);
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
+  });
+
+  it("keeps unrecognized non-success statuses fail-closed", async () => {
+    const onAgentToolResult = vi.fn();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "exec",
+          execute: vi.fn(async () =>
+            textToolResult("Approval is unavailable.", { status: "approval-unavailable" }),
+          ),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "exec",
+        arguments: { command: "pwd" },
+      },
+      { onAgentToolResult },
+    );
+
+    expect(result).toMatchObject({ success: false });
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "exec",
+      result: textToolResult("Approval is unavailable.", { status: "approval-unavailable" }),
+      isError: true,
+    });
+  });
+
+  it("preserves explicitly successful cancellation outcomes", async () => {
+    const onAgentToolResult = vi.fn();
+    const cancelledResult = textToolResult("Approval rejected.", {
+      ok: true,
+      status: "cancelled",
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "lobster",
+          execute: vi.fn(async () => cancelledResult),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "lobster",
+        arguments: {},
+      },
+      { onAgentToolResult },
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "lobster",
+      result: cancelledResult,
+      isError: false,
+    });
+  });
+
+  it("reports sanitized dynamic tool results to the private result observer", async () => {
+    const onAgentToolResult = vi.fn();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "memory_lookup_custom",
+          execute: vi.fn(async () =>
+            textToolResult("OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789", {
+              status: "failed",
+              error: "backend unavailable",
+            }),
+          ),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "memory_lookup_custom",
+        arguments: {},
+      },
+      { onAgentToolResult },
+    );
+
+    expect(onAgentToolResult).toHaveBeenCalledOnce();
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "memory_lookup_custom",
+      result: {
+        content: [{ type: "text", text: "OPENROUTER_API_KEY=sk-or-…6789" }],
+        details: { status: "failed", error: "backend unavailable" },
+      },
+      isError: true,
+    });
+  });
+
+  it("reports thrown dynamic tool failures to the private result observer", async () => {
+    const onAgentToolResult = vi.fn();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "memory_lookup_custom",
+          execute: vi.fn(async () => {
+            throw new Error("backend unavailable");
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "memory_lookup_custom",
+        arguments: {},
+      },
+      { onAgentToolResult },
+    );
+
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "memory_lookup_custom",
+      result: {
+        content: [{ type: "text", text: "backend unavailable" }],
+        details: { status: "failed", error: "backend unavailable" },
+      },
+      isError: true,
+    });
   });
 
   it("preserves terminal async tool results without marking them as errors", async () => {

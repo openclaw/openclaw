@@ -23,6 +23,7 @@ export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
 ]);
 
 export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["acpx", "memory-core"]);
+export const QA_LAB_PLUGIN_ID = "qa-lab";
 
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
@@ -112,7 +113,12 @@ export function buildQaGatewayConfig(params: {
     transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
   );
   const allowedPlugins = [
-    ...new Set([...QA_BASE_RUNTIME_PLUGIN_IDS, ...selectedPluginIds, ...transportPluginIds]),
+    ...new Set([
+      ...QA_BASE_RUNTIME_PLUGIN_IDS,
+      QA_LAB_PLUGIN_ID,
+      ...selectedPluginIds,
+      ...transportPluginIds,
+    ]),
   ];
   const resolveModelParams = (modelRef: string) =>
     provider.resolveModelParams({
@@ -141,6 +147,9 @@ export function buildQaGatewayConfig(params: {
           },
         },
         "memory-core": {
+          enabled: true,
+        },
+        [QA_LAB_PLUGIN_ID]: {
           enabled: true,
         },
         ...pluginEntries,

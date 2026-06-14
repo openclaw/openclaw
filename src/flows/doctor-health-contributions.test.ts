@@ -116,7 +116,8 @@ vi.mock("../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
-vi.mock("../utils.js", () => ({
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
   isRecord: mocks.isRecord,
   shortenHomePath: mocks.shortenHomePath,
 }));

@@ -13,7 +13,12 @@ import {
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderWikiMarkdown, type WikiPageSummary } from "./markdown.js";
+import {
+  isUnmanagedRawSourceSummary,
+  renderWikiMarkdown,
+  type WikiPageSummary,
+} from "./markdown.js";
+import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 
 type MemoryWikiLintIssue = {
   severity: "error" | "warning";
@@ -51,6 +56,15 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
+function isUnmanagedRawSourcePage(
+  page: WikiPageSummary,
+  managedImportedSourcePagePaths: Set<string>,
+): boolean {
+  return (
+    isUnmanagedRawSourceSummary(page) && !managedImportedSourcePagePaths.has(page.relativePath)
+  );
+}
+
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const validTargets = new Set<string>();
   for (const page of pages) {
@@ -77,20 +91,30 @@ function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[
   return issues;
 }
 
-function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
+function collectPageIssues(
+  pages: WikiPageSummary[],
+  managedImportedSourcePagePaths: Set<string>,
+): MemoryWikiLintIssue[] {
   const issues: MemoryWikiLintIssue[] = [];
   const pagesById = new Map<string, WikiPageSummary[]>();
   const claimHealth = collectWikiClaimHealth(pages);
 
   for (const page of pages) {
+    const requiresStructuredPageMetadata = !isUnmanagedRawSourcePage(
+      page,
+      managedImportedSourcePagePaths,
+    );
+
     if (!page.id) {
-      issues.push({
-        severity: "error",
-        category: "structure",
-        code: "missing-id",
-        path: page.relativePath,
-        message: "Missing `id` frontmatter.",
-      });
+      if (requiresStructuredPageMetadata) {
+        issues.push({
+          severity: "error",
+          category: "structure",
+          code: "missing-id",
+          path: page.relativePath,
+          message: "Missing `id` frontmatter.",
+        });
+      }
     } else {
       const current = pagesById.get(page.id) ?? [];
       current.push(page);
@@ -98,13 +122,15 @@ function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
     }
 
     if (!page.pageType) {
-      issues.push({
-        severity: "error",
-        category: "structure",
-        code: "missing-page-type",
-        path: page.relativePath,
-        message: "Missing `pageType` frontmatter.",
-      });
+      if (requiresStructuredPageMetadata) {
+        issues.push({
+          severity: "error",
+          category: "structure",
+          code: "missing-page-type",
+          path: page.relativePath,
+          message: "Missing `pageType` frontmatter.",
+        });
+      }
     } else if (page.pageType !== toExpectedPageType(page)) {
       issues.push({
         severity: "error",
@@ -194,7 +220,11 @@ function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
     }
 
     const freshness = assessPageFreshness(page);
-    if (page.kind !== "report" && (freshness.level === "stale" || freshness.level === "unknown")) {
+    if (
+      requiresStructuredPageMetadata &&
+      page.kind !== "report" &&
+      (freshness.level === "stale" || freshness.level === "unknown")
+    ) {
       issues.push({
         severity: "warning",
         category: "quality",
@@ -354,7 +384,11 @@ export async function lintMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
 ): Promise<LintMemoryWikiResult> {
   const compileResult = await compileMemoryWikiVault(config);
-  const issues = collectPageIssues(compileResult.pages);
+  const sourceSyncState = await readMemoryWikiSourceSyncState(config.vault.path);
+  const managedImportedSourcePagePaths = new Set(
+    Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
+  );
+  const issues = collectPageIssues(compileResult.pages, managedImportedSourcePagePaths);
   const issuesByCategory = buildIssuesByCategory(issues);
   const reportPath = await writeLintReport(config.vault.path, issues);
 

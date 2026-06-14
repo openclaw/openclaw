@@ -731,11 +731,11 @@ export async function createChatSession(
   state.lastError = null;
   state.chatError = null;
   const previousSessionKey = state.sessionKey;
-  const parentSessionKey = state.sessionsResult?.sessions.some(
-    (row) => row.key === previousSessionKey,
-  )
-    ? previousSessionKey
-    : undefined;
+  const normalizedPreviousSessionKey = normalizeOptionalString(previousSessionKey);
+  const parentSessionKey =
+    normalizeLowercaseStringOrEmpty(normalizedPreviousSessionKey) === "unknown"
+      ? undefined
+      : normalizedPreviousSessionKey;
   const nextSessionKey = await createSessionAndRefresh(
     state as unknown as Parameters<typeof createSessionAndRefresh>[0],
     {

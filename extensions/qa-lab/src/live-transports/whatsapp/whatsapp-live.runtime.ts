@@ -15,6 +15,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
+import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
@@ -27,7 +28,6 @@ import {
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
-  type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
@@ -258,6 +258,7 @@ type WhatsAppQaScenarioResult = {
     responseObservedAt: string;
     source: "approval-request-to-resolution" | "request-to-observed-message";
   };
+  standardId?: string;
   status: "fail" | "pass" | "skip";
   title: string;
 };
@@ -269,29 +270,6 @@ export type WhatsAppQaRunResult = {
   reportPath: string;
   scenarios: WhatsAppQaScenarioResult[];
   summaryPath: string;
-};
-
-type WhatsAppQaSummary = {
-  cleanupIssues: string[];
-  counts: {
-    failed: number;
-    passed: number;
-    skipped: number;
-    total: number;
-  };
-  credentials: {
-    credentialFingerprint?: string;
-    credentialId?: string;
-    kind: string;
-    ownerId?: string;
-    role?: QaCredentialRole;
-    source: "convex" | "env";
-  };
-  finishedAt: string;
-  scenarios: WhatsAppQaScenarioResult[];
-  startedAt: string;
-  sutAccountId: string;
-  sutPhoneE164: string;
 };
 
 type WhatsAppCredentialLease = Awaited<
@@ -1425,14 +1403,6 @@ function inferWhatsAppCredentialSource(
   const normalized =
     value?.trim().toLowerCase() || env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim().toLowerCase();
   return normalized === "convex" ? "convex" : "env";
-}
-
-function inferWhatsAppCredentialRole(value: string | undefined): QaCredentialRole | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "ci" || normalized === "maintainer") {
-    return normalized;
-  }
-  return undefined;
 }
 
 function resolveWhatsAppMetadataRedaction(env: NodeJS.ProcessEnv = process.env) {
@@ -2630,6 +2600,7 @@ async function runWhatsAppScenario(params: {
       return {
         id: params.scenario.id,
         title: params.scenario.title,
+        standardId: params.scenario.standardId,
         status: "pass" as const,
         details: `${scenarioRun.approvalKind} approval ${approval.approvalId} resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
         rttMs: approval.rttMs,
@@ -2733,6 +2704,7 @@ async function runWhatsAppScenario(params: {
       return {
         id: params.scenario.id,
         title: params.scenario.title,
+        standardId: params.scenario.standardId,
         status: "pass" as const,
         details: "no reply",
       };
@@ -2766,6 +2738,7 @@ async function runWhatsAppScenario(params: {
     return {
       id: params.scenario.id,
       title: params.scenario.title,
+      standardId: params.scenario.standardId,
       status: "pass" as const,
       details: [`reply matched in ${rttMs}ms`, afterSendDetails, afterReplyDetails, batchDetails]
         .filter(Boolean)
@@ -2945,6 +2918,7 @@ function createMissingGroupJidScenarioResult(params: {
   return {
     id: params.scenario.id,
     title: params.scenario.title,
+    standardId: params.scenario.standardId,
     status: params.explicitScenarioSelection ? "fail" : "skip",
     details: params.explicitScenarioSelection
       ? "requested scenario requires groupJid in the WhatsApp QA credential payload"
@@ -2967,6 +2941,7 @@ function appendPreScenarioFailureResults(params: {
     params.scenarioResults.push({
       id: scenario.id,
       title: scenario.title,
+      standardId: scenario.standardId,
       status: "fail",
       details: params.details,
     });
@@ -3025,7 +3000,6 @@ export async function runWhatsAppQaLive(params: {
   const scenarios = findScenarios(params.scenarioIds, providerMode);
   const explicitScenarioSelection = (params.scenarioIds?.length ?? 0) > 0;
   const requestedCredentialSource = inferWhatsAppCredentialSource(params.credentialSource);
-  const requestedCredentialRole = inferWhatsAppCredentialRole(params.credentialRole);
   const redactPublicMetadata = resolveWhatsAppMetadataRedaction();
   const includeObservedMessageContent = isTruthyOptIn(process.env[WHATSAPP_QA_CAPTURE_CONTENT_ENV]);
   const startedAt = new Date().toISOString();
@@ -3156,6 +3130,7 @@ export async function runWhatsAppQaLive(params: {
           const result: WhatsAppQaScenarioResult = {
             id: scenario.id,
             title: scenario.title,
+            standardId: scenario.standardId,
             status: "fail",
             details:
               driverAttempt > 1
@@ -3228,11 +3203,8 @@ export async function runWhatsAppQaLive(params: {
 
   const finishedAt = new Date().toISOString();
   const reportPath = path.join(outputDir, "whatsapp-qa-report.md");
-  const summaryPath = path.join(outputDir, "whatsapp-qa-summary.json");
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_FILENAME);
   const observedMessagesPath = path.join(outputDir, "whatsapp-qa-observed-messages.json");
-  const passed = scenarioResults.filter((entry) => entry.status === "pass").length;
-  const failed = scenarioResults.filter((entry) => entry.status === "fail").length;
-  const skipped = scenarioResults.filter((entry) => entry.status === "skip").length;
   const credentialFingerprint = fingerprintQaCredentialId(credentialLease?.credentialId);
   const publishedCleanupIssues = redactPublicMetadata
     ? redactQaLiveLaneIssues(cleanupIssues)
@@ -3240,36 +3212,22 @@ export async function runWhatsAppQaLive(params: {
   const publishedScenarioResults = redactPublicMetadata
     ? redactWhatsAppQaScenarioResults(scenarioResults)
     : scenarioResults;
-  const summary: WhatsAppQaSummary = {
-    credentials: credentialLease
-      ? {
-          source: credentialLease.source,
-          kind: credentialLease.kind,
-          role: credentialLease.role,
-          credentialFingerprint,
-          credentialId: redactPublicMetadata ? undefined : credentialLease.credentialId,
-          ownerId: redactPublicMetadata ? undefined : credentialLease.ownerId,
-        }
-      : {
-          source: requestedCredentialSource,
-          kind: "whatsapp",
-          role: requestedCredentialRole,
-        },
-    sutAccountId,
-    sutPhoneE164: redactPublicMetadata
-      ? "<redacted>"
-      : (runtimeEnv?.sutPhoneE164 ?? "<unavailable>"),
-    startedAt,
-    finishedAt,
-    cleanupIssues: publishedCleanupIssues,
-    counts: {
-      total: scenarioResults.length,
-      passed,
-      failed,
-      skipped,
-    },
-    scenarios: publishedScenarioResults,
-  };
+  const evidence = buildLiveTransportEvidenceSummary({
+    artifactPaths: [
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      { kind: "transport-observations", path: path.basename(observedMessagesPath) },
+    ],
+    checks: publishedScenarioResults.map(({ standardId, ...check }) => ({
+      ...check,
+      coverageIds: standardId ? [`channels.whatsapp.${standardId}`] : undefined,
+    })),
+    env: process.env,
+    generatedAt: finishedAt,
+    primaryModel,
+    providerMode,
+    transportId: "whatsapp",
+  });
   await fs.writeFile(
     observedMessagesPath,
     `${JSON.stringify(
@@ -3282,7 +3240,7 @@ export async function runWhatsAppQaLive(params: {
       2,
     )}\n`,
   );
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+  await fs.writeFile(summaryPath, `${JSON.stringify(evidence, null, 2)}\n`);
   await fs.writeFile(
     reportPath,
     `${renderWhatsAppQaMarkdown({

@@ -734,8 +734,8 @@ export function registerSkillsCli(program: Command) {
     .action(
       async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
         try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await applySkillProposal({ workspaceDir, proposalId });
+          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const applied = await applySkillProposal({ workspaceDir, config, proposalId });
           if (opts.json) {
             defaultRuntime.writeJson(applied);
             return;

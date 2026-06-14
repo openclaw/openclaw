@@ -439,7 +439,7 @@ docker_build_run e2e-build -t demo-image .
       chmodSync(join(workDir, "runner.sh"), 0o755);
 
       const waitForFile = async (filePath: string) => {
-        for (let attempt = 0; attempt < 50; attempt += 1) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
           if (existsSync(filePath)) {
             return;
           }
@@ -452,7 +452,7 @@ docker_build_run e2e-build -t demo-image .
           child.once("exit", (code, signal) => resolve({ code, signal }));
         });
       const waitForDead = async (pid: number) => {
-        for (let attempt = 0; attempt < 50; attempt += 1) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
           try {
             process.kill(pid, 0);
           } catch {

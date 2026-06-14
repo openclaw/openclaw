@@ -65,6 +65,10 @@ async function loadCronJobForEditSchedulePatch(
   throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
 }
 
+async function readCronJobForEdit(opts: Record<string, unknown>, id: string): Promise<CronJob> {
+  return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
+}
+
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
     cron
@@ -83,7 +87,10 @@ export function registerCronEditCommand(cron: Command) {
       .option("--session-key <key>", "Set session key for job routing")
       .option("--clear-session-key", "Unset session key", false)
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
-      .option("--at <when>", "Set one-shot time (ISO) or duration like 20m")
+      .option(
+        "--at <when>",
+        "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m",
+      )
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
       .option(
@@ -243,7 +250,18 @@ export function registerCronEditCommand(cron: Command) {
             tz: opts.tz,
           });
           if (scheduleRequest.kind === "direct") {
-            patch.schedule = scheduleRequest.schedule;
+            if (
+              scheduleRequest.schedule.kind === "cron" &&
+              scheduleRequest.schedule.tz === undefined
+            ) {
+              const existing = await readCronJobForEdit(opts, String(id));
+              patch.schedule =
+                existing.schedule.kind === "cron" && existing.schedule.tz !== undefined
+                  ? { ...scheduleRequest.schedule, tz: existing.schedule.tz }
+                  : scheduleRequest.schedule;
+            } else {
+              patch.schedule = scheduleRequest.schedule;
+            }
           } else if (scheduleRequest.kind === "patch-existing-cron") {
             const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
             if (!existing) {

@@ -8,6 +8,10 @@ import { isChannelConfigured } from "../../../config/channel-configured.js";
 import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
+import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  type UpdatePostInstallDoctorResult,
+} from "../../../infra/update-doctor-result.js";
 import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
@@ -341,6 +345,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   warnings: string[];
   completed: boolean;
   touchedConfig: boolean;
+  postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 }> {
   const env = params.env ?? process.env;
   const updateInProgress = shouldDeferConfiguredPluginInstallRepair(env);
@@ -360,11 +365,17 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
       blockedPluginIds: collectBlockedPluginIds(params.cfg),
       env,
     });
+    const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
+      updateInProgress,
+      details: repaired.deferredRepairDetails ?? [],
+      warnings: repaired.warnings,
+    });
     return {
       changes: repaired.changes,
       warnings: repaired.warnings,
       completed: repaired.warnings.length === 0,
       touchedConfig: false,
+      ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
     };
   }
   if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
@@ -378,10 +389,27 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     env,
   });
   const completed = repaired.warnings.length === 0 && !updateInProgress;
+  const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
+    updateInProgress,
+    details: repaired.deferredRepairDetails ?? [],
+    warnings: repaired.warnings,
+  });
   return {
     changes: repaired.changes,
     warnings: repaired.warnings,
     completed,
     touchedConfig: completed,
+    ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
   };
+}
+
+function createPostInstallDoctorResultForDeferredRepair(params: {
+  updateInProgress: boolean;
+  details: readonly string[];
+  warnings: readonly string[];
+}): UpdatePostInstallDoctorResult | undefined {
+  if (!params.updateInProgress || params.warnings.length > 0 || params.details.length === 0) {
+    return undefined;
+  }
+  return createDeferredConfiguredPluginRepairDoctorResult(params.details);
 }

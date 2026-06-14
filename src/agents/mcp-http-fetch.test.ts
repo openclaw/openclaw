@@ -1,3 +1,4 @@
+import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 /**
  * Regression coverage for MCP HTTP fetch wrappers.
  * Verifies SSRF-guarded fetch, scoped dispatcher behavior, and same-origin headers.
@@ -120,6 +121,21 @@ describe("MCP HTTP fetch helpers", () => {
     expect(lookupMock).not.toHaveBeenCalled();
   });
 
+  it.each([204, 205, 304])("preserves bodyless HTTP %s responses", async (status) => {
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new Response(null, { status }),
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    const response = await fetch("https://mcp.example.com/mcp");
+
+    expect(response.status).toBe(status);
+    expect(response.body).toBeNull();
+  });
+
   it("keeps same-origin TLS overrides ahead of configured env proxy", async () => {
     vi.stubEnv("https_proxy", "http://proxy.example:8080");
     const fetch = buildMcpHttpFetch({
@@ -194,5 +210,39 @@ describe("MCP HTTP fetch helpers", () => {
     expect(new Headers(calls[0]?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(calls[0]?.[1]?.headers).get("mcp-protocol-version")).toBe("2025-06-18");
     expect(calls[1]?.[1]?.headers).toBeUndefined();
+  });
+
+  it("returns fetch responses compatible with MCP SDK OAuth error parsing", async () => {
+    class ForeignResponse {
+      status = 400;
+      statusText = "Bad Request";
+      headers = new Headers({ "content-type": "application/json" });
+      body = null;
+      get ok() {
+        return false;
+      }
+      async text() {
+        return '{"error":"invalid_client_metadata","error_description":"bad redirect"}';
+      }
+    }
+
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async (url: string | URL | Request, init?: unknown) => {
+        fetchCalls.push({ url, init });
+        return new ForeignResponse() as unknown as Response;
+      },
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+    expect(response).toBeInstanceOf(Response);
+    const error = await parseErrorResponse(response);
+    expect(error.message).toContain("bad redirect");
+    expect(error.message).not.toContain("[object Response]");
   });
 });
