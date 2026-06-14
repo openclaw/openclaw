@@ -31,7 +31,9 @@ describe("WhatsApp channel logout", () => {
       account: {
         accountId: "work",
         authDir: "/tmp/openclaw-whatsapp-work",
+        enabled: true,
         isLegacyAuthDir: false,
+        sendReadReceipts: false,
       },
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as RuntimeEnv,
     });
@@ -55,7 +57,9 @@ describe("WhatsApp channel logout", () => {
       account: {
         accountId: "work",
         authDir: "/tmp/openclaw-whatsapp-work",
+        enabled: true,
         isLegacyAuthDir: false,
+        sendReadReceipts: false,
       },
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as RuntimeEnv,
     });
