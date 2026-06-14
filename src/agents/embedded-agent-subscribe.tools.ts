@@ -553,6 +553,7 @@ export function isToolResultError(result: unknown): boolean {
     normalized === "denied" ||
     normalized === "forbidden" ||
     normalized === "unavailable" ||
+    normalized === "approval-unavailable" ||
     normalized === "disabled" ||
     normalized === "aborted" ||
     normalized === "cancelled" ||
