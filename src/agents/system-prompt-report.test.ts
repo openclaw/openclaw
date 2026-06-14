@@ -220,4 +220,110 @@ describe("buildSystemPromptReport", () => {
     });
     expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
   });
+
+  it("keeps reporting when tool descriptor getters throw", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const unreadableTool = Object.defineProperties(
+      {},
+      {
+        name: {
+          get() {
+            throw new Error("name unavailable");
+          },
+        },
+        description: {
+          get() {
+            throw new Error("description unavailable");
+          },
+        },
+        label: {
+          get() {
+            throw new Error("label unavailable");
+          },
+        },
+        parameters: {
+          get() {
+            throw new Error("parameters unavailable");
+          },
+        },
+      },
+    );
+    const hostileSchema = Object.defineProperty({ type: "object" }, "properties", {
+      get() {
+        throw new Error("properties unavailable");
+      },
+    });
+    const hostileSchemaJsonChars = JSON.stringify({ type: "object" }).length;
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [
+        unreadableTool,
+        {
+          name: "hostile_schema",
+          description: "Hostile schema",
+          parameters: hostileSchema,
+        },
+      ] as never,
+    });
+
+    expect(report.tools.schemaChars).toBe(hostileSchemaJsonChars);
+    expect(report.tools.entries[0]).toMatchObject({
+      name: "(unknown)",
+      summaryChars: 0,
+      schemaChars: 0,
+      propertiesCount: null,
+    });
+    expect(report.tools.entries[1]).toMatchObject({
+      name: "hostile_schema",
+      summaryChars: "Hostile schema".length,
+      schemaChars: hostileSchemaJsonChars,
+      propertiesCount: null,
+    });
+  });
+
+  it("keeps reporting when schema properties cannot be enumerated", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const hostileProperties = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("properties unavailable");
+        },
+      },
+    );
+    const schema = {
+      type: "object",
+      properties: hostileProperties,
+    };
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [
+        {
+          name: "hostile_properties",
+          description: "Hostile properties",
+          parameters: schema,
+        },
+      ] as never,
+    });
+
+    expect(report.tools.entries[0]).toMatchObject({
+      name: "hostile_properties",
+      schemaChars: 0,
+      propertiesCount: null,
+    });
+  });
 });
