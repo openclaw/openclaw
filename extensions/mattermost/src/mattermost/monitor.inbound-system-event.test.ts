@@ -477,19 +477,19 @@ describe("mattermost inbound user posts", () => {
     mockState.runtimeCore = createRuntimeCore(progressConfig);
     mockState.dispatchReplyFromConfig.mockImplementation(async (params) => {
       await params.replyOptions?.onToolStart?.({
-        itemId: "tool-read",
+        toolCallId: "read-1",
         name: "read",
         phase: "start",
       });
       params.replyOptions?.onAssistantMessageStart?.();
       params.replyOptions?.onReasoningEnd?.();
       await params.replyOptions?.onToolStart?.({
-        itemId: "tool-exec",
+        toolCallId: "exec-1",
         name: "exec",
         phase: "start",
       });
       await params.replyOptions?.onItemEvent?.({
-        itemId: "tool-read",
+        itemId: "tool:read-1",
         kind: "tool",
         name: "read",
         status: "completed",
@@ -499,7 +499,7 @@ describe("mattermost inbound user posts", () => {
       await params.replyOptions?.onReasoningEnd?.();
       await params.replyOptions?.onReasoningStream?.({ text: "Checking" });
       await params.replyOptions?.onItemEvent?.({
-        itemId: "tool-read",
+        itemId: "tool:read-1",
         kind: "tool",
         name: "read",
         status: "completed",
