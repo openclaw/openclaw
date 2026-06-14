@@ -69,6 +69,52 @@ describe("compactWithSafetyTimeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("keeps timeout acceptance alive through the native commit continuation", async () => {
+    vi.useFakeTimers();
+    let timeoutReason: unknown;
+    let outcome:
+      | { status: "pending" }
+      | { status: "resolved"; value: string }
+      | { status: "rejected"; message: string } = { status: "pending" };
+    const compactPromise = compactWithSafetyTimeout(async (signal) => {
+      const compactResult = await new Promise<string>((resolve) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            timeoutReason = signal.reason;
+            queueMicrotask(() => resolve("native partial summary ready"));
+          },
+          { once: true },
+        );
+      });
+
+      if (signal?.aborted && !isCompactionTimeoutResultAccepted(signal.reason)) {
+        return "native result dropped as aborted";
+      }
+      return compactResult;
+    }, 30);
+    compactPromise.then(
+      (value) => {
+        outcome = { status: "resolved", value };
+      },
+      (error: unknown) => {
+        outcome = { status: "rejected", message: (error as Error).message };
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(30);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(outcome).toEqual({
+      status: "resolved",
+      value: "native partial summary ready",
+    });
+    expect(isCompactionTimeoutResultAccepted(timeoutReason)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("expires timeout-result acceptance after the safety wrapper rejects", async () => {
     vi.useFakeTimers();
     let timeoutReason: unknown;
