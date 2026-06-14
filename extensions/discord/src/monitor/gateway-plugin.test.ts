@@ -258,6 +258,31 @@ describe("createDiscordGatewayPlugin", () => {
     ).toBeUndefined();
   });
 
+  it("disables ws receiver buffered-part limits for Discord gateway sockets", () => {
+    const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
+    const webSocketCtor = vi.fn(function WebSocketCtor() {
+      return socket;
+    });
+    const plugin = createPlugin({
+      webSocketCtor: webSocketCtor as unknown as NonNullable<
+        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
+      >["webSocketCtor"],
+    });
+
+    (plugin as unknown as { createWebSocket: (url: string) => typeof socket }).createWebSocket(
+      "wss://gateway.discord.gg",
+    );
+
+    expect(webSocketCtor).toHaveBeenCalledWith(
+      "wss://gateway.discord.gg",
+      expect.objectContaining({
+        handshakeTimeout: 30_000,
+        maxBufferedChunks: 0,
+        maxFragments: 0,
+      }),
+    );
+  });
+
   it("emits transport activity for current gateway socket messages", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);

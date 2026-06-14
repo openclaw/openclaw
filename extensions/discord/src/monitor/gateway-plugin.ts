@@ -39,7 +39,12 @@ const discordDnsLookup = createDiscordDnsLookup();
 
 type DiscordGatewayWebSocketCtor = new (
   url: string,
-  options?: { agent?: unknown; handshakeTimeout?: number },
+  options?: {
+    agent?: unknown;
+    handshakeTimeout?: number;
+    maxBufferedChunks?: number;
+    maxFragments?: number;
+  },
 ) => ws.WebSocket;
 type DiscordGatewayWebSocketAgent = InstanceType<typeof HttpsAgent> | HttpAgent;
 const registrationPromises = new WeakMap<discordGateway.GatewayPlugin, Promise<void>>();
@@ -269,6 +274,8 @@ function createGatewayPlugin(params: {
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
       const socket = new WebSocketCtor(url, {
         handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
+        maxBufferedChunks: 0,
+        maxFragments: 0,
         ...(params.wsAgent ? { agent: params.wsAgent } : {}),
       });
       let lastTransportError: DiscordGatewayTransportErrorDetails | undefined;
