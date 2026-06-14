@@ -1595,7 +1595,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("([.[].name] | unique | length) == length");
     expect(releaseWorkflow).toContain("Windows checksum manifest does not match pinned digest");
     expect(releaseWorkflow).toContain(
-      "Windows source release ${WINDOWS_NODE_TAG} is missing required asset",
+      "Windows source release ${WINDOWS_NODE_TAG} must contain exactly one required asset",
     );
     expect(releaseWorkflow.indexOf("Validate stable Windows source release")).toBeLessThan(
       releaseWorkflow.indexOf("\n  publish:\n"),
@@ -1624,7 +1624,15 @@ describe("package artifact reuse", () => {
     expect(windowsWorkflow).toContain(
       "Downloaded Windows source asset does not match pinned digest",
     );
-    expect(windowsWorkflow).not.toContain("--repo openclaw/openclaw-windows-node --json assets");
+    expect(windowsWorkflow).toContain(
+      "--repo openclaw/openclaw-windows-node --json tagName,isDraft,isPrerelease,assets,url",
+    );
+    expect(windowsWorkflow).toContain(
+      "Windows source release must contain exactly one required asset",
+    );
+    expect(windowsWorkflow).toContain(
+      "Windows source release asset digest does not match the pinned digest",
+    );
     expect(windowsWorkflow).toContain(
       "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US",
     );

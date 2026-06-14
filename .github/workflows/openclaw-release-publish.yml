@@ -217,11 +217,13 @@ jobs:
             exit 1
           fi
           for asset_name in "${required_assets[@]}"; do
-            asset_digest="$(printf '%s' "${source_json}" | jq -r --arg name "${asset_name}" '.assets[]? | select(.name == $name) | .digest // empty')"
-            if [[ -z "${asset_digest}" ]]; then
-              echo "Windows source release ${WINDOWS_NODE_TAG} is missing required asset ${asset_name}." >&2
+            asset_matches="$(printf '%s' "${source_json}" | jq -c --arg name "${asset_name}" '[.assets[]? | select(.name == $name)]')"
+            asset_match_count="$(printf '%s' "${asset_matches}" | jq 'length')"
+            if [[ "${asset_match_count}" != "1" ]]; then
+              echo "Windows source release ${WINDOWS_NODE_TAG} must contain exactly one required asset ${asset_name}; found ${asset_match_count}." >&2
               exit 1
             fi
+            asset_digest="$(printf '%s' "${asset_matches}" | jq -r '.[0].digest // empty')"
             if [[ ! "${asset_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
               echo "Windows source release ${WINDOWS_NODE_TAG} asset ${asset_name} is missing its immutable SHA-256 digest." >&2
               exit 1

@@ -277,7 +277,8 @@ vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. The helpe
   canonical OpenClaw GitHub release, then re-downloads the promoted assets and
   verifies the manifest membership and hashes. The parent verifies the current
   x64, ARM64, and checksum asset contract before publication. Direct recovery
-  also rejects stale or extra `OpenClawCompanion-*` assets. Manually dispatch
+  rejects unexpected `OpenClawCompanion-*` asset names before replacing the
+  expected contract assets with the pinned source bytes. Manually dispatch
   `Windows Node Release` only for recovery, and always pass an exact tag, never
   `latest`, plus the explicit `expected_installer_digests` JSON map from the
   approved source release. Website download links should target exact OpenClaw

@@ -278,10 +278,13 @@ export async function validateWindowsSourceRelease(tag, options = {}) {
   }
 
   const assets = WINDOWS_NODE_REQUIRED_ASSETS.map((name) => {
-    const asset = (release.assets ?? []).find((entry) => entry.name === name);
-    if (!asset) {
-      throw new Error(`Windows source release ${tag} is missing required asset ${name}`);
+    const matches = (release.assets ?? []).filter((entry) => entry.name === name);
+    if (matches.length !== 1) {
+      throw new Error(
+        `Windows source release ${tag} must contain exactly one required asset ${name}; found ${matches.length}`,
+      );
     }
+    const [asset] = matches;
     if (!SHA256_DIGEST_PATTERN.test(asset.digest ?? "")) {
       throw new Error(`Windows source release ${tag} asset ${name} is missing its SHA-256 digest`);
     }

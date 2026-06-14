@@ -141,7 +141,30 @@ describe("release candidate checklist", () => {
   it.each([
     [{ draft: true }, "must be published"],
     [{ prerelease: true }, "must not be a prerelease"],
-    [{ assets: [] }, "is missing required asset OpenClawCompanion-Setup-x64.exe"],
+    [{ tag_name: "v0.6.4" }, "Windows source release tag mismatch: expected v0.6.3, got v0.6.4"],
+    [
+      { assets: [] },
+      "must contain exactly one required asset OpenClawCompanion-Setup-x64.exe; found 0",
+    ],
+    [
+      {
+        assets: [
+          {
+            name: "OpenClawCompanion-Setup-x64.exe",
+            digest: `sha256:${"a".repeat(64)}`,
+          },
+          {
+            name: "OpenClawCompanion-Setup-x64.exe",
+            digest: `sha256:${"c".repeat(64)}`,
+          },
+          {
+            name: "OpenClawCompanion-Setup-arm64.exe",
+            digest: `sha256:${"b".repeat(64)}`,
+          },
+        ],
+      },
+      "must contain exactly one required asset OpenClawCompanion-Setup-x64.exe; found 2",
+    ],
     [
       {
         assets: [

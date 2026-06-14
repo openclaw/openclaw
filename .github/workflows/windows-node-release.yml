@@ -89,7 +89,7 @@ jobs:
             throw "Target OpenClaw release contains unexpected OpenClawCompanion assets before upload: $($unexpectedTargetCompanionAssets -join ', ')"
           }
 
-          $sourceRelease = gh release view $env:WINDOWS_NODE_TAG --repo openclaw/openclaw-windows-node --json tagName,isDraft,isPrerelease,url | ConvertFrom-Json
+          $sourceRelease = gh release view $env:WINDOWS_NODE_TAG --repo openclaw/openclaw-windows-node --json tagName,isDraft,isPrerelease,assets,url | ConvertFrom-Json
           if ($sourceRelease.tagName -ne $env:WINDOWS_NODE_TAG) {
             throw "Windows source release tag mismatch: expected $env:WINDOWS_NODE_TAG, got $($sourceRelease.tagName)"
           }
@@ -98,6 +98,15 @@ jobs:
           }
           if ($stableRelease -and $sourceRelease.isPrerelease) {
             throw "Stable OpenClaw releases require a non-prerelease Windows source release: $($sourceRelease.url)"
+          }
+          foreach ($name in $requiredInstallerNames) {
+            $sourceAssets = @($sourceRelease.assets | Where-Object name -eq $name)
+            if ($sourceAssets.Count -ne 1) {
+              throw "Windows source release must contain exactly one required asset $name; found $($sourceAssets.Count)."
+            }
+            if ([string]$sourceAssets[0].digest -ne [string]$expectedDigests[$name]) {
+              throw "Windows source release asset digest does not match the pinned digest: $name"
+            }
           }
 
       - name: Download Windows Hub release installers

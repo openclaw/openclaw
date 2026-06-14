@@ -162,8 +162,9 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   blocks publication until the canonical asset contract is present. Use direct
   `Windows Node Release` dispatch only for recovery, always with an exact tag,
   never `latest`, and the explicit `expected_installer_digests` JSON map from
-  the approved source release; recovery must also reject stale or extra
-  `OpenClawCompanion-*` target assets.
+  the approved source release. Recovery rejects unexpected
+  `OpenClawCompanion-*` target asset names, then replaces the expected contract
+  assets with the pinned source bytes.
 - Website Windows Hub download links should target exact canonical
   `openclaw/openclaw/releases/download/vYYYY.M.PATCH/...` assets for the current
   stable release, or `releases/latest/download/...` only after verifying the
