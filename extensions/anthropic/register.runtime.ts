@@ -88,16 +88,6 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   ANTHROPIC_SONNET_46_MODEL_ID,
   ANTHROPIC_SONNET_46_DOT_MODEL_ID,
 ] as const;
-const ANTHROPIC_MODERN_MODEL_PREFIXES = [
-  "claude-opus-4-8",
-  "claude-opus-4.8",
-  "claude-opus-4-7",
-  "claude-opus-4.7",
-  "claude-opus-4-6",
-  "claude-opus-4.6",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4.6",
-] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",
   "OpenClaw prefers Claude CLI reuse when it is available on the host.",

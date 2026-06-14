@@ -314,16 +314,20 @@ export class ClaudeAppServerClient {
     if (!child) {
       return;
     }
-    // Graceful first: closing stdin signals the bridge's JSON-RPC reader to
-    // drain and exit on its own. Only if it has not exited after
-    // FORCE_KILL_DELAY_MS do we escalate to SIGKILL — and the timer is cleared
-    // the moment the child's "exit" fires, so a clean shutdown never reaches
-    // the force path. The signal targets the process group we ourselves spawned
-    // (negative pid; the child was started `detached` on Unix), so this only
-    // reaps our own descendant tree, never an unrelated process. SIGKILL is the
-    // last-resort reap, not the primary stop mechanism.
+    // Graceful first: close stdin and send SIGTERM to the process group we
+    // spawned. SIGKILL only runs after FORCE_KILL_DELAY_MS if the bridge ignores
+    // the normal shutdown path.
     child.stdin?.end();
     child.stdin?.destroy();
+    try {
+      if (child.pid && process.platform !== "win32") {
+        process.kill(-child.pid, "SIGTERM");
+      } else {
+        child.kill("SIGTERM");
+      }
+    } catch {
+      /* ignore */
+    }
     const forceKill = setTimeout(() => {
       try {
         if (child.pid && process.platform !== "win32") {
