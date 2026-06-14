@@ -22,7 +22,7 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "./reply-dispatcher-runtime-api.js";
-import { getOptionalFeishuRuntime } from "./runtime.js";
+import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
@@ -117,6 +117,7 @@ type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
   runtime: RuntimeEnv;
+  channel: ReturnType<typeof getFeishuRuntime>["channel"];
   chatId: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
@@ -136,10 +137,7 @@ type CreateFeishuReplyDispatcherParams = {
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
-  const core = getOptionalFeishuRuntime();
-  if (!core) {
-    throw new Error("Feishu runtime not initialized — cannot create reply dispatcher");
-  }
+  const core = { channel: params.channel } as ReturnType<typeof getFeishuRuntime>;
   const {
     cfg,
     agentId,
