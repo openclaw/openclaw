@@ -14,7 +14,6 @@ import {
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
 } from "../run-wait.js";
-import type { TerminationCondition } from "../termination.js";
 import { runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
@@ -84,8 +83,6 @@ export async function runSessionsSendA2AFlow(params: {
   baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
-  /** Composable stop condition. Defaults to MaxIterations(maxPingPongTurns). */
-  termination?: TerminationCondition;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   try {
@@ -153,9 +150,6 @@ export async function runSessionsSendA2AFlow(params: {
       let currentSessionKey = params.requesterSessionKey;
       let nextSessionKey = params.targetSessionKey;
       let incomingMessage = latestReply;
-      const termination = params.termination;
-      const loopStartedAt = Date.now();
-      termination?.reset();
       for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
         const currentRole =
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
@@ -184,12 +178,6 @@ export async function runSessionsSendA2AFlow(params: {
         }
         latestReply = replyText;
         incomingMessage = replyText;
-        if (termination) {
-          const [stop] = await termination.check({ turn, replyText, startedAt: loopStartedAt });
-          if (stop) {
-            break;
-          }
-        }
         const swap = currentSessionKey;
         currentSessionKey = nextSessionKey;
         nextSessionKey = swap;
