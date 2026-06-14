@@ -51,6 +51,7 @@ import {
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 import {
+  buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
@@ -101,6 +102,14 @@ function filterStringArray(value: unknown): string[] | undefined {
 }
 
 function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
+  const commandOutput = buildCommandOutputFromToolResultEvent(evt);
+  if (commandOutput) {
+    return (
+      commandOutput.status === "failed" ||
+      commandOutput.status === "error" ||
+      (typeof commandOutput.exitCode === "number" && commandOutput.exitCode !== 0)
+    );
+  }
   if (evt.stream !== "item" && evt.stream !== "command_output") {
     return false;
   }
@@ -118,7 +127,7 @@ function canForwardFailedFollowupProgressEvent(
   evt: FollowupAgentEvent,
   opts?: GetReplyOptions,
 ): boolean {
-  if (evt.stream === "command_output") {
+  if (evt.stream === "command_output" || buildCommandOutputFromToolResultEvent(evt)) {
     return typeof opts?.onCommandOutput === "function";
   }
   if (evt.stream !== "item") {
@@ -151,6 +160,8 @@ async function forwardFollowupProgressEvent(params: {
     const name = readStringValue(evt.data.name);
     if (phase === "start" || phase === "update") {
       await opts?.onToolStart?.({
+        itemId: readStringValue(evt.data.itemId),
+        toolCallId: readStringValue(evt.data.toolCallId),
         name,
         phase,
         args:
@@ -159,6 +170,10 @@ async function forwardFollowupProgressEvent(params: {
             : undefined,
         detailMode: params.detailMode,
       });
+    }
+    const commandOutput = buildCommandOutputFromToolResultEvent(evt);
+    if (commandOutput) {
+      await opts?.onCommandOutput?.(commandOutput);
     }
   }
 
@@ -169,6 +184,7 @@ async function forwardFollowupProgressEvent(params: {
   if (evt.stream === "item" && !suppressItemChannelProgress) {
     await opts?.onItemEvent?.({
       itemId: readStringValue(evt.data.itemId),
+      toolCallId: readStringValue(evt.data.toolCallId),
       kind: readStringValue(evt.data.kind),
       title: readStringValue(evt.data.title),
       name: readStringValue(evt.data.name),

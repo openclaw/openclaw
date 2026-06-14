@@ -2383,6 +2383,37 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("replaces Telegram command progress items with matching command output", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({
+        itemId: "tool:call-1",
+        toolCallId: "call-1",
+        kind: "command",
+        name: "exec",
+        progressText: "install dependencies",
+      });
+      await replyOptions?.onCommandOutput?.({
+        itemId: "tool:call-1-output",
+        toolCallId: "call-1",
+        phase: "end",
+        name: "exec",
+        exitCode: 0,
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    const lastUpdate = answerDraftStream.update.mock.calls.at(-1)?.[0];
+    expect(lastUpdate).toContain("completed");
+    expect(lastUpdate).not.toContain("install dependencies");
+  });
+
   it("sends trailing verbose status after a progress-mode final answer", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(

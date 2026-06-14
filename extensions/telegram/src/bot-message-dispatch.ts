@@ -25,11 +25,11 @@ import {
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   formatChannelProgressDraftLine,
-  formatChannelProgressDraftLineForEntry,
   resolveChannelStreamingBlockEnabled,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -2276,10 +2276,12 @@ export const dispatchTelegramMessage = async ({
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(
-                      formatChannelProgressDraftLineForEntry(
+                      buildChannelProgressDraftLineForEntry(
                         telegramCfg,
                         {
                           event: "tool",
+                          itemId: payload.itemId,
+                          toolCallId: payload.toolCallId,
                           name: toolName,
                           phase: payload.phase,
                           args: payload.args,
@@ -2307,6 +2309,7 @@ export const dispatchTelegramMessage = async ({
                       buildChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "item",
                         itemId: payload.itemId,
+                        toolCallId: payload.toolCallId,
                         itemKind: payload.kind,
                         title: payload.title,
                         name: payload.name,
@@ -2352,8 +2355,10 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushStreamToolProgress(
-                      formatChannelProgressDraftLine({
+                      buildChannelProgressDraftLine({
                         event: "command-output",
+                        itemId: payload.itemId,
+                        toolCallId: payload.toolCallId,
                         phase: payload.phase,
                         title: payload.title,
                         name: payload.name,
@@ -2367,8 +2372,10 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushStreamToolProgress(
-                      formatChannelProgressDraftLine({
+                      buildChannelProgressDraftLine({
                         event: "patch",
+                        itemId: payload.itemId,
+                        toolCallId: payload.toolCallId,
                         phase: payload.phase,
                         title: payload.title,
                         name: payload.name,
