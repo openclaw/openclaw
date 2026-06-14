@@ -164,4 +164,67 @@ describe("TTS core", () => {
     expect(result.summary).not.toContain("<thinking>");
     expect(result.summary).not.toContain("Internal reasoning");
   });
+
+  it("strips malformed reasoning tags from summarization output", async () => {
+    const config = {
+      provider: "openai",
+      model: {
+        id: "gpt-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    } as unknown as ResolvedTtsConfig;
+    const testUsage: Usage = {
+      input: 10,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 30,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const auth = { kind: "api-key" as const, apiKey: "test-key" };
+
+    // Test malformed/unclosed thinking tag
+    const assistant1 = {
+      role: "assistant" as const,
+      content: [{ type: "text", text: "<think>Unclosed reasoning block.The answer is 42." }],
+      api: "openai-completions",
+      provider: "openai",
+      model: "gpt-5.5",
+      stopReason: "stop",
+      usage: testUsage,
+      timestamp: Date.now(),
+    } satisfies AssistantMessage;
+
+    const result1 = await summarizeText(
+      {
+        text: "What is the answer?",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      },
+      {
+        completeSimple: vi.fn(async () => assistant1),
+        prepareSimpleCompletionModel: vi.fn(
+          async () =>
+            ({
+              model: {
+                id: "gpt-5.5",
+                api: "openai-completions",
+                provider: "openai",
+                baseUrl: "https://api.openai.com/v1",
+              },
+              auth,
+            }) as unknown as PreparedSimpleCompletionModel,
+        ),
+        requireApiKey: vi.fn(() => "key"),
+      },
+    );
+
+    expect(result1.summary).toBe("The answer is 42.");
+    expect(result1.summary).not.toContain("<think>");
+    expect(result1.summary).not.toContain("Unclosed reasoning");
+  });
 });
