@@ -1657,15 +1657,14 @@ describe("workboard controller", () => {
   it("allows automatic reload after an initial load is invalidated by a write", async () => {
     const host = {};
     const initialList = createDeferred<unknown>();
+    const reloadedList = createDeferred<unknown>();
     const movedCard = { ...sampleCard, title: "Moved during initial load" };
     const reloadedCard = { ...sampleCard, title: "Reloaded canonical card" };
     let listCalls = 0;
     const client = createClient((method) => {
       if (method === "workboard.cards.list") {
         listCalls += 1;
-        return listCalls === 1
-          ? initialList.promise
-          : { cards: [reloadedCard], statuses: ["todo", "done"] };
+        return listCalls === 1 ? initialList.promise : reloadedList.promise;
       }
       if (method === "workboard.cards.move") {
         return { card: movedCard };
@@ -1685,16 +1684,22 @@ describe("workboard controller", () => {
       status: "review",
       position: 2000,
     });
-    initialList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
-    await initialLoad;
 
     const state = getWorkboardState(host);
     expect(state.loaded).toBe(false);
     expect(state.loadAttempted).toBe(false);
+    expect(state.loading).toBe(false);
 
-    await loadWorkboard({ host, client: client as never });
+    const reload = loadWorkboard({ host, client: client as never });
+    expect(listCalls).toBe(2);
+    reloadedList.resolve({ cards: [reloadedCard], statuses: ["todo", "done"] });
+    await reload;
     expect(state.cards).toMatchObject([{ title: "Reloaded canonical card" }]);
     expect(state.loaded).toBe(true);
+
+    initialList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await initialLoad;
+    expect(state.cards).toMatchObject([{ title: "Reloaded canonical card" }]);
   });
 
   it("does not clear draft-save loading state from an invalidated refresh", async () => {

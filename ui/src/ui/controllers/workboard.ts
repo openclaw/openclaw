@@ -514,8 +514,18 @@ function invalidateWorkboardLoads(host: WorkboardHost) {
   if (state) {
     setWorkboardLifecycleTasksPrepared(state, false, { host });
     resetWorkboardLifecycleTaskConfirmations(state);
+    if (workboardLoadPromises.has(host)) {
+      if (!state.draftSaving) {
+        state.loading = false;
+      }
+      if (!state.loaded) {
+        state.loadAttempted = false;
+      }
+    }
   }
   nextWorkboardLoadGeneration(host);
+  workboardLoadPromises.delete(host);
+  workboardLoadTokens.delete(host);
   nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
