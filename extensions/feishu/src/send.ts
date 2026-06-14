@@ -9,6 +9,10 @@ import {
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import {
+  redactFeishuAuditSensitiveText,
+  redactFeishuAuditSensitiveValue,
+} from "./audit-redaction.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -548,7 +552,7 @@ export function buildFeishuPostMessagePayload(params: { messageText: string }): 
   content: string;
   msgType: string;
 } {
-  const { messageText } = params;
+  const messageText = redactFeishuAuditSensitiveText(params.messageText);
   return {
     content: JSON.stringify({
       zh_cn: {
@@ -622,7 +626,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
     params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
-  const content = JSON.stringify(card);
+  const content = JSON.stringify(redactFeishuAuditSensitiveValue(card));
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
   return sendReplyOrFallbackDirect(client, {
@@ -659,7 +663,7 @@ export async function editMessageFeishu(params: {
   const client = createFeishuClient(account);
 
   if (card) {
-    const content = JSON.stringify(card);
+    const content = JSON.stringify(redactFeishuAuditSensitiveValue(card));
     const response = await client.im.message.patch({
       path: { message_id: messageId },
       data: { content },
@@ -703,7 +707,7 @@ export async function updateCardFeishu(params: {
   }
 
   const client = createFeishuClient(account);
-  const content = JSON.stringify(card);
+  const content = JSON.stringify(redactFeishuAuditSensitiveValue(card));
 
   const response = await client.im.message.patch({
     path: { message_id: messageId },
@@ -730,7 +734,7 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
       elements: [
         {
           tag: "markdown",
-          content: text,
+          content: redactFeishuAuditSensitiveText(text),
         },
       ],
     },
@@ -764,10 +768,15 @@ export function buildStructuredCard(
     note?: string;
   },
 ): Record<string, unknown> {
-  const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
+  const elements: Record<string, unknown>[] = [
+    { tag: "markdown", content: redactFeishuAuditSensitiveText(text) },
+  ];
   if (options?.note) {
     elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
+    elements.push({
+      tag: "markdown",
+      content: `<font color='grey'>${redactFeishuAuditSensitiveText(options.note)}</font>`,
+    });
   }
   const card: Record<string, unknown> = {
     schema: "2.0",
@@ -776,7 +785,10 @@ export function buildStructuredCard(
   };
   if (options?.header) {
     card.header = {
-      title: { tag: "plain_text", content: options.header.title },
+      title: {
+        tag: "plain_text",
+        content: redactFeishuAuditSensitiveText(options.header.title),
+      },
       template: resolveFeishuCardTemplate(options.header.template) ?? "blue",
     };
   }
