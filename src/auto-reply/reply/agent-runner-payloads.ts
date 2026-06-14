@@ -295,7 +295,11 @@ export async function buildReplyPayloads(params: {
         originatingTo,
         originatingThreadId: params.originatingThreadId,
         replyToId: payload.replyToId,
-        replyToIsExplicit: Boolean(payload.replyToTag || payload.replyToCurrent),
+        replyToIsExplicit: Boolean(
+          getReplyPayloadMetadata(payload)?.replyToIdExplicit ||
+          payload.replyToTag ||
+          payload.replyToCurrent,
+        ),
         accountId,
       });
       if (!decision.shouldDedupePayloads) {

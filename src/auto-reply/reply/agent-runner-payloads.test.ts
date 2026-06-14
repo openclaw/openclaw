@@ -56,7 +56,13 @@ describe("buildReplyPayloads media filter integration", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "slack" }),
             threading: {
-              resolveReplyTransport: ({ threadId, replyToId }) => ({
+              resolveReplyTransport: ({
+                threadId,
+                replyToId,
+              }: {
+                threadId?: string | number | null;
+                replyToId?: string | null;
+              }) => ({
                 replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
                 threadId: null,
               }),
@@ -69,7 +75,13 @@ describe("buildReplyPayloads media filter integration", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "mattermost" }),
             threading: {
-              resolveReplyTransport: ({ threadId, replyToId }) => {
+              resolveReplyTransport: ({
+                threadId,
+                replyToId,
+              }: {
+                threadId?: string | number | null;
+                replyToId?: string | null;
+              }) => {
                 const resolvedThreadId =
                   replyToId ?? (threadId != null ? String(threadId) : undefined);
                 return {
@@ -513,7 +525,7 @@ describe("buildReplyPayloads media filter integration", () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       config: {},
-      payloads: [{ text: "thread reply", replyToId: "999.000", replyToTag: true }],
+      payloads: [{ text: "thread reply", replyToId: "999.000" }],
       replyToMode: "all",
       replyToChannel: "slack",
       currentMessageId: "111.222",

@@ -387,6 +387,7 @@ function createMockReplyOperation(): {
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
+      retainFailureUntilComplete: vi.fn(),
       complete: vi.fn(),
       completeThen: vi.fn((afterClear: () => void) => afterClear()),
       fail: failMock,

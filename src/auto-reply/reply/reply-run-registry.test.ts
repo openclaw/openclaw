@@ -14,6 +14,7 @@ import {
   isReplyRunAbortableForCompaction,
   queueReplyRunMessage,
   replyRunRegistry,
+  runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
@@ -137,6 +138,41 @@ describe("reply run registry", () => {
 
     expect(operation.result).toEqual({ kind: "completed" });
     expect(afterClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains failed operations until final delivery completes", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-failed",
+      resetTriggered: false,
+    });
+    const afterClear = vi.fn();
+    operation.retainFailureUntilComplete();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    operation.fail("run_failed", new Error("provider failed"));
+
+    expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+    expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+    expect(afterClear).not.toHaveBeenCalled();
+
+    operation.complete();
+
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+    expect(afterClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("force-clears retained failed operations", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-retained",
+      resetTriggered: false,
+    });
+    operation.retainFailureUntilComplete();
+
+    expect(forceClearReplyRunBySessionId("session-retained", new Error("stuck"))).toBe(true);
+    expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
   });
 
   it("force-clears a running operation after abort without backend cleanup", async () => {

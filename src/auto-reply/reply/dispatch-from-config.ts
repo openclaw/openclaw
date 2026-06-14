@@ -1429,6 +1429,7 @@ export async function dispatchReplyFromConfig(
       return { status: "busy" };
     }
     dispatchReplyOperation = admission.operation;
+    dispatchReplyOperation.retainFailureUntilComplete();
     dispatchAbortOperation = admission.operation;
     return { status: "ready" };
   };
@@ -1503,9 +1504,13 @@ export async function dispatchReplyFromConfig(
     }
   };
   const failDispatchReplyOperation = (error: unknown) => {
-    if (dispatchReplyOperation && !dispatchReplyOperation.result) {
+    if (!dispatchReplyOperation) {
+      return;
+    }
+    if (!dispatchReplyOperation.result) {
       dispatchReplyOperation.fail("run_failed", error);
     }
+    dispatchReplyOperation.complete();
   };
   const isDispatchOperationAborted = () => getDispatchAbortSignal()?.aborted === true;
   const isPreDispatchOperationAborted = () => getPreDispatchAbortSignal()?.aborted === true;

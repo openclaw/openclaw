@@ -120,7 +120,11 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  replyRunRegistry,
+  runAfterReplyOperationClear,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { recordReplyUsageState } from "./reply-usage-state.js";
@@ -2562,8 +2566,12 @@ export async function runReplyAgent(params: {
       );
     }
     if (shouldDrainQueuedFollowupsAfterClear) {
-      replyOperation.completeThen(drainQueuedFollowupsAfterClear);
-    } else {
+      if (providedReplyOperation) {
+        runAfterReplyOperationClear(replyOperation, drainQueuedFollowupsAfterClear);
+      } else {
+        replyOperation.completeThen(drainQueuedFollowupsAfterClear);
+      }
+    } else if (!providedReplyOperation) {
       replyOperation.complete();
     }
     blockReplyPipeline?.stop();

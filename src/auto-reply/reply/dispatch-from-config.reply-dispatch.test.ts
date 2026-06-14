@@ -25,6 +25,7 @@ let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatch
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
+let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAfterReplyOperationClear;
 let resetReplyRunRegistry: typeof import("./reply-run-registry.js").testing.resetReplyRunRegistry;
 
 function firstRuntimeLoadCall() {
@@ -56,6 +57,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     const replyRunRegistryModule = await import("./reply-run-registry.js");
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
     replyRunRegistry = replyRunRegistryModule.replyRunRegistry;
+    runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
     resetReplyRunRegistry = () => replyRunRegistryModule.testing.resetReplyRunRegistry();
   });
 
@@ -250,10 +252,15 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
   });
 
-  it("delivers a generated final reply when a queued follow-up claims the session first", async () => {
+  it("delivers a generated final reply before queued follow-up admission", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     const dispatcher = createDispatcher();
+    const deliveryOrder: string[] = [];
     let queuedOperation: ReturnType<typeof createReplyOperation> | undefined;
+    vi.mocked(dispatcher.sendFinalReply).mockImplementation(() => {
+      deliveryOrder.push("final");
+      return true;
+    });
 
     try {
       const result = await dispatchReplyFromConfig({
@@ -261,12 +268,18 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         cfg: emptyConfig,
         dispatcher,
         replyResolver: async () => {
-          expect(replyRunRegistry.get("agent:test:session")?.sessionId).toBeTruthy();
-          replyRunRegistry.get("agent:test:session")?.complete();
-          queuedOperation = createReplyOperation({
-            sessionKey: "agent:test:session",
-            sessionId: "queued-session",
-            resetTriggered: false,
+          const operation = replyRunRegistry.get("agent:test:session");
+          if (!operation) {
+            throw new Error("expected dispatch reply operation");
+          }
+          operation.fail("run_failed", new Error("provider failed"));
+          runAfterReplyOperationClear(operation, () => {
+            deliveryOrder.push("followup");
+            queuedOperation = createReplyOperation({
+              sessionKey: "agent:test:session",
+              sessionId: "queued-session",
+              resetTriggered: false,
+            });
           });
           return { text: "first reply" };
         },
@@ -275,6 +288,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(result.queuedFinal).toBe(true);
       expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
       expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "first reply" });
+      expect(deliveryOrder).toEqual(["final", "followup"]);
+      expect(replyRunRegistry.get("agent:test:session")).toBe(queuedOperation);
     } finally {
       queuedOperation?.complete();
     }

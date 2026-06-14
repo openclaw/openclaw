@@ -61,6 +61,11 @@ export type ReplyOperation = {
   updateSessionId(nextSessionId: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
+  /**
+   * Keep a failed operation active until complete() releases the session lane.
+   * Dispatch uses this while a user-visible failure payload still needs delivery.
+   */
+  retainFailureUntilComplete(): void;
   complete(): void;
   /**
    * Complete the operation, clear active-run state, then run follow-up work.
@@ -188,9 +193,35 @@ function isReplyRunCompacting(operation: ReplyOperation): boolean {
 }
 
 const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
+const afterClearCallbacksByOperation = new WeakMap<ReplyOperation, Set<() => void>>();
 
 function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
   return attachedBackendByOperation.get(operation);
+}
+
+/** Run work after an operation no longer owns its session lane. */
+export function runAfterReplyOperationClear(
+  operation: ReplyOperation,
+  afterClear: () => void,
+): void {
+  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
+    afterClear();
+    return;
+  }
+  const callbacks = afterClearCallbacksByOperation.get(operation) ?? new Set<() => void>();
+  callbacks.add(afterClear);
+  afterClearCallbacksByOperation.set(operation, callbacks);
+}
+
+function flushReplyOperationAfterClear(operation: ReplyOperation): void {
+  const callbacks = afterClearCallbacksByOperation.get(operation);
+  if (!callbacks) {
+    return;
+  }
+  afterClearCallbacksByOperation.delete(operation);
+  for (const callback of callbacks) {
+    callback();
+  }
 }
 
 function clearReplyRunState(params: { sessionKey: string; sessionId: string }): void {
@@ -251,6 +282,7 @@ export function createReplyOperation(params: {
   let phase: ReplyOperationPhase = "queued";
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
+  let retainFailureUntilComplete = false;
 
   const clearState = () => {
     if (stateCleared) {
@@ -262,6 +294,7 @@ export function createReplyOperation(params: {
       sessionKey,
       sessionId: currentSessionId,
     });
+    flushReplyOperationAfterClear(operation);
   };
 
   const abortInternally = (reason?: unknown) => {
@@ -370,6 +403,9 @@ export function createReplyOperation(params: {
         attachedBackendByOperation.delete(operation);
       }
     },
+    retainFailureUntilComplete() {
+      retainFailureUntilComplete = true;
+    },
     complete() {
       if (!result) {
         result = { kind: "completed" };
@@ -378,15 +414,17 @@ export function createReplyOperation(params: {
       clearState();
     },
     completeThen(afterClear) {
+      runAfterReplyOperationClear(operation, afterClear);
       operation.complete();
-      afterClear();
     },
     fail(code, cause) {
       if (!result) {
         result = { kind: "failed", code, cause };
         phase = "failed";
       }
-      clearState();
+      if (!retainFailureUntilComplete) {
+        clearState();
+      }
     },
     abortByUser() {
       const phaseBeforeAbort = phase;
@@ -560,6 +598,7 @@ export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown
     return false;
   }
   operation.fail("run_failed", cause);
+  operation.complete();
   return true;
 }
 
