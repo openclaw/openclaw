@@ -228,6 +228,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       .run(excess);
   }
 
+  private upsertEmbeddingCacheEntries(
+    entries: Array<{ hash: string; embedding: number[] }>,
+    provider: { id: string; model: string } | null = this.provider,
+  ): void {
+    upsertMemoryEmbeddingCache({
+      db: this.db,
+      enabled: this.cache.enabled,
+      provider,
+      providerKey: this.providerKey,
+      entries,
+      tableName: EMBEDDING_CACHE_TABLE,
+    });
+    if (this.embeddingCacheMirrorDb && this.embeddingCacheMirrorDb !== this.db) {
+      upsertMemoryEmbeddingCache({
+        db: this.embeddingCacheMirrorDb,
+        enabled: this.cache.enabled,
+        provider,
+        providerKey: this.providerKey,
+        entries,
+        tableName: EMBEDDING_CACHE_TABLE,
+      });
+    }
+  }
+
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
     if (chunks.length === 0) {
       return [];
@@ -271,14 +295,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       }
       cursor += batch.length;
     }
-    upsertMemoryEmbeddingCache({
-      db: this.db,
-      enabled: this.cache.enabled,
-      provider: this.provider,
-      providerKey: this.providerKey,
-      entries: toCache,
-      tableName: EMBEDDING_CACHE_TABLE,
-    });
+    this.upsertEmbeddingCacheEntries(toCache);
     return embeddings;
   }
 
@@ -354,14 +371,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       embeddings[item.index] = embedding;
       toCache.push({ hash: item.chunk.hash, embedding });
     }
-    upsertMemoryEmbeddingCache({
-      db: this.db,
-      enabled: this.cache.enabled,
-      provider,
-      providerKey: this.providerKey,
-      entries: toCache,
-      tableName: EMBEDDING_CACHE_TABLE,
-    });
+    this.upsertEmbeddingCacheEntries(toCache, provider);
     return embeddings;
   }
 
