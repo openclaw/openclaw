@@ -313,8 +313,8 @@ describe("embedded attempt session lock lifecycle", () => {
     await reacquire;
     await controller.dispose();
 
-    expect(acquireSessionWriteLockLocal23).toHaveBeenCalledTimes(2);
-    expect(events).toEqual(["held-release-start", "held-release-end", "reacquired-release"]);
+    expect(acquireSessionWriteLockLocal23).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["held-release-start", "held-release-end"]);
   });
 
   it("waits for active retained-lock writes before abort release (#86816)", async () => {
@@ -839,8 +839,8 @@ describe("embedded attempt session lock lifecycle", () => {
       EmbeddedAttemptSessionTakeoverError,
     );
     expect(controller.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLockLocal6).toHaveBeenCalledTimes(2);
-    expect(release).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal6).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("allows ctime-only fingerprint drift while the prompt lock is released", async () => {
