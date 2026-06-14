@@ -282,8 +282,21 @@ export function stripLeadingInboundMetadata(text: string): string {
     return "";
   }
 
+  const strippedDeliveryHint = isMessageToolDeliveryHintLine(lines[index]);
+  while (index < lines.length && isMessageToolDeliveryHintLine(lines[index])) {
+    index++;
+    while (index < lines.length && lines[index] === "") {
+      index++;
+    }
+  }
+  if (index >= lines.length) {
+    return "";
+  }
+
   if (!isInboundMetaSentinelLine(lines[index])) {
-    const strippedNoLeading = stripTrailingUntrustedContextSuffix(lines);
+    const strippedNoLeading = stripTrailingUntrustedContextSuffix(
+      strippedDeliveryHint ? lines.slice(index) : lines,
+    );
     return strippedNoLeading.join("\n");
   }
 
