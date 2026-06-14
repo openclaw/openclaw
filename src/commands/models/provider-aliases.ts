@@ -15,6 +15,8 @@ type ProviderAliasSource = {
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
 };
 
+type SourcePeerPlugin = Pick<PluginManifestRecord, "id" | "origin" | "rootDir">;
+
 const sourcePeerModelCatalogCache = new Map<string, PluginManifestModelCatalog | null>();
 
 function listManifestPlugins(params: ProviderAliasSource): readonly PluginManifestRecord[] {
@@ -26,9 +28,36 @@ function listManifestPlugins(params: ProviderAliasSource): readonly PluginManife
   );
 }
 
-function resolveSourcePeerPluginRoot(
-  plugin: Pick<PluginManifestRecord, "id" | "origin" | "rootDir">,
-): string | undefined {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readPluginModelCatalog(
+  plugin: PluginManifestRecord,
+): PluginManifestModelCatalog | undefined {
+  try {
+    return plugin.modelCatalog;
+  } catch {
+    return undefined;
+  }
+}
+
+function readSourcePeerPlugin(plugin: PluginManifestRecord): SourcePeerPlugin | undefined {
+  try {
+    if (
+      typeof plugin.id !== "string" ||
+      typeof plugin.origin !== "string" ||
+      typeof plugin.rootDir !== "string"
+    ) {
+      return undefined;
+    }
+    return { id: plugin.id, origin: plugin.origin, rootDir: plugin.rootDir };
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSourcePeerPluginRoot(plugin: SourcePeerPlugin): string | undefined {
   if (plugin.origin !== "bundled") {
     return undefined;
   }
@@ -49,7 +78,7 @@ function resolveSourcePeerPluginRoot(
 }
 
 function loadSourcePeerModelCatalog(
-  plugin: Pick<PluginManifestRecord, "id" | "origin" | "rootDir">,
+  plugin: SourcePeerPlugin,
 ): PluginManifestModelCatalog | undefined {
   const cacheKey = path.resolve(plugin.rootDir);
   const cached = sourcePeerModelCatalogCache.get(cacheKey);
@@ -73,17 +102,64 @@ function loadSourcePeerModelCatalog(
   return modelCatalog ?? undefined;
 }
 
+function loadSourcePeerModelCatalogForPlugin(
+  plugin: PluginManifestRecord,
+): PluginManifestModelCatalog | undefined {
+  const sourcePeerPlugin = readSourcePeerPlugin(plugin);
+  return sourcePeerPlugin ? loadSourcePeerModelCatalog(sourcePeerPlugin) : undefined;
+}
+
+function readModelCatalogAliasEntries(
+  modelCatalog: PluginManifestModelCatalog | undefined,
+): readonly (readonly [string, Record<string, unknown>])[] {
+  let aliases: unknown;
+  try {
+    aliases = modelCatalog?.aliases;
+  } catch {
+    return [];
+  }
+  if (!isRecord(aliases)) {
+    return [];
+  }
+  let keys: string[];
+  try {
+    keys = Object.keys(aliases);
+  } catch {
+    return [];
+  }
+  const entries: [string, Record<string, unknown>][] = [];
+  for (const key of keys) {
+    try {
+      const target = aliases[key];
+      if (isRecord(target)) {
+        entries.push([key, target]);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
 function hasModelCatalogAliases(modelCatalog: PluginManifestModelCatalog | undefined): boolean {
-  return Object.keys(modelCatalog?.aliases ?? {}).length > 0;
+  return readModelCatalogAliasEntries(modelCatalog).length > 0;
+}
+
+function readAliasTargetProvider(target: Record<string, unknown>): string {
+  try {
+    return typeof target.provider === "string" ? target.provider : "";
+  } catch {
+    return "";
+  }
 }
 
 function collectModelCatalogAliases(
   aliases: Map<string, string>,
   modelCatalog: PluginManifestModelCatalog | undefined,
 ): void {
-  for (const [aliasProvider, target] of Object.entries(modelCatalog?.aliases ?? {})) {
+  for (const [aliasProvider, target] of readModelCatalogAliasEntries(modelCatalog)) {
     const alias = normalizeProviderId(aliasProvider);
-    const provider = normalizeProviderId(target.provider);
+    const provider = normalizeProviderId(readAliasTargetProvider(target));
     if (alias && provider) {
       aliases.set(alias, provider);
     }
@@ -93,9 +169,10 @@ function collectModelCatalogAliases(
 function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string, string> {
   const aliases = new Map<string, string>();
   for (const plugin of listManifestPlugins(params)) {
-    collectModelCatalogAliases(aliases, plugin.modelCatalog);
-    if (!hasModelCatalogAliases(plugin.modelCatalog) && plugin.origin === "bundled") {
-      collectModelCatalogAliases(aliases, loadSourcePeerModelCatalog(plugin));
+    const modelCatalog = readPluginModelCatalog(plugin);
+    collectModelCatalogAliases(aliases, modelCatalog);
+    if (!hasModelCatalogAliases(modelCatalog)) {
+      collectModelCatalogAliases(aliases, loadSourcePeerModelCatalogForPlugin(plugin));
     }
   }
   return aliases;
