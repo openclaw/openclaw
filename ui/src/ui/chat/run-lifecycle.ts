@@ -296,6 +296,9 @@ export function reconcileChatRunFromSessionRow(
   if (!host.chatRunId && host.chatStream == null) {
     return false;
   }
+  if (row.hasActiveRun === true) {
+    return false;
+  }
   if (isSessionRunActive(row)) {
     return false;
   }
