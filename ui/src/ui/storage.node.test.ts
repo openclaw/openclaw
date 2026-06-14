@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
+  loadLocalAssistantIdentity,
   loadLocalUserIdentity,
   loadSettings,
+  saveLocalAssistantIdentity,
   saveLocalUserIdentity,
   saveSettings,
 } from "./storage.ts";
@@ -678,5 +680,72 @@ describe("loadSettings default gateway URL derivation", () => {
       avatar: null,
     });
     expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
+  });
+});
+
+describe("loadLocalAssistantIdentity / saveLocalAssistantIdentity", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("scopes avatar override to agent when agentId is provided", () => {
+    saveLocalAssistantIdentity({ avatar: "data:img/main.png" }, "main");
+    saveLocalAssistantIdentity({ avatar: "data:img/stockclaw.png" }, "stockclaw");
+
+    expect(loadLocalAssistantIdentity("main").avatar).toBe("data:img/main.png");
+    expect(loadLocalAssistantIdentity("stockclaw").avatar).toBe("data:img/stockclaw.png");
+  });
+
+  it("uses unscoped key when agentId is not provided (backward compat)", () => {
+    saveLocalAssistantIdentity({ avatar: "data:img/legacy.png" });
+
+    expect(loadLocalAssistantIdentity().avatar).toBe("data:img/legacy.png");
+    expect(loadLocalAssistantIdentity(null).avatar).toBe("data:img/legacy.png");
+    expect(localStorage.getItem("openclaw.control.assistant.v1")).toBe(
+      '{"avatar":"data:img/legacy.png"}',
+    );
+  });
+
+  it("migrates legacy unscoped value to scoped key on first access", () => {
+    // Simulate a user who set an avatar before this fix
+    localStorage.setItem(
+      "openclaw.control.assistant.v1",
+      JSON.stringify({ avatar: "data:img/legacy.png" }),
+    );
+
+    // First access with agentId should read legacy and migrate
+    const result = loadLocalAssistantIdentity("main");
+    expect(result.avatar).toBe("data:img/legacy.png");
+
+    // Legacy key should be removed after migration
+    expect(localStorage.getItem("openclaw.control.assistant.v1")).toBeNull();
+
+    // Scoped key should now have the migrated value
+    expect(JSON.parse(localStorage.getItem("openclaw.control.assistant.v1:main") ?? "{}")).toEqual({
+      avatar: "data:img/legacy.png",
+    });
+  });
+
+  it("clears scoped avatar when setting null", () => {
+    saveLocalAssistantIdentity({ avatar: "data:img/main.png" }, "main");
+    expect(loadLocalAssistantIdentity("main").avatar).toBe("data:img/main.png");
+
+    saveLocalAssistantIdentity({ avatar: null }, "main");
+    expect(loadLocalAssistantIdentity("main").avatar).toBeNull();
+    expect(localStorage.getItem("openclaw.control.assistant.v1:main")).toBeNull();
+  });
+
+  it("does not migrate empty legacy value", () => {
+    localStorage.setItem("openclaw.control.assistant.v1", JSON.stringify({ avatar: null }));
+
+    const result = loadLocalAssistantIdentity("main");
+    expect(result.avatar).toBeNull();
+    // Legacy key should still be there since migration only happens for non-null values
+    expect(localStorage.getItem("openclaw.control.assistant.v1")).toBe('{"avatar":null}');
   });
 });
