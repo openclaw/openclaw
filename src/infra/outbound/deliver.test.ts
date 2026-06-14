@@ -2180,6 +2180,48 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMediaOptions?.accountId).toBeUndefined();
   });
 
+  it("suppresses plugin media sends when the adapter returns no delivery identity", async () => {
+    const sendMedia = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "" });
+    const payloadOutcomes: unknown[] = [];
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({ channel: "matrix", messageId: "text-1" }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!explicit:example",
+      payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/cron-tts.mp3" }],
+      skipQueue: true,
+      onPayloadDeliveryOutcome: (outcome) => {
+        payloadOutcomes.push(outcome);
+      },
+    });
+
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    expect(results).toStrictEqual([]);
+    expect(payloadOutcomes).toStrictEqual([
+      {
+        index: 0,
+        status: "suppressed",
+        reason: "adapter_returned_no_identity",
+      },
+    ]);
+  });
+
   it("forwards audioAsVoice through generic plugin media delivery", async () => {
     const sendMedia = vi.fn(async () => ({
       channel: "matrix" as const,

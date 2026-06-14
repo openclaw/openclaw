@@ -1891,10 +1891,14 @@ async function deliverOutboundPayloadsCore(
               unit.overrides,
             )
           : await deliveryHandler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
+        if (!hasDeliveryResultIdentity(delivery)) {
+          continue;
+        }
         results.push(delivery);
         firstMessageId ??= delivery.messageId;
         lastMessageId = delivery.messageId;
       }
+      const deliveredResults = results.slice(beforeCount);
       await maybePinDeliveredMessage({
         handler: deliveryHandler,
         payload: effectivePayload,
@@ -1906,9 +1910,8 @@ async function deliverOutboundPayloadsCore(
         handler: deliveryHandler,
         payload: effectivePayload,
         target: deliveryTarget,
-        results: results.slice(beforeCount),
+        results: deliveredResults,
       });
-      const deliveredResults = results.slice(beforeCount);
       if (deliveredResults.length > 0) {
         recordPayloadOutcome({
           index: payloadIndex,
@@ -1924,9 +1927,9 @@ async function deliverOutboundPayloadsCore(
           }),
         );
       }
-      completeDeliveryDiagnostics(results.length - beforeCount);
+      completeDeliveryDiagnostics(deliveredResults.length);
       emitMessageSent({
-        success: true,
+        success: deliveredResults.length > 0,
         content: payloadSummary.hookContent ?? payloadSummary.text,
         messageId: lastMessageId,
       });
