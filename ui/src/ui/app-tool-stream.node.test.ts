@@ -23,6 +23,7 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     sessionKey: "main",
     chatRunId: null,
     chatStream: null,
+    chatStreamKind: null,
     chatStreamStartedAt: null,
     chatStreamSegments: [],
     toolStreamById: new Map<string, ToolStreamEntry>(),
@@ -109,6 +110,28 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("projects item preamble progress into the transient chat stream", () => {
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: TOOL_STREAM_TEST_NOW,
+      sessionKey: "main",
+      data: {
+        itemId: "msg-commentary",
+        kind: "preamble",
+        phase: "update",
+        progressText: "Checking the app-server stream",
+      },
+    });
+
+    expect(host.chatStream).toBe("Checking the app-server stream");
+    expect(host.chatStreamKind).toBe("progress");
+    expect(host.chatStreamStartedAt).toBe(TOOL_STREAM_TEST_NOW);
   });
 
   it("accepts session-scoped fallback lifecycle events when no run is active", () => {

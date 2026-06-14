@@ -110,6 +110,7 @@ export type AppViewState = {
   activityAtBottom: boolean;
   chatStreamSegments: Array<{ text: string; ts: number }>;
   chatStream: string | null;
+  chatStreamKind?: "assistant" | "progress" | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
   chatSideResult: ChatSideResult | null;

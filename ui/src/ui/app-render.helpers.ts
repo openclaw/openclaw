@@ -157,6 +157,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatStream = null;
+  state.chatStreamKind = null;
   state.chatSideResult = null;
   state.lastError = null;
   state.chatError = null;
