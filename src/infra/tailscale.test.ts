@@ -102,7 +102,9 @@ describe("tailscale helpers", () => {
     });
   });
 
-  it("does not cache malformed tailscale whois output as an empty identity", async () => {
+  it("caches malformed tailscale whois output on the short error TTL path", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     const exec = vi
       .fn()
       .mockResolvedValueOnce({ stdout: "warning: stale state\n{not json}\n" })
@@ -110,8 +112,19 @@ describe("tailscale helpers", () => {
         stdout: JSON.stringify({ UserProfile: { LoginName: "after@example.com" } }),
       });
 
-    await expect(readTailscaleWhoisIdentity("100.64.0.12", exec)).rejects.toThrow(SyntaxError);
-    await expect(readTailscaleWhoisIdentity("100.64.0.12", exec)).resolves.toEqual({
+    await expect(
+      readTailscaleWhoisIdentity("100.64.0.12", exec, { errorTtlMs: 1_000 }),
+    ).resolves.toBeNull();
+    await expect(
+      readTailscaleWhoisIdentity("100.64.0.12", exec, { errorTtlMs: 1_000 }),
+    ).resolves.toBeNull();
+    expect(exec).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1_001);
+
+    await expect(
+      readTailscaleWhoisIdentity("100.64.0.12", exec, { errorTtlMs: 1_000 }),
+    ).resolves.toEqual({
       login: "after@example.com",
     });
 

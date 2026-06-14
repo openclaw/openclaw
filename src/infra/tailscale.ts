@@ -606,22 +606,20 @@ export async function readTailscaleWhoisIdentity(
 
   const cacheTtlMs = opts?.cacheTtlMs ?? 60_000;
   const errorTtlMs = opts?.errorTtlMs ?? 5_000;
-  let stdout: string;
   try {
     const tailscaleBin = await getTailscaleBinary();
     const result = await exec(tailscaleBin, ["whois", "--json", normalized], {
       timeoutMs: opts?.timeoutMs ?? 5_000,
       maxBuffer: 200_000,
     });
-    stdout = result.stdout;
+    const parsed = result.stdout ? parsePossiblyNoisyJsonObject(result.stdout) : {};
+    const identity = parseWhoisIdentity(parsed);
+    writeCachedWhois(normalized, identity, cacheTtlMs);
+    return identity;
   } catch {
     writeCachedWhois(normalized, null, errorTtlMs);
     return null;
   }
-  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
-  const identity = parseWhoisIdentity(parsed);
-  writeCachedWhois(normalized, identity, cacheTtlMs);
-  return identity;
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
