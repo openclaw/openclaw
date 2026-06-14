@@ -68,6 +68,30 @@ describe("buildTelegramMessageContext mirror revocation", () => {
     expect(onMirrorAdmissionBlocked).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks a mirror to a DM whose access is denied (DM policy disabled) and fires onMirrorAdmissionBlocked", async () => {
+    const onMirrorAdmissionBlocked = vi.fn();
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 0,
+        chat: { id: 9_876_543_210, type: "private" as const, first_name: "User" },
+        date: 1_700_000_000,
+        text: "·",
+        from: { id: 9_876_543_210, is_bot: false, first_name: "User" },
+      },
+      dmPolicy: "disabled",
+      options: { mirror: true, forceWasMentioned: true, onMirrorAdmissionBlocked },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({ groupConfig: undefined, topicConfig: undefined }),
+    });
+
+    // DM access denial is destination revocation too: drop the context AND signal
+    // so dispatchMirror keeps the handled mark instead of falling through to the
+    // raw echo, which would otherwise leak session content to the denied DM.
+    expect(ctx).toBeNull();
+    expect(onMirrorAdmissionBlocked).toHaveBeenCalledTimes(1);
+  });
+
   it("builds a mirror context for an enabled group without firing the revocation signal", async () => {
     const onMirrorAdmissionBlocked = vi.fn();
     const ctx = await buildTelegramMessageContextForTest({
