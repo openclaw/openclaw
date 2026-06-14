@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyBaileysEncryptedStreamFinishHotfix,
   collectLegacyPluginRuntimeDepsStateRoots,
   isSourceCheckoutRoot,
   isDirectPostinstallInvocation,
@@ -861,5 +862,45 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(removePath).not.toHaveBeenCalled();
+  });
+
+  it("recognizes Baileys rc13 media hotfixes as already patched", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-baileys-hotfix-");
+    const mediaPath = path.join(
+      packageRoot,
+      "node_modules",
+      "@whiskeysockets",
+      "baileys",
+      "lib",
+      "Utils",
+      "messages-media.js",
+    );
+    const mediaSource = [
+      "import { once } from 'events';",
+      "const encryptedStream = async () => {",
+      "  const encFinishPromise = once(encFileWriteStream, 'finish');",
+      "  const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+      "  encFileWriteStream.end();",
+      "  originalFileStream?.end?.();",
+      "  await encFinishPromise;",
+      "  await originalFinishPromise;",
+      "};",
+      "const uploadWithFetch = async ({ agent }) => {",
+      "  const dispatcher = typeof agent?.dispatch === 'function' ? agent : undefined;",
+      "  return fetch(url, {",
+      "    ...(dispatcher ? { dispatcher } : {}),",
+      "    method: 'POST',",
+      "  });",
+      "};",
+      "",
+    ].join("\n");
+    await fs.mkdir(path.dirname(mediaPath), { recursive: true });
+    await fs.writeFile(mediaPath, mediaSource);
+
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
+      applied: false,
+      reason: "already_patched",
+    });
+    await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe(mediaSource);
   });
 });
