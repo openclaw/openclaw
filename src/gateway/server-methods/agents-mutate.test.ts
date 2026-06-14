@@ -372,6 +372,7 @@ type MockIdentity = {
 
 type MockAgentEntry = {
   id: string;
+  default?: boolean;
   name?: string;
   workspace?: string;
   agentDir?: string;
