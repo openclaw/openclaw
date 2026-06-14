@@ -574,7 +574,158 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settings.lastActiveSessionKey).toBe("agent:test_old:main");
   });
 
-  it("caps persisted session scopes to the most recent gateways", () => {
+  it.each([
+    "agent:main:feishu:direct:ou_123",
+    "agent:main:feishu:group:chat_456",
+    "agent:main:slack:channel:C12345",
+    "agent:main:direct:ou_123",
+    "agent:main:direct:ou_123:thread:99",
+    "agent:main:dm:12345:thread:12345:99",
+    "agent:main:telegram:direct:12345:thread:12345:99",
+    "agent:main:telegram:dm:12345:thread:12345:99",
+    "agent:main:feishu:acct_abc:direct:ou_123",
+    "agent:main:feishu:group:chat_456:thread_abc",
+    "agent:main:slack:workspace_abc:channel:C12345",
+    "agent:main:feishu:acct_abc:group:chat_456:topic_travel",
+  ])("preserves a scoped routed session selection across reload %s", async (sessionKey) => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    localStorage.setItem(
+      scopedKey,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        theme: "claw",
+        themeMode: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        chatShowToolCalls: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navWidth: 220,
+        navGroupsCollapsed: {},
+        borderRadius: 50,
+        sessionsByGateway: {
+          [gwUrl]: {
+            sessionKey,
+            lastActiveSessionKey: sessionKey,
+          },
+        },
+      }),
+    );
+
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: gwUrl,
+      sessionKey,
+      lastActiveSessionKey: sessionKey,
+    });
+  });
+
+  it.each([
+    "agent:main:feishu:direct:ou_123",
+    "agent:main:feishu:group:chat_456",
+    "agent:main:slack:channel:C12345",
+    "agent:main:direct:ou_123",
+    "agent:main:direct:ou_123:thread:99",
+    "agent:main:dm:12345:thread:12345:99",
+    "agent:main:telegram:direct:12345:thread:12345:99",
+    "agent:main:telegram:dm:12345:thread:12345:99",
+    "agent:main:feishu:acct_abc:direct:ou_123",
+    "agent:main:feishu:group:chat_456:thread_abc",
+    "agent:main:slack:workspace_abc:channel:C12345",
+    "agent:main:feishu:acct_abc:group:chat_456:topic_travel",
+  ])(
+    "falls back to main when restoring a legacy routed session selection %s",
+    async (sessionKey) => {
+      setTestLocation({
+        protocol: "https:",
+        host: "gateway.example:8443",
+        pathname: "/",
+      });
+
+      const gwUrl = expectedGatewayUrl("");
+      const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+      localStorage.setItem(
+        scopedKey,
+        JSON.stringify({
+          gatewayUrl: gwUrl,
+          theme: "claw",
+          themeMode: "system",
+          chatFocusMode: false,
+          chatShowThinking: true,
+          chatShowToolCalls: true,
+          splitRatio: 0.6,
+          navCollapsed: false,
+          navWidth: 220,
+          navGroupsCollapsed: {},
+          borderRadius: 50,
+          sessionKey,
+          lastActiveSessionKey: sessionKey,
+        }),
+      );
+
+      expect(loadSettings()).toMatchObject({
+        gatewayUrl: gwUrl,
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+      });
+    },
+  );
+
+  it.each([
+    "agent:main:subagent:direct:user-1",
+    "agent:main:subagent:worker:direct:user-1",
+    "agent:main:cron:daily:group:summary",
+    "agent:main:custom:project:direct:notes:extra",
+    "agent:main:explicit:portal-123:direct:shadow",
+    "agent:main:explicit:portal-123:dm:shadow",
+    "agent:main:explicit:portal-123:group:shadow",
+    "agent:ops-agent:dashboard:direct:subagent-orchestrator",
+  ])("preserves non-peer agent session %s", async (sessionKey) => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    localStorage.setItem(
+      scopedKey,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        theme: "claw",
+        themeMode: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        chatShowToolCalls: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navWidth: 220,
+        navGroupsCollapsed: {},
+        borderRadius: 50,
+        sessionsByGateway: {
+          [gwUrl]: {
+            sessionKey,
+            lastActiveSessionKey: sessionKey,
+          },
+        },
+      }),
+    );
+
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: gwUrl,
+      sessionKey,
+      lastActiveSessionKey: sessionKey,
+    });
+  });
+
+  it("caps persisted session scopes to the most recent gateways", async () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
