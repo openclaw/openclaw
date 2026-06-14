@@ -152,11 +152,12 @@ export function createCronPromptExecutor(params: {
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
   abortReason: () => string;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
   ) => void;
+  onLaneWait?: (info?: { waiting?: boolean }) => void;
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
@@ -304,6 +305,9 @@ export function createCronPromptExecutor(params: {
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
             : undefined,
+          // Scheduled run: keep bursty cron overloaded/rate_limit local, while
+          // still sharing real credential/account failures across auth profiles.
+          authProfileFailurePolicy: "local_transient",
           thinkLevel: params.thinkLevel,
           fastMode: resolveFastModeState({
             cfg: params.cfgWithAgentDefaults,
@@ -333,6 +337,7 @@ export function createCronPromptExecutor(params: {
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
           onExecutionPhase: params.onExecutionPhase,
+          onLaneWait: params.onLaneWait,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
         });
@@ -394,11 +399,12 @@ export async function executeCronRun(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
   isAborted: () => boolean;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
   ) => void;
+  onLaneWait?: (info?: { waiting?: boolean }) => void;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
@@ -444,6 +450,7 @@ export async function executeCronRun(params: {
     abortReason: params.abortReason,
     onExecutionStarted: params.onExecutionStarted,
     onExecutionPhase: params.onExecutionPhase,
+    onLaneWait: params.onLaneWait,
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();

@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   requestHeartbeat,
@@ -321,6 +322,8 @@ describe("plugin runtime command execution", () => {
           "updateSessionStoreEntry",
           "resolveSessionFilePath",
         ]);
+        expect(runtime.agent.session.getSessionEntry).toBe(loadSessionEntry);
+        expect(runtime.agent.session.listSessionEntries).toBe(listSessionEntries);
       },
     },
     {

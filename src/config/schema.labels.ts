@@ -967,6 +967,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.messagePrefix": "Inbound Message Prefix",
   "messages.visibleReplies": "Visible Replies",
   "messages.responsePrefix": "Outbound Response Prefix",
+  "messages.usageTemplate": "Usage Footer Template",
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
   "messages.groupChat.historyLimit": "Group History Limit",

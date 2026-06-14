@@ -1,5 +1,10 @@
 // Narrow session-store helpers for channel hot paths.
 
+import {
+  listSessionEntries,
+  loadSessionEntry as getSessionEntry,
+  readSessionUpdatedAt,
+} from "../config/sessions/session-accessor.js";
 import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 
 /**
@@ -8,6 +13,7 @@ import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/sto
  * legacy mutable whole-store shape and will remain a compatibility escape hatch.
  */
 export const loadSessionStore = loadSessionStoreImpl;
+export { getSessionEntry, listSessionEntries, readSessionUpdatedAt };
 
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 export {
@@ -22,10 +28,7 @@ export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 export {
   clearSessionStoreCacheForTest,
-  getSessionEntry,
-  listSessionEntries,
   patchSessionEntry,
-  readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   saveSessionStore,
   updateLastRoute,

@@ -1,6 +1,6 @@
 /**
  * Anthropic Vertex stream runtime. It constructs Vertex SDK clients and adapts
- * OpenClaw stream options into Anthropic Messages payload policy.
+ * OpenClaw stream options for the shared Anthropic Messages transport.
  */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -18,10 +18,6 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  applyAnthropicPayloadPolicyToParams,
-  resolveAnthropicPayloadPolicy,
-} from "openclaw/plugin-sdk/provider-stream-shared";
 import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
 
 type AnthropicVertexTransportOptions = ProviderStreamOptions & {
@@ -120,36 +116,6 @@ function resolveAnthropicVertexMaxTokens(params: {
   return requested ?? modelMax;
 }
 
-function createAnthropicVertexOnPayload(params: {
-  model: { api: string; baseUrl?: string; provider: string };
-  cacheRetention: ProviderStreamOptions["cacheRetention"] | undefined;
-  onPayload: ProviderStreamOptions["onPayload"] | undefined;
-}): NonNullable<ProviderStreamOptions["onPayload"]> {
-  const policy = resolveAnthropicPayloadPolicy({
-    provider: params.model.provider,
-    api: params.model.api,
-    baseUrl: params.model.baseUrl,
-    cacheRetention: params.cacheRetention,
-    enableCacheControl: true,
-  });
-
-  function applyPolicy(payload: unknown): unknown {
-    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-      applyAnthropicPayloadPolicyToParams(payload as Record<string, unknown>, policy);
-    }
-    return payload;
-  }
-
-  return async (payload, model) => {
-    const shapedPayload = applyPolicy(payload);
-    const nextPayload = await params.onPayload?.(shapedPayload, model);
-    if (nextPayload === undefined || nextPayload === shapedPayload) {
-      return shapedPayload;
-    }
-    return applyPolicy(nextPayload);
-  };
-}
-
 /**
  * Create a StreamFn that routes through OpenClaw's generic model stream with an
  * injected `AnthropicVertex` client.  All streaming, message conversion, and
@@ -200,11 +166,10 @@ export function createAnthropicVertexStreamFn(
       cacheRetention: options?.cacheRetention,
       sessionId: options?.sessionId,
       headers: options?.headers,
-      onPayload: createAnthropicVertexOnPayload({
-        model: transportModel,
-        cacheRetention: options?.cacheRetention,
-        onPayload: options?.onPayload,
-      }),
+      // The shared anthropic-messages transport already splits the system prompt
+      // cache boundary and budgets all cache_control markers; re-applying the
+      // payload policy here marked the uncached suffix and breached the 4-marker cap.
+      onPayload: options?.onPayload,
       maxRetryDelayMs: options?.maxRetryDelayMs,
       metadata: options?.metadata,
     };

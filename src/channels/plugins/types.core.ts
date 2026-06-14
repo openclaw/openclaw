@@ -9,7 +9,7 @@ import type {
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -396,6 +396,10 @@ export type ChannelOutboundSessionRoute = {
 };
 
 export type ChannelThreadingAdapter = {
+  matchesToolContextTarget?: (params: {
+    target: string;
+    toolContext: ChannelThreadingToolContext;
+  }) => boolean;
   resolveReplyToMode?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -436,6 +440,9 @@ export type ChannelThreadingAdapter = {
     accountId?: string | null;
     threadId?: string | number | null;
     replyToId?: string | null;
+    /** True when replyToId came from an explicit payload target or reply tag. */
+    replyToIsExplicit?: boolean;
+    replyDelivery?: ReplyDeliveryContext;
   }) => ChannelReplyTransport | null;
   resolveFocusedBinding?: (params: {
     cfg: OpenClawConfig;
@@ -461,6 +468,8 @@ export type ChannelThreadingContext = {
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
+  /** Routable messaging target when it differs from the platform-native channel id. */
+  currentMessagingTarget?: string;
   currentGraphChannelId?: string;
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
@@ -711,6 +720,9 @@ export type ChannelToolSend = {
   to: string;
   accountId?: string | null;
   threadId?: string | null;
+  /** True when the native provider send may inherit the active conversation thread. */
+  threadImplicit?: boolean;
+  threadSuppressed?: boolean;
 };
 
 export type ChannelMessagePreparedSendPayloadContext = {
@@ -754,6 +766,11 @@ export type ChannelMessageActionAdapter = {
     toolContext?: ChannelThreadingToolContext;
   }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
+  /** Recover the actual resolved send route from a successful action result. */
+  extractToolSendResult?: (params: {
+    result: unknown;
+    send: ChannelToolSend;
+  }) => ChannelToolSend | null;
   /**
    * Translate generic `message(action=send)` arguments into the payload core
    * should persist, retry, recover, and ack. Return null to keep the legacy

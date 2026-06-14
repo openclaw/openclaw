@@ -147,6 +147,7 @@ function buildSyntheticMessageEvent(
     message: {
       message_id: `card-action-${event.token}`,
       ...(replyTargetMessageId ? { reply_target_message_id: replyTargetMessageId } : {}),
+      ...(replyTargetMessageId ? { typing_target_message_id: replyTargetMessageId } : {}),
       ...(!replyTargetMessageId ? { suppress_reply_target: true } : {}),
       chat_id: event.context.chat_id || event.operator.open_id,
       chat_type: chatType,

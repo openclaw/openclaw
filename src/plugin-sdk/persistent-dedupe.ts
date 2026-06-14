@@ -104,6 +104,8 @@ export type PersistentDedupe = {
   checkAndRecord: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
   /** Checks memory/disk recency without recording a new timestamp. */
   hasRecent: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Removes a recorded key from process memory and persisted storage. */
+  forget: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
   /** Loads recent disk entries into memory for one namespace and returns the loaded count. */
   warmup: (namespace?: string, onError?: (error: unknown) => void) => Promise<number>;
   /** Clears only process-local memory; persisted namespace files are left intact. */
@@ -154,6 +156,8 @@ export type ClaimableDedupe = {
   ) => void;
   /** Checks whether the key is recent without claiming or committing it. */
   hasRecent: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Removes an active or committed key from memory and persisted storage when supported. */
+  forget?: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
   /** Warms persistent storage into memory when configured; memory-only guards return zero. */
   warmup: (namespace?: string, onError?: (error: unknown) => void) => Promise<number>;
   /** Clears process-local caches and in-memory persistent state. */
@@ -556,9 +560,30 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     return hasRecentInner(trimmed, namespace, scopedKey, now, onDiskError);
   }
 
+  async function forget(
+    key: string,
+    dedupeOptions?: PersistentDedupeCheckOptions,
+  ): Promise<boolean> {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      return false;
+    }
+    const namespace = resolveNamespace(dedupeOptions?.namespace);
+    const scopedKey = resolveScopedKey(namespace, trimmed);
+    memory.delete(scopedKey);
+
+    try {
+      return getStore(namespace).delete(resolveEntryKey(trimmed));
+    } catch (error) {
+      (dedupeOptions?.onDiskError ?? options.onDiskError)?.(error);
+      return false;
+    }
+  }
+
   return {
     checkAndRecord,
     hasRecent,
+    forget,
     warmup,
     clearMemory: () => memory.clear(),
     memorySize: () => memory.size(),
@@ -570,7 +595,9 @@ function createReleasedClaimError(scopedKey: string): Error {
 }
 
 /** Create a claim/commit/release dedupe guard backed by memory and optional persistent storage. */
-export function createClaimableDedupe(options: ClaimableDedupeOptions): ClaimableDedupe {
+export function createClaimableDedupe(
+  options: ClaimableDedupeOptions,
+): ClaimableDedupe & Required<Pick<ClaimableDedupe, "forget">> {
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const memoryMaxSize = resolveNonNegativeIntegerOption(options.memoryMaxSize, 0);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
@@ -620,6 +647,26 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
       return persistent.hasRecent(trimmed, dedupeOptions);
     }
     return memory.peek(scopedKey, dedupeOptions?.now);
+  }
+
+  async function forget(
+    key: string,
+    dedupeOptions?: PersistentDedupeCheckOptions,
+  ): Promise<boolean> {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      return false;
+    }
+    const namespace = resolveNamespace(dedupeOptions?.namespace);
+    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const claimValue = inflight.get(scopedKey);
+    claimValue?.reject(createReleasedClaimError(scopedKey));
+    inflight.delete(scopedKey);
+    if (persistent) {
+      return persistent.forget(trimmed, dedupeOptions);
+    }
+    memory.delete(scopedKey);
+    return true;
   }
 
   async function claim(
@@ -710,6 +757,7 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
     commit,
     release,
     hasRecent,
+    forget,
     warmup: persistent?.warmup ?? (async () => 0),
     clearMemory: () => {
       persistent?.clearMemory();

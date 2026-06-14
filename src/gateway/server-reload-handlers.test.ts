@@ -5,7 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
-import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
+import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { diffConfigPaths } from "./config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  type ChannelKind,
+  type GatewayReloadPlan,
+} from "./config-reload-plan.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   createGatewayReloadHandlers,
@@ -46,6 +53,7 @@ const hoisted = vi.hoisted(() => ({
   runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
   reloadEvents: [] as string[],
   resetModelCatalogCache: vi.fn(() => {}),
+  refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
@@ -110,6 +118,13 @@ vi.mock("../agents/model-catalog.js", () => ({
   resetModelCatalogCache: () => {
     hoisted.reloadEvents.push("reset-model-catalog");
     hoisted.resetModelCatalogCache();
+  },
+}));
+
+vi.mock("../agents/context.js", () => ({
+  refreshContextWindowCache: async (cfg: OpenClawConfig) => {
+    hoisted.reloadEvents.push("refresh-context-window");
+    await hoisted.refreshContextWindowCache(cfg);
   },
 }));
 
@@ -184,6 +199,7 @@ afterEach(() => {
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
   hoisted.reloadEvents.length = 0;
   hoisted.resetModelCatalogCache.mockClear();
+  hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
   hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockClear();
@@ -191,6 +207,7 @@ afterEach(() => {
   hoisted.setInternalHooksEnabled.mockClear();
   hoisted.loadInternalHooks.mockClear();
   hoisted.loadInternalHooks.mockResolvedValue(0);
+  clearSecretsRuntimeSnapshot();
 });
 
 describe("gateway hot reload model state", () => {
@@ -256,8 +273,10 @@ describe("gateway hot reload model state", () => {
       "reload-plugins",
       "reset-model-catalog",
       "clear-provider-auth",
+      "refresh-context-window",
       "warm-provider-auth",
     ]);
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 
@@ -316,6 +335,59 @@ describe("gateway hot reload model state", () => {
 
     expect(hoisted.setInternalHooksEnabled).toHaveBeenCalledWith(true);
     expect(hoisted.loadInternalHooks).toHaveBeenCalledWith(nextConfig, "/tmp/openclaw-workspace");
+  });
+
+  it("refreshes context metadata when the default workspace changes", async () => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const nextConfig = {
+      agents: { defaults: { workspace: "/tmp/next-workspace" } },
+    } as OpenClawConfig;
+
+    await applyHotReload(
+      {
+        changedPaths: ["agents.defaults.workspace"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["agents.defaults.workspace"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: false,
+        restartChannels: new Set(),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      nextConfig,
+    );
+
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+  });
+
+  it.each([
+    {
+      label: "adds the agents object",
+      previousConfig: {},
+      nextConfig: { agents: { defaults: { workspace: "/tmp/next-workspace" } } },
+      expectedPath: "agents",
+    },
+    {
+      label: "removes the defaults object",
+      previousConfig: { agents: { defaults: { workspace: "/tmp/previous-workspace" } } },
+      nextConfig: { agents: {} },
+      expectedPath: "agents.defaults",
+    },
+  ])("refreshes context metadata when a workspace change $label", async (testCase) => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const previousConfig = testCase.previousConfig as OpenClawConfig;
+    const nextConfig = testCase.nextConfig as OpenClawConfig;
+    const changedPaths = diffConfigPaths(previousConfig, nextConfig);
+    expect(changedPaths).toEqual([testCase.expectedPath]);
+
+    await applyHotReload(buildGatewayReloadPlan(changedPaths), nextConfig);
+
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
   });
 });
 
@@ -1055,6 +1127,7 @@ describe("gateway Gmail hot reload handlers", () => {
       nextConfig,
     );
 
+    expect(hoisted.refreshContextWindowCache).not.toHaveBeenCalled();
     expect(stopPostReadySidecars).toHaveBeenCalledBefore(hoisted.stopGmailWatcher);
     expect(hoisted.startGmailWatcherWithLogs).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: nextConfig }),
@@ -1218,6 +1291,116 @@ describe("gateway Gmail hot reload handlers", () => {
     await reloader.stop();
 
     expect(restartSignal?.aborted).toBe(true);
+  });
+
+  it("resets context metadata after a managed hot reload rolls back", async () => {
+    vi.useFakeTimers();
+    const writeListenerRef: { current: ((event: ConfigWriteNotification) => void) | null } = {
+      current: null,
+    };
+    const initialConfig = createGmailConfig("old@example.com");
+    const nextConfig: OpenClawConfig = {
+      ...createGmailConfig("next@example.com"),
+      models: { providers: {} },
+    };
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    activateSecretsRuntimeSnapshot({
+      sourceConfig: initialConfig,
+      config: initialConfig,
+      authStores: [],
+      warnings: [],
+      webTools: createEmptyRuntimeWebToolsMetadata(),
+    });
+    hoisted.startGmailWatcherWithLogs.mockRejectedValueOnce(new Error("start failed"));
+    const reloader = startManagedGatewayConfigReloader({
+      minimalTestGateway: false,
+      initialConfig,
+      initialCompareConfig: initialConfig,
+      initialInternalWriteHash: null,
+      watchPath: "/tmp/openclaw.json",
+      readSnapshot: vi.fn(async () => ({
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        sourceConfig: nextConfig,
+        resolved: nextConfig,
+        valid: true,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+        hash: "hash-next",
+      })) as never,
+      promoteSnapshot: vi.fn(async () => true) as never,
+      subscribeToWrites: ((listener: (event: ConfigWriteNotification) => void) => {
+        writeListenerRef.current = listener;
+        return () => {
+          if (writeListenerRef.current === listener) {
+            writeListenerRef.current = null;
+          }
+        };
+      }) as never,
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel: vi.fn(async () => {}),
+      stopChannel: vi.fn(async () => {}),
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload,
+      channelManager: {} as never,
+      activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => ({
+        sourceConfig: config,
+        config,
+        authStores: [],
+        warnings: [],
+        webTools: {},
+      })) as never,
+      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      clients: [],
+    });
+    const registeredWriteListener = writeListenerRef.current;
+    if (!registeredWriteListener) {
+      throw new Error("Expected config write listener to be registered");
+    }
+
+    registeredWriteListener({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+      persistedHash: "hash-next",
+      revision: 1,
+      fingerprint: "runtime-hash-next",
+      sourceFingerprint: "source-hash-next",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledTimes(1);
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(initialConfig);
+    expect(logReload.error).toHaveBeenCalledWith("config reload failed: Error: start failed");
+    await reloader.stop();
   });
 
   it("does not start a Gmail restart after the managed reloader stops before hot reload applies", async () => {

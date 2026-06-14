@@ -21,6 +21,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   clearProviderRuntimePluginCacheForTest,
@@ -33,6 +34,7 @@ import {
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
+  wrapProviderSimpleCompletionStreamFn,
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
@@ -166,6 +168,7 @@ export {
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
   resolveProviderRuntimePlugin,
+  wrapProviderSimpleCompletionStreamFn,
   wrapProviderStreamFn,
 };
 
@@ -325,6 +328,7 @@ export function normalizeProviderResolvedModelWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   context: {
     config?: OpenClawConfig;
     agentDir?: string;

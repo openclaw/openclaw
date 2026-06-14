@@ -783,7 +783,7 @@ jobs:
           fi
 
           args=(
-            -f ref="$TARGET_SHA"
+            -f ref="$TARGET_REF"
             -f expected_sha="$TARGET_SHA"
             -f provider="$PROVIDER"
             -f mode="$MODE"

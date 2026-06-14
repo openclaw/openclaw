@@ -13,6 +13,14 @@ const mocks = vi.hoisted(() => ({
   resolveCodexAppServerAuthProfileIdForAgent: vi.fn(
     (params?: { authProfileId?: string }) => params?.authProfileId,
   ),
+  resolveCodexAppServerAuthProfileStore: vi.fn(
+    (params?: { authProfileStore?: unknown }) => params?.authProfileStore,
+  ),
+  refreshCodexAppServerAuthTokens: vi.fn(async () => ({
+    accessToken: "refreshed-access",
+    chatgptAccountId: "refreshed-account",
+    chatgptPlanType: null,
+  })),
   resolveCodexAppServerFallbackApiKeyCacheKey: vi.fn(() => undefined as string | undefined),
   resolveManagedCodexAppServerStartOptions: vi.fn(async (startOptions) => startOptions),
   embeddedAgentLog: { debug: vi.fn(), warn: vi.fn() },
@@ -23,6 +31,8 @@ vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.bridgeCodexAppServerStartOptions,
   resolveCodexAppServerAuthProfileIdForAgent: mocks.resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerAuthProfileStore: mocks.resolveCodexAppServerAuthProfileStore,
+  refreshCodexAppServerAuthTokens: mocks.refreshCodexAppServerAuthTokens,
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.resolveCodexAppServerFallbackApiKeyCacheKey,
 }));
 
@@ -79,6 +89,7 @@ function bridgeStartOptionsCall() {
   return firstMockArg(mocks.bridgeCodexAppServerStartOptions, "bridge start options") as {
     agentDir?: string;
     authProfileId?: string;
+    authProfileStore?: unknown;
     config?: unknown;
     startOptions: { command?: string; commandSource?: string };
   };
@@ -88,6 +99,7 @@ function applyAuthProfileCall() {
   return firstMockArg(mocks.applyCodexAppServerAuthProfile, "apply auth profile") as {
     agentDir?: string;
     authProfileId?: string;
+    authProfileStore?: unknown;
     config?: unknown;
   };
 }
@@ -96,6 +108,7 @@ function resolveAuthProfileCall() {
   return firstMockArg(mocks.resolveCodexAppServerAuthProfileIdForAgent, "resolve auth profile") as {
     agentDir?: string;
     authProfileId?: string;
+    authProfileStore?: unknown;
     config?: unknown;
   };
 }
@@ -142,6 +155,11 @@ describe("shared Codex app-server client", () => {
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockImplementation(
       (params?: { authProfileId?: string }) => params?.authProfileId,
     );
+    mocks.resolveCodexAppServerAuthProfileStore.mockClear();
+    mocks.resolveCodexAppServerAuthProfileStore.mockImplementation(
+      (params?: { authProfileStore?: unknown }) => params?.authProfileStore,
+    );
+    mocks.refreshCodexAppServerAuthTokens.mockClear();
     mocks.resolveCodexAppServerFallbackApiKeyCacheKey.mockClear();
     mocks.resolveCodexAppServerFallbackApiKeyCacheKey.mockReturnValue(undefined);
     mocks.resolveManagedCodexAppServerStartOptions.mockClear();
@@ -238,6 +256,95 @@ describe("shared Codex app-server client", () => {
     expect(bridgeCall?.authProfileId).toBe("openai:work");
     const applyCall = applyAuthProfileCall();
     expect(applyCall?.authProfileId).toBe("openai:work");
+  });
+
+  it("carries a scoped auth store through isolated app-server startup", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const authProfileStore = { version: 1, profiles: {} };
+    const preparedAuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:scoped": { type: "token", provider: "openai", token: "prepared-token" },
+      },
+    };
+    mocks.resolveCodexAppServerAuthProfileIdForAgent.mockReturnValue("openai:scoped");
+    mocks.resolveCodexAppServerAuthProfileStore.mockReturnValue(preparedAuthProfileStore);
+
+    const clientPromise = createIsolatedCodexAppServerClient({
+      timeoutMs: 1000,
+      authProfileStore,
+    });
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+
+    await expect(clientPromise).resolves.toBe(harness.client);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: undefined,
+      authProfileStore,
+      config: undefined,
+    });
+    expect(resolveAuthProfileCall().authProfileStore).toBe(preparedAuthProfileStore);
+    expect(bridgeStartOptionsCall().authProfileStore).toBe(preparedAuthProfileStore);
+    expect(applyAuthProfileCall().authProfileStore).toBe(preparedAuthProfileStore);
+
+    const priorWriteCount = harness.writes.length;
+    harness.send({
+      id: "refresh-1",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "unauthorized", previousAccountId: "scoped-account" },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(priorWriteCount));
+
+    expect(mocks.refreshCodexAppServerAuthTokens).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: "openai:scoped",
+      authProfileStore: preparedAuthProfileStore,
+      config: undefined,
+    });
+    expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toEqual({
+      id: "refresh-1",
+      result: {
+        accessToken: "refreshed-access",
+        chatgptAccountId: "refreshed-account",
+        chatgptPlanType: null,
+      },
+    });
+  });
+
+  it("registers persisted profile refresh for isolated app-server startup", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    const clientPromise = createIsolatedCodexAppServerClient({
+      timeoutMs: 1000,
+      authProfileId: "openai:persisted",
+      agentDir: "/tmp/openclaw-persisted-agent",
+    });
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+
+    await expect(clientPromise).resolves.toBe(harness.client);
+    const priorWriteCount = harness.writes.length;
+    harness.send({
+      id: "refresh-persisted",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "unauthorized", previousAccountId: "persisted-account" },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(priorWriteCount));
+
+    expect(mocks.refreshCodexAppServerAuthTokens).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw-persisted-agent",
+      authProfileId: "openai:persisted",
+      config: undefined,
+    });
+    expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toEqual({
+      id: "refresh-persisted",
+      result: {
+        accessToken: "refreshed-access",
+        chatgptAccountId: "refreshed-account",
+        chatgptPlanType: null,
+      },
+    });
   });
 
   it("skips target auth resolution when native source auth is requested", async () => {

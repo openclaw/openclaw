@@ -13,7 +13,7 @@ import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
+import { CONFIG_DIR, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import {
   resolveEffectiveAgentSkillFilter,
   resolveEffectiveAgentSkillsLimits,
@@ -27,6 +27,7 @@ import type {
   SkillEntry,
   SkillSnapshot,
 } from "../types.js";
+import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
@@ -42,12 +43,11 @@ const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.
 const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
 /**
- * Replace the user's home directory prefix with `~` in skill file paths
- * to reduce system prompt token usage. Models understand `~` expansion,
- * and the read tool resolves `~` to the home directory.
+ * Replace OS home directory prefixes with `~` in skill file paths to
+ * reduce system prompt token usage while matching host file-tool expansion.
  *
  * Example: `/Users/alice/.bun/.../skills/github/SKILL.md`
- *       → `~/.bun/.../skills/github/SKILL.md`
+ * → `~/.bun/.../skills/github/SKILL.md`
  *
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
@@ -64,7 +64,7 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveHomeDir(), resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
     (home): home is string => Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
@@ -79,10 +79,64 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   if (homes.length === 0) {
     return skills;
   }
+  const preservedRoots = resolvePreservedPromptSkillPathRoots();
+  const tildeRoots = resolvePromptTildeRoots();
   return skills.map((s) => ({
     ...s,
-    filePath: compactHomePath(s.filePath, homes),
+    filePath: shouldPreservePromptSkillPath(s.filePath, preservedRoots, tildeRoots)
+      ? s.filePath
+      : compactHomePath(s.filePath, homes),
   }));
+}
+
+function resolvePreservedPromptSkillPathRoots(): string[] {
+  const configDir = resolveConfigDir();
+  const promptSkillDirs = [
+    path.resolve(configDir, "skills"),
+    path.resolve(configDir, "plugin-skills"),
+  ];
+  const realPromptSkillDirs = promptSkillDirs
+    .map((dir) => tryRealpath(dir))
+    .filter((dir): dir is string => Boolean(dir));
+  return uniqueStrings([...promptSkillDirs, ...realPromptSkillDirs]);
+}
+
+function resolvePromptTildeRoots(): string[] {
+  const nativeHome = resolveNativeUserHomeDir();
+  if (!nativeHome) {
+    return [];
+  }
+  const resolvedNativeHome = path.resolve(nativeHome);
+  if (isContainerStateHomeWherePromptTildeEscapes(resolvedNativeHome)) {
+    return [];
+  }
+  const realNativeHome = tryRealpath(resolvedNativeHome);
+  return uniqueStrings([
+    resolvedNativeHome,
+    ...(realNativeHome ? [realNativeHome] : []),
+  ]);
+}
+
+function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
+  const configDir = path.resolve(resolveConfigDir());
+  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
+}
+
+function shouldPreservePromptSkillPath(
+  filePath: string,
+  roots: readonly string[],
+  tildeRoots: readonly string[],
+): boolean {
+  const resolvedFilePath = path.resolve(filePath);
+  const isManagedPromptSkillPath = roots.some(
+    (root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath),
+  );
+  if (!isManagedPromptSkillPath) {
+    return false;
+  }
+  return !tildeRoots.some(
+    (root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath),
+  );
 }
 
 function compactHomePath(filePath: string, homes: readonly string[]): string {
@@ -1368,6 +1422,7 @@ export function buildWorkspaceSkillSnapshot(
     ...(skillFilter === undefined ? {} : { skillFilter }),
     resolvedSkills,
     version: opts?.snapshotVersion,
+    promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };
 }
 

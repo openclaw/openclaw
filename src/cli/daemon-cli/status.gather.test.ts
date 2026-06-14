@@ -61,7 +61,9 @@ const readGatewayRestartHandoffSync = vi.fn<
 >(() => null);
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
-const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+const serviceReadRuntime = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => Promise<{ status: string; detail?: string }>
+>(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
     runtime: { status: "running", pid: 1234 },
@@ -74,7 +76,7 @@ const serviceReadCommand = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<{
     programArguments: string[];
     environment?: Record<string, string>;
-  }>
+  } | null>
 >(async (_env?: NodeJS.ProcessEnv) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
   environment: {
@@ -486,6 +488,29 @@ describe("gatherDaemonStatus", () => {
     ).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
+  });
+
+  it("keeps gateway status read-only when service management is unsupported", async () => {
+    serviceReadCommand.mockResolvedValueOnce(null);
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "unknown",
+      detail: "Gateway service install not supported on aix",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.service.command).toBeNull();
+    expect(status.service.loaded).toBe(false);
+    expect(status.service.runtime).toEqual({
+      status: "unknown",
+      detail: "Gateway service install not supported on aix",
+    });
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 
   it("surfaces recent service restart handoffs only during deep status", async () => {

@@ -3,7 +3,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
-import type { NodePairingPairedNode } from "../infra/node-pairing.js";
+import {
+  sameNodeApprovalSurfaceSet,
+  sameNodePermissionSurface,
+} from "../infra/node-pairing-surface.js";
+import type { NodePairingPairedNode, NodePairingPendingRequest } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -38,10 +42,29 @@ type KnownNodeApprovedSource = {
   lastSeenReason?: string;
 };
 
+type KnownNodePendingSource = {
+  requestId: string;
+  nodeId: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
+  clientId?: string;
+  clientMode?: string;
+  remoteIp?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
+  caps: string[];
+  commands: string[];
+  permissions?: Record<string, boolean>;
+};
+
 type KnownNodeEntry = {
   nodeId: string;
   devicePairing?: KnownNodeDevicePairingSource;
   nodePairing?: KnownNodeApprovedSource;
+  pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
   effective: NodeListNode;
 };
@@ -89,6 +112,46 @@ function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprove
   };
 }
 
+function buildPendingNodeSource(entry: NodePairingPendingRequest): KnownNodePendingSource {
+  return {
+    requestId: entry.requestId,
+    nodeId: entry.nodeId,
+    displayName: entry.displayName,
+    platform: entry.platform,
+    version: entry.version,
+    coreVersion: entry.coreVersion,
+    uiVersion: entry.uiVersion,
+    clientId: entry.clientId,
+    clientMode: entry.clientMode,
+    remoteIp: entry.remoteIp,
+    deviceFamily: entry.deviceFamily,
+    modelIdentifier: entry.modelIdentifier,
+    caps: uniqueSortedStrings(entry.caps),
+    commands: uniqueSortedStrings(entry.commands),
+    permissions: entry.permissions,
+  };
+}
+
+function resolveCurrentPendingNodePairing(params: {
+  pending?: KnownNodePendingSource;
+  nodePairing?: KnownNodeApprovedSource;
+  live?: NodeSession;
+}): KnownNodePendingSource | undefined {
+  const { pending, nodePairing, live } = params;
+  if (!pending || !live) {
+    return pending;
+  }
+  const declaredPermissions =
+    !nodePairing && live.declaredPermissions === undefined
+      ? pending.permissions
+      : live.declaredPermissions;
+  return sameNodeApprovalSurfaceSet(pending.caps, live.declaredCaps) &&
+    sameNodeApprovalSurfaceSet(pending.commands, live.declaredCommands) &&
+    sameNodePermissionSurface(pending.permissions, declaredPermissions)
+    ? pending
+    : undefined;
+}
+
 function resolveEffectiveLastSeen(params: {
   live?: NodeSession;
   devicePairing?: KnownNodeDevicePairingSource;
@@ -127,28 +190,54 @@ function buildEffectiveKnownNode(entry: {
   nodeId: string;
   devicePairing?: KnownNodeDevicePairingSource;
   nodePairing?: KnownNodeApprovedSource;
+  pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
 }): NodeListNode {
-  const { nodeId, devicePairing, nodePairing, live } = entry;
+  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live } = entry;
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   return {
     nodeId,
-    displayName: live?.displayName ?? nodePairing?.displayName ?? devicePairing?.displayName,
-    platform: live?.platform ?? nodePairing?.platform ?? devicePairing?.platform,
-    version: live?.version ?? nodePairing?.version,
-    coreVersion: live?.coreVersion ?? nodePairing?.coreVersion,
-    uiVersion: live?.uiVersion ?? nodePairing?.uiVersion,
-    clientId: live?.clientId ?? devicePairing?.clientId,
-    clientMode: live?.clientMode ?? devicePairing?.clientMode,
-    deviceFamily: live?.deviceFamily ?? nodePairing?.deviceFamily,
-    modelIdentifier: live?.modelIdentifier ?? nodePairing?.modelIdentifier,
-    remoteIp: live?.remoteIp ?? nodePairing?.remoteIp ?? devicePairing?.remoteIp,
+    displayName:
+      live?.displayName ??
+      nodePairing?.displayName ??
+      devicePairing?.displayName ??
+      pendingNodePairing?.displayName,
+    platform:
+      live?.platform ??
+      nodePairing?.platform ??
+      devicePairing?.platform ??
+      pendingNodePairing?.platform,
+    version: live?.version ?? nodePairing?.version ?? pendingNodePairing?.version,
+    coreVersion: live?.coreVersion ?? nodePairing?.coreVersion ?? pendingNodePairing?.coreVersion,
+    uiVersion: live?.uiVersion ?? nodePairing?.uiVersion ?? pendingNodePairing?.uiVersion,
+    clientId: live?.clientId ?? devicePairing?.clientId ?? pendingNodePairing?.clientId,
+    clientMode: live?.clientMode ?? devicePairing?.clientMode ?? pendingNodePairing?.clientMode,
+    deviceFamily:
+      live?.deviceFamily ?? nodePairing?.deviceFamily ?? pendingNodePairing?.deviceFamily,
+    modelIdentifier:
+      live?.modelIdentifier ?? nodePairing?.modelIdentifier ?? pendingNodePairing?.modelIdentifier,
+    remoteIp:
+      live?.remoteIp ??
+      nodePairing?.remoteIp ??
+      devicePairing?.remoteIp ??
+      pendingNodePairing?.remoteIp,
     caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
     commands: live
       ? uniqueSortedStrings(live.commands)
       : uniqueSortedStrings(nodePairing?.commands),
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
+    approvalState: pendingNodePairing
+      ? nodePairing
+        ? "pending-reapproval"
+        : "pending-approval"
+      : nodePairing
+        ? "approved"
+        : "unapproved",
+    pendingRequestId: pendingNodePairing?.requestId,
+    pendingDeclaredCaps: pendingNodePairing?.caps,
+    pendingDeclaredCommands: pendingNodePairing?.commands,
+    pendingDeclaredPermissions: pendingNodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
     lastSeenAtMs: lastSeen.lastSeenAtMs,
     lastSeenReason: lastSeen.lastSeenReason,
@@ -177,6 +266,7 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly NodePairingPairedNode[];
+  pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
@@ -187,10 +277,18 @@ export function createKnownNodeCatalog(params: {
   const nodePairingById = new Map(
     (params.pairedNodes ?? []).map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
   );
+  const pendingNodePairingById = new Map<string, KnownNodePendingSource>();
+  // listNodePairing returns newest requests first; keep the current approval action per node.
+  for (const entry of params.pendingNodes ?? []) {
+    if (!pendingNodePairingById.has(entry.nodeId)) {
+      pendingNodePairingById.set(entry.nodeId, buildPendingNodeSource(entry));
+    }
+  }
   const liveById = new Map(params.connectedNodes.map((entry) => [entry.nodeId, entry]));
   const nodeIds = new Set<string>([
     ...devicePairingById.keys(),
     ...nodePairingById.keys(),
+    ...pendingNodePairingById.keys(),
     ...liveById.keys(),
   ]);
   const entriesById = new Map<string, KnownNodeEntry>();
@@ -198,15 +296,22 @@ export function createKnownNodeCatalog(params: {
     const devicePairing = devicePairingById.get(nodeId);
     const nodePairing = nodePairingById.get(nodeId);
     const live = liveById.get(nodeId);
+    const pendingNodePairing = resolveCurrentPendingNodePairing({
+      pending: pendingNodePairingById.get(nodeId),
+      nodePairing,
+      live,
+    });
     entriesById.set(nodeId, {
       nodeId,
       devicePairing,
       nodePairing,
+      pendingNodePairing,
       live,
       effective: buildEffectiveKnownNode({
         nodeId,
         devicePairing,
         nodePairing,
+        pendingNodePairing,
         live,
       }),
     });

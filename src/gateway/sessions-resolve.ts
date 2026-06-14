@@ -7,7 +7,7 @@ import {
   errorShape,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -17,7 +17,7 @@ import {
   loadCombinedSessionStoreForGateway,
   migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
@@ -61,8 +61,7 @@ function validateSessionAgentExists(
 function isResolvedSessionKeyVisible(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
-  storePath: string;
-  store: ReturnType<typeof loadSessionStore>;
+  store: Record<string, SessionEntry>;
   key: string;
 }) {
   if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
@@ -125,14 +124,13 @@ export async function resolveSessionKeyFromResolveParams(params: {
   if (hasKey) {
     // Key lookups may hit legacy store aliases. Migrate/prune before returning
     // the canonical key so later calls operate on one store identity.
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
-    const store = loadSessionStore(target.storePath);
+    const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
+    const store = target.store;
     if (store[target.canonicalKey]) {
       if (
         !isResolvedSessionKeyVisible({
           cfg,
           p,
-          storePath: target.storePath,
           store,
           key: target.canonicalKey,
         })
@@ -160,28 +158,31 @@ export async function resolveSessionKeyFromResolveParams(params: {
         s[primaryKey] = s[legacyKey];
       }
     });
-    const migratedStore = loadSessionStore(target.storePath);
+    const refreshedTarget = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key: target.canonicalKey,
+      clone: false,
+    });
     if (
       !isResolvedSessionKeyVisible({
         cfg,
         p,
-        storePath: target.storePath,
-        store: migratedStore,
-        key: target.canonicalKey,
+        store: refreshedTarget.store,
+        key: refreshedTarget.canonicalKey,
       })
     ) {
       return noSessionFoundResult(key);
     }
     const agentCheckLegacy = validateSessionAgentExists(
       cfg,
-      target.canonicalKey,
-      migratedStore[target.canonicalKey],
-      { acpMetadataSessionKey: target.canonicalKey },
+      refreshedTarget.canonicalKey,
+      refreshedTarget.store[refreshedTarget.canonicalKey],
+      { acpMetadataSessionKey: refreshedTarget.canonicalKey },
     );
     if (agentCheckLegacy) {
       return agentCheckLegacy;
     }
-    return { ok: true, key: target.canonicalKey };
+    return { ok: true, key: refreshedTarget.canonicalKey };
   }
 
   if (hasSessionId) {

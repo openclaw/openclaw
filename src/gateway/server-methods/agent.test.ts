@@ -7,6 +7,7 @@ import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -37,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   loadGatewaySessionRow: vi.fn(),
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
+  clearAgentRunContext: vi.fn(),
   registerAgentRunContext: vi.fn(),
   emitAgentEvent: vi.fn(),
   performGatewaySessionReset: vi.fn(),
@@ -56,6 +58,7 @@ const mocks = vi.hoisted(() => ({
       lastInteractionAt: entry?.lastInteractionAt,
     }),
   ),
+  lifecycleGeneration: "test-generation",
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -137,7 +140,18 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
+  assertAgentRunLifecycleGenerationCurrent: (lifecycleGeneration: string) => {
+    if (lifecycleGeneration === mocks.lifecycleGeneration) {
+      return;
+    }
+    const error = new Error("Agent run belongs to a stale gateway lifecycle");
+    error.name = "AbortError";
+    throw error;
+  },
+  claimAgentRunContext: mocks.registerAgentRunContext,
+  clearAgentRunContext: mocks.clearAgentRunContext,
   emitAgentEvent: mocks.emitAgentEvent,
+  getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
@@ -537,6 +551,7 @@ describe("gateway agent handler", () => {
           lastInteractionAt: entry?.lastInteractionAt,
         }),
       );
+    mocks.lifecycleGeneration = "test-generation";
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
     resetExecApprovalFollowupRuntimeHandoffsForTests();
@@ -2178,6 +2193,7 @@ describe("gateway agent handler", () => {
     expect(context.addChatRun).not.toHaveBeenCalled();
     expect(mocks.registerAgentRunContext).toHaveBeenCalledWith("test-backend-internal-effects", {
       isControlUiVisible: false,
+      lifecycleGeneration: "test-generation",
     });
   });
 
@@ -3458,6 +3474,43 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("preserves restart ownership for aborted async gateway agent rejections", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-restart-abort-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      const abortError = createAgentRunRestartAbortError();
+      const wrappedError = new Error("ACP turn failed before completion", {
+        cause: abortError,
+      });
+      wrappedError.name = "AcpRuntimeError";
+      const context = makeContext();
+      const runId = "task-registry-agent-run-restart-abort";
+      mocks.agentCommand.mockImplementationOnce(() => {
+        context.chatAbortControllers.get(runId)?.controller.abort(abortError);
+        return Promise.reject(wrappedError);
+      });
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context, reqId: runId },
+      );
+
+      await waitForAssertion(() => {
+        expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+          runId,
+          status: "timeout",
+          summary: "aborted",
+          stopReason: "restart",
+        });
+      });
+    });
+  });
+
   it("classifies timeout async gateway agent rejections as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-timeout-error-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -4327,6 +4380,39 @@ describe("gateway agent handler", () => {
 
     expect(registerToolEventRecipient).toHaveBeenCalledWith("alias-global-tool-events", "conn-1");
     expect(registerToolEventRecipient).toHaveBeenCalledWith("run-existing", "conn-1");
+  });
+
+  it("updates tracked agent session identity after compaction rotation", async () => {
+    primeMainAgentRun();
+    const context = makeContext();
+    let trackedSessionId: string | undefined;
+    mocks.agentCommand.mockImplementation(async (call: AgentCommandCall) => {
+      const onSessionIdChanged = call.onSessionIdChanged;
+      if (typeof onSessionIdChanged !== "function") {
+        throw new Error("expected session id change callback");
+      }
+      onSessionIdChanged("rotated-session-id");
+      trackedSessionId = context.chatAbortControllers.get("agent-session-rotation")?.sessionId;
+      return {
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      };
+    });
+
+    await invokeAgent(
+      {
+        message: "rotate session",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "agent-session-rotation",
+      },
+      {
+        reqId: "agent-session-rotation",
+        context,
+      },
+    );
+
+    expect(trackedSessionId).toBe("rotated-session-id");
   });
 
   it("honors selected-global agent id when the request uses the main alias", async () => {
@@ -5391,6 +5477,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.loadVoiceWakeRoutingConfig.mockReset();
     mocks.resolveVoiceWakeRouteByTrigger.mockReset();
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
+    mocks.lifecycleGeneration = "test-generation";
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
     resetExecApprovalFollowupRuntimeHandoffsForTests();
@@ -6290,6 +6377,328 @@ describe("gateway agent handler chat.abort integration", () => {
     });
   });
 
+  it("does not register or dispatch agent work prepared across a gateway restart", async () => {
+    mocks.registerAgentRunContext.mockClear();
+    let releaseRouting: (() => void) | undefined;
+    mocks.loadVoiceWakeRoutingConfig.mockImplementation(
+      async () =>
+        await new Promise((resolve) => {
+          releaseRouting = () =>
+            resolve({
+              version: 1,
+              defaultTarget: { mode: "current" },
+              routes: [],
+              updatedAtMs: 0,
+            });
+        }),
+    );
+    mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
+    mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: sessionKey === "agent:main:voice" ? "voice-session-id" : "main-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: sessionKey === "agent:main:voice" ? "agent:main:voice" : "agent:main:main",
+    }));
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-restart-during-voice-route";
+    const pending = invokeAgent(
+      {
+        message: "wake up",
+        sessionKey: "agent:main:main",
+        voiceWakeTrigger: "robot wake",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+    await waitForAssertion(() => expect(releaseRouting).toBeTypeOf("function"));
+
+    mocks.lifecycleGeneration = "post-restart-generation";
+    releaseRouting?.();
+    await pending;
+
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "agent:main:voice",
+      status: "timeout",
+      stopReason: "restart",
+      timeoutPhase: "queue",
+      providerStarted: false,
+    });
+  });
+
+  it("does not mutate a session after losing lifecycle ownership while waiting for its store", async () => {
+    prime();
+    let releaseSessionWrite: (() => void) | undefined;
+    let updaterCompleted = false;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      await new Promise<void>((resolve) => {
+        releaseSessionWrite = resolve;
+      });
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      const result = await updater(store);
+      updaterCompleted = true;
+      return result;
+    });
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-restart-during-session-write";
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+    await waitForAssertion(() => expect(releaseSessionWrite).toBeTypeOf("function"));
+
+    mocks.lifecycleGeneration = "post-restart-generation";
+    releaseSessionWrite?.();
+    await pending;
+
+    expect(updaterCompleted).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "agent:main:main",
+      status: "timeout",
+      stopReason: "restart",
+    });
+  });
+
+  it("does not acknowledge a bare reset that loses lifecycle ownership", async () => {
+    prime();
+    let releaseReset: (() => void) | undefined;
+    mocks.performGatewaySessionReset.mockImplementation(
+      async (opts: { assertCurrent?: () => void }) => {
+        await new Promise<void>((resolve) => {
+          releaseReset = resolve;
+        });
+        opts.assertCurrent?.();
+        return {
+          ok: true,
+          key: "agent:main:main",
+          entry: { sessionId: "reset-session-id" },
+        };
+      },
+    );
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-restart-during-bare-reset";
+    const pending = invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        context,
+        respond,
+        reqId: runId,
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+    await waitForAssertion(() => expect(releaseReset).toBeTypeOf("function"));
+
+    mocks.lifecycleGeneration = "post-restart-generation";
+    releaseReset?.();
+    await pending;
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "agent:main:main",
+      status: "timeout",
+      stopReason: "restart",
+    });
+    expect(
+      respond.mock.calls.some(
+        (call: unknown[]) => (call[1] as { result?: unknown } | undefined)?.result !== undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it("acknowledges a committed reset when restart prevents its follow-up", async () => {
+    prime();
+    mocks.performGatewaySessionReset.mockImplementation(
+      async (opts: { onCommitted?: (commit: { key: string; sessionId: string }) => void }) => {
+        opts.onCommitted?.({
+          key: "agent:main:main",
+          sessionId: "reset-session-id",
+        });
+        mocks.lifecycleGeneration = "post-restart-generation";
+        return {
+          ok: true,
+          key: "agent:main:main",
+          entry: { sessionId: "reset-session-id" },
+        };
+      },
+    );
+
+    const context = makeContext();
+    const respond = await invokeAgent(
+      {
+        message: "/reset check status",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "idem-restart-after-reset-commit",
+      },
+      {
+        context,
+        reqId: "restart-after-reset-commit",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mockCallArg(respond)).toBe(true);
+    const result = expectRecordFields(mockCallArg(respond, 0, 1), {
+      status: "ok",
+      summary: "completed",
+    }).result as { payloads?: Array<{ text?: string }> };
+    expect(result.payloads?.[0]?.text).toContain("Session reset.");
+    expect(result.payloads?.[0]?.text).toContain("send the follow-up message again");
+    expectRecordFields(context.dedupe.get("agent:idem-restart-after-reset-commit")?.payload, {
+      status: "ok",
+      summary: "completed",
+    });
+  });
+
+  it("acknowledges a committed bare reset after lifecycle rotation", async () => {
+    prime();
+    mocks.performGatewaySessionReset.mockImplementation(
+      async (opts: { onCommitted?: (commit: { key: string; sessionId: string }) => void }) => {
+        opts.onCommitted?.({
+          key: "agent:main:main",
+          sessionId: "reset-session-id",
+        });
+        mocks.lifecycleGeneration = "post-restart-generation";
+        return {
+          ok: true,
+          key: "agent:main:main",
+          entry: { sessionId: "reset-session-id" },
+        };
+      },
+    );
+
+    const context = makeContext();
+    const respond = await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "idem-restart-after-bare-reset",
+      },
+      {
+        context,
+        reqId: "restart-after-bare-reset",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mockCallArg(respond)).toBe(true);
+    const result = expectRecordFields(mockCallArg(respond, 0, 1), {
+      status: "ok",
+      summary: "completed",
+    }).result as { payloads?: Array<{ text?: string }> };
+    expect(result.payloads?.[0]?.text).toBe("✅ Session reset.");
+    expectRecordFields(context.dedupe.get("agent:idem-restart-after-bare-reset")?.payload, {
+      status: "ok",
+      summary: "completed",
+    });
+  });
+
+  it("acknowledges a committed reset when post-commit work fails after rotation", async () => {
+    prime();
+    mocks.performGatewaySessionReset.mockImplementation(
+      async (opts: { onCommitted?: (commit: { key: string; sessionId: string }) => void }) => {
+        opts.onCommitted?.({
+          key: "agent:main:main",
+          sessionId: "reset-session-id",
+        });
+        mocks.lifecycleGeneration = "post-restart-generation";
+        throw new Error("post-commit cleanup failed");
+      },
+    );
+
+    const context = makeContext();
+    const respond = await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "idem-post-commit-reset-failure",
+      },
+      {
+        context,
+        reqId: "post-commit-reset-failure",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mockCallArg(respond)).toBe(true);
+    const result = expectRecordFields(mockCallArg(respond, 0, 1), {
+      status: "ok",
+      summary: "completed",
+    }).result as { payloads?: Array<{ text?: string }> };
+    expect(result.payloads?.[0]?.text).toBe("✅ Session reset.");
+    expectRecordFields(context.dedupe.get("agent:idem-post-commit-reset-failure")?.payload, {
+      status: "ok",
+      summary: "completed",
+    });
+  });
+
+  it("acknowledges a committed reset when restart wins during later session persistence", async () => {
+    prime();
+    mockSessionResetSuccess({ reason: "reset" });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      const result = await updater(store);
+      mocks.lifecycleGeneration = "post-restart-generation";
+      return result;
+    });
+
+    const context = makeContext();
+    const respond = await invokeAgent(
+      {
+        message: "/reset check status",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "idem-restart-after-reset-later",
+      },
+      {
+        context,
+        reqId: "restart-after-reset-later",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mockCallArg(respond)).toBe(true);
+    const result = expectRecordFields(mockCallArg(respond, 0, 1), {
+      status: "ok",
+      summary: "completed",
+    }).result as { payloads?: Array<{ text?: string }> };
+    expect(result.payloads?.[0]?.text).toContain("send the follow-up message again");
+    expectRecordFields(context.dedupe.get("agent:idem-restart-after-reset-later")?.payload, {
+      status: "ok",
+      summary: "completed",
+    });
+  });
+
   it("rejects unauthorized chat.abort during pre-accept setup", async () => {
     prime();
     let releaseSessionWrite: (() => void) | undefined;
@@ -6751,8 +7160,51 @@ describe("gateway agent handler chat.abort integration", () => {
     });
   });
 
+  it("retains agent RPC registration until terminal persistence settles", async () => {
+    prime();
+    let resolveAgent: (value: {
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }) => void = () => undefined;
+    const agentResult = new Promise<{
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }>((resolve) => {
+      resolveAgent = resolve;
+    });
+    mocks.agentCommand.mockReturnValueOnce(agentResult);
+
+    const context = makeContext();
+    const runId = "idem-abort-cleanup-persisting";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId },
+    );
+
+    const entry = requireValue(context.chatAbortControllers.get(runId), "chat abort entry missing");
+    let resolvePersistence: () => void = () => undefined;
+    entry.projectSessionTerminalPersistence = new Promise<void>((resolve) => {
+      resolvePersistence = resolve;
+    });
+    resolveAgent({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+
+    await waitForAssertion(() => {
+      expect(context.chatAbortControllers.has(runId)).toBe(true);
+    });
+    resolvePersistence();
+    await waitForAssertion(() => {
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+    });
+  });
+
   it("removes the chatAbortControllers entry after the run errors", async () => {
     prime();
+    mocks.clearAgentRunContext.mockClear();
     mocks.agentCommand.mockRejectedValueOnce(new Error("boom"));
 
     const context = makeContext();
@@ -6769,6 +7221,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
     await waitForAssertion(() => {
       expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(mocks.clearAgentRunContext).toHaveBeenCalledWith(runId, "test-generation");
     });
   });
 
@@ -6832,6 +7285,7 @@ describe("gateway agent handler chat.abort integration", () => {
     };
     context.chatAbortControllers.set(runId, preExisting);
     context.dedupe.delete(`agent:${runId}`);
+    mocks.registerAgentRunContext.mockClear();
     const respond = vi.fn();
 
     await invokeAgent(
@@ -6846,6 +7300,8 @@ describe("gateway agent handler chat.abort integration", () => {
 
     expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
     expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
       cached: true,

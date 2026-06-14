@@ -391,7 +391,9 @@ function buildGoogleVertexRequestUrl(
 ): string {
   const project = encodeURIComponent(resolveGoogleVertexProject(options));
   const location = encodeURIComponent(resolveGoogleVertexLocation(options));
-  const modelId = encodeURIComponent(model.id);
+  // Mirror resolveGoogleModelPath: strip the google/ provider prefix so a
+  // provider-qualified id does not become an invalid models/google%2F... path.
+  const modelId = encodeURIComponent(stripGoogleProviderPrefix(model.id));
   const origin = resolveGoogleVertexBaseOrigin(model, decodeURIComponent(location));
   return `${origin}/${GOOGLE_VERTEX_DEFAULT_API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${modelId}:streamGenerateContent?alt=sse`;
 }

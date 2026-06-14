@@ -1,6 +1,7 @@
 // Daemon lifecycle core tests cover service lifecycle transitions and platform adapters.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { GatewayService } from "../../daemon/service.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -85,6 +86,26 @@ function stubServiceGatewayTokenEnv() {
   });
 }
 
+async function withUnsupportedGatewayService(
+  run: (unsupportedService: GatewayService) => Promise<void>,
+) {
+  const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("aix");
+  try {
+    const { resolveGatewayService } = await import("../../daemon/service.js");
+    await run(resolveGatewayService());
+  } finally {
+    platformSpy.mockRestore();
+  }
+}
+
+function expectUnsupportedServiceCheckFailure() {
+  const payload = readJsonLog<{ ok?: boolean; error?: string }>();
+  expect(payload.ok).toBe(false);
+  expect(payload.error).toContain(
+    "Gateway service check failed: Error: Gateway service install not supported on aix",
+  );
+}
+
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
     ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
@@ -108,6 +129,75 @@ describe("runServiceRestart token drift", () => {
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
     });
     stubEmptyGatewayEnv();
+  });
+
+  it("rejects unsupported-platform start before not-loaded recovery", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "started" as const,
+      message: "should not run",
+      loaded: true,
+    }));
+
+    await withUnsupportedGatewayService(async (unsupportedService) => {
+      await expect(
+        runServiceStart({
+          serviceNoun: "Gateway",
+          service: unsupportedService,
+          renderStartHints: () => ["openclaw gateway install"],
+          opts: { json: true },
+          onNotLoaded,
+        }),
+      ).rejects.toThrow("__exit__:1");
+    });
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expectUnsupportedServiceCheckFailure();
+  });
+
+  it("rejects unsupported-platform stop before unmanaged fallback", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "stopped" as const,
+      message: "should not run",
+    }));
+
+    await withUnsupportedGatewayService(async (unsupportedService) => {
+      await expect(
+        runServiceStop({
+          serviceNoun: "Gateway",
+          service: unsupportedService,
+          opts: { json: true },
+          onNotLoaded,
+        }),
+      ).rejects.toThrow("__exit__:1");
+    });
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expectUnsupportedServiceCheckFailure();
+  });
+
+  it("rejects unsupported-platform restart before unmanaged fallback", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "restarted" as const,
+      message: "should not run",
+    }));
+    const postRestartCheck = vi.fn(async () => {});
+
+    await withUnsupportedGatewayService(async (unsupportedService) => {
+      await expect(
+        runServiceRestart({
+          serviceNoun: "Gateway",
+          service: unsupportedService,
+          renderStartHints: () => ["openclaw gateway install"],
+          opts: { json: true },
+          onNotLoaded,
+          postRestartCheck,
+        }),
+      ).rejects.toThrow("__exit__:1");
+    });
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expect(postRestartCheck).not.toHaveBeenCalled();
+    expectUnsupportedServiceCheckFailure();
   });
 
   it("prints the container restart hint when restart is requested for a not-loaded service", async () => {

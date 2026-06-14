@@ -11,7 +11,8 @@
   "providerEndpoints": [
     {
       "endpointClass": "openai-public",
-      "hosts": ["api.openai.com"]
+      "hosts": ["api.openai.com"],
+      "hostSuffixes": [".api.openai.com"]
     },
     {
       "endpointClass": "openai",

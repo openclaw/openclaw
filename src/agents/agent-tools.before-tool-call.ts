@@ -1357,11 +1357,20 @@ export function rewrapToolWithBeforeToolCallHook(
     wrappedContext && typeof wrappedContext === "object"
       ? (wrappedContext as HookContext)
       : undefined;
-  return wrapToolWithBeforeToolCallHook(
-    source && typeof source === "object" ? (source as AnyAgentTool) : tool,
-    ctx ?? preservedContext,
-    options,
-  );
+  const sourceTool = source && typeof source === "object" ? (source as AnyAgentTool) : tool;
+  if (sourceTool === tool) {
+    return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
+  }
+  // Keep schema and metadata replacements applied after the original wrap while
+  // restoring the unwrapped execute function for the new hook context.
+  const rewrapSource: AnyAgentTool = {
+    ...tool,
+    execute: sourceTool.execute,
+  };
+  delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
+  copyPluginToolMeta(tool, rewrapSource);
+  copyChannelAgentToolMeta(tool as never, rewrapSource as never);
+  return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }
 
 /** Copy before_tool_call marker metadata when another wrapper replaces a tool. */

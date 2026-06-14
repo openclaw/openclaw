@@ -19,6 +19,7 @@ import {
   registerMemoryCapability,
   type MemoryPluginCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
@@ -3686,35 +3687,33 @@ describe("memory plugin e2e", () => {
   });
 
   test("sanitizeForMemoryCapture strips message-tool delivery hints before envelopes", () => {
-    const input = [
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      "",
-      "[Telegram Alice] I prefer dark mode",
-    ].join("\n");
-    expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+    for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
+      const input = [deliveryHint, "", "[Telegram Alice] I prefer dark mode"].join("\n");
+      expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+    }
   });
 
   test("sanitizeForMemoryCapture strips message-tool delivery hints before plain text", () => {
-    const input = [
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      "",
-      "I prefer dark mode",
-    ].join("\n");
-    const sanitized = sanitizeForMemoryCapture(input);
-    expect(sanitized).toBe("I prefer dark mode");
-    expect(shouldCapture(sanitized)).toBe(true);
+    for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
+      const input = [deliveryHint, "", "I prefer dark mode"].join("\n");
+      const sanitized = sanitizeForMemoryCapture(input);
+      expect(sanitized).toBe("I prefer dark mode");
+      expect(shouldCapture(sanitized)).toBe(true);
+    }
   });
 
   test("sanitizeForMemoryCapture strips delivery hints before chronological context", () => {
-    const input = [
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      "",
-      "Conversation context (untrusted, chronological, selected for current message):",
-      "[Telegram Bob] I prefer dark mode",
-    ].join("\n");
-    const sanitized = sanitizeForMemoryCapture(input);
-    expect(sanitized).toBe("I prefer dark mode");
-    expect(shouldCapture(sanitized)).toBe(true);
+    for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
+      const input = [
+        deliveryHint,
+        "",
+        "Conversation context (untrusted, chronological, selected for current message):",
+        "[Telegram Bob] I prefer dark mode",
+      ].join("\n");
+      const sanitized = sanitizeForMemoryCapture(input);
+      expect(sanitized).toBe("I prefer dark mode");
+      expect(shouldCapture(sanitized)).toBe(true);
+    }
   });
 
   test("sanitizeForMemoryCapture strips pending history wrappers before current envelopes", () => {

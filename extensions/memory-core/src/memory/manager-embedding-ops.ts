@@ -228,6 +228,36 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       .run(excess);
   }
 
+  private upsertEmbeddingCacheEntries(
+    entries: Array<{ hash: string; embedding: number[] }>,
+    provider: { id: string; model: string } | null = this.provider,
+  ): void {
+    upsertMemoryEmbeddingCache({
+      db: this.db,
+      enabled: this.cache.enabled,
+      provider,
+      providerKey: this.providerKey,
+      entries,
+      tableName: EMBEDDING_CACHE_TABLE,
+    });
+    if (this.embeddingCacheMirrorDb && this.embeddingCacheMirrorDb !== this.db) {
+      try {
+        upsertMemoryEmbeddingCache({
+          db: this.embeddingCacheMirrorDb,
+          enabled: this.cache.enabled,
+          provider,
+          providerKey: this.providerKey,
+          entries,
+          tableName: EMBEDDING_CACHE_TABLE,
+        });
+      } catch (err) {
+        log.warn("memory embeddings: failed to mirror safe-reindex cache batch", {
+          error: formatErrorMessage(err),
+        });
+      }
+    }
+  }
+
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
     if (chunks.length === 0) {
       return [];
@@ -240,7 +270,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     const missingChunks = missing.map((m) => m.chunk);
     const batches = buildMemoryEmbeddingBatches(missingChunks, EMBEDDING_BATCH_MAX_TOKENS);
-    const toCache: Array<{ hash: string; embedding: number[] }> = [];
     const provider = this.provider;
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
@@ -261,24 +290,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const batchEmbeddings = hasStructuredInputs
         ? await this.embedBatchInputsWithRetry(inputs)
         : await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
+      const batchCacheEntries: Array<{ hash: string; embedding: number[] }> = [];
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
         if (item) {
           embeddings[item.index] = embedding;
-          toCache.push({ hash: item.chunk.hash, embedding });
+          batchCacheEntries.push({ hash: item.chunk.hash, embedding });
         }
       }
+      this.upsertEmbeddingCacheEntries(batchCacheEntries);
       cursor += batch.length;
     }
-    upsertMemoryEmbeddingCache({
-      db: this.db,
-      enabled: this.cache.enabled,
-      provider: this.provider,
-      providerKey: this.providerKey,
-      entries: toCache,
-      tableName: EMBEDDING_CACHE_TABLE,
-    });
     return embeddings;
   }
 
@@ -354,14 +377,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       embeddings[item.index] = embedding;
       toCache.push({ hash: item.chunk.hash, embedding });
     }
-    upsertMemoryEmbeddingCache({
-      db: this.db,
-      enabled: this.cache.enabled,
-      provider,
-      providerKey: this.providerKey,
-      entries: toCache,
-      tableName: EMBEDDING_CACHE_TABLE,
-    });
+    this.upsertEmbeddingCacheEntries(toCache, provider);
     return embeddings;
   }
 

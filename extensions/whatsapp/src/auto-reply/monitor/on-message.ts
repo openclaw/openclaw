@@ -1,6 +1,10 @@
 // Whatsapp plugin module implements on message behavior.
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -138,20 +142,13 @@ export function createWebOnMessageHandler(params: {
         id: peerId,
       },
     });
-    const route =
+    const baseConversationRoute =
       msg.chatType === "group" ? resolveWhatsAppGroupSessionRoute(baseRoute) : baseRoute;
-    const groupHistoryKey =
-      msg.chatType === "group"
-        ? buildGroupHistoryKey({
-            channel: "whatsapp",
-            accountId: route.accountId,
-            peerKind: "group",
-            peerId,
-          })
-        : route.sessionKey;
+    const routeAccountId =
+      baseConversationRoute.accountId ?? msg.accountId ?? params.account.accountId ?? "default";
     const account = resolveWhatsAppAccount({
       cfg,
-      accountId: route.accountId ?? msg.accountId ?? params.account.accountId,
+      accountId: routeAccountId,
     });
     const baseMentionConfig = buildMentionConfig(cfg);
 
@@ -166,6 +163,26 @@ export function createWebOnMessageHandler(params: {
       params.echoTracker.forget(msg.payload.body);
       return;
     }
+
+    const configuredRoute = resolveConfiguredBindingRoute({
+      cfg,
+      route: baseConversationRoute,
+      channel: "whatsapp",
+      accountId: routeAccountId,
+      conversationId: peerId,
+    });
+    // Bound route facts intentionally feed group activation/mention policy.
+    // Side-effectful ACP readiness still waits until the group turn is admitted.
+    const route = configuredRoute.route;
+    const groupHistoryKey =
+      msg.chatType === "group"
+        ? buildGroupHistoryKey({
+            channel: "whatsapp",
+            accountId: route.accountId,
+            peerKind: "group",
+            peerId,
+          })
+        : route.sessionKey;
 
     // Preflight audio transcription: run once before broadcast fan-out so all
     // agents share the same transcript instead of each making a separate STT call.
@@ -182,6 +199,24 @@ export function createWebOnMessageHandler(params: {
     let ackAlreadySent = false;
     let ackReaction: AckReactionHandle | null = null;
     let statusReactionController: StatusReactionController | null = null;
+    let recordAcceptedConfiguredGroupRoute: (() => void) | null = null;
+    const clearPreDispatchReaction = async () => {
+      try {
+        if (statusReactionController) {
+          statusReactionController.cancelPending();
+          await statusReactionController.clear();
+          return;
+        }
+        if (ackReaction && (await ackReaction.ackReactionPromise)) {
+          await ackReaction.remove();
+        }
+      } catch (err) {
+        params.replyLogger.warn(
+          { error: String(err) },
+          "whatsapp: failed to clear pre-dispatch reaction after configured ACP readiness failure",
+        );
+      }
+    };
     const runAudioPreflightOnce = async () => {
       if (
         preflightAudioTranscript !== undefined ||
@@ -261,17 +296,25 @@ export function createWebOnMessageHandler(params: {
         OriginatingChannel: "whatsapp",
         OriginatingTo: conversationId,
       } satisfies MsgContext;
-      updateLastRouteInBackground({
-        cfg,
-        backgroundTasks: params.backgroundTasks,
-        storeAgentId: route.agentId,
-        sessionKey: route.sessionKey,
-        channel: "whatsapp",
-        to: conversationId,
-        accountId: route.accountId,
-        ctx: metaCtx,
-        warn: params.replyLogger.warn.bind(params.replyLogger),
-      });
+      const recordGroupRoute = () =>
+        updateLastRouteInBackground({
+          cfg,
+          backgroundTasks: params.backgroundTasks,
+          storeAgentId: route.agentId,
+          sessionKey: route.sessionKey,
+          channel: "whatsapp",
+          to: conversationId,
+          accountId: route.accountId,
+          ctx: metaCtx,
+          warn: params.replyLogger.warn.bind(params.replyLogger),
+        });
+      // Configured ACP group routes are session-owned only after admission and
+      // readiness; ordinary routes keep the existing early group last-route update.
+      if (configuredRoute.bindingResolution) {
+        recordAcceptedConfiguredGroupRoute = recordGroupRoute;
+      } else {
+        recordGroupRoute();
+      }
 
       let gating = await applyGroupGating({
         cfg,
@@ -323,12 +366,26 @@ export function createWebOnMessageHandler(params: {
       }
     }
 
+    if (configuredRoute.bindingResolution) {
+      const ensured = await ensureConfiguredBindingRouteReady({
+        cfg,
+        bindingResolution: configuredRoute.bindingResolution,
+      });
+      if (!ensured.ok) {
+        params.replyLogger.warn(
+          `whatsapp: configured ACP binding unavailable for conversation ${configuredRoute.bindingResolution.record.conversation.conversationId}: ${ensured.error}`,
+        );
+        await clearPreDispatchReaction();
+        return;
+      }
+    }
+    recordAcceptedConfiguredGroupRoute?.();
+
     await runAudioPreflightOnce();
 
-    // Broadcast groups: when we'd reply anyway, run multiple agents.
-    // Does not bypass group mention/activation gating above.
     if (
-      await maybeBroadcastMessage({
+      !configuredRoute.bindingResolution &&
+      (await maybeBroadcastMessage({
         cfg,
         msg,
         peerId,
@@ -343,7 +400,7 @@ export function createWebOnMessageHandler(params: {
         ...(ackReaction && msg.chatType !== "group" ? { ackReaction } : {}),
         ...(statusReactionController && msg.chatType !== "group" ? { ackAlreadySent: true } : {}),
         processMessage: (m, r, k, opts) => processForRoute(cfg, m, r, k, opts),
-      })
+      }))
     ) {
       return;
     }

@@ -357,6 +357,40 @@ describe("memory manager atomic reindex", () => {
     await expectPathMissing(`${tempIndexPath}-shm`);
   });
 
+  it("reports publish before post-swap cleanup failures", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+
+    let published = false;
+    const realRename = fs.rename;
+    const rename: typeof fs.rename = vi.fn(async (source, target) => {
+      await realRename(source, target);
+    });
+    const rm: typeof fs.rm = vi.fn(async (filePath) => {
+      if (String(filePath).includes(".backup-")) {
+        throw Object.assign(new Error("backup cleanup locked"), { code: "EACCES" });
+      }
+    });
+
+    await expectRejectCode(
+      runMemoryAtomicReindex({
+        targetPath: indexPath,
+        tempPath: tempIndexPath,
+        afterPublish: () => {
+          published = true;
+        },
+        fileOptions: {
+          fileOps: { rename, rm, wait: vi.fn().mockResolvedValue(undefined) },
+        },
+        build: async () => undefined,
+      }),
+      "EACCES",
+    );
+
+    expect(published).toBe(true);
+    expect(readChunkMarker(indexPath)).toBe("after");
+  });
+
   it("restores backed-up target sidecars when publishing the main index fails", async () => {
     writeChunkMarker(indexPath, "before");
     writeChunkMarker(tempIndexPath, "after");

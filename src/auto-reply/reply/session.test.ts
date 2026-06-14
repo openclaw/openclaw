@@ -26,6 +26,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -1421,8 +1422,7 @@ describe("initSessionState RawBody", () => {
     const sessionFile = path.join(stateDir, "agents", agentId, "sessions", `${sessionId}.jsonl`);
     const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
 
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    try {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       await fs.mkdir(path.dirname(storePath), { recursive: true });
       await writeSessionStoreFast(storePath, {
         [sessionKey]: {
@@ -1448,9 +1448,7 @@ describe("initSessionState RawBody", () => {
       expect(result.sessionEntry.sessionId).toBe(sessionId);
       expect(result.sessionEntry.sessionFile).toBe(sessionFile);
       expect(result.storePath).toBe(storePath);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    });
   });
 
   it.each([
@@ -3386,6 +3384,56 @@ describe("drainFormattedSystemEvents", () => {
     expect(result).toContain("System: WhatsApp: linked");
     for (const line of result!.split("\n")) {
       expect(line).toMatch(/^System:/);
+    }
+  });
+
+  it("leaves tagged cron events queued during heartbeat runs instead of re-rendering them (#44922)", async () => {
+    try {
+      // A `sessionTarget: "main"` cron systemEvent is enqueued tagged `cron:<jobId>`
+      // and is surfaced by the heartbeat's dedicated reminder prompt. The generic
+      // render must not also emit it as a raw `System:` line during that heartbeat
+      // run, or the model sees the same text twice.
+      enqueueSystemEvent("Reminder: rotate API keys", {
+        sessionKey: "agent:main:main",
+        contextKey: "cron:rotate-keys",
+      });
+      enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
+
+      const result = await drainFormattedSystemEvents({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        isMainSession: true,
+        isNewSession: false,
+        suppressHeartbeatOwnedEvents: true,
+      });
+
+      expect(result).toContain("Model switched.");
+      expect(result).not.toContain("rotate API keys");
+      // The cron event stays queued so the heartbeat path remains its single owner.
+      expect(peekSystemEvents("agent:main:main")).toEqual(["Reminder: rotate API keys"]);
+    } finally {
+      resetSystemEventsForTest();
+    }
+  });
+
+  it("renders tagged cron events on normal turns so skipped heartbeats still have a fallback", async () => {
+    try {
+      enqueueSystemEvent("Reminder: rotate API keys", {
+        sessionKey: "agent:main:main",
+        contextKey: "cron:rotate-keys",
+      });
+
+      const result = await drainFormattedSystemEvents({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        isMainSession: true,
+        isNewSession: false,
+      });
+
+      expect(result).toContain("Reminder: rotate API keys");
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    } finally {
+      resetSystemEventsForTest();
     }
   });
 });

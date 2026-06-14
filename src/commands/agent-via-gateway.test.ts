@@ -1694,6 +1694,7 @@ describe("agentCliCommand", () => {
       );
       expect(localOpts.cleanupBundleMcpOnRunEnd).toBe(true);
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
+      expect(localOpts.oneShotCliRun).toBe(true);
       expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
@@ -1789,6 +1790,7 @@ describe("agentCliCommand", () => {
       );
       expect(fallbackOpts.cleanupBundleMcpOnRunEnd).toBe(true);
       expect(fallbackOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
+      expect(fallbackOpts.oneShotCliRun).toBe(false);
     });
   });
 });

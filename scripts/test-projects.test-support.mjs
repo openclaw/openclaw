@@ -55,6 +55,7 @@ import {
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
+  resolveDefaultVitestNoOutputTimeoutMs,
   resolveVitestCliEntry,
   resolveVitestNodeArgs,
 } from "./run-vitest.mjs";
@@ -865,6 +866,12 @@ const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
   "src/gateway/server.startup-matrix-migration.integration.test.ts",
   "src/gateway/sessions-history-http.test.ts",
 ]);
+function resolveTestProjectsVitestNoOutputTimeoutMs(config) {
+  const directRunnerTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(["run", "--config", config]);
+  return String(
+    Math.max(Number(DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS), directRunnerTimeoutMs),
+  );
+}
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -2438,7 +2445,7 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
   const expandToProjectConfigs =
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1" ||
     (Number.isFinite(parallelShardCount) && parallelShardCount > 1) ||
-    shouldUseLocalFullSuiteParallelByDefault(process.env);
+    shouldExpandLocalFullSuiteShardsByDefault(process.env);
   return fullSuiteVitestShards.flatMap((shard) => {
     if (
       process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD === "1" &&
@@ -2482,6 +2489,10 @@ export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   return (
     env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && env.CI !== "true" && env.GITHUB_ACTIONS !== "true"
   );
+}
+
+export function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
+  return env.CI !== "true" && env.GITHUB_ACTIONS !== "true";
 }
 
 function parsePositiveInt(value, label) {
@@ -2597,7 +2608,9 @@ export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
       !Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY) &&
       !Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)
     ) {
-      nextEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY] = DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS;
+      nextEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY] = resolveTestProjectsVitestNoOutputTimeoutMs(
+        spec.config,
+      );
     }
     if (
       !Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY) &&

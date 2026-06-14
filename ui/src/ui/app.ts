@@ -697,6 +697,7 @@ export class OpenClawApp extends LitElement {
   chatLastScrollTop = 0;
   chatHasAutoScrolled = false;
   chatUserNearBottom = true;
+  chatFollowLocked = false;
   chatIsProgrammaticScroll = false;
   chatProgrammaticScrollTarget = 0;
   @state() chatNewMessagesBelow = false;

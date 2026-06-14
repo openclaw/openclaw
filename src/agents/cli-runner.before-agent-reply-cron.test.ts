@@ -116,6 +116,21 @@ afterEach(() => {
 });
 
 describe("runCliAgent cron before_agent_reply seam", () => {
+  it("rejects stale lifecycle ownership before CLI preparation", async () => {
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        lifecycleGeneration: "stale-generation",
+      }),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Agent run belongs to a stale gateway lifecycle",
+    });
+
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
   it("lets before_agent_reply claim cron runs before the CLI subprocess is invoked", async () => {
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");

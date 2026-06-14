@@ -1095,7 +1095,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background work. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work.",
+    "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background work. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work. Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection. Avoid delegating quick lookups or single-file reads unless policy prefers delegation. After spawning, do non-overlapping work while run-mode results return.",
     "inputSchema": {
       "properties": {
         "agentId": {
