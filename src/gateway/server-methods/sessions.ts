@@ -1215,7 +1215,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg);
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(
+      key,
+      cfg,
+      p.agentId ? { agentId: p.agentId } : undefined,
+    );
     const store = loadSessionStore(storePath);
     const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
     if (!entry) {
