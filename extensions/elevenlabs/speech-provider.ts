@@ -43,13 +43,12 @@ const ELEVENLABS_TTS_MODELS = [
   "eleven_multilingual_v2",
   "eleven_flash_v2_5",
   "eleven_flash_v2",
+  "eleven_turbo_v2_5",
+  "eleven_monolingual_v1",
 ] as const;
 
 function normalizeElevenLabsTtsModelId(value: string | undefined): string | undefined {
   switch (value) {
-    case "eleven_monolingual_v1":
-    case "eleven_multilingual_v1":
-      return "eleven_multilingual_v2";
     case "eleven_turbo_v2_5":
       return "eleven_flash_v2_5";
     case "eleven_turbo_v2":

@@ -48,14 +48,16 @@ describe("elevenlabs speech provider", () => {
       "eleven_multilingual_v2",
       "eleven_flash_v2_5",
       "eleven_flash_v2",
+      "eleven_turbo_v2_5",
+      "eleven_monolingual_v1",
     ]);
   });
 
-  it("maps deprecated ElevenLabs TTS model IDs before synthesis", async () => {
+  it("keeps non-equivalent deprecated ElevenLabs TTS model IDs", async () => {
     const provider = buildElevenLabsSpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
-      expect(body.model_id).toBe("eleven_multilingual_v2");
+      expect(body.model_id).toBe("eleven_monolingual_v1");
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
