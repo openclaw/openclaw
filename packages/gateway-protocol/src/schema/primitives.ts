@@ -21,6 +21,27 @@ const SESSION_LABEL_MAX_LENGTH = 512;
 
 /** Non-empty string primitive for protocol fields that reject blank values. */
 export const NonEmptyString = Type.String({ minLength: 1 });
+// Connect-frame auth bounds for protocol-issued bootstrap and device tokens.
+// These are machine-generated 32-byte base64url (43 chars) or hex (64 chars)
+// values, and the verifier iterates them against every stored pairing/device
+// entry under the bootstrap-state mutex. `safeEqualSecret` pads both operands
+// to `Math.max(provided, expected)` before `timingSafeEqual`, so an unbounded
+// provided value amplifies each per-entry comparison. 256 is well above any
+// plausible legitimate value while keeping that scan bounded.
+export const HANDSHAKE_BOOTSTRAP_TOKEN_MAX_LENGTH = 256;
+export const HandshakeBootstrapTokenString = Type.String({
+  maxLength: HANDSHAKE_BOOTSTRAP_TOKEN_MAX_LENGTH,
+});
+// Connect-frame auth bounds for operator-configured shared secrets
+// (`auth.token` and `auth.password`). These are matched once per connect
+// against a single resolved configured value, so the per-entry amplification
+// risk above does not apply. Keep the cap generous to preserve compatibility
+// with arbitrarily-sized operator configs (e.g. long random tokens or
+// passphrases) while still bounding pre-auth allocation/scan work.
+export const HANDSHAKE_SHARED_SECRET_MAX_LENGTH = 4096;
+export const HandshakeSharedSecretString = Type.String({
+  maxLength: HANDSHAKE_SHARED_SECRET_MAX_LENGTH,
+});
 /** Maximum stable session key length accepted by chat-send protocol requests. */
 export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;
 /** Chat-send session key string primitive with bounded length. */
