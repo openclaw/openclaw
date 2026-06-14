@@ -317,4 +317,37 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("bash ok");
     expect(output).not.toContain("No sessions found");
   });
+
+  it("skips placeholder store entries without transcript session ids", async () => {
+    const runtime = makeRuntime();
+    fs.writeFileSync(
+      storePath,
+      `${JSON.stringify({
+        "agent:main:cron:placeholder": {
+          label: "placeholder cron",
+          updatedAt: 3,
+        },
+        [sessionKey]: {
+          sessionId: "session-one",
+          sessionFile: "session-one.jsonl",
+          updatedAt: 2,
+          status: "done",
+        },
+      })}\n`,
+    );
+    writeJsonl(trajectoryPath, [
+      makeEvent({
+        type: "tool.result",
+        ts: "2026-05-18T12:04:21.000Z",
+        data: { name: "bash", success: true },
+      }),
+    ]);
+
+    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
+
+    const output = runtimeOutput(runtime);
+    expect(output).toContain("tool.result");
+    expect(output).toContain("bash ok");
+    expect(output).not.toContain("No sessions found");
+  });
 });

@@ -351,20 +351,24 @@ async function buildTailSelection(params: {
   entry: SessionEntry;
   key: string;
   storePath: string;
-}): Promise<TailSelection> {
+}): Promise<TailSelection | null> {
+  const sessionId = params.entry.sessionId?.trim();
+  if (!sessionId) {
+    return null;
+  }
   const sessionsDir = path.dirname(params.storePath);
-  const sessionFile = resolveSessionFilePath(params.entry.sessionId, params.entry, {
+  const sessionFile = resolveSessionFilePath(sessionId, params.entry, {
     agentId: params.agentId,
     sessionsDir,
   });
   const trajectoryPath =
     (await resolveTrajectoryRuntimeFile({
       sessionFile,
-      sessionId: params.entry.sessionId,
+      sessionId,
     })) ??
     resolveTrajectoryFilePath({
       sessionFile,
-      sessionId: params.entry.sessionId,
+      sessionId,
     });
   return {
     agentId: params.agentId,
@@ -541,14 +545,15 @@ export async function sessionsTailCommand(
       agentId: target.agentId,
       storePath: target.storePath,
     })) {
-      selections.push(
-        await buildTailSelection({
-          agentId: target.agentId,
-          entry,
-          key: sessionKey,
-          storePath: target.storePath,
-        }),
-      );
+      const selection = await buildTailSelection({
+        agentId: target.agentId,
+        entry,
+        key: sessionKey,
+        storePath: target.storePath,
+      });
+      if (selection) {
+        selections.push(selection);
+      }
     }
   }
   const selected = selectSessionsToTail(selections, opts.sessionKey);
