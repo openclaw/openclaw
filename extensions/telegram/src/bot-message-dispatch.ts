@@ -2276,6 +2276,9 @@ export const dispatchTelegramMessage = async ({
                       }
                       return;
                     }
+                    if (streamMode === "progress" && info.kind === "tool") {
+                      await rotateAnswerLaneAfterToolProgress();
+                    }
                     const delivered = await sendPayload(effectivePayload, {
                       durable: info.kind === "final",
                     });
