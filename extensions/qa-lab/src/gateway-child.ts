@@ -363,7 +363,14 @@ function signalQaGatewayChildProcessTree(child: ChildProcess, signal: NodeJS.Sig
       child.kill(signal);
       return;
     }
-    process.kill(-child.pid, signal);
+    
+    // Node 24 safe check: Only kill the group if the child process is detached.
+    // Otherwise, targeting the negative PID blasts the parent gateway under systemd.
+    if (child.detached) {
+      process.kill(-child.pid, signal);
+    } else {
+      child.kill(signal);
+    }
   } catch {
     try {
       child.kill(signal);
