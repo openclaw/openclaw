@@ -424,3 +424,26 @@ export function parseTtsDirectives(
     warnings,
   };
 }
+
+const hiddenTextCaptionPolicy: SpeechModelOverridePolicy = {
+  enabled: true,
+  allowText: true,
+  allowProvider: false,
+  allowVoice: false,
+  allowModelId: false,
+  allowVoiceSettings: false,
+  allowNormalization: false,
+  allowSeed: false,
+};
+
+export function resolveDirectiveOnlyTtsCaptionText(text: string | undefined): string | undefined {
+  if (!text?.trim()) {
+    return undefined;
+  }
+  const parsed = parseTtsDirectives(text, hiddenTextCaptionPolicy, { providers: [] });
+  const captionText = parsed.ttsText?.trim();
+  if (!captionText || parsed.cleanedText.trim()) {
+    return undefined;
+  }
+  return captionText;
+}
