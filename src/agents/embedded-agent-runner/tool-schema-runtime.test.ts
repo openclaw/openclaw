@@ -25,6 +25,16 @@ vi.mock("./logger.js", () => ({
 const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } =
   await import("./tool-schema-runtime.js");
 
+function createUnreadableNameTool() {
+  const tool = { name: "placeholder" };
+  Object.defineProperty(tool, "name", {
+    get() {
+      throw new Error("tool name getter exploded");
+    },
+  });
+  return tool;
+}
+
 describe("tool schema runtime diagnostics", () => {
   it("stays quiet when a provider reports no diagnostics", () => {
     mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([]);
@@ -86,6 +96,29 @@ describe("tool schema runtime diagnostics", () => {
           { index: 1, tool: "beta", violations: ["one"], violationCount: 1 },
         ],
       },
+    );
+  });
+
+  it("logs provider diagnostics even when a tool name cannot be read", () => {
+    mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([
+      { toolName: "unknown", toolIndex: 0, violations: ["one"] },
+    ]);
+
+    expect(() =>
+      logProviderToolSchemaDiagnostics({
+        provider: "example",
+        tools: [createUnreadableNameTool(), { name: "beta" }] as never,
+      }),
+    ).not.toThrow();
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics: 1 tool for example: unknown (1 violation)",
+      expect.objectContaining({
+        provider: "example",
+        toolCount: 2,
+        diagnosticCount: 1,
+        tools: ["0:<unreadable>", "1:beta"],
+      }),
     );
   });
 });

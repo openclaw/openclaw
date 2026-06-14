@@ -94,7 +94,7 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       provider: params.provider,
       toolCount: params.tools.length,
       diagnosticCount: diagnostics.length,
-      tools: params.tools.map((tool, index) => `${index}:${tool.name}`),
+      tools: params.tools.map(formatDiagnosticToolName),
       diagnostics: diagnostics.map((diagnostic) => ({
         index: diagnostic.toolIndex,
         tool: diagnostic.toolName,
@@ -103,6 +103,15 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       })),
     },
   );
+}
+
+function formatDiagnosticToolName(tool: AgentTool, index: number): string {
+  try {
+    const name = tool.name;
+    return `${index}:${typeof name === "string" && name ? name : "<unnamed>"}`;
+  } catch {
+    return `${index}:<unreadable>`;
+  }
 }
 
 function summarizeProviderToolSchemaDiagnostics(
