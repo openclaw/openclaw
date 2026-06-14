@@ -1992,6 +1992,154 @@ describe("google transport stream", () => {
     expect(params.toolConfig).toBeUndefined();
   });
 
+  it("quarantines invalid Google transport tools before building request params", () => {
+    const unreadable = { name: "bad_parameters", description: "bad" };
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          unreadable,
+          {
+            name: "dynamic_schema",
+            description: "dynamic",
+            parameters: {
+              type: "object",
+              properties: {
+                target: { $dynamicRef: "#target" },
+              },
+            },
+          },
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: {
+              type: "object",
+              properties: { q: { type: "string" } },
+              required: ["q"],
+            },
+          },
+        ],
+      } as never,
+      { toolChoice: "auto" },
+    );
+
+    expect(params.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parametersJsonSchema: {
+              type: "object",
+              properties: { q: { type: "string" } },
+              required: ["q"],
+            },
+          },
+        ],
+      },
+    ]);
+    expect(params.toolConfig).toEqual({
+      functionCallingConfig: { mode: "AUTO" },
+    });
+  });
+
+  it("omits tools and tool config when the Google transport tool list length is unreadable", () => {
+    const tools = new Proxy([] as unknown[], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length getter exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools,
+      } as never,
+      { toolChoice: "auto" },
+    );
+
+    expect(params.tools).toBeUndefined();
+    expect(params.toolConfig).toBeUndefined();
+  });
+
+  it("throws a local error when the forced Google transport tool is quarantined", () => {
+    const unreadable = { name: "bad_parameters", description: "bad" };
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+
+    expect(() =>
+      buildGoogleGenerativeAiParams(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            unreadable,
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: {
+                type: "object",
+                properties: { q: { type: "string" } },
+              },
+            },
+          ],
+        } as never,
+        {
+          toolChoice: {
+            type: "function",
+            function: { name: "bad_parameters" },
+          },
+        },
+      ),
+    ).toThrow('forced Google tool choice "bad_parameters" is unavailable');
+  });
+
+  it("keeps parameter-free Google transport tools", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "ping",
+            description: "Ping",
+          },
+        ],
+      } as never,
+      { toolChoice: "auto" },
+    );
+
+    expect(params.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "ping",
+            description: "Ping",
+          },
+        ],
+      },
+    ]);
+    expect(params.toolConfig).toEqual({
+      functionCallingConfig: { mode: "AUTO" },
+    });
+  });
+
   it("uses a non-empty text placeholder for empty user text", () => {
     const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
       messages: [
