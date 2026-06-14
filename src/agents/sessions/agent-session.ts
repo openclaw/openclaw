@@ -32,6 +32,7 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isContextOverflow } from "../../llm/utils/overflow.js";
+import { isCompactionTimeoutResultAccepted } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import type {
   Agent,
   AgentEvent,
@@ -328,7 +329,7 @@ type CompactionWorkOutcome =
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
 function isCompactionTimeoutAbortReason(reason: unknown): boolean {
-  return reason instanceof Error && reason.name === "CompactionTimeoutError";
+  return isCompactionTimeoutResultAccepted(reason);
 }
 
 // ============================================================================

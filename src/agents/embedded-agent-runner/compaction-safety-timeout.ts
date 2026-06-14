@@ -10,6 +10,29 @@ import type { CompactResult, ContextEngine } from "../../context-engine/types.js
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
+const acceptedCompactionTimeoutReasons = new WeakSet<Error>();
+
+function createCompactionTimeoutError(): Error {
+  const timeoutError = new Error("Compaction timed out");
+  timeoutError.name = "CompactionTimeoutError";
+  acceptedCompactionTimeoutReasons.add(timeoutError);
+  return timeoutError;
+}
+
+function expireCompactionTimeoutResultAcceptance(reason: unknown): void {
+  if (reason instanceof Error) {
+    acceptedCompactionTimeoutReasons.delete(reason);
+  }
+}
+
+export function isCompactionTimeoutResultAccepted(reason: unknown): boolean {
+  return (
+    reason instanceof Error &&
+    reason.name === "CompactionTimeoutError" &&
+    acceptedCompactionTimeoutReasons.has(reason)
+  );
+}
+
 function createAbortError(signal: AbortSignal): Error {
   const reason = "reason" in signal ? signal.reason : undefined;
   if (reason instanceof Error) {
@@ -106,14 +129,16 @@ export async function compactWithSafetyTimeout<T>(
     const contenders: Array<Promise<T> | Promise<never>> = [compactPromise];
 
     if (resolvedTimeoutMs && timeoutController) {
-      const timeoutError = new Error("Compaction timed out");
-      timeoutError.name = "CompactionTimeoutError";
+      const timeoutError = createCompactionTimeoutError();
       contenders.push(
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {
             timeoutController.abort(timeoutError);
             cancel(timeoutError);
-            queueMicrotask(() => reject(timeoutError));
+            queueMicrotask(() => {
+              expireCompactionTimeoutResultAcceptance(timeoutError);
+              reject(timeoutError);
+            });
           }, resolvedTimeoutMs);
           timeout.unref?.();
         }),
