@@ -147,6 +147,36 @@ describe("security audit trust model findings", () => {
           ).toBe(false);
         },
       },
+      {
+        name: "flags open dmPolicy when tools.elevated is enabled",
+        cfg: {
+          tools: { elevated: { enabled: true, allowFrom: { feishu: ["ou_123"] } } },
+          channels: { feishu: { groupPolicy: "disabled", dmPolicy: "open" } },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[6].cfg);
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_elevated",
+          );
+          expect(finding?.severity).toBe("critical");
+          expect(finding?.detail).toContain("channels.feishu.dmPolicy");
+        },
+      },
+      {
+        name: "flags open dmPolicy when runtime/filesystem tools are exposed without guards",
+        cfg: {
+          channels: { feishu: { groupPolicy: "disabled", dmPolicy: "open" } },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[7].cfg);
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+          );
+          expect(finding?.severity).toBe("critical");
+          expect(finding?.detail).toContain("channels.feishu.dmPolicy");
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
