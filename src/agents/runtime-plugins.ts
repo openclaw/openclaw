@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
+import type { RuntimePluginLoadProgressReporter } from "../plugins/runtime/load-diagnostics.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -37,6 +38,7 @@ export function ensureRuntimePluginsLoaded(params: {
   config?: OpenClawConfig;
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
+  onLoadProgress?: RuntimePluginLoadProgressReporter;
 }): void {
   if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
     return;
@@ -59,6 +61,7 @@ export function ensureRuntimePluginsLoaded(params: {
       workspaceDir,
       ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
       ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
+      ...(params.onLoadProgress ? { runtimePluginLoadProgress: params.onLoadProgress } : {}),
       runtimeOptions: allowGatewaySubagentBinding
         ? { allowGatewaySubagentBinding: true }
         : undefined,
