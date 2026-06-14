@@ -174,6 +174,32 @@ describe("provider auth aliases", () => {
     expect(resolveProviderIdForAuth("openai", { metadataSnapshot })).toBe("openai");
   });
 
+  it("keeps healthy auth aliases after unreadable plugin metadata", () => {
+    const unreadablePlugin = {
+      id: "broken",
+      get origin() {
+        throw new Error("provider auth alias plugin origin getter exploded");
+      },
+      providerAuthAliases: {
+        broken: "broken-target",
+      },
+    } as never;
+    const metadataSnapshot = {
+      plugins: [
+        unreadablePlugin,
+        createPluginManifestRecord({
+          id: "healthy",
+          origin: "bundled",
+          providerAuthAliases: {
+            healthy: "healthy-provider",
+          },
+        }),
+      ],
+    } as never;
+
+    expect(resolveProviderIdForAuth("healthy", { metadataSnapshot })).toBe("healthy-provider");
+  });
+
   it("does not reuse aliases across env-resolved plugin roots", () => {
     const config = {};
     const env = {
