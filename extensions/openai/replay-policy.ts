@@ -21,6 +21,7 @@ export function buildOpenAIReplayPolicy(ctx: ProviderReplayPolicyContext): Provi
     validateGeminiTurns: false,
     validateAnthropicTurns: false,
     ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
+    ...(isResponsesFamily ? { dropReasoningFromHistory: true } : {}),
     ...(ctx.modelApi === "openai-completions"
       ? {
           sanitizeToolCallIds: true,
