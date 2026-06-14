@@ -235,6 +235,134 @@ describe("googlechat message actions", () => {
     expectJsonResult(result, { ok: true, to: "spaces/BBB" });
   });
 
+  it("falls back to sending the media URL as text when upload returns 403", async () => {
+    const account = buildAccount({
+      config: { mediaMaxMb: 5 },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    const readRemoteMediaBuffer = vi.fn(async () => ({
+      buffer: Buffer.from("remote-bytes"),
+      fileName: "remote.png",
+      contentType: "image/png",
+    }));
+    getGoogleChatRuntime.mockReturnValue({
+      channel: {
+        media: {
+          readRemoteMediaBuffer,
+        },
+      },
+    });
+    uploadGoogleChatAttachment.mockRejectedValueOnce(
+      new Error("Google Chat upload 403: PERMISSION_DENIED"),
+    );
+    sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-fallback",
+    });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    const result = await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "caption",
+        media: "https://example.com/file.png",
+      },
+      cfg: {},
+      accountId: "default",
+    } as never);
+
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "caption\nhttps://example.com/file.png",
+      thread: undefined,
+    });
+    expectJsonResult(result, { ok: true, to: "spaces/AAA" });
+  });
+
+  it("propagates 403 upload errors for local media paths", async () => {
+    const account = buildAccount({
+      config: { mediaMaxMb: 5 },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    const readFile = vi.fn(async () => Buffer.from("local-bytes"));
+    getGoogleChatRuntime.mockReturnValue({
+      channel: {
+        media: {
+          readRemoteMediaBuffer: vi.fn(),
+        },
+      },
+    });
+    uploadGoogleChatAttachment.mockRejectedValueOnce(
+      new Error("Google Chat upload 403: PERMISSION_DENIED"),
+    );
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "send",
+        params: {
+          to: "spaces/AAA",
+          message: "caption",
+          media: "/tmp/workspace/notes.md",
+        },
+        cfg: {},
+        accountId: "default",
+        mediaLocalRoots: ["/tmp/workspace"],
+        mediaReadFile: readFile,
+      } as never),
+    ).rejects.toThrow("403");
+
+    expect(sendGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("propagates non-403 upload errors", async () => {
+    const account = buildAccount({
+      config: { mediaMaxMb: 5 },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    const readRemoteMediaBuffer = vi.fn(async () => ({
+      buffer: Buffer.from("remote-bytes"),
+      fileName: "remote.png",
+      contentType: "image/png",
+    }));
+    getGoogleChatRuntime.mockReturnValue({
+      channel: {
+        media: {
+          readRemoteMediaBuffer,
+        },
+      },
+    });
+    uploadGoogleChatAttachment.mockRejectedValueOnce(
+      new Error("Google Chat upload 500: Internal Server Error"),
+    );
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "send",
+        params: {
+          to: "spaces/AAA",
+          message: "caption",
+          media: "https://example.com/file.png",
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("500");
+
+    expect(sendGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
   it("removes only matching app reactions on react remove", async () => {
     const account = buildAccount({
       config: { botUser: "users/app-bot" },

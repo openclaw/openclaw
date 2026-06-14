@@ -407,6 +407,88 @@ describe("googlechatPlugin outbound sendMedia", () => {
     expect(result.chatId).toBe("spaces/AAA");
     expect(result.receipt.primaryPlatformMessageId).toBe("spaces/AAA/messages/msg-2");
   });
+
+  it("falls back to sending the media URL as text when upload returns 403", async () => {
+    readRemoteMediaBufferMock.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+      fileName: "remote.png",
+    });
+    uploadGoogleChatAttachmentMock.mockRejectedValueOnce(
+      new Error("Google Chat upload 403: PERMISSION_DENIED"),
+    );
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-fallback",
+    });
+
+    const cfg = createGoogleChatCfg();
+
+    const result = await googlechatOutboundAdapter.attachedResults.sendMedia({
+      cfg,
+      to: "spaces/AAA",
+      text: "caption",
+      mediaUrl: "https://example.com/image.png",
+      accountId: "default",
+    });
+
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        space: "spaces/AAA",
+        text: "caption\nhttps://example.com/image.png",
+      }),
+    );
+    expect(result.messageId).toBe("spaces/AAA/messages/msg-fallback");
+    expect(result.chatId).toBe("spaces/AAA");
+  });
+
+  it("propagates 403 upload errors for local media paths", async () => {
+    loadOutboundMediaFromUrlMock.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+      fileName: "image.png",
+    });
+    uploadGoogleChatAttachmentMock.mockRejectedValueOnce(
+      new Error("Google Chat upload 403: PERMISSION_DENIED"),
+    );
+
+    const cfg = createGoogleChatCfg();
+
+    await expect(
+      googlechatOutboundAdapter.attachedResults.sendMedia({
+        cfg,
+        to: "spaces/AAA",
+        text: "caption",
+        mediaUrl: "/tmp/workspace/image.png",
+        mediaLocalRoots: ["/tmp/workspace"],
+        accountId: "default",
+      }),
+    ).rejects.toThrow("403");
+
+    expect(sendGoogleChatMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates non-403 upload errors", async () => {
+    readRemoteMediaBufferMock.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+      fileName: "remote.png",
+    });
+    uploadGoogleChatAttachmentMock.mockRejectedValueOnce(
+      new Error("Google Chat upload 500: Internal Server Error"),
+    );
+
+    const cfg = createGoogleChatCfg();
+
+    await expect(
+      googlechatOutboundAdapter.attachedResults.sendMedia({
+        cfg,
+        to: "spaces/AAA",
+        text: "caption",
+        mediaUrl: "https://example.com/image.png",
+        accountId: "default",
+      }),
+    ).rejects.toThrow("500");
+  });
 });
 
 describe("googlechatPlugin threading", () => {
