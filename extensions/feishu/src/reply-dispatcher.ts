@@ -117,7 +117,21 @@ type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
   runtime: RuntimeEnv;
-  channel: Pick<ReturnType<typeof getFeishuRuntime>["channel"], "text" | "reply">;
+  channel: {
+    text: Pick<
+      ReturnType<typeof getFeishuRuntime>["channel"]["text"],
+      | "resolveTextChunkLimit"
+      | "resolveChunkMode"
+      | "resolveMarkdownTableMode"
+      | "convertMarkdownTables"
+      | "chunkTextWithMode"
+      | "chunkMarkdownTextWithMode"
+    >;
+    reply: Pick<
+      ReturnType<typeof getFeishuRuntime>["channel"]["reply"],
+      "createReplyDispatcherWithTyping" | "resolveHumanDelayConfig"
+    >;
+  };
   chatId: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
