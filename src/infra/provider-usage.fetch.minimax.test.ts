@@ -56,7 +56,7 @@ describe("fetchMinimaxUsage", () => {
     });
 
     const result = await fetchMinimaxUsage("key", 5000, mockFetch, { baseUrl });
-    expect(result.windows).toEqual([{ label: "5h", usedPercent: 2, resetAt: undefined }]);
+    expect(result.windows).toEqual([{ label: "5h", usedPercent: 98, resetAt: undefined }]);
   });
 
   it.each([
@@ -154,7 +154,7 @@ describe("fetchMinimaxUsage", () => {
       },
     },
     {
-      name: "treats MiniMax current_interval_usage_count as remaining quota (not consumed)",
+      name: "treats MiniMax current_interval_usage_count as consumed usage",
       payload: {
         data: {
           current_interval_total_count: 100,
@@ -164,7 +164,7 @@ describe("fetchMinimaxUsage", () => {
       },
       expected: {
         plan: "Coding Plan",
-        windows: [{ label: "5h", usedPercent: 2, resetAt: undefined }],
+        windows: [{ label: "5h", usedPercent: 98, resetAt: undefined }],
       },
     },
     {
@@ -240,7 +240,7 @@ describe("fetchMinimaxUsage", () => {
       },
       expected: {
         plan: "Coding Plan · MiniMax-M*",
-        windows: [{ label: "4h", usedPercent: 0.8333333333333334, resetAt: 1_774_195_200_000 }],
+        windows: [{ label: "4h", usedPercent: 99.16666666666667, resetAt: 1_774_195_200_000 }],
       },
     },
     {
@@ -265,7 +265,7 @@ describe("fetchMinimaxUsage", () => {
       },
       expected: {
         plan: "Coding Plan · video-01",
-        windows: [{ label: "4h", usedPercent: 25, resetAt: 1_774_195_200_000 }],
+        windows: [{ label: "4h", usedPercent: 75, resetAt: 1_774_195_200_000 }],
       },
     },
   ])("$name", async ({ payload, expected }) => {
