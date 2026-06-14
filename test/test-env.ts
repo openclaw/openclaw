@@ -17,6 +17,15 @@ const LIVE_EXTERNAL_AUTH_FILES = [
   ".codex/auth.json",
   ".codex/config.toml",
 ] as const;
+const LIVE_EXTERNAL_AUTH_EXCLUDED_DIRS = new Set([
+  "antigravity-browser-profile",
+  "browser_recordings",
+  "Cache",
+  "Cache_Data",
+  "Code Cache",
+  "GPUCache",
+  "CacheStorage",
+]);
 const requireFromHere = createRequire(import.meta.url);
 
 type LegacyConfigCompatApi = typeof import("../src/commands/doctor/shared/legacy-config-compat.js");
@@ -249,7 +258,21 @@ function ensureParentDir(targetPath: string): void {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 }
 
-function copyDirIfExists(sourcePath: string, targetPath: string): void {
+function shouldStageLiveExternalAuthPath(sourceRoot: string, sourcePath: string): boolean {
+  const relativePath = path.relative(sourceRoot, sourcePath);
+  if (!relativePath || relativePath.startsWith("..")) {
+    return true;
+  }
+  return relativePath
+    .split(path.sep)
+    .every((segment) => !LIVE_EXTERNAL_AUTH_EXCLUDED_DIRS.has(segment));
+}
+
+function copyDirIfExists(
+  sourcePath: string,
+  targetPath: string,
+  options?: { filter?: (sourcePath: string) => boolean },
+): void {
   if (!fs.existsSync(sourcePath)) {
     return;
   }
@@ -257,6 +280,7 @@ function copyDirIfExists(sourcePath: string, targetPath: string): void {
   fs.cpSync(sourcePath, targetPath, {
     recursive: true,
     force: true,
+    filter: options?.filter,
   });
 }
 
@@ -408,7 +432,10 @@ function stageLiveTestState(params: {
   copyLiveAuthProfiles(realStateDir, tempStateDir);
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
-    copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));
+    const sourcePath = path.join(params.realHome, authDir);
+    copyDirIfExists(sourcePath, path.join(params.tempHome, authDir), {
+      filter: (entryPath) => shouldStageLiveExternalAuthPath(sourcePath, entryPath),
+    });
   }
   for (const authFile of LIVE_EXTERNAL_AUTH_FILES) {
     copyFileIfExists(path.join(params.realHome, authFile), path.join(params.tempHome, authFile));
