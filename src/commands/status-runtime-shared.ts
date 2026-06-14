@@ -1,10 +1,20 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
+import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import {
+  buildCodexSyntheticUsageAuth,
+  mergeUsageSummaries,
+  shouldUseCodexSyntheticUsageForRuntime,
+} from "../status/codex-synthetic-usage.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 
@@ -31,6 +41,58 @@ function loadReadOnlyChannelPluginsModule() {
 
 function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
+}
+
+function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
+  const auth = normalizeOptionalLowercaseString(authLabel);
+  if (!auth) {
+    return undefined;
+  }
+  if (auth.startsWith("oauth")) {
+    return "oauth";
+  }
+  if (auth.startsWith("token")) {
+    return "token";
+  }
+  if (auth.startsWith("api-key") || auth.startsWith("api key")) {
+    return "api_key";
+  }
+  return undefined;
+}
+
+function shouldUseConfiguredCodexSyntheticUsage(params: {
+  config: OpenClawConfig;
+  agentDir: string;
+}): boolean {
+  const configuredDefault = resolveDefaultModelForAgent({
+    cfg: params.config,
+    allowPluginNormalization: false,
+  });
+  const policy = resolveAgentHarnessPolicy({
+    config: params.config,
+    provider: configuredDefault.provider,
+    modelId: configuredDefault.model,
+  });
+  if (
+    !shouldUseCodexSyntheticUsageForRuntime({
+      provider: configuredDefault.provider,
+      effectiveHarness: policy.runtime,
+    })
+  ) {
+    return false;
+  }
+  const authLabel = resolveModelAuthLabel({
+    provider: configuredDefault.provider,
+    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: configuredDefault.provider,
+      harnessRuntime: policy.runtime,
+      config: params.config,
+    }),
+    cfg: params.config,
+    agentDir: params.agentDir,
+    includeExternalProfiles: false,
+  });
+  return resolveUsageCredentialType(authLabel) !== "api_key";
 }
 
 /** Runs the lightweight security audit used by status JSON/all output. */
@@ -69,11 +131,23 @@ type StatusUsageSummaryOptions = {
 /** Loads provider usage for status output, defaulting to the config's default agent directory. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
-  return await loadProviderUsageSummary({
+  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config);
+  const usage = await loadProviderUsageSummary({
     timeoutMs: params.timeoutMs,
     config: params.config,
-    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.config),
+    agentDir,
   });
+  if (!shouldUseConfiguredCodexSyntheticUsage({ config: params.config, agentDir })) {
+    return usage;
+  }
+  const codexUsage = await loadProviderUsageSummary({
+    timeoutMs: params.timeoutMs,
+    providers: ["openai"],
+    auth: [buildCodexSyntheticUsageAuth()],
+    config: params.config,
+    agentDir,
+  });
+  return mergeUsageSummaries(usage, codexUsage);
 }
 
 /** Exposes the lazily loaded provider-usage module for callers that need its helpers. */

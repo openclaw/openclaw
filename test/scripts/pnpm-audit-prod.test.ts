@@ -234,6 +234,57 @@ snapshots:
     ]);
   });
 
+  it("suppresses the Deno-only esbuild advisory for the pinned Node package path", () => {
+    const versionsByPackage = new Map([["esbuild", new Set(["0.28.0"])]]);
+    const findings = filterFindingsBySeverity(
+      {
+        esbuild: [
+          {
+            id: "1120679",
+            severity: "high",
+            title: "esbuild Deno module binary integrity check missing",
+            vulnerable_versions: ">=0.17.0 <0.28.1",
+            url: "https://github.com/advisories/GHSA-gv7w-rqvm-qjhr",
+          },
+        ],
+      },
+      "high",
+      versionsByPackage,
+    );
+
+    expect(findings).toEqual([]);
+  });
+
+  it("keeps the esbuild advisory blocking for unreviewed affected versions", () => {
+    const versionsByPackage = new Map([["esbuild", new Set(["0.27.7"])]]);
+    const findings = filterFindingsBySeverity(
+      {
+        esbuild: [
+          {
+            id: "1120679",
+            severity: "high",
+            title: "esbuild Deno module binary integrity check missing",
+            vulnerable_versions: ">=0.17.0 <0.28.1",
+            url: "https://github.com/advisories/GHSA-gv7w-rqvm-qjhr",
+          },
+        ],
+      },
+      "high",
+      versionsByPackage,
+    );
+
+    expect(findings).toEqual([
+      {
+        id: "1120679",
+        packageName: "esbuild",
+        severity: "high",
+        title: "esbuild Deno module binary integrity check missing",
+        url: "https://github.com/advisories/GHSA-gv7w-rqvm-qjhr",
+        vulnerableVersions: ">=0.17.0 <0.28.1",
+      },
+    ]);
+  });
+
   it("bounds bulk advisory error response bodies", async () => {
     const tail = "tail-sentinel-should-not-appear";
     const response = new Response(`${"x".repeat(5000)}${tail}`, {

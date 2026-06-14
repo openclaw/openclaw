@@ -13,7 +13,6 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
-import { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -46,6 +45,10 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import {
+  buildCodexSyntheticUsageAuth,
+  shouldUseCodexSyntheticUsageForRuntime,
+} from "./codex-synthetic-usage.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 export type { BuildStatusTextParams } from "./status-text.types.js";
 
@@ -178,15 +181,6 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
   } catch {
     return undefined;
   }
-}
-
-function shouldUseCodexSyntheticUsage(params: {
-  provider?: string;
-  effectiveHarness?: string;
-}): boolean {
-  const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
-  const provider = normalizeOptionalLowercaseString(params.provider);
-  return harness === "codex" && (provider === "openai" || provider === "codex");
 }
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
@@ -375,11 +369,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
   const selectedUsageCredentialType = resolveUsageCredentialType(usageAuthLabel);
   const useCodexSyntheticUsage =
-    shouldUseCodexSyntheticUsage({
+    selectedUsageCredentialType !== "api_key" &&
+    shouldUseCodexSyntheticUsageForRuntime({
       provider: activeStatusProvider,
       effectiveHarness,
-    }) &&
-    (selectedUsageCredentialType === "oauth" || selectedUsageCredentialType === "token");
+    });
   const codexUsageAuthProfileId = useCodexSyntheticUsage
     ? resolveCodexSyntheticUsageAuthProfileId({
         profileId: sessionEntry?.authProfileOverride,
@@ -413,14 +407,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           workspaceDir: statusWorkspaceDir,
           config: cfg,
           auth: useCodexSyntheticUsage
-            ? [
-                {
-                  provider: "openai",
-                  token: CODEX_APP_SERVER_AUTH_MARKER,
-                  ...(codexUsageAuthProfileId ? { authProfileId: codexUsageAuthProfileId } : {}),
-                  hookProvider: "codex",
-                },
-              ]
+            ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
             : undefined,
         }),
         new Promise<never>((_, reject) => {
