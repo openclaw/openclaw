@@ -18,6 +18,7 @@ afterEach(async () => {
 
 function createRuntime(currentCfg?: OpenClawConfig, persistedCfg?: OpenClawConfig) {
   let runtimeCfg = structuredClone(currentCfg ?? ({} as OpenClawConfig));
+  const commitConfig = vi.fn();
   const mutateConfigFile = vi.fn(
     async (params: {
       mutate: (
@@ -28,6 +29,7 @@ function createRuntime(currentCfg?: OpenClawConfig, persistedCfg?: OpenClawConfi
       const draft = structuredClone(runtimeCfg);
       const result = await params.mutate(draft, { snapshot: {} as never, previousHash: null });
       runtimeCfg = draft;
+      commitConfig();
       return { nextConfig: persistedCfg ?? runtimeCfg, result };
     },
   );
@@ -38,6 +40,7 @@ function createRuntime(currentCfg?: OpenClawConfig, persistedCfg?: OpenClawConfi
         current: vi.fn(() => runtimeCfg),
       },
     } as unknown as PluginRuntime,
+    commitConfig,
     mutateConfigFile,
   };
 }
@@ -166,7 +169,7 @@ describe("maybeCreateDynamicAgent", () => {
       agents: { list: [] },
       bindings: [],
     } as OpenClawConfig;
-    const { runtime, mutateConfigFile } = createRuntime(cfg);
+    const { runtime, commitConfig, mutateConfigFile } = createRuntime(cfg);
     const canCreateForConfig = vi
       .fn<(cfg: OpenClawConfig) => Promise<boolean>>()
       .mockResolvedValueOnce(true)
@@ -184,6 +187,7 @@ describe("maybeCreateDynamicAgent", () => {
     expect(result.created).toBe(false);
     expect(canCreateForConfig).toHaveBeenCalledTimes(2);
     expect(mutateConfigFile).toHaveBeenCalledTimes(1);
+    expect(commitConfig).not.toHaveBeenCalled();
     expect(result.updatedCfg.agents?.list).toEqual([]);
     expect(result.updatedCfg.bindings).toEqual([]);
     expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(false);
@@ -192,7 +196,14 @@ describe("maybeCreateDynamicAgent", () => {
 
   it("scopes bindings to the normalized account id", async () => {
     const cfg = {
-      channels: { feishu: { dynamicAgentCreation: createDynamicConfig() } },
+      channels: {
+        feishu: {
+          dynamicAgentCreation: {
+            ...createDynamicConfig(),
+            maxAgents: 1,
+          },
+        },
+      },
       agents: {
         list: [
           {
@@ -250,7 +261,7 @@ describe("maybeCreateDynamicAgent", () => {
       agents: {
         list: [
           {
-            id: "feishu-ou_sender",
+            id: "feishu-ou_existing",
             workspace: path.join(tempRoot, "existing-workspace"),
             agentDir: path.join(tempRoot, "existing-agent"),
           },
