@@ -22,7 +22,11 @@ import {
   measureGatewayRestartTrace,
   recordGatewayRestartTrace,
 } from "./restart-trace.js";
-import type { ChatRunEntry, ChatRunState } from "./server-chat-state.js";
+import {
+  createChatAbortMarker,
+  type ChatRunEntry,
+  type ChatRunState,
+} from "./server-chat-state.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
@@ -406,7 +410,7 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       entry.abortStopReason = "restart";
       entry.controller.abort(createAgentRunRestartAbortError());
       params.chatAbortControllers.delete(runId);
-      params.chatRunState.abortedRuns.set(runId, Date.now());
+      params.chatRunState.abortedRuns.set(runId, createChatAbortMarker());
       params.chatRunState.clearRun(runId);
       const removed = params.removeChatRun(runId, runId, entry.sessionKey);
       params.agentRunSeq.delete(runId);
