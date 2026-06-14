@@ -58,9 +58,9 @@ function collectProviderFactories<TProvider>(params: {
   mod: Record<string, unknown>;
   suffix: string;
   isProvider: (value: unknown) => value is TProvider;
-}): { providers: TProvider[]; errors: unknown[] } {
+}): { providers: TProvider[]; failedFactoryCount: number } {
   const providers: TProvider[] = [];
-  const errors: unknown[] = [];
+  let failedFactoryCount = 0;
   for (const [name, exported] of Object.entries(params.mod).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -75,24 +75,15 @@ function collectProviderFactories<TProvider>(params: {
     let candidate: unknown;
     try {
       candidate = exported();
-    } catch (error) {
-      errors.push(error);
+    } catch {
+      failedFactoryCount += 1;
       continue;
     }
     if (params.isProvider(candidate)) {
       providers.push(candidate);
     }
   }
-  return { providers, errors };
-}
-
-function unableToInitializeProviderError(params: {
-  pluginId: string;
-  errors: readonly unknown[];
-}): Error {
-  return new Error(`Unable to initialize web providers for plugin ${params.pluginId}`, {
-    cause: params.errors.length === 1 ? params.errors[0] : new AggregateError(params.errors),
-  });
+  return { providers, failedFactoryCount };
 }
 
 function tryLoadBundledPublicArtifactModule(params: {
@@ -136,17 +127,17 @@ function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
   if (!mod) {
     return null;
   }
-  const { providers, errors } = collectProviderFactories({
+  const { providers, failedFactoryCount } = collectProviderFactories({
     mod,
     suffix: params.suffix,
     isProvider: params.isProvider,
   });
   if (providers.length === 0) {
-    if (errors.length > 0) {
-      throw unableToInitializeProviderError({
-        pluginId: params.pluginId,
-        errors,
-      });
+    if (failedFactoryCount > 0) {
+      // A broken plugin-owned provider factory must not poison startup for
+      // other providers. Treat the plugin as unavailable and let callers keep
+      // resolving the remaining active provider set.
+      return [];
     }
     return null;
   }
