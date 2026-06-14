@@ -1546,8 +1546,6 @@ async function processResponsesStream(
     });
   };
   const appendCompletedResponseToolCallItem = (item: Record<string, unknown>) => {
-    // A tool call is a real message boundary; never collapse text across it.
-    lastTextBlock = null;
     const args = parseStreamingJson(stringifyJsonLike(item.arguments, "{}"));
     const block = {
       type: "toolCall",
@@ -1580,7 +1578,12 @@ async function processResponsesStream(
       }
       if (rawItem.type === "message") {
         appendCompletedResponseTextItem(rawItem);
-      } else if (rawItem.type === "function_call") {
+        continue;
+      }
+      // Any non-message item (reasoning, tool call) is a real boundary; a later
+      // message must not collapse across it, mirroring the streaming path.
+      lastTextBlock = null;
+      if (rawItem.type === "function_call") {
         appendCompletedResponseToolCallItem(rawItem);
       }
     }
