@@ -334,6 +334,7 @@ export async function startWebLoginWithQr(
   }
   const shouldRelinkLoggedOutAuth =
     authState.exists && !opts.force && isWebAuthLoggedOut(account.accountId);
+  const shouldClearExistingAuth = authState.exists && (opts.force || shouldRelinkLoggedOutAuth);
   if (
     authState.exists &&
     !opts.force &&
@@ -346,13 +347,19 @@ export async function startWebLoginWithQr(
       message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
     };
   }
-  if (shouldRelinkLoggedOutAuth) {
+  if (shouldClearExistingAuth) {
     try {
-      await logoutWeb({
+      const cleared = await logoutWeb({
         authDir: account.authDir,
         isLegacyAuthDir: account.isLegacyAuthDir,
         runtime,
       });
+      if (!cleared) {
+        return {
+          message:
+            "WhatsApp login failed: existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.",
+        };
+      }
       clearWebAuthLoggedOut(account.accountId);
     } catch (err) {
       return {

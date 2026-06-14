@@ -1,6 +1,6 @@
 // Whatsapp tests cover channel logout plugin behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappPlugin } from "./channel.js";
 import {
   clearWebAuthLoggedOut,
@@ -19,6 +19,10 @@ vi.mock("./channel.runtime.js", () => ({
 describe("WhatsApp channel logout", () => {
   beforeEach(() => {
     hoisted.logoutWeb.mockClear();
+    clearWebAuthLoggedOut("work");
+  });
+
+  afterEach(() => {
     clearWebAuthLoggedOut("work");
   });
 

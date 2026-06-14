@@ -1,4 +1,4 @@
-// Whatsapp plugin module tracks terminal auth facts observed by the live runtime.
+// WhatsApp plugin module tracks terminal auth facts observed by the live runtime.
 
 const loggedOutWebAuthAccounts = new Set<string>();
 

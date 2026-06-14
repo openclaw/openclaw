@@ -400,7 +400,7 @@ export async function monitorWebChannel(
               );
             } else if (setupDecision.healthState === "conflict") {
               runtime.error(
-                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
+                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then restart the channel. To force a fresh QR, run \`${formatCliCommand("openclaw channels logout --channel whatsapp")}\` before \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
               );
             } else {
               runtime.error(
@@ -633,7 +633,7 @@ export async function monitorWebChannel(
             "web reconnect: non-retryable close status; stopping monitor",
           );
           runtime.error(
-            `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
+            `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then restart the channel. To force a fresh QR, run \`${formatCliCommand("openclaw channels logout --channel whatsapp")}\` before \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
           );
         } else {
           reconnectLogger.warn(

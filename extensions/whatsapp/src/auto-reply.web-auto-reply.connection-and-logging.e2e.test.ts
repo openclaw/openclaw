@@ -408,6 +408,7 @@ describe("web auto-reply connection", () => {
     expect(sleep).not.toHaveBeenCalled();
     expectErrorContaining(runtime.error, "status 440");
     expectErrorContaining(runtime.error, "session conflict");
+    expectErrorContaining(runtime.error, "openclaw channels logout --channel whatsapp");
     expectErrorContaining(runtime.error, "Stopping web monitoring");
   });
 
@@ -473,22 +474,27 @@ describe("web auto-reply connection", () => {
         { timeout: 250, interval: 2 },
       );
 
-      scripted.resolveClose(0, { status, isLoggedOut, error });
-      await run;
+      try {
+        scripted.resolveClose(0, { status, isLoggedOut, error });
+        await run;
 
-      expect(scripted.getListenerCount()).toBe(1);
-      expect(sleep).not.toHaveBeenCalled();
-      expect(getActiveWebListener(accountId)).toBeNull();
-      await expect(fs.readFile(credsPath, "utf8")).resolves.toBe(credsJson);
-      expect(isWebAuthLoggedOut(accountId)).toBe(healthState === "logged-out");
-      expect(
-        statuses.filter((entry) => entry.connected === false && entry.healthState === healthState),
-      ).not.toEqual([]);
-      const finalStatus = statuses.at(-1);
-      expect(finalStatus?.running).toBe(false);
-      expect(finalStatus?.connected).toBe(false);
-      expect(finalStatus?.healthState).toBe(healthState);
-      clearWebAuthLoggedOut(accountId);
+        expect(scripted.getListenerCount()).toBe(1);
+        expect(sleep).not.toHaveBeenCalled();
+        expect(getActiveWebListener(accountId)).toBeNull();
+        await expect(fs.readFile(credsPath, "utf8")).resolves.toBe(credsJson);
+        expect(isWebAuthLoggedOut(accountId)).toBe(healthState === "logged-out");
+        expect(
+          statuses.filter(
+            (entry) => entry.connected === false && entry.healthState === healthState,
+          ),
+        ).not.toEqual([]);
+        const finalStatus = statuses.at(-1);
+        expect(finalStatus?.running).toBe(false);
+        expect(finalStatus?.connected).toBe(false);
+        expect(finalStatus?.healthState).toBe(healthState);
+      } finally {
+        clearWebAuthLoggedOut(accountId);
+      }
     },
   );
 

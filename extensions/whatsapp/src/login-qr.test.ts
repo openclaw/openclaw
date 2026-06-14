@@ -311,6 +311,51 @@ describe("login-qr", () => {
     expect(createWaSocketMock).not.toHaveBeenCalled();
   });
 
+  it("clears saved auth for an explicit fresh QR relink", async () => {
+    const accountId = "force-fresh-qr";
+    getActiveWebListenerMock.mockReturnValue({} as never);
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({
+      outcome: "stable",
+      exists: true,
+    });
+    waitForWaConnectionMock.mockImplementation(() => new Promise(() => {}));
+
+    const result = await startWebLoginWithQr({ timeoutMs: 5000, accountId, force: true });
+
+    expect(result).toEqual({
+      qrDataUrl: "data:image/png;base64,encoded:qr-data",
+      message: "Scan this QR in WhatsApp → Linked Devices.",
+    });
+    expect(logoutWebMock).toHaveBeenCalledWith({
+      authDir: expect.stringContaining(accountId),
+      isLegacyAuthDir: false,
+      runtime: expect.anything(),
+    });
+  });
+
+  it("does not start a fresh QR when existing auth cleanup is skipped", async () => {
+    const accountId = "skipped-cleanup-qr";
+    markWebAuthLoggedOut(accountId);
+    try {
+      logoutWebMock.mockResolvedValueOnce(false);
+      readWebAuthExistsForDecisionMock.mockResolvedValueOnce({
+        outcome: "stable",
+        exists: true,
+      });
+
+      const result = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
+
+      expect(result).toEqual({
+        message:
+          "WhatsApp login failed: existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.",
+      });
+      expect(isWebAuthLoggedOut(accountId)).toBe(true);
+      expect(createWaSocketMock).not.toHaveBeenCalled();
+    } finally {
+      clearWebAuthLoggedOut(accountId);
+    }
+  });
+
   it("clears terminal logged-out state after successful QR relink", async () => {
     const accountId = "qr-success-clears-terminal-state";
     markWebAuthLoggedOut(accountId);
@@ -432,7 +477,7 @@ describe("login-qr", () => {
     expect(result.message).toMatch(/retry/i);
   });
 
-  it("reports a recovered linked session when socket bootstrap restores auth without a QR", async () => {
+  it("reports a recovered linked session when saved auth has no active listener", async () => {
     createWaSocketMock.mockImplementationOnce(
       async (
         _printQr: boolean,
@@ -445,9 +490,7 @@ describe("login-qr", () => {
     );
     waitForWaConnectionMock.mockResolvedValueOnce(undefined);
     readWebSelfIdMock.mockReturnValueOnce({ e164: "+5511977000000", jid: null, lid: null });
-    readWebAuthExistsForDecisionMock
-      .mockResolvedValueOnce({ outcome: "stable", exists: false })
-      .mockResolvedValue({ outcome: "stable", exists: true });
+    readWebAuthExistsForDecisionMock.mockResolvedValue({ outcome: "stable", exists: true });
 
     const result = await startWebLoginWithQr({ timeoutMs: 5000 });
 
