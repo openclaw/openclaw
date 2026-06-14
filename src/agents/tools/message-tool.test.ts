@@ -2,6 +2,7 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../auto-reply/reply/delivery-hints.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -2620,6 +2621,10 @@ describe("message tool internal-runtime-context sanitization", () => {
       name: "delivery hint only",
       message:
         "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    },
+    {
+      name: "narration-aware delivery hint only",
+      message: MESSAGE_TOOL_ONLY_DELIVERY_HINT,
     },
     {
       name: "inbound metadata only",
