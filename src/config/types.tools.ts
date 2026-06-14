@@ -540,6 +540,12 @@ export type MemorySearchConfig = {
     onSearch?: boolean;
     watch?: boolean;
     watchDebounceMs?: number;
+    /**
+     * Minutes between periodic memory sync ticks. Defaults to 30. Set to 0
+     * to disable interval-based sync; other configured triggers such as
+     * onSessionStart, onSearch, and watch/file-change can still reindex
+     * memory.
+     */
     intervalMinutes?: number;
     /**
      * Timeout in seconds for inline embedding batches during memory indexing.

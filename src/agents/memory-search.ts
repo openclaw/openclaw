@@ -448,7 +448,7 @@ function resolveSyncConfig(
       overrides?.sync?.watchDebounceMs ??
       defaults?.sync?.watchDebounceMs ??
       DEFAULT_WATCH_DEBOUNCE_MS,
-    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 30,
     embeddingBatchTimeoutSeconds:
       overrides?.sync?.embeddingBatchTimeoutSeconds ?? defaults?.sync?.embeddingBatchTimeoutSeconds,
     sessions: {
