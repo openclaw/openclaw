@@ -14,11 +14,11 @@ import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
-  TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryPointerOpenFlags,
+  resolveTrajectoryRuntimeEventMaxBytes,
 } from "./paths.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
@@ -29,6 +29,7 @@ export {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryPointerOpenFlags,
+  resolveTrajectoryRuntimeEventMaxBytes,
   safeTrajectorySessionFileName,
 } from "./paths.js";
 
@@ -133,9 +134,10 @@ function trimTrajectoryWriterCache(): void {
 function truncateOversizedTrajectoryEvent(
   event: TrajectoryEvent,
   line: string,
+  limitBytes: number,
 ): string | undefined {
   const bytes = Buffer.byteLength(line, "utf8");
-  if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+  if (bytes <= limitBytes) {
     return line;
   }
   const truncated = safeJsonStringify({
@@ -143,11 +145,11 @@ function truncateOversizedTrajectoryEvent(
     data: {
       truncated: true,
       originalBytes: bytes,
-      limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+      limitBytes,
       reason: "trajectory-event-size-limit",
     },
   });
-  if (truncated && Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+  if (truncated && Buffer.byteLength(truncated, "utf8") <= limitBytes) {
     return truncated;
   }
   return undefined;
@@ -486,15 +488,25 @@ export function createTrajectoryRuntimeRecorder(
     return null;
   }
 
+  // Resolve the per-event byte cap once at recorder creation from the captured
+  // `env`, matching how `OPENCLAW_TRAJECTORY` enablement and trajectory path
+  // resolution already pin to the recorder's env. Re-reading it per event from
+  // ambient `process.env` would (a) ignore an injected `params.env` override
+  // and (b) let mid-session ambient mutations silently change behavior.
+  const maxRuntimeFileBytes = Math.max(
+    1,
+    Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
+  );
+  const eventMaxBytes = Math.min(
+    resolveTrajectoryRuntimeEventMaxBytes(env),
+    Math.max(1, maxRuntimeFileBytes - 1),
+  );
+
   const filePath = resolveTrajectoryFilePath({
     env,
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
   });
-  const maxRuntimeFileBytes = Math.max(
-    1,
-    Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
-  );
   const writer = params.writer ?? getTrajectoryWindowWriter(filePath, maxRuntimeFileBytes);
   writeTrajectoryPointerBestEffort({
     filePath,
@@ -534,7 +546,7 @@ export function createTrajectoryRuntimeRecorder(
     if (!line) {
       return undefined;
     }
-    const boundedLine = truncateOversizedTrajectoryEvent(event, line);
+    const boundedLine = truncateOversizedTrajectoryEvent(event, line, eventMaxBytes);
     if (!boundedLine) {
       return undefined;
     }
