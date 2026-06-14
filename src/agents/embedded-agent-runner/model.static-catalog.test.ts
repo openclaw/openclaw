@@ -315,6 +315,62 @@ describe("resolveBundledStaticCatalogModel", () => {
     );
   });
 
+  it.each([
+    "Unable to resolve bundled plugin public surface opencode-go/./provider-discovery.js",
+    "Unable to open bundled plugin public surface opencode-go/./provider-discovery.js",
+  ])("falls through when the provider catalog entry artifact is unavailable: %s", (message) => {
+    setManifestPlugins([
+      {
+        id: "opencode-go",
+        origin: "bundled",
+        providers: ["opencode-go"],
+        providerCatalogEntry: "./provider-discovery.ts",
+        modelCatalog: {
+          providers: {
+            "opencode-go": {
+              baseUrl: "https://opencode.ai/zen/go/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "kimi-k2.7-code",
+                  name: "Kimi K2.7 Code",
+                  input: ["text", "image"],
+                  contextWindow: 262144,
+                  maxTokens: 262144,
+                  cost: { input: 0.75, output: 3.5, cacheRead: 0.16, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+          discovery: {
+            "opencode-go": "refreshable",
+          },
+        },
+      },
+    ]);
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(() => {
+      throw new Error(message);
+    });
+
+    expect(
+      resolveBundledStaticCatalogModel({
+        provider: "opencode-go",
+        modelId: "kimi-k2.5",
+        includeRefreshableDiscovery: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveBundledStaticCatalogModel({
+        provider: "opencode-go",
+        modelId: "kimi-k2.5",
+        includeRefreshableDiscovery: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
+    ).toHaveBeenCalledTimes(1);
+  });
+
   it("requires an exact provider and model match", () => {
     setManifestPlugins([createMistralManifestPlugin()]);
 

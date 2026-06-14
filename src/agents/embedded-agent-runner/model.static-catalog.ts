@@ -204,6 +204,17 @@ type BundledProviderCatalogEntrySurface = {
   buildBundledStaticProviderConfig?: () => ModelProviderConfig | undefined;
 };
 
+const MISSING_BUNDLED_PUBLIC_SURFACE_PREFIX = "Unable to resolve bundled plugin public surface ";
+const UNOPENABLE_BUNDLED_PUBLIC_SURFACE_PREFIX = "Unable to open bundled plugin public surface ";
+
+function isOptionalBundledPublicSurfaceLoadError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message.startsWith(MISSING_BUNDLED_PUBLIC_SURFACE_PREFIX) ||
+      error.message.startsWith(UNOPENABLE_BUNDLED_PUBLIC_SURFACE_PREFIX))
+  );
+}
+
 function loadBundledProviderCatalogEntryModel(params: {
   provider: string;
   modelId: string;
@@ -217,10 +228,20 @@ function loadBundledProviderCatalogEntryModel(params: {
     if (!plugin.providerCatalogEntry || !pluginOwnsBundledProviderRef(plugin, provider)) {
       continue;
     }
-    const mod = loadBundledPluginPublicArtifactModuleSync<BundledProviderCatalogEntrySurface>({
-      dirName: plugin.id,
-      artifactBasename: normalizeProviderCatalogArtifactPath(plugin.providerCatalogEntry),
-    });
+    let mod: BundledProviderCatalogEntrySurface;
+    try {
+      mod = loadBundledPluginPublicArtifactModuleSync<BundledProviderCatalogEntrySurface>({
+        dirName: plugin.id,
+        artifactBasename: normalizeProviderCatalogArtifactPath(plugin.providerCatalogEntry),
+      });
+    } catch (error) {
+      // providerCatalogEntry is an optional metadata fast path. Missing or
+      // unreadable bundled artifacts should fall through to other lookup paths.
+      if (isOptionalBundledPublicSurfaceLoadError(error)) {
+        continue;
+      }
+      throw error;
+    }
     const providerConfig = mod.buildBundledStaticProviderConfig?.();
     if (!providerConfig?.models) {
       continue;
@@ -430,9 +451,9 @@ export function resolveBundledStaticCatalogModel(
         : {}),
     })(params);
   }
-  const cacheKey = `${params.includeRefreshableDiscovery === true ? 1 : 0}:${
-    params.includeRuntimeDiscovery === true ? 1 : 0
-  }` as BundledStaticCatalogResolverCacheKey;
+  const refreshableFlag: 0 | 1 = params.includeRefreshableDiscovery === true ? 1 : 0;
+  const runtimeFlag: 0 | 1 = params.includeRuntimeDiscovery === true ? 1 : 0;
+  const cacheKey: BundledStaticCatalogResolverCacheKey = `${refreshableFlag}:${runtimeFlag}`;
   let resolver = bundledStaticCatalogResolverCache.get(cacheKey);
   if (!resolver) {
     resolver = createBundledStaticCatalogModelResolver({
