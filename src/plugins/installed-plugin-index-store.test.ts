@@ -16,6 +16,7 @@ import {
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -592,6 +593,924 @@ describe("installed plugin index persistence", () => {
     });
 
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
+  });
+
+  it("rebuilds policy refreshes when install records are missing from plugins", async () => {
+    const stateDir = makeTempDir();
+    const installPath = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/whatsapp",
+      pluginId: "whatsapp",
+      version: "2026.5.2",
+    });
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          whatsapp: {
+            source: "npm",
+            spec: "@openclaw/whatsapp@2026.5.2",
+            installPath,
+          },
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+      config: {
+        plugins: {
+          entries: {
+            whatsapp: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expectPluginIds(refreshed, ["whatsapp"]);
+    expectPluginFields(refreshed, "whatsapp", {
+      pluginId: "whatsapp",
+      origin: "global",
+      enabled: true,
+    });
+    expectInstallRecord(refreshed, "whatsapp", {
+      source: "npm",
+      spec: "@openclaw/whatsapp@2026.5.2",
+      installPath,
+    });
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: ["whatsapp"],
+    });
+  });
+
+  it("rebuilds policy refreshes from linked path install records", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "local-plugin");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    createCandidate(pluginDir, { id: "local-plugin" });
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          "local-plugin": {
+            source: "path",
+            sourcePath: pluginDir,
+            installPath: pluginDir,
+          },
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+      config: {
+        plugins: {
+          entries: {
+            "local-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expectPluginIds(refreshed, ["local-plugin"]);
+    expectPluginFields(refreshed, "local-plugin", {
+      pluginId: "local-plugin",
+      origin: "global",
+      enabled: true,
+    });
+    expectInstallRecord(refreshed, "local-plugin", {
+      source: "path",
+      sourcePath: pluginDir,
+      installPath: pluginDir,
+    });
+  });
+
+  it("keeps policy refreshes on the fast path for stale existing install paths", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale");
+    const bundledDir = path.join(stateDir, "bundled");
+    const bundledPluginDir = path.join(bundledDir, "bundled-demo");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(bundledPluginDir, { recursive: true });
+    createCandidate(bundledPluginDir, { id: "bundled-demo" });
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: staleDir,
+      installPath: staleDir,
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          stale: installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+    });
+
+    expectPluginIds(refreshed, []);
+    expectInstallRecord(refreshed, "stale", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: [],
+      installRecords: {
+        stale: installRecord,
+      },
+    });
+  });
+
+  it("rebuilds policy refreshes for pathless install records missing from the index", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "pathless");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir, { id: "pathless-demo" });
+    const installRecord = {
+      source: "npm" as const,
+      spec: "pathless-demo@1.0.0",
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "pathless-demo": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+
+    expectPluginIds(refreshed, ["pathless-demo"]);
+    expectInstallRecord(refreshed, "pathless-demo", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: ["pathless-demo"],
+      installRecords: {
+        "pathless-demo": installRecord,
+      },
+    });
+  });
+
+  it("rebuilds policy refreshes when explicit candidates can recover a missing plugin", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-explicit");
+    const candidateDir = path.join(stateDir, "candidates", "explicit-recovered");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(candidateDir, { recursive: true });
+    const candidate = createCandidate(candidateDir, { id: "explicit-recovered" });
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: staleDir,
+      installPath: staleDir,
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "explicit-recovered": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+
+    expectPluginIds(refreshed, ["explicit-recovered"]);
+    expectInstallRecord(refreshed, "explicit-recovered", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: ["explicit-recovered"],
+      installRecords: {
+        "explicit-recovered": installRecord,
+      },
+    });
+  });
+
+  it("rebuilds policy refreshes when supplied discovery can recover a missing plugin", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-discovery");
+    const candidateDir = path.join(stateDir, "candidates", "discovery-recovered");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(candidateDir, { recursive: true });
+    const candidate = createCandidate(candidateDir, { id: "discovery-recovered" });
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: staleDir,
+      installPath: staleDir,
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "discovery-recovered": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      discovery: { candidates: [candidate], diagnostics: [] },
+      env,
+    });
+
+    expectPluginIds(refreshed, ["discovery-recovered"]);
+    expectInstallRecord(refreshed, "discovery-recovered", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: ["discovery-recovered"],
+      installRecords: {
+        "discovery-recovered": installRecord,
+      },
+    });
+  });
+
+  it("keeps unrelated explicit recovery candidates on the policy refresh fast path", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-unrelated");
+    const candidateDir = path.join(stateDir, "candidates", "unrelated");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(candidateDir, { recursive: true });
+    const candidate = createCandidate(candidateDir, { id: "unrelated" });
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: staleDir,
+      installPath: staleDir,
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          stale: installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+
+    expectPluginIds(refreshed, []);
+    expectInstallRecord(refreshed, "stale", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: [],
+      installRecords: {
+        stale: installRecord,
+      },
+    });
+  });
+
+  it("rebuilds policy refreshes when a stale install path has a discoverable source path", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-install");
+    const sourceDir = path.join(stateDir, "extensions", "source-recovered");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(sourceDir, { recursive: true });
+    createCandidate(sourceDir, { id: "source-recovered" });
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: sourceDir,
+      installPath: staleDir,
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "source-recovered": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+    });
+
+    expectPluginIds(refreshed, ["source-recovered"]);
+    expectInstallRecord(refreshed, "source-recovered", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: ["source-recovered"],
+      installRecords: {
+        "source-recovered": installRecord,
+      },
+    });
+  });
+
+  it("keeps unreachable source paths on the policy refresh fast path", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-unreachable-source");
+    const sourceDir = path.join(stateDir, "outside-source");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(sourceDir, { recursive: true });
+    createCandidate(sourceDir, { id: "outside-source" });
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: sourceDir,
+      installPath: staleDir,
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "outside-source": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+    });
+
+    expectPluginIds(refreshed, []);
+    expectInstallRecord(refreshed, "outside-source", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: [],
+      installRecords: {
+        "outside-source": installRecord,
+      },
+    });
+  });
+
+  it("rebuilds policy refreshes for config-loaded source path plugins", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-config-install");
+    const sourceDir = path.join(stateDir, "workspace-plugin");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "config-source",
+        openclaw: {
+          extensions: ["./src/index.ts"],
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "config-source",
+        name: "Config Source",
+        configSchema: { type: "object" },
+        providers: ["config-source"],
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(sourceDir, "src", "index.ts"), "export default {};\n", "utf8");
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: sourceDir,
+      installPath: staleDir,
+    };
+    const config = {
+      plugins: {
+        load: { paths: [sourceDir] },
+      },
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      config,
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "config-source": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      config,
+      env,
+    });
+
+    expectPluginIds(refreshed, ["config-source"]);
+    expectInstallRecord(refreshed, "config-source", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: ["config-source"],
+      installRecords: {
+        "config-source": installRecord,
+      },
+    });
+  });
+
+  it("rebuilds policy refreshes when config load paths can recover a missing plugin", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-config-candidate");
+    const configDir = path.join(stateDir, "configured", "config-recovered");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(configDir, { recursive: true });
+    createCandidate(configDir, { id: "config-recovered" });
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: staleDir,
+      installPath: staleDir,
+    };
+    const config = {
+      plugins: {
+        load: { paths: [configDir] },
+      },
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      config,
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "config-recovered": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      config,
+      env,
+    });
+
+    expectPluginIds(refreshed, ["config-recovered"]);
+    expectInstallRecord(refreshed, "config-recovered", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: ["config-recovered"],
+      installRecords: {
+        "config-recovered": installRecord,
+      },
+    });
+  });
+
+  it("keeps unconfigured source path plugins on the policy refresh fast path", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-unconfigured-install");
+    const sourceDir = path.join(stateDir, "unconfigured-source");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "unconfigured-source",
+        openclaw: {
+          extensions: ["./src/index.ts"],
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "unconfigured-source",
+        name: "Unconfigured Source",
+        configSchema: { type: "object" },
+        providers: ["unconfigured-source"],
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(sourceDir, "src", "index.ts"), "export default {};\n", "utf8");
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: sourceDir,
+      installPath: staleDir,
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "unconfigured-source": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+    });
+
+    expectPluginIds(refreshed, []);
+    expectInstallRecord(refreshed, "unconfigured-source", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: [],
+      installRecords: {
+        "unconfigured-source": installRecord,
+      },
+    });
+  });
+
+  it("ignores malformed config load paths while checking missing install recovery", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-malformed-config-install");
+    const sourceDir = path.join(stateDir, "malformed-config-source");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(path.join(sourceDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "malformed-config-source",
+        openclaw: {
+          extensions: ["./src/index.ts"],
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "malformed-config-source",
+        name: "Malformed Config Source",
+        configSchema: { type: "object" },
+        providers: ["malformed-config-source"],
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(sourceDir, "src", "index.ts"), "export default {};\n", "utf8");
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: sourceDir,
+      installPath: staleDir,
+    };
+    const config = {
+      plugins: {
+        load: {
+          paths: { bad: sourceDir } as unknown as string[],
+        },
+      },
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      config,
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "malformed-config-source": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      config,
+      env,
+    });
+
+    expectPluginIds(refreshed, []);
+    expectInstallRecord(refreshed, "malformed-config-source", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: [],
+      installRecords: {
+        "malformed-config-source": installRecord,
+      },
+    });
+  });
+
+  it("rebuilds policy refreshes for config-loaded source plugin files", async () => {
+    const stateDir = makeTempDir();
+    const staleDir = path.join(stateDir, "plugins", "stale-config-file-install");
+    const sourceDir = path.join(stateDir, "file-config-source");
+    const sourceFile = path.join(sourceDir, "index.ts");
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(sourceFile, "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "file-config-source",
+        name: "File Config Source",
+        configSchema: { type: "object" },
+        providers: ["file-config-source"],
+      }),
+      "utf8",
+    );
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: sourceDir,
+      installPath: staleDir,
+    };
+    const config = {
+      plugins: {
+        load: { paths: [sourceFile] },
+      },
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      config,
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "file-config-source": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      config,
+      env,
+    });
+
+    expectPluginIds(refreshed, ["file-config-source"]);
+    expectInstallRecord(refreshed, "file-config-source", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: ["file-config-source"],
+      installRecords: {
+        "file-config-source": installRecord,
+      },
+    });
+  });
+
+  it("keeps policy refreshes on the fast path for source-only npm install records", async () => {
+    const stateDir = makeTempDir();
+    const sourceOnlyDir = path.join(stateDir, "plugins", "source-only");
+    const bundledDir = path.join(stateDir, "bundled");
+    const bundledPluginDir = path.join(bundledDir, "bundled-demo");
+    fs.mkdirSync(path.join(sourceOnlyDir, "src"), { recursive: true });
+    fs.mkdirSync(bundledPluginDir, { recursive: true });
+    createCandidate(bundledPluginDir, { id: "bundled-demo" });
+    fs.writeFileSync(
+      path.join(sourceOnlyDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/source-only",
+        openclaw: {
+          extensions: ["./src/index.ts"],
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(sourceOnlyDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "source-only",
+        name: "Source Only",
+        configSchema: { type: "object" },
+        providers: ["source-only"],
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(sourceOnlyDir, "src", "index.ts"), "export default {};\n", "utf8");
+    const installRecord = {
+      source: "npm" as const,
+      spec: "@openclaw/source-only@1.0.0",
+      installPath: sourceOnlyDir,
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "source-only": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+    });
+
+    expectPluginIds(refreshed, []);
+    expectInstallRecord(refreshed, "source-only", installRecord);
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: [],
+      installRecords: {
+        "source-only": installRecord,
+      },
+    });
   });
 
   it("preserves existing install records when refreshing the manifest cache", async () => {
