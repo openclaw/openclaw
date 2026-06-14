@@ -389,23 +389,217 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
 
 /** Exported for testing */
 export function loadEntriesFromFile(filePath: string): FileEntry[] {
-  if (!existsSync(filePath)) {
-    return [];
+  return loadEntriesFromFileWithSnapshot(filePath).entries;
+}
+
+function loadEntriesFromFileWithSnapshot(filePath: string): {
+  entries: FileEntry[];
+  snapshot: SessionFileSnapshot | undefined;
+} {
+  const resolvedPath = resolve(filePath);
+  let snapshot: SessionFileSnapshot;
+  try {
+    snapshot = readSessionFileSnapshot(resolvedPath);
+  } catch {
+    sessionEntriesCache.delete(resolvedPath);
+    return { entries: [], snapshot: undefined };
   }
 
-  const content = readFileSync(filePath, "utf8");
-  const entries = parseJsonlEntries(content);
+  const cached = sessionEntriesCache.get(resolvedPath);
+  if (cached && isSameSessionFileSnapshot(cached.snapshot, snapshot)) {
+    return { entries: copyFileEntries(cached.entries), snapshot };
+  }
 
-  // Validate session header
-  if (entries.length === 0) {
+  const content = readFileSync(resolvedPath, "utf8");
+  const entries = parseJsonlEntries(content);
+  return { entries: rememberSessionEntries(resolvedPath, snapshot, entries), snapshot };
+}
+
+interface SessionFileSnapshot {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+}
+
+interface CachedSessionEntries {
+  snapshot: SessionFileSnapshot;
+  entries: FileEntry[];
+}
+
+const MAX_CACHED_SESSION_FILES = 8;
+const sessionEntriesCache = new Map<string, CachedSessionEntries>();
+
+function readSessionFileSnapshot(filePath: string): SessionFileSnapshot {
+  const fileStat = statSync(filePath, { bigint: true });
+  return {
+    dev: fileStat.dev,
+    ino: fileStat.ino,
+    size: fileStat.size,
+    mtimeNs: fileStat.mtimeNs,
+    ctimeNs: fileStat.ctimeNs,
+  };
+}
+
+function isSameSessionFileSnapshot(left: SessionFileSnapshot, right: SessionFileSnapshot): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function rememberSessionEntries(
+  filePath: string,
+  snapshot: SessionFileSnapshot,
+  entries: FileEntry[],
+  cloneForCache = false,
+): FileEntry[] {
+  if (!hasReadableSessionHeader(entries)) {
+    sessionEntriesCache.delete(filePath);
+    return entries.length === 0 ? entries : [];
+  }
+  // Cache only current transcripts. Older versions still go through migration
+  // with fresh mutable entries so cache hits never share objects that migrate.
+  if (!hasCacheableSessionHeader(entries)) {
+    sessionEntriesCache.delete(filePath);
     return entries;
+  }
+
+  // Current-version session entries are append-only after load. Freeze the
+  // cached snapshot so warm hits cannot drift away from the file metadata that
+  // validated the cache key.
+  const cachedEntries = freezeFileEntries(cloneForCache ? entries.map(cloneFileEntry) : entries);
+  const cached: CachedSessionEntries = {
+    snapshot,
+    entries: cachedEntries,
+  };
+  sessionEntriesCache.delete(filePath);
+  sessionEntriesCache.set(filePath, cached);
+  while (sessionEntriesCache.size > MAX_CACHED_SESSION_FILES) {
+    const oldestKey = sessionEntriesCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    sessionEntriesCache.delete(oldestKey);
+  }
+  return copyFileEntries(cachedEntries);
+}
+
+function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
+  if (entries.length === 0) {
+    return true;
   }
   const header = entries[0];
   if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
-    return [];
+    return false;
   }
 
+  return header.version === CURRENT_SESSION_VERSION;
+}
+
+function rememberWrittenSessionEntries(filePath: string, entries: FileEntry[]): void {
+  const resolvedPath = resolve(filePath);
+  let snapshot: SessionFileSnapshot;
+  try {
+    snapshot = readSessionFileSnapshot(resolvedPath);
+  } catch {
+    sessionEntriesCache.delete(resolvedPath);
+    return;
+  }
+  rememberSessionEntries(resolvedPath, snapshot, entries, true);
+}
+
+function rememberAppendedSessionEntry(
+  filePath: string,
+  previousSnapshot: SessionFileSnapshot | undefined,
+  beforeAppendSnapshot: SessionFileSnapshot | undefined,
+  entry: FileEntry,
+): SessionFileSnapshot | undefined {
+  const resolvedPath = resolve(filePath);
+  if (
+    !previousSnapshot ||
+    !beforeAppendSnapshot ||
+    !isSameSessionFileSnapshot(previousSnapshot, beforeAppendSnapshot)
+  ) {
+    sessionEntriesCache.delete(resolvedPath);
+    return readSessionFileSnapshotIfExists(resolvedPath);
+  }
+
+  const cached = sessionEntriesCache.get(resolvedPath);
+  const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
+  if (!snapshot || !cached || !isSameSessionFileSnapshot(cached.snapshot, previousSnapshot)) {
+    sessionEntriesCache.delete(resolvedPath);
+    return snapshot;
+  }
+
+  cached.entries.push(freezeFileEntry(cloneFileEntry(entry)));
+  cached.snapshot = snapshot;
+  sessionEntriesCache.delete(resolvedPath);
+  sessionEntriesCache.set(resolvedPath, cached);
+  return snapshot;
+}
+
+function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot | undefined {
+  try {
+    return readSessionFileSnapshot(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+// Cached entries are deep-frozen so warm hits cannot drift from the file bytes
+// that validated the cache key. The session header (entries[0]) is the one entry
+// callers legitimately mutate in place — `prepareSessionManagerForRun` rewrites
+// its id/cwd before an embedded run. Return a mutable clone of just the header so
+// that mutation does not throw on a frozen object, while the append-only message
+// entries stay shared frozen (preserving cache performance and preventing caller
+// mutations from leaking back into the cache).
+function copyFileEntries(entries: readonly FileEntry[]): FileEntry[] {
+  const copy = entries.slice();
+  if (copy.length > 0 && copy[0].type === "session" && Object.isFrozen(copy[0])) {
+    copy[0] = cloneFileEntry(copy[0]);
+  }
+  return copy;
+}
+
+function cloneFileEntry(entry: FileEntry): FileEntry {
+  return structuredClone(entry);
+}
+
+function freezeFileEntries(entries: FileEntry[]): FileEntry[] {
+  for (const entry of entries) {
+    freezeJsonLikeValue(entry);
+  }
   return entries;
+}
+
+function freezeFileEntry(entry: FileEntry): FileEntry {
+  freezeJsonLikeValue(entry);
+  return entry;
+}
+
+// The cache key proves only the file bytes at a specific stat snapshot. Freezing
+// cached JSONL objects prevents caller mutations from creating transcript state
+// that was never read from or written to disk.
+function freezeJsonLikeValue(value: unknown, seen = new WeakSet<object>()): void {
+  if (typeof value !== "object" || value === null || seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      freezeJsonLikeValue(item, seen);
+    }
+  } else {
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      freezeJsonLikeValue(item, seen);
+    }
+  }
+  Object.freeze(value);
 }
 
 function parseJsonlEntries(content: string): FileEntry[] {
@@ -748,6 +942,7 @@ export class SessionManager {
   private labelTimestampsById: Map<string, string> = new Map();
   private leafId: string | null = null;
   private recoveredCorruptHeader = false;
+  private sessionFileSnapshot: SessionFileSnapshot | undefined;
 
   private constructor(
     cwd: string,
@@ -772,9 +967,12 @@ export class SessionManager {
   /** Switch to a different session file (used for resume and branching) */
   setSessionFile(sessionFile: string): void {
     this.sessionFile = resolve(sessionFile);
+    this.sessionFileSnapshot = undefined;
     this.recoveredCorruptHeader = false;
     if (existsSync(this.sessionFile)) {
-      this.fileEntries = loadEntriesFromFile(this.sessionFile);
+      const loaded = loadEntriesFromFileWithSnapshot(this.sessionFile);
+      this.fileEntries = loaded.entries;
+      this.sessionFileSnapshot = loaded.snapshot;
 
       // If file was empty or corrupted (no valid header), truncate and start fresh
       // to avoid appending messages without a session header (which breaks the session)
@@ -817,6 +1015,7 @@ export class SessionManager {
 
   newSession(options?: NewSessionOptions): string | undefined {
     this.recoveredCorruptHeader = false;
+    this.sessionFileSnapshot = undefined;
     this.sessionId = options?.id ?? createSessionId();
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {
@@ -868,6 +1067,8 @@ export class SessionManager {
       return;
     }
     writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+    rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
+    this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
   }
 
   isPersisted(): boolean {
@@ -911,8 +1112,17 @@ export class SessionManager {
     if (!this.flushed) {
       writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
       this.flushed = true;
+      rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
+      this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
     } else {
+      const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
       appendJsonlEntrySync(this.sessionFile, entry);
+      this.sessionFileSnapshot = rememberAppendedSessionEntry(
+        this.sessionFile,
+        this.sessionFileSnapshot,
+        beforeAppendSnapshot,
+        entry,
+      );
     }
   }
 
@@ -1327,6 +1537,7 @@ export class SessionManager {
       this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
       this.sessionId = newSessionId;
       this.sessionFile = newSessionFile;
+      this.sessionFileSnapshot = undefined;
       this.buildIndex();
 
       // Only write the file now if it contains an assistant message.
