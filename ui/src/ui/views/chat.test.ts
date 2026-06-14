@@ -908,6 +908,15 @@ describe("chat composer workbench", () => {
     expect(
       container.querySelector(".agent-chat__composer-controls .test-composer-control"),
     ).not.toBeNull();
+    const workbench = container.querySelector(".chat-workbench");
+    const main = container.querySelector(".chat-workbench__main");
+    const rail = container.querySelector(".chat-workspace-rail");
+    expect(main?.parentElement).toBe(workbench);
+    expect(rail?.parentElement).toBe(workbench);
+    expect(Array.from(workbench?.children ?? []).map((child) => child.className)).toEqual([
+      "chat-workspace-rail",
+      "chat-workbench__main",
+    ]);
     expect(container.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
       "/workspace",
     );

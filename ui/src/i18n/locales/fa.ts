@@ -1347,6 +1347,17 @@ export const fa: TranslationMap = {
     toolCards: {
       toolError: "خطای ابزار",
     },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
+    },
   },
   languages: {
     en: "English (انگلیسی)",

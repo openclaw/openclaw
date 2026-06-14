@@ -1315,6 +1315,17 @@ export const th: TranslationMap = {
     toolCards: {
       toolError: "ข้อผิดพลาดของเครื่องมือ",
     },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
+    },
   },
   languages: {
     en: "อังกฤษ",

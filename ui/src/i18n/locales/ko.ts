@@ -1338,6 +1338,17 @@ export const ko: TranslationMap = {
     toolCards: {
       toolError: "도구 오류",
     },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
+    },
   },
   languages: {
     en: "영어",

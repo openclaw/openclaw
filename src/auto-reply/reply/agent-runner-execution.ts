@@ -47,7 +47,10 @@ import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-p
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import {
+  isCliRuntimeAliasForProvider,
+  resolveCliRuntimeExecutionProvider,
+} from "../../agents/model-runtime-aliases.js";
 import {
   isCliProvider,
   resolveModelRefFromString,
@@ -1420,6 +1423,7 @@ function emitModelFallbackStepLifecycle(params: {
 export function resolveSessionRuntimeOverrideForProvider(params: {
   provider: string;
   entry?: Pick<SessionEntry, "agentRuntimeOverride">;
+  cfg?: OpenClawConfig;
 }): string | undefined {
   const provider = normalizeLowercaseStringOrEmpty(params.provider);
   const runtime = normalizeLowercaseStringOrEmpty(params.entry?.agentRuntimeOverride);
@@ -1428,6 +1432,9 @@ export function resolveSessionRuntimeOverrideForProvider(params: {
   }
   if (provider === "openai" && runtime === "codex") {
     return "codex";
+  }
+  if (isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg })) {
+    return runtime;
   }
   return undefined;
 }
@@ -2020,6 +2027,7 @@ export async function runAgentTurnWithFallback(params: {
             resolveSessionRuntimeOverrideForProvider({
               provider,
               entry: params.getActiveSessionEntry(),
+              cfg: runtimeConfig,
             }),
           prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
             await agentTurnTiming.measure("fallback_prepare_harness", () =>
@@ -2104,6 +2112,7 @@ export async function runAgentTurnWithFallback(params: {
                 const resolvedSessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                   provider,
                   entry: params.getActiveSessionEntry(),
+                  cfg: runtimeConfig,
                 });
                 const resolvedSelectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
                   config: runtimeConfig,

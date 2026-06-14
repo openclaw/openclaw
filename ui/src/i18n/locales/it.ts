@@ -1352,6 +1352,17 @@ export const it: TranslationMap = {
     toolCards: {
       toolError: "Errore dello strumento",
     },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
+    },
   },
   languages: {
     en: "English (Inglese)",
