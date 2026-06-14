@@ -415,7 +415,10 @@ export async function getReplyFromConfig(
     return nativeSlashCommandFastReply.reply;
   }
 
-  const isRuntimeManaged = Boolean(agentCfg?.runtime && agentCfg.runtime.type !== "embedded");
+  const isRuntimeManaged = Boolean(
+    resolveAgentConfig(cfg, agentId)?.runtime &&
+    resolveAgentConfig(cfg, agentId)!.runtime!.type !== "embedded",
+  );
   const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
     useFastTestBootstrap
       ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
