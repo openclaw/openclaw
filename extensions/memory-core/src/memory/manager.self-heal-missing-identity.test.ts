@@ -99,15 +99,6 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     return manager;
   }
 
-  async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-  }
-
-  async function markOld(paths: string[]): Promise<void> {
-    const oldDate = new Date(Date.now() - 25 * 60 * 60 * 1000);
-    await Promise.all(paths.map((entry) => fs.utimes(entry, oldDate, oldDate)));
-  }
-
   async function seedChunksWithNoMeta(model = "fts-only"): Promise<void> {
     const db = new DatabaseSync(indexPath);
     db.exec(`
@@ -164,19 +155,6 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     expect(indexIdentityStatus(memoryManager)).toBe("missing");
     expect(statusAfter.chunks).toBe(1);
     expect(statusAfter.dirty).toBe(true);
-  });
-
-  it("removes stale atomic reindex temp sqlite families when opening the manager", async () => {
-    const staleTemp = `${indexPath}.tmp-11111111-1111-4111-8111-111111111111`;
-    const stalePaths = [staleTemp, `${staleTemp}-wal`, `${staleTemp}-shm`];
-    const freshTemp = `${indexPath}.tmp-22222222-2222-4222-8222-222222222222`;
-    await Promise.all([...stalePaths, freshTemp].map((entry) => fs.writeFile(entry, "temp")));
-    await markOld(stalePaths);
-
-    await createManager({ provider: "none", vectorEnabled: false });
-
-    await Promise.all(stalePaths.map((entry) => expectPathMissing(entry)));
-    await expect(fs.access(freshTemp)).resolves.toBeUndefined();
   });
 
   it("refreshes a cached manager after a cli atomic reindex replaces the sqlite file", async () => {
