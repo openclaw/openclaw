@@ -151,6 +151,12 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     security: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     ask: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    allowedDecisions: Type.Optional(
+      Type.Array(Type.String({ enum: ["allow-once", "allow-always", "deny"] }), {
+        minItems: 1,
+        maxItems: 3,
+      }),
+    ),
     commandSpans: Type.Optional(
       Type.Array(
         Type.Object(

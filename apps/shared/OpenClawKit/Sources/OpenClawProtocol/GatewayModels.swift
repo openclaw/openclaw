@@ -6362,6 +6362,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let security: AnyCodable?
     public let ask: AnyCodable?
     public let warningtext: AnyCodable?
+    public let alloweddecisions: [String]?
     public let commandspans: [[String: AnyCodable]]?
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
@@ -6387,6 +6388,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         security: AnyCodable?,
         ask: AnyCodable?,
         warningtext: AnyCodable?,
+        alloweddecisions: [String]?,
         commandspans: [[String: AnyCodable]]?,
         agentid: AnyCodable? = nil,
         resolvedpath: AnyCodable?,
@@ -6411,6 +6413,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.security = security
         self.ask = ask
         self.warningtext = warningtext
+        self.alloweddecisions = alloweddecisions
         self.commandspans = commandspans
         self.agentid = agentid
         self.resolvedpath = resolvedpath
@@ -6437,6 +6440,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case security
         case ask
         case warningtext = "warningText"
+        case alloweddecisions = "allowedDecisions"
         case commandspans = "commandSpans"
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"

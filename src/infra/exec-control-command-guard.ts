@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { buildCommandPayloadCandidates } from "./command-analysis/risks.js";
-import { analyzeShellCommand } from "./exec-approvals-analysis.js";
+import { explainShellCommand } from "./command-explainer/extract.js";
 
 type ParsedExecApprovalCommand = {
   approvalId: string;
@@ -90,17 +90,25 @@ export function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
   );
 }
 
-export function detectUnsafeExecControlShellCommand(
+export async function detectUnsafeExecControlShellCommand(
   command: string,
-): UnsafeExecControlShellCommandKind | null {
+): Promise<UnsafeExecControlShellCommandKind | null> {
   const rawCommand = command.trim();
-  const analysis = analyzeShellCommand({ command: rawCommand });
-  const candidates = analysis.ok
-    ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
-    : normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
-        const argv = splitShellArgs(line);
-        return argv ? buildCommandPayloadCandidates(argv) : [line];
-      });
+  const candidates = await (async () => {
+    try {
+      const explanation = await explainShellCommand(rawCommand);
+      if (explanation.ok) {
+        const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
+        return commands.flatMap((step) => buildCommandPayloadCandidates(step.argv));
+      }
+    } catch {
+      // Fall back to line-local shell splitting below.
+    }
+    return normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
+      const argv = splitShellArgs(line);
+      return argv ? buildCommandPayloadCandidates(argv) : [line];
+    });
+  })();
   for (const candidate of candidates) {
     if (parseExecApprovalShellCommand(candidate)) {
       return "approve";
@@ -112,8 +120,8 @@ export function detectUnsafeExecControlShellCommand(
   return null;
 }
 
-export function rejectUnsafeExecControlShellCommand(command: string): void {
-  const unsafeKind = detectUnsafeExecControlShellCommand(command);
+export async function rejectUnsafeExecControlShellCommand(command: string): Promise<void> {
+  const unsafeKind = await detectUnsafeExecControlShellCommand(command);
   if (unsafeKind === "approve") {
     throw new Error(
       [

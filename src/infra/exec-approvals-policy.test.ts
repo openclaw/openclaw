@@ -25,6 +25,7 @@ let normalizeExecMode: typeof import("./exec-approvals.js").normalizeExecMode;
 let normalizeExecTarget: typeof import("./exec-approvals.js").normalizeExecTarget;
 let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSecurity;
 let requiresExecApproval: typeof import("./exec-approvals.js").requiresExecApproval;
+let resolveExecApprovalRequestAllowedDecisions: typeof import("./exec-approvals.js").resolveExecApprovalRequestAllowedDecisions;
 let resolveExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExecModeFromPolicy;
 let resolveExecModePolicy: typeof import("./exec-approvals.js").resolveExecModePolicy;
 let resolveExecPolicyForMode: typeof import("./exec-approvals.js").resolveExecPolicyForMode;
@@ -49,6 +50,8 @@ async function loadActualExecApprovalModules(): Promise<void> {
   normalizeExecTarget = execApprovals.normalizeExecTarget;
   normalizeExecSecurity = execApprovals.normalizeExecSecurity;
   requiresExecApproval = execApprovals.requiresExecApproval;
+  resolveExecApprovalRequestAllowedDecisions =
+    execApprovals.resolveExecApprovalRequestAllowedDecisions;
   resolveExecModeFromPolicy = execApprovals.resolveExecModeFromPolicy;
   resolveExecModePolicy = execApprovals.resolveExecModePolicy;
   resolveExecPolicyForMode = execApprovals.resolveExecPolicyForMode;
@@ -212,6 +215,27 @@ describe("exec approvals policy helpers", () => {
       ask: "always",
       autoReview: false,
     });
+  });
+
+  it("treats request allowed decisions as a narrowing cap", () => {
+    expect(
+      resolveExecApprovalRequestAllowedDecisions({
+        ask: "always",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+      }),
+    ).toEqual(["allow-once", "deny"]);
+    expect(
+      resolveExecApprovalRequestAllowedDecisions({
+        ask: "on-miss",
+        allowedDecisions: ["deny"],
+      }),
+    ).toEqual(["deny"]);
+    expect(
+      resolveExecApprovalRequestAllowedDecisions({
+        ask: "always",
+        allowedDecisions: ["allow-always"],
+      }),
+    ).toEqual(["allow-once", "deny"]);
   });
 
   it.each([

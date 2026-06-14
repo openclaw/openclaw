@@ -155,11 +155,17 @@ async function requestAllowOnceApproval(
     nodeId,
     cwd: null,
     host: "node",
+    requireDeliveryRoute: false,
+    twoPhase: true,
     timeoutMs: 30_000,
   });
-  await rpcReq(ws, "exec.approval.resolve", { id: approvalId, decision: "allow-once" });
   const requested = await requestP;
   expect(requested.ok).toBe(true);
+  const resolved = await rpcReq(ws, "exec.approval.resolve", {
+    id: approvalId,
+    decision: "allow-once",
+  });
+  expect(resolved.ok).toBe(true);
   return approvalId;
 }
 
@@ -232,14 +238,17 @@ async function requestChatAllowOnceApproval(params: {
     turnSourceTo: params.context.turnSourceTo,
     turnSourceAccountId: params.context.turnSourceAccountId,
     turnSourceThreadId: params.context.turnSourceThreadId,
+    requireDeliveryRoute: false,
+    twoPhase: true,
     timeoutMs: 30_000,
-  });
-  await rpcReq(params.ws, "exec.approval.resolve", {
-    id: approvalId,
-    decision: "allow-once",
   });
   const requested = await requestP;
   expect(requested.ok).toBe(true);
+  const resolved = await rpcReq(params.ws, "exec.approval.resolve", {
+    id: approvalId,
+    decision: "allow-once",
+  });
+  expect(resolved.ok).toBe(true);
   return approvalId;
 }
 
@@ -572,7 +581,7 @@ describe("node.invoke approval bypass", () => {
         }),
         idempotencyKey: crypto.randomUUID(),
       });
-      expect(invoke.ok).toBe(true);
+      expect(invoke.ok, JSON.stringify(invoke.error)).toBe(true);
       await expectForwardedApprovedParams({ invokeCapture, absentKey: "injected" });
 
       const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);

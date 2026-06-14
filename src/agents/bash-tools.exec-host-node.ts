@@ -8,6 +8,7 @@ import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
 import {
   type ExecSecurity,
+  maxAsk,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
 } from "../infra/exec-approvals.js";
@@ -130,7 +131,14 @@ export async function executeNodeHostCommand(
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
     autoReviewArgv,
+    allowAlwaysPersistence,
   } = approvalAnalysis;
+  const approvalDecisionAsk =
+    nodeApprovalPolicyKnown && nodeAsk !== undefined ? maxAsk(hostAsk, nodeAsk) : "always";
+  const allowedDecisions = resolveExecApprovalAllowedDecisions({
+    ask: approvalDecisionAsk,
+    allowAlwaysPersistence,
+  });
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -159,6 +167,7 @@ export async function executeNodeHostCommand(
       nodeId: target.nodeId,
       security: hostSecurity,
       ask: hostAsk,
+      allowedDecisions,
       commandHighlighting: params.commandHighlighting,
       ...buildExecApprovalRequesterContext({
         agentId: prepared.agentId,
@@ -438,7 +447,7 @@ export async function executeNodeHostCommand(
           initiatingSurface,
           sentApproverDms,
           unavailableReason,
-          allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
+          allowedDecisions,
           nodeId: target.nodeId,
         });
       }
