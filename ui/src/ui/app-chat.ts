@@ -252,10 +252,19 @@ function isChatResetCommand(text: string) {
   if (parsed.command.key === "new") {
     return true;
   }
-  if (/^soft(?:\s|$)/.test(normalizeLowercaseStringOrEmpty(parsed.args))) {
+  if (isSoftResetArgs(parsed.args)) {
     return false;
   }
   return true;
+}
+
+function isSoftResetArgs(args: string) {
+  return /^soft(?:\s|$)/.test(normalizeLowercaseStringOrEmpty(args));
+}
+
+function shouldClearChatAfterResetCommand(text: string) {
+  const parsed = parseSlashCommand(text);
+  return Boolean(parsed?.command.key === "reset" && !isSoftResetArgs(parsed.args));
 }
 
 function confirmChatResetCommand(text: string) {
@@ -432,6 +441,7 @@ function enqueuePendingSendMessage(
   sendState: ChatQueueItem["sendState"] = host.connected && host.client
     ? "sending"
     : "waiting-reconnect",
+  resetChatAfterCompletion?: boolean,
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
@@ -445,6 +455,7 @@ function enqueuePendingSendMessage(
     createdAt: Date.now(),
     attachments: hasAttachments ? attachments : undefined,
     refreshSessions,
+    resetChatAfterCompletion,
     sendAttempts: 0,
     sendRunId: generateUUID(),
     sendState,
@@ -463,6 +474,12 @@ function enqueuePendingSendMessage(
     source: "manual",
   });
   return pending;
+}
+
+function clearChatViewAfterCompletedReset(host: ChatHost) {
+  host.chatMessages = [];
+  host.chatSideResult = null;
+  host.chatSideResultTerminalRuns?.clear();
 }
 
 function updateQueuedMessage(
@@ -1099,6 +1116,9 @@ async function sendQueuedChatMessage(
             armLocalTerminalReconcile: true,
           },
         );
+        if (prepared.resetChatAfterCompletion) {
+          clearChatViewAfterCompletedReset(host);
+        }
         void loadChatHistory(host as unknown as ChatState);
       } else {
         const hasAlreadyAdoptedRunStream =
@@ -1118,6 +1138,7 @@ async function sendQueuedChatMessage(
       const refreshTarget = {
         sessionKey,
         agentId: prepared.agentId,
+        resetChatAfterCompletion: prepared.resetChatAfterCompletion || undefined,
       };
       if (ack.status === "ok") {
         void loadSessions(host as unknown as SessionsState, {
@@ -1173,6 +1194,7 @@ async function sendChatMessageNow(
     previousAttachments?: ChatAttachment[];
     restoreAttachments?: boolean;
     refreshSessions?: boolean;
+    resetChatAfterCompletion?: boolean;
     submittedAtMs?: number;
   },
 ) {
@@ -1188,6 +1210,8 @@ async function sendChatMessageNow(
           opts?.attachments,
           opts?.refreshSessions,
           opts?.submittedAtMs,
+          undefined,
+          opts?.resetChatAfterCompletion,
         );
   if (!queued) {
     return false;
@@ -1783,6 +1807,8 @@ export async function handleSendChat(
   }
 
   const refreshSessions = shouldInterpretChatCommands && isChatResetCommand(message);
+  const resetChatAfterCompletion =
+    shouldInterpretChatCommands && shouldClearChatAfterResetCommand(message);
   const submitKey = chatSubmitKey(
     host,
     "message",
@@ -1811,6 +1837,7 @@ export async function handleSendChat(
       refreshSessions,
       submittedAtMs,
       waitingForModel ? "waiting-model" : undefined,
+      resetChatAfterCompletion,
       skillWorkshopRevision,
     );
     if (!queued) {
@@ -1861,6 +1888,7 @@ export async function handleSendChat(
       previousAttachments: cleared.previousAttachments,
       restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
       refreshSessions,
+      resetChatAfterCompletion,
       submittedAtMs,
     });
   });
@@ -1890,8 +1918,10 @@ async function dispatchSlashCommand(
       await host.onSlashAction("new-session");
       return;
     case "reset":
-      await sendChatMessageNow(host, args ? `/reset ${args}` : "/reset", {
+      const message = args ? `/reset ${args}` : "/reset";
+      await sendChatMessageNow(host, message, {
         refreshSessions: true,
+        resetChatAfterCompletion: shouldClearChatAfterResetCommand(message),
         previousDraft: sendOpts?.previousDraft,
         restoreDraft: sendOpts?.restoreDraft,
       });

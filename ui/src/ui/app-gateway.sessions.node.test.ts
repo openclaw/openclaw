@@ -214,6 +214,57 @@ describe("handleGatewayEvent sessions.changed", () => {
     });
   });
 
+  it("clears visible chat and reloads history after a completed hard reset run", async () => {
+    loadSessionsMock.mockReset();
+    loadChatHistoryMock.mockReset().mockResolvedValue(undefined);
+    flushChatQueueForEventMock.mockReset();
+    handleChatEventMock.mockReset().mockReturnValue("final");
+    const host = createHost() as ReturnType<typeof createHost> & {
+      chatMessages: unknown[];
+      chatSideResult?: unknown | null;
+      chatSideResultTerminalRuns?: Set<string>;
+    };
+    host.sessionKey = "agent:ops:main";
+    host.chatMessages = [{ role: "user", content: "old transcript", timestamp: 1 }];
+    host.chatSideResult = { runId: "btw-run" };
+    host.chatSideResultTerminalRuns = new Set(["btw-run"]);
+    host.refreshSessionsAfterChat.set("reset-run", {
+      sessionKey: "agent:ops:main",
+      resetChatAfterCompletion: true,
+    });
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: "reset-run",
+        sessionKey: "agent:ops:main",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Reset complete." }],
+          timestamp: 2,
+        },
+      },
+      seq: 1,
+    });
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideResultTerminalRuns?.size).toBe(0);
+    expect(loadSessionsMock).toHaveBeenCalledWith(host, {
+      activeMinutes: 10,
+      limit: 25,
+      agentId: "ops",
+    });
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+
+    await Promise.resolve();
+
+    expect(flushChatQueueForEventMock).toHaveBeenCalledWith(host);
+  });
+
   it("applies reliable session change snapshots without refetching the list", () => {
     loadSessionsMock.mockReset();
     handleChatEventMock.mockReset().mockReturnValue("idle");
