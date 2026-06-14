@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
@@ -53,6 +54,7 @@ const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
 const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
+const EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL = 256;
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -68,7 +70,41 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
 }
 
-async function readWorkspaceFileWithGuards(params: {
+async function readFdToString(fd: number, maxBytes: number): Promise<string> {
+  const capacity = Math.min(maxBytes, MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
+  const buffer = Buffer.allocUnsafe(capacity);
+  let totalRead = 0;
+  while (totalRead < capacity) {
+    const { bytesRead } = await new Promise<{ bytesRead: number }>((resolve, reject) => {
+      syncFs.read(fd, buffer, totalRead, capacity - totalRead, totalRead, (error, readCount) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve({ bytesRead: readCount });
+      });
+    });
+    if (bytesRead === 0) {
+      break;
+    }
+    totalRead += bytesRead;
+  }
+  return buffer.subarray(0, totalRead).toString("utf-8");
+}
+
+async function closeFdAsync(fd: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    syncFs.close(fd, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
 }): Promise<WorkspaceGuardedReadResult> {
@@ -86,19 +122,21 @@ async function readWorkspaceFileWithGuards(params: {
   const identity = workspaceFileIdentity(opened.stat, opened.path);
   const cached = workspaceFileCache.get(params.filePath);
   if (cached && cached.identity === identity) {
-    syncFs.closeSync(opened.fd);
+    await closeFdAsync(opened.fd).catch(() => {});
     return { ok: true, content: cached.content };
   }
 
   try {
-    const content = syncFs.readFileSync(opened.fd, "utf-8");
+    const content = await readFdToString(opened.fd, MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
     workspaceFileCache.set(params.filePath, { content, identity });
     return { ok: true, content };
   } catch (error) {
     workspaceFileCache.delete(params.filePath);
     return { ok: false, reason: "io", error };
   } finally {
-    syncFs.closeSync(opened.fd);
+    // Suppress close errors to avoid masking the original read error
+    // or causing unhandled rejections on NFS/FUSE filesystems.
+    await closeFdAsync(opened.fd).catch(() => {});
   }
 }
 
@@ -1054,30 +1092,30 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     },
   ];
 
-  const result: WorkspaceBootstrapFile[] = [];
-  for (const entry of entries) {
-    if (
-      entry.name === DEFAULT_MEMORY_FILENAME &&
-      !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME))
-    ) {
-      continue;
-    }
-    const loaded = await readWorkspaceFileWithGuards({
-      filePath: entry.filePath,
-      workspaceDir: resolvedDir,
-    });
-    if (loaded.ok) {
-      result.push({
-        name: entry.name,
-        path: entry.filePath,
-        content: loaded.content,
-        missing: false,
+  const results = await Promise.all(
+    entries.map(async (entry): Promise<WorkspaceBootstrapFile | null> => {
+      if (
+        entry.name === DEFAULT_MEMORY_FILENAME &&
+        !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME))
+      ) {
+        return null;
+      }
+      const loaded = await readWorkspaceFileWithGuards({
+        filePath: entry.filePath,
+        workspaceDir: resolvedDir,
       });
-    } else {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
-    }
-  }
-  return result;
+      if (loaded.ok) {
+        return {
+          name: entry.name,
+          path: entry.filePath,
+          content: loaded.content,
+          missing: false,
+        };
+      }
+      return { name: entry.name, path: entry.filePath, missing: true };
+    }),
+  );
+  return results.filter((file): file is WorkspaceBootstrapFile => file !== null);
 }
 
 const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
@@ -1128,11 +1166,50 @@ function resolveGlobWalkRoot(pattern: string): string {
   return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
 }
 
+// Mirror Node fs.glob's default dot behavior while walking: `*` and `**` never
+// match a path segment that begins with ".", so a dot directory can only hold a
+// match when the pattern explicitly names a literal-dot segment at the aligned
+// depth. Returns whether `dirSegments` can be a prefix of some path the pattern
+// matches; used to prune dot-directory subtrees (`.git`, `.openclaw`, …) the
+// glob could never reach. matchesGlob applies the dot rule per single segment,
+// so the only extra rule here is that `**` cannot consume a leading-dot segment.
+function globPrefixCanDescend(dirSegments: string[], patternSegments: string[]): boolean {
+  const dirLength = dirSegments.length;
+  const patternLength = patternSegments.length;
+  const match = (dirIndex: number, patternIndex: number): boolean => {
+    if (dirIndex === dirLength) {
+      // Whole directory path consumed; deeper entries may still match.
+      return true;
+    }
+    if (patternIndex === patternLength) {
+      // Pattern exhausted but directory segments remain — no descendant matches.
+      return false;
+    }
+    const segment = dirSegments[dirIndex];
+    const patternSegment = patternSegments[patternIndex];
+    if (patternSegment === "**") {
+      if (match(dirIndex, patternIndex + 1)) {
+        return true;
+      }
+      // `**` skips over directory levels but never a leading-dot segment.
+      return !segment.startsWith(".") && match(dirIndex + 1, patternIndex);
+    }
+    if (!path.matchesGlob(segment, patternSegment)) {
+      return false;
+    }
+    return match(dirIndex + 1, patternIndex + 1);
+  };
+  return match(0, 0);
+}
+
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,
+  normalizedPattern: string,
 ): AsyncGenerator<string> {
+  const patternSegments = normalizedPattern.split("/");
   const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
+  let visitedEntries = 0;
   while (stack.length > 0) {
     const currentRelativeDir = stack.pop() ?? "";
     const currentDir = path.resolve(workspaceDir, currentRelativeDir);
@@ -1149,10 +1226,25 @@ async function* walkWorkspaceFiles(
     }
 
     for (const entry of entries) {
+      visitedEntries += 1;
+      if (visitedEntries % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
+        await yieldImmediate();
+      }
       const childRelativePath = currentRelativeDir
         ? path.join(currentRelativeDir, entry.name)
         : entry.name;
       if (entry.isDirectory()) {
+        // Skip dot-directory subtrees the glob can never match, matching
+        // fs.glob's default dot behavior instead of walking `.git`/`.openclaw`.
+        if (
+          entry.name.startsWith(".") &&
+          !globPrefixCanDescend(
+            normalizeWorkspacePatternPath(childRelativePath).split("/"),
+            patternSegments,
+          )
+        ) {
+          continue;
+        }
         stack.push(childRelativePath);
         continue;
       }
@@ -1163,22 +1255,17 @@ async function* walkWorkspaceFiles(
   }
 }
 
+// Always resolve globs with the yielding walker. fs.glob would be faster for
+// simple patterns, but it only exposes matched paths — Node traverses the
+// directory tree internally, so a sparse pattern like `**/AGENTS.md` across a
+// huge workspace can block the event loop. The walker yields periodically while
+// it walks, so the active path can never stall. The walk always completes and
+// returns every file matched within the real tree; the downstream bootstrap
+// character budget handles content limiting.
 async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
 ): Promise<string[]> {
-  if (typeof fs.glob === "function") {
-    try {
-      const matches: string[] = [];
-      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
-        matches.push(match);
-      }
-      return matches;
-    } catch {
-      // Fall through to the local matcher before treating the pattern as literal.
-    }
-  }
-
   if (typeof path.matchesGlob !== "function") {
     return [pattern];
   }
@@ -1188,12 +1275,22 @@ async function resolveExtraBootstrapPatternPaths(
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,
     resolveGlobWalkRoot(normalizedPattern),
+    normalizedPattern,
   )) {
     if (path.matchesGlob(candidate, normalizedPattern)) {
       matches.push(candidate);
     }
   }
-  return matches.length > 0 ? matches : [pattern];
+  // Filesystem walk order follows directory order, which varies across machines.
+  // Sort by normalized relative path with a code-unit comparator (not
+  // localeCompare, whose ICU/locale rules could re-introduce drift) so bootstrap
+  // byte order stays deterministic across equivalent workspaces and the prompt
+  // cache stays stable.
+  if (matches.length > 0) {
+    matches.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    return matches;
+  }
+  return [pattern];
 }
 
 export async function loadExtraBootstrapFiles(
@@ -1218,6 +1315,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
 
   // Resolve glob patterns into concrete file paths
   const resolvedPaths = new Set<string>();
+  const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   for (const pattern of extraPatterns) {
     if (hasGlobPattern(pattern)) {
       const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
@@ -1230,7 +1328,6 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
 
   const files: WorkspaceBootstrapFile[] = [];
-  const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
     // Only load files whose basename is a recognized bootstrap filename

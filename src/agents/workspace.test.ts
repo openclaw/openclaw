@@ -1,6 +1,7 @@
 // Workspace tests cover bootstrap seeding, attestation safety, bootstrap file
 // filtering, and setup-completion state for agent workspaces.
 import { createHash } from "node:crypto";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +24,7 @@ import {
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
+  readWorkspaceFileWithGuards,
   reconcileWorkspaceBootstrapCompletion,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
@@ -41,6 +43,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await testState?.cleanup();
   testState = undefined;
 });
@@ -745,6 +749,104 @@ describe("loadWorkspaceBootstrapFiles", () => {
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("readWorkspaceFileWithGuards", () => {
+  it("reads workspace file content through the async fd path", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-read-");
+    const filePath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    await fs.writeFile(filePath, "workspace rules", "utf-8");
+
+    await expect(
+      readWorkspaceFileWithGuards({
+        filePath,
+        workspaceDir: tempDir,
+      }),
+    ).resolves.toStrictEqual({ ok: true, content: "workspace rules" });
+  });
+
+  it("returns cached content when the file identity still matches", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-read-cache-");
+    const filePath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    await fs.writeFile(filePath, "cached rules", "utf-8");
+
+    await expect(
+      readWorkspaceFileWithGuards({
+        filePath,
+        workspaceDir: tempDir,
+      }),
+    ).resolves.toStrictEqual({ ok: true, content: "cached rules" });
+    const readSpy = vi.spyOn(syncFs, "read");
+
+    await expect(
+      readWorkspaceFileWithGuards({
+        filePath,
+        workspaceDir: tempDir,
+      }),
+    ).resolves.toStrictEqual({ ok: true, content: "cached rules" });
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it("closes the fd when an async read fails", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-read-error-");
+    const filePath = path.join(tempDir, DEFAULT_TOOLS_FILENAME);
+    await fs.writeFile(filePath, "tool notes", "utf-8");
+    const readError = new Error("read failed");
+    vi.spyOn(syncFs, "read").mockImplementation(((
+      fd,
+      buffer,
+      offset,
+      length,
+      position,
+      callback,
+    ) => {
+      void fd;
+      void buffer;
+      void offset;
+      void length;
+      void position;
+      callback(readError, 0, buffer);
+    }) as typeof syncFs.read);
+    const closeSpy = vi.spyOn(syncFs, "close");
+
+    const result = await readWorkspaceFileWithGuards({
+      filePath,
+      workspaceDir: tempDir,
+    });
+
+    expect(result).toStrictEqual({ ok: false, reason: "io", error: readError });
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("assembles full content when fs.read returns short reads", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-short-read-");
+    const filePath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const fullContent = "ABCDEFGHIJ";
+    await fs.writeFile(filePath, fullContent, "utf-8");
+
+    // Simulate short reads: yield 3 bytes at a time
+    const originalRead = syncFs.read.bind(syncFs);
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number | null,
+      callback: (err: NodeJS.ErrnoException | null, bytesRead: number, buffer: Buffer) => void,
+    ) => {
+      const chunk = Math.min(length, 3);
+      originalRead(fd, buffer, offset, chunk, position, callback);
+    }) as typeof syncFs.read);
+
+    const result = await readWorkspaceFileWithGuards({
+      filePath,
+      workspaceDir: tempDir,
+    });
+
+    expect(result).toStrictEqual({ ok: true, content: fullContent });
+    // Must have called read more than once to reassemble full content
+    expect(readSpy.mock.calls.length).toBeGreaterThan(1);
   });
 });
 

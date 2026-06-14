@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import os from "node:os";
+import { performance } from "node:perf_hooks";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -1337,35 +1338,35 @@ export async function runEmbeddedAttempt(
       completedBootstrapTurn ??= await hasCompletedBootstrapTurn(sessionFile);
       return completedBootstrapTurn;
     };
-    const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
-      resolveAttemptWorkspaceBootstrapRouting({
-        isWorkspaceBootstrapPending,
-        bootstrapFiles,
-        bootstrapContextRunKind: params.bootstrapContextRunKind,
-        trigger: params.trigger,
-        sessionKey: params.sessionKey,
-        isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-        isCanonicalWorkspace: params.isCanonicalWorkspace,
-        effectiveWorkspace,
-        resolvedWorkspace,
-        hasBootstrapFileAccess: bootstrapHasFileAccess,
+    const bootstrapContextStartedAt = performance.now();
+    const bootstrapContextSubstageTimings: Array<{ name: string; durationMs: number }> = [];
+    const recordBootstrapContextSubstage = (name: string, durationMs: number) => {
+      bootstrapContextSubstageTimings.push({
+        name,
+        durationMs: Math.max(0, durationMs),
       });
-    const shouldProbeContinuationSkip =
-      !isRawModelRun &&
-      contextInjectionMode === "continuation-skip" &&
-      (params.bootstrapContextRunKind ?? "default") !== "heartbeat" &&
-      (await hasCompletedBootstrapTurnForAttempt(params.sessionFile));
-    let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
-    let bootstrapRouting =
-      shouldProbeContinuationSkip || isRawModelRun || contextInjectionMode === "never"
-        ? await resolveBootstrapRouting()
-        : undefined;
-    if (
-      !isRawModelRun &&
-      contextInjectionMode !== "never" &&
-      (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
-    ) {
-      preloadedBootstrapFiles = await resolveBootstrapFilesForRun({
+    };
+    const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) => {
+      const startedAt = performance.now();
+      try {
+        return resolveAttemptWorkspaceBootstrapRouting({
+          isWorkspaceBootstrapPending,
+          bootstrapFiles,
+          bootstrapContextRunKind: params.bootstrapContextRunKind,
+          trigger: params.trigger,
+          sessionKey: params.sessionKey,
+          isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
+          isCanonicalWorkspace: params.isCanonicalWorkspace,
+          effectiveWorkspace,
+          resolvedWorkspace,
+          hasBootstrapFileAccess: bootstrapHasFileAccess,
+        });
+      } finally {
+        recordBootstrapContextSubstage("bootstrap-routing", performance.now() - startedAt);
+      }
+    };
+    const resolveBootstrapFilesForAttempt = () =>
+      resolveBootstrapFilesForRun({
         workspaceDir: resolvedWorkspace,
         config: params.config,
         sessionKey: params.sessionKey,
@@ -1374,7 +1375,33 @@ export async function runEmbeddedAttempt(
         warn: bootstrapWarn,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
+        onBootstrapSubstageTiming: recordBootstrapContextSubstage,
       });
+    const shouldProbeContinuationSkip =
+      !isRawModelRun &&
+      contextInjectionMode === "continuation-skip" &&
+      (params.bootstrapContextRunKind ?? "default") !== "heartbeat";
+    const shouldSkipForCompletedContinuation = shouldProbeContinuationSkip
+      ? await (async () => {
+          const startedAt = performance.now();
+          try {
+            return await hasCompletedBootstrapTurnForAttempt(params.sessionFile);
+          } finally {
+            recordBootstrapContextSubstage("continuation-scan", performance.now() - startedAt);
+          }
+        })()
+      : false;
+    let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
+    let bootstrapRouting =
+      shouldSkipForCompletedContinuation || isRawModelRun || contextInjectionMode === "never"
+        ? await resolveBootstrapRouting()
+        : undefined;
+    if (
+      !isRawModelRun &&
+      contextInjectionMode !== "never" &&
+      (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
+    ) {
+      preloadedBootstrapFiles = await resolveBootstrapFilesForAttempt();
       bootstrapRouting = await resolveBootstrapRouting(preloadedBootstrapFiles);
     }
     bootstrapRouting ??= await resolveBootstrapRouting(preloadedBootstrapFiles);
@@ -1393,28 +1420,32 @@ export async function runEmbeddedAttempt(
       sessionFile: params.sessionFile,
       hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
       resolveBootstrapContextForRun: async () => {
-        const bootstrapFiles =
-          preloadedBootstrapFiles ??
-          (await resolveBootstrapFilesForRun({
-            workspaceDir: resolvedWorkspace,
-            config: params.config,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            agentId: sessionAgentId,
-            warn: bootstrapWarn,
-            contextMode: params.bootstrapContextMode,
-            runKind: params.bootstrapContextRunKind,
-          }));
+        const bootstrapFiles = preloadedBootstrapFiles ?? (await resolveBootstrapFilesForAttempt());
+        const contextBuildStartedAt = performance.now();
+        const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, {
+          config: params.config,
+          agentId: sessionAgentId,
+          warn: bootstrapWarn,
+        });
+        recordBootstrapContextSubstage("context-build", performance.now() - contextBuildStartedAt);
         return {
           bootstrapFiles,
-          contextFiles: buildBootstrapContextForFiles(bootstrapFiles, {
-            config: params.config,
-            agentId: sessionAgentId,
-            warn: bootstrapWarn,
-          }),
+          contextFiles,
         };
       },
     });
+    const bootstrapContextTotalMs = performance.now() - bootstrapContextStartedAt;
+    if (bootstrapContextTotalMs > 2_000) {
+      const substages =
+        bootstrapContextSubstageTimings.length > 0
+          ? bootstrapContextSubstageTimings
+              .map((stage) => `${stage.name}:${stage.durationMs.toFixed(1)}ms`)
+              .join(",")
+          : "none";
+      log.debug(
+        `[trace:embedded-run] bootstrap-context substages: runId=${params.runId} sessionId=${params.sessionId} totalMs=${bootstrapContextTotalMs.toFixed(1)} substages=${substages}`,
+      );
+    }
     prepStages.mark("bootstrap-context");
     const remappedContextFiles = remapInjectedContextFilesToWorkspace({
       files: resolvedContextFiles,
