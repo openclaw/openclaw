@@ -87,4 +87,82 @@ describe("doctor empty allowlist policy scan", () => {
     const [warningOptions] = extraWarningsForAccount.mock.calls[0] ?? [];
     expect(warningOptions?.prefix).toBe("channels.signal");
   });
+
+  it("does not warn on empty top-level groupAllowFrom when sub-accounts are present", () => {
+    // Reporter scenario from #92684: top-level groupAllowFrom is empty,
+    // sub-accounts exist, and the top-level has no allowFrom of its own.
+    // The top-level is a parent/fallback, not an account — no false warning.
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              bot1: { groupAllowFrom: ["@alice"] },
+              bot2: { groupAllowFrom: ["@bob"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+    expect(warnings.filter((w) => w.includes("group messages")).length).toBe(0);
+  });
+
+  it("does not warn when top-level has own populated groupAllowFrom with sub-accounts", () => {
+    // The top-level has its own groupAllowFrom entries — it has an effective
+    // allowlist, so no "empty" warning should fire for the parent scope.
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["@owner"],
+            accounts: {
+              bot1: { groupAllowFrom: ["@alice"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+    expect(warnings.filter((w) => w.includes("group messages")).length).toBe(0);
+  });
+
+  it("still warns when top-level has botToken credentials with named accounts", () => {
+    // Top-level botToken creates an implicit default account. Even though
+    // named accounts have their own allowFrom, the implicit default account
+    // uses the top-level's empty groupAllowFrom — warning must fire.
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              bot1: { groupAllowFrom: ["@alice"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+    expect(warnings.some((w) => w.includes("group messages"))).toBe(true);
+  });
+
+  it("still warns on empty top-level groupAllowFrom when no accounts are configured", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+    expect(warnings.some((w) => w.includes("group messages"))).toBe(true);
+  });
 });
