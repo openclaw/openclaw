@@ -136,10 +136,7 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
 }
 
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
-export {
-  resolveSessionTranscriptPathInDir,
-  resolveStorePath,
-} from "../config/sessions/paths.js";
+export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
 /**
  * @deprecated Use getSessionEntry to read session metadata by agent/session
  * identity instead of resolving transcript file paths. File-shaped session
