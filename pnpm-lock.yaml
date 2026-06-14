@@ -1447,6 +1447,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/skills-setup: {}
+
   extensions/slack:
     dependencies:
       '@slack/bolt':
