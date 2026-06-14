@@ -55,8 +55,8 @@ const viewerPayload = JSON.stringify({
     unsafeCSS: "",
   },
   langs: ["text"],
-  oldFile: { fileName: "a.ts", lang: "text", content: "old" },
-  newFile: { fileName: "a.ts", lang: "text", content: "new" },
+  oldFile: { name: "a.ts", lang: "text", contents: "old" },
+  newFile: { name: "a.ts", lang: "text", contents: "new" },
 });
 
 function renderCard(payloadOverride?: string): void {
@@ -198,8 +198,8 @@ describe("viewerState initialization", () => {
         unsafeCSS: "",
       },
       langs: ["text"],
-      oldFile: { fileName: "a.ts", lang: "text", content: "old" },
-      newFile: { fileName: "a.ts", lang: "text", content: "new" },
+      oldFile: { name: "a.ts", lang: "text", contents: "old" },
+      newFile: { name: "a.ts", lang: "text", contents: "new" },
     });
     renderCard(customPayload);
     const { hydrateViewer } = await import("./viewer-client.js");
@@ -245,8 +245,8 @@ describe("viewerState initialization", () => {
         unsafeCSS: "",
       },
       langs: ["typescript"],
-      oldFile: { fileName: "a.ts", lang: "typescript", content: "old" },
-      newFile: { fileName: "a.ts", lang: "typescript", content: "new" },
+      oldFile: { name: "a.ts", lang: "typescript", contents: "old" },
+      newFile: { name: "a.ts", lang: "typescript", contents: "new" },
     });
     const payload2 = JSON.stringify({
       prerenderedHTML: "<div>diff2</div>",
@@ -262,8 +262,8 @@ describe("viewerState initialization", () => {
         unsafeCSS: "",
       },
       langs: ["python"],
-      oldFile: { fileName: "b.py", lang: "python", content: "old" },
-      newFile: { fileName: "b.py", lang: "python", content: "new" },
+      oldFile: { name: "b.py", lang: "python", contents: "old" },
+      newFile: { name: "b.py", lang: "python", contents: "new" },
     });
     renderCard(payload1);
     renderCard(payload2);
@@ -435,7 +435,7 @@ describe("getHydrateProps branching", () => {
         unsafeCSS: "",
       },
       langs: ["text"],
-      fileDiff: { fileName: "patch.diff", lang: "text", hunks: [] },
+      fileDiff: { name: "patch.diff", lang: "text", hunks: [] },
     });
     renderCard(fileDiffPayload);
     const { hydrateViewer } = await import("./viewer-client.js");
@@ -443,7 +443,7 @@ describe("getHydrateProps branching", () => {
     await hydrateViewer();
 
     const hydrateArg = fileDiffHydrateMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(hydrateArg.fileDiff).toEqual({ fileName: "patch.diff", lang: "text", hunks: [] });
+    expect(hydrateArg.fileDiff).toEqual({ name: "patch.diff", lang: "text", hunks: [] });
     expect(hydrateArg.oldFile).toBeUndefined();
     expect(hydrateArg.newFile).toBeUndefined();
   });
@@ -456,8 +456,8 @@ describe("getHydrateProps branching", () => {
 
     const hydrateArg = fileDiffHydrateMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(hydrateArg.fileDiff).toBeUndefined();
-    expect(hydrateArg.oldFile).toEqual({ fileName: "a.ts", lang: "text", content: "old" });
-    expect(hydrateArg.newFile).toEqual({ fileName: "a.ts", lang: "text", content: "new" });
+    expect(hydrateArg.oldFile).toEqual({ name: "a.ts", lang: "text", contents: "old" });
+    expect(hydrateArg.newFile).toEqual({ name: "a.ts", lang: "text", contents: "new" });
   });
 
 });
