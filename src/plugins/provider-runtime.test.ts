@@ -460,10 +460,16 @@ describe("provider-runtime", () => {
         provider: "claude-cli",
         modelId: "claude-sonnet-4-6",
         model: MODEL,
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:user-1",
       },
     });
 
     expect(createStreamFn).toHaveBeenCalledOnce();
+    expect(createStreamFn.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: "session-1",
+      sessionKey: "agent:main:telegram:direct:user-1",
+    });
     expectRecordFields(getLastResolvePluginProvidersParams(), {
       providerRefs: ["claude-cli"],
       modelRefs: ["claude-cli/claude-sonnet-4-6", "claude-sonnet-4-6"],

@@ -898,6 +898,10 @@ export type ProviderCreateStreamFnContext = {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;
+  /** OpenClaw conversation session id for request-scoped provider state. */
+  sessionId?: string;
+  /** Semantic session key; prefer this over sessionId for local routing decisions. */
+  sessionKey?: string;
 };
 
 /**

@@ -17,6 +17,8 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  sessionId?: string;
+  sessionKey?: string;
   allowRuntimePluginLoad?: boolean;
 }): StreamFn | undefined {
   const streamFn =
@@ -33,6 +35,8 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
         provider: params.model.provider,
         modelId: params.model.id,
         model: params.model,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
       },
     }) ??
     createTransportAwareStreamFnForModel(params.model, {
@@ -40,6 +44,8 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
     });
   if (!streamFn) {
     return undefined;

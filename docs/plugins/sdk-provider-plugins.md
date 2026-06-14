@@ -657,6 +657,11 @@ API key auth, and dynamic model resolution.
       | 41 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
       | 42 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
+      `createStreamFn` receives request-scoped `sessionId` and `sessionKey`
+      when the caller is an agent turn, compaction, or `/btw` side question.
+      Use them only for local per-conversation transport state, such as native
+      CLI session maps or audit correlation.
+
       Runtime fallback notes:
 
       - `normalizeConfig` checks the matched provider first, then other hook-capable provider plugins until one actually changes the config. If no provider hook rewrites a supported Google-family config entry, the bundled Google config normalizer still applies.
