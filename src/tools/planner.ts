@@ -49,6 +49,13 @@ export function buildToolPlan(options: BuildToolPlanOptions): ToolPlan {
       ...evaluateToolAvailability({ descriptor, context: options.availability }),
     ];
     if (diagnostics.length > 0) {
+      for (const diagnostic of diagnostics) {
+        if (diagnostic.reason === "unsupported-signal") {
+          console.warn(
+            `[tool-planner] ${descriptor.name}: ${diagnostic.reason} — ${diagnostic.message}`,
+          );
+        }
+      }
       hidden.push({ descriptor, diagnostics });
       continue;
     }

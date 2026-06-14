@@ -1,5 +1,5 @@
 // Verifies tool planner filtering, ordering, and unsupported-tool reporting.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ToolPlanContractError } from "./diagnostics.js";
 import { formatToolExecutorRef } from "./execution.js";
 import { buildToolPlan } from "./planner.js";
@@ -98,6 +98,8 @@ describe("buildToolPlan", () => {
   });
 
   it("hides descriptors with malformed empty allOf availability", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
     const plan = buildToolPlan({
       descriptors: [descriptor("malformed", { availability: { allOf: [] } })],
     });
@@ -111,6 +113,15 @@ describe("buildToolPlan", () => {
         message: "Empty availability allOf group",
       },
     ]);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("malformed"),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("unsupported-signal"),
+    );
+
+    warn.mockRestore();
   });
 
   it("keeps protocol conversion separate from executor refs and model normalization", () => {
