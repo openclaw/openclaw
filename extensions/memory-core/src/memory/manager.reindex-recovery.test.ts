@@ -18,6 +18,7 @@ type ReindexHarness = {
   writeMeta: () => void;
   dirty: boolean;
   sessionsDirty: boolean;
+  sessionsFullRetryDirty: boolean;
   sessionsDirtyFiles: Set<string>;
   sessionDeltas: Map<string, SessionDeltaState>;
 };
@@ -54,6 +55,7 @@ describe("memory manager reindex recovery", () => {
     provider?: string;
     sources?: Array<"memory" | "sessions">;
     cacheEnabled?: boolean;
+    chunkTokens?: number;
   }): OpenClawConfig {
     return {
       memory: { backend: "builtin" },
@@ -64,7 +66,7 @@ describe("memory manager reindex recovery", () => {
             provider: params.provider ?? "openai",
             model: "mock-embed",
             store: { path: params.storePath, vector: { enabled: false } },
-            chunking: { tokens: 4000, overlap: 0 },
+            chunking: { tokens: params.chunkTokens ?? 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: false },
             remote: { nonBatchConcurrency: 1 },
             cache: { enabled: params.cacheEnabled ?? false },
@@ -160,21 +162,58 @@ describe("memory manager reindex recovery", () => {
     },
   );
 
-  it("mirrors safe-reindex cache writes into the old index before temp cleanup", async () => {
+  it.each(["runSafeReindex", "runUnsafeReindex"] as const)(
+    "marks clean full reindex work dirty after %s fails late",
+    async (method) => {
+      const storePath = path.join(workspaceDir, `index-clean-retry-${method}.sqlite`);
+      const memoryManager = await openManager(
+        createCfg({
+          storePath,
+          provider: "none",
+          sources: ["memory", "sessions"],
+        }),
+      );
+      const harness = memoryManager as unknown as ReindexHarness;
+      const emptySyncPlan = { indexItems: [], finalize: () => undefined };
+
+      harness.syncMemoryFiles = async () => emptySyncPlan;
+      harness.syncSessionFiles = async () => emptySyncPlan;
+      harness.writeMeta = () => {
+        throw new Error("late clean reindex failure");
+      };
+
+      await expect(harness[method]({ reason: "test", force: true })).rejects.toThrow(
+        "late clean reindex failure",
+      );
+
+      expect(harness.dirty).toBe(true);
+      expect(harness.sessionsDirty).toBe(true);
+      expect(harness.sessionsFullRetryDirty).toBe(true);
+      expect(harness.sessionsDirtyFiles.size).toBe(0);
+    },
+  );
+
+  it("mirrors each successful safe-reindex cache batch into the old index", async () => {
     const storePath = path.join(workspaceDir, "index-cache-mirror.sqlite");
-    await fs.writeFile(path.join(memoryDir, "01-old.md"), "Alpha old cache line.");
     const memoryManager = await openManager(
       createCfg({
         storePath,
         cacheEnabled: true,
+        chunkTokens: 1200,
       }),
     );
     await memoryManager.sync({ reason: "test", force: true });
     deleteEmbeddingCacheRows(storePath);
     expect(readCacheRowCount(storePath)).toBe(0);
 
-    await fs.writeFile(path.join(memoryDir, "02-new.md"), "Beta new cache line.");
-    await fs.writeFile(path.join(memoryDir, "03-new.md"), "Gamma new cache line.");
+    await fs.writeFile(
+      path.join(memoryDir, "02-large.md"),
+      [
+        "Cache alpha line. ".repeat(250),
+        "Cache gamma line. ".repeat(250),
+        "Cache delta line. ".repeat(250),
+      ].join("\n"),
+    );
 
     let calls = 0;
     const embedBatchMock = getEmbedBatchMock();
@@ -190,6 +229,7 @@ describe("memory manager reindex recovery", () => {
       "planned reindex embed failure",
     );
 
+    expect(embedBatchMock).toHaveBeenCalledTimes(2);
     expect(readCacheRowCount(storePath)).toBe(1);
 
     embedBatchMock.mockClear();

@@ -123,6 +123,7 @@ type MemorySessionDeltaState = { lastSize: number; pendingBytes: number; pending
 type MemoryReindexRetryState = {
   dirty: boolean;
   sessionsDirty: boolean;
+  sessionsFullRetryDirty: boolean;
   sessionsDirtyFiles: Set<string>;
   sessionDeltas: Map<string, MemorySessionDeltaState>;
 };
@@ -276,6 +277,9 @@ export abstract class MemoryManagerSyncOps {
   protected dirty = false;
   protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   protected sessionsDirty = false;
+  // Failed full reindexes can start with no per-file dirty set. Keep a
+  // one-shot all-sessions retry marker so the next non-force sync cannot skip.
+  protected sessionsFullRetryDirty = false;
   private readonly memoryWatchPressureWarning: MemoryWatchPressureWarningState = { shown: false };
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
@@ -321,6 +325,7 @@ export abstract class MemoryManagerSyncOps {
     return {
       dirty: this.dirty,
       sessionsDirty: this.sessionsDirty,
+      sessionsFullRetryDirty: this.sessionsFullRetryDirty,
       sessionsDirtyFiles: new Set(this.sessionsDirtyFiles),
       sessionDeltas: new Map(
         Array.from(this.sessionDeltas, ([file, state]) => [file, { ...state }]),
@@ -330,6 +335,7 @@ export abstract class MemoryManagerSyncOps {
 
   private restoreReindexRetryState(snapshot: MemoryReindexRetryState): void {
     this.dirty = snapshot.dirty || this.dirty;
+    this.sessionsFullRetryDirty = snapshot.sessionsFullRetryDirty || this.sessionsFullRetryDirty;
     this.sessionsDirtyFiles = new Set([...snapshot.sessionsDirtyFiles, ...this.sessionsDirtyFiles]);
     const currentDeltas = this.sessionDeltas;
     this.sessionDeltas = new Map(
@@ -339,7 +345,30 @@ export abstract class MemoryManagerSyncOps {
       this.sessionDeltas.set(file, { ...state });
     }
     this.sessionsDirty =
-      snapshot.sessionsDirty || this.sessionsDirty || this.sessionsDirtyFiles.size > 0;
+      snapshot.sessionsDirty ||
+      this.sessionsDirty ||
+      this.sessionsFullRetryDirty ||
+      this.sessionsDirtyFiles.size > 0;
+  }
+
+  private markFailedFullReindexRetry(params: { memory: boolean; sessions: boolean }): void {
+    if (params.memory) {
+      this.dirty = true;
+    }
+    if (params.sessions) {
+      this.sessionsDirty = true;
+      this.sessionsFullRetryDirty = true;
+    }
+  }
+
+  private clearSessionRetryState(): void {
+    this.sessionsDirty = false;
+    this.sessionsFullRetryDirty = false;
+    this.sessionsDirtyFiles.clear();
+  }
+
+  private refreshSessionDirtyFlag(): void {
+    this.sessionsDirty = this.sessionsFullRetryDirty || this.sessionsDirtyFiles.size > 0;
   }
 
   private shouldDeferSourceWideBatch(): boolean {
@@ -1639,6 +1668,7 @@ export abstract class MemoryManagerSyncOps {
     return shouldSyncSessionsForReindex({
       hasSessionSource: this.sources.has("sessions"),
       sessionsDirty: this.sessionsDirty,
+      sessionsFullRetryDirty: this.sessionsFullRetryDirty,
       dirtySessionFileCount: this.sessionsDirtyFiles.size,
       sync: params,
       needsFullReindex,
@@ -2207,12 +2237,9 @@ export abstract class MemoryManagerSyncOps {
           this.dirty = false;
         }
         if (shouldSyncSessions) {
-          this.sessionsDirty = false;
-          this.sessionsDirtyFiles.clear();
-        } else if (this.sessionsDirtyFiles.size > 0) {
-          this.sessionsDirty = true;
+          this.clearSessionRetryState();
         } else {
-          this.sessionsDirty = false;
+          this.refreshSessionDirtyFlag();
         }
       } else {
         if (shouldSyncMemory) {
@@ -2226,12 +2253,9 @@ export abstract class MemoryManagerSyncOps {
             targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
             progress: progress ?? undefined,
           });
-          this.sessionsDirty = false;
-          this.sessionsDirtyFiles.clear();
-        } else if (this.sessionsDirtyFiles.size > 0) {
-          this.sessionsDirty = true;
+          this.clearSessionRetryState();
         } else {
-          this.sessionsDirty = false;
+          this.refreshSessionDirtyFlag();
         }
       }
     } catch (err) {
@@ -2343,6 +2367,11 @@ export abstract class MemoryManagerSyncOps {
     let tempDbClosed = false;
     let originalDbClosed = false;
     const originalRetryState = this.snapshotReindexRetryState();
+    const shouldRetryMemoryOnFailure = this.sources.has("memory");
+    const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
+      { reason: params.reason, force: params.force },
+      true,
+    );
     const originalState = {
       ftsAvailable: this.fts.available,
       ftsError: this.fts.loadError,
@@ -2390,11 +2419,8 @@ export abstract class MemoryManagerSyncOps {
         },
         build: async () => {
           await this.seedEmbeddingCache(originalDb);
-          const shouldSyncMemory = this.sources.has("memory");
-          const shouldSyncSessions = this.shouldSyncSessions(
-            { reason: params.reason, force: params.force },
-            true,
-          );
+          const shouldSyncMemory = shouldRetryMemoryOnFailure;
+          const shouldSyncSessions = shouldRetrySessionsOnFailure;
 
           if (this.shouldDeferSourceWideBatch()) {
             await this.executeSourceWideSync({
@@ -2407,12 +2433,9 @@ export abstract class MemoryManagerSyncOps {
               this.dirty = false;
             }
             if (shouldSyncSessions) {
-              this.sessionsDirty = false;
-              this.sessionsDirtyFiles.clear();
-            } else if (this.sessionsDirtyFiles.size > 0) {
-              this.sessionsDirty = true;
+              this.clearSessionRetryState();
             } else {
-              this.sessionsDirty = false;
+              this.refreshSessionDirtyFlag();
             }
           } else {
             if (shouldSyncMemory) {
@@ -2422,12 +2445,9 @@ export abstract class MemoryManagerSyncOps {
 
             if (shouldSyncSessions) {
               await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
-              this.sessionsDirty = false;
-              this.sessionsDirtyFiles.clear();
-            } else if (this.sessionsDirtyFiles.size > 0) {
-              this.sessionsDirty = true;
+              this.clearSessionRetryState();
             } else {
-              this.sessionsDirty = false;
+              this.refreshSessionDirtyFlag();
             }
           }
           if (!shouldSyncMemory) {
@@ -2483,6 +2503,10 @@ export abstract class MemoryManagerSyncOps {
       } catch {}
       restoreOriginalState();
       this.restoreReindexRetryState(originalRetryState);
+      this.markFailedFullReindexRetry({
+        memory: shouldRetryMemoryOnFailure,
+        sessions: shouldRetrySessionsOnFailure,
+      });
       throw err;
     }
   }
@@ -2495,14 +2519,16 @@ export abstract class MemoryManagerSyncOps {
     // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
     // under the per-test HOME anyway, and this cuts substantial fs+sqlite churn.
     const originalRetryState = this.snapshotReindexRetryState();
+    const shouldRetryMemoryOnFailure = this.sources.has("memory");
+    const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
+      { reason: params.reason, force: params.force },
+      true,
+    );
     try {
       this.resetIndex();
 
-      const shouldSyncMemory = this.sources.has("memory");
-      const shouldSyncSessions = this.shouldSyncSessions(
-        { reason: params.reason, force: params.force },
-        true,
-      );
+      const shouldSyncMemory = shouldRetryMemoryOnFailure;
+      const shouldSyncSessions = shouldRetrySessionsOnFailure;
 
       if (this.shouldDeferSourceWideBatch()) {
         await this.executeSourceWideSync({
@@ -2515,12 +2541,9 @@ export abstract class MemoryManagerSyncOps {
           this.dirty = false;
         }
         if (shouldSyncSessions) {
-          this.sessionsDirty = false;
-          this.sessionsDirtyFiles.clear();
-        } else if (this.sessionsDirtyFiles.size > 0) {
-          this.sessionsDirty = true;
+          this.clearSessionRetryState();
         } else {
-          this.sessionsDirty = false;
+          this.refreshSessionDirtyFlag();
         }
       } else {
         if (shouldSyncMemory) {
@@ -2530,12 +2553,9 @@ export abstract class MemoryManagerSyncOps {
 
         if (shouldSyncSessions) {
           await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
-          this.sessionsDirty = false;
-          this.sessionsDirtyFiles.clear();
-        } else if (this.sessionsDirtyFiles.size > 0) {
-          this.sessionsDirty = true;
+          this.clearSessionRetryState();
         } else {
-          this.sessionsDirty = false;
+          this.refreshSessionDirtyFlag();
         }
       }
       if (!shouldSyncMemory) {
@@ -2568,6 +2588,10 @@ export abstract class MemoryManagerSyncOps {
       this.pruneEmbeddingCacheIfNeeded?.();
     } catch (err) {
       this.restoreReindexRetryState(originalRetryState);
+      this.markFailedFullReindexRetry({
+        memory: shouldRetryMemoryOnFailure,
+        sessions: shouldRetrySessionsOnFailure,
+      });
       throw err;
     }
   }
