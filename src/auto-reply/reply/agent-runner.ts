@@ -1735,22 +1735,28 @@ export async function runReplyAgent(params: {
         const attemptExecutionRuntime = await import(
           "../../agents/command/attempt-execution.runtime.js"
         );
-        activeSessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
-          body: commandBody,
-          transcriptBody: transcriptCommandBody,
-          result: runResult,
-          sessionId: activeSessionEntry?.sessionId ?? sessionKey,
-          sessionKey: sessionKey ?? activeSessionEntry?.sessionId,
-          sessionEntry: activeSessionEntry,
-          sessionStore: activeSessionStore,
-          storePath,
-          sessionAgentId: followupRun.run.agentId,
-          sessionCwd: followupRun.run.cwd,
-          config: cfg,
-          embeddedAssistantGapFill,
-        });
-        if (activeSessionStore && sessionKey && activeSessionEntry) {
-          activeSessionStore[sessionKey] = activeSessionEntry;
+        const effectiveSessionId =
+          runResult.meta?.agentMeta?.sessionId ??
+          activeSessionEntry?.sessionId ??
+          followupRun.run.sessionId;
+        if (effectiveSessionId) {
+          activeSessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
+            body: commandBody,
+            transcriptBody: transcriptCommandBody,
+            result: runResult,
+            sessionId: effectiveSessionId,
+            sessionKey: sessionKey ?? effectiveSessionId,
+            sessionEntry: activeSessionEntry,
+            sessionStore: activeSessionStore,
+            storePath,
+            sessionAgentId: followupRun.run.agentId,
+            sessionCwd: followupRun.run.cwd,
+            config: cfg,
+            embeddedAssistantGapFill,
+          });
+          if (activeSessionStore && sessionKey && activeSessionEntry) {
+            activeSessionStore[sessionKey] = activeSessionEntry;
+          }
         }
       } catch (error) {
         logVerbose(
