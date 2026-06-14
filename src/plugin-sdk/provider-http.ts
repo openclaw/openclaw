@@ -30,6 +30,7 @@ export {
   postJsonRequest,
   postMultipartRequest,
   postTranscriptionRequest,
+  resolveProviderOperationRemainingTimeoutMs,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   resolveAudioTranscriptionUploadFileName,

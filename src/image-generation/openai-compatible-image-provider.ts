@@ -1,18 +1,21 @@
-/** Factory for image providers with OpenAI-compatible generation/edit endpoints. */
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  fetchWithTimeoutGuarded,
   postJsonRequest,
   postMultipartRequest,
   resolveProviderHttpRequestConfig,
-  resolveProviderOperationTimeoutMs,
+  resolveProviderOperationRemainingTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseOpenAiCompatibleImageResponse } from "./image-assets.js";
+import { resolveConfiguredMediaMaxBytes } from "../media/configured-max-bytes.js";
+import { parseOpenAiCompatibleImageResponseAsync } from "./image-assets.js";
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -21,11 +24,8 @@ import type {
   ImageGenerationSourceImage,
 } from "./types.js";
 
-// Factory for providers that expose OpenAI-style /images/generations and
-// /images/edits endpoints while still allowing provider-specific bodies.
 type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
 
-/** OpenAI-compatible image endpoint mode. */
 export type OpenAiCompatibleImageRequestMode = "generate" | "edit";
 
 export type OpenAiCompatibleImageProviderRequestParams = {
@@ -101,18 +101,33 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
+function hasSameUrlOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
+}
+
+function createSameOriginDownloadHeaders(headers: Headers): Headers {
+  const downloadHeaders = new Headers(headers);
+  downloadHeaders.delete("Content-Type");
+  return downloadHeaders;
+}
+
 function appendImagesPath(baseUrl: string, mode: OpenAiCompatibleImageRequestMode): string {
   return `${trimTrailingSlash(baseUrl)}/images/${mode === "edit" ? "edits" : "generations"}`;
 }
 
-function resolveRequestTimeoutMs(params: {
+function createRequestTimeoutResolver(params: {
   options: OpenAiCompatibleImageProviderOptions;
   req: ImageGenerationRequest;
   mode: OpenAiCompatibleImageRequestMode;
-}): number | undefined {
-  if (params.options.defaultTimeoutMs === undefined) {
-    return params.req.timeoutMs;
+}): () => number | undefined {
+  if (params.options.defaultTimeoutMs === undefined && params.req.timeoutMs === undefined) {
+    return () => params.req.timeoutMs;
   }
+  const defaultTimeoutMs = params.options.defaultTimeoutMs ?? params.req.timeoutMs ?? 1;
   const label =
     params.mode === "edit"
       ? (params.options.failureLabels?.edit ?? `${params.options.label} image edit`)
@@ -121,13 +136,13 @@ function resolveRequestTimeoutMs(params: {
     timeoutMs: params.req.timeoutMs,
     label,
   });
-  return resolveProviderOperationTimeoutMs({
-    deadline,
-    defaultTimeoutMs: params.options.defaultTimeoutMs,
-  });
+  return () =>
+    resolveProviderOperationRemainingTimeoutMs({
+      deadline,
+      defaultTimeoutMs,
+    });
 }
 
-/** Creates an image-generation provider backed by OpenAI-style image endpoints. */
 export function createOpenAiCompatibleImageGenerationProvider(
   options: OpenAiCompatibleImageProviderOptions,
 ): ImageGenerationProvider {
@@ -155,8 +170,6 @@ export function createOpenAiCompatibleImageGenerationProvider(
     capabilities: options.capabilities,
     async generateImage(req): Promise<ImageGenerationResult> {
       const inputImages = req.inputImages ?? [];
-      // Reference images switch the request to edit mode; providers can still
-      // disable edits or cap reference count through capabilities.
       const mode: OpenAiCompatibleImageRequestMode = inputImages.length > 0 ? "edit" : "generate";
       const maxInputImages = options.capabilities.edit.maxInputImages;
       if (mode === "edit" && !options.capabilities.edit.enabled) {
@@ -227,13 +240,13 @@ export function createOpenAiCompatibleImageGenerationProvider(
         mode === "edit"
           ? options.buildEditRequest({ ...requestParams, mode })
           : options.buildGenerateRequest({ ...requestParams, mode });
-      const timeoutMs = resolveRequestTimeoutMs({ options, req, mode });
-      // Multipart requests must let FormData set its own boundary header, while
-      // JSON requests need an explicit content type after configured headers.
+      const resolveTimeoutMs = createRequestTimeoutResolver({ options, req, mode });
+      const timeoutMs = resolveTimeoutMs();
+      const requestUrl = appendImagesPath(baseUrl, mode);
       const request =
         requestBody.kind === "multipart"
           ? postMultipartRequest({
-              url: appendImagesPath(baseUrl, mode),
+              url: requestUrl,
               headers: (() => {
                 const multipartHeaders = new Headers(headers);
                 multipartHeaders.delete("Content-Type");
@@ -247,7 +260,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
               dispatcherPolicy,
             })
           : postJsonRequest({
-              url: appendImagesPath(baseUrl, mode),
+              url: requestUrl,
               headers: (() => {
                 const jsonHeaders = new Headers(headers);
                 jsonHeaders.set("Content-Type", "application/json");
@@ -269,12 +282,60 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+        const malformedResponseError =
+          mode === "edit"
+            ? `${options.label} image edit response malformed`
+            : `${options.label} image generation response malformed`;
+        const images = await parseOpenAiCompatibleImageResponseAsync(await response.json(), {
           ...options.response,
-          malformedResponseError:
-            mode === "edit"
-              ? `${options.label} image edit response malformed`
-              : `${options.label} image generation response malformed`,
+          malformedResponseError,
+          downloadUrl: async ({ url }) => {
+            const useProviderTransport = hasSameUrlOrigin(requestUrl, url);
+            const download = await fetchWithTimeoutGuarded(
+              url,
+              {
+                method: "GET",
+                ...(useProviderTransport
+                  ? { headers: createSameOriginDownloadHeaders(headers) }
+                  : {}),
+              },
+              resolveTimeoutMs(),
+              fetch,
+              {
+                ...(req.ssrfPolicy || (useProviderTransport && resolvedAllowPrivateNetwork)
+                  ? {
+                      ssrfPolicy: {
+                        ...req.ssrfPolicy,
+                        ...(useProviderTransport && resolvedAllowPrivateNetwork
+                          ? { allowPrivateNetwork: true }
+                          : {}),
+                      },
+                    }
+                  : {}),
+                ...(useProviderTransport && dispatcherPolicy ? { dispatcherPolicy } : {}),
+                auditContext: `${options.id}-image-download`,
+              },
+            );
+            try {
+              await assertOkOrThrowHttpError(
+                download.response,
+                `${options.label} image URL download failed`,
+              );
+              return {
+                buffer: await readResponseWithLimit(
+                  download.response,
+                  resolveConfiguredMediaMaxBytes(req.cfg) ?? MAX_IMAGE_BYTES,
+                  {
+                    onOverflow: ({ maxBytes }) =>
+                      new Error(`${options.label} image URL download exceeded ${maxBytes} bytes`),
+                  },
+                ),
+                mimeType: download.response.headers.get("content-type") ?? undefined,
+              };
+            } finally {
+              await download.release();
+            }
+          },
         });
         if (images.length === 0) {
           throw new Error(

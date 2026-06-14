@@ -1,11 +1,11 @@
-/** Tests image asset parsing, MIME sniffing, and OpenAI-compatible response conversion. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   generatedImageAssetFromDataUrl,
   imageFileExtensionForMimeType,
   imageSourceUploadFileName,
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
+  parseOpenAiCompatibleImageResponseAsync,
   sniffImageMimeType,
   toImageDataUrl,
 } from "./image-assets.js";
@@ -111,6 +111,78 @@ describe("image asset helpers", () => {
         { malformedResponseError: "Sample image response malformed" },
       ),
     ).toThrow("Sample image response malformed");
+  });
+
+  it("parses OpenAI-compatible URL image responses", async () => {
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+    const downloadUrl = vi.fn(async () => ({
+      buffer: pngBytes,
+      mimeType: "image/png",
+    }));
+
+    const images = await parseOpenAiCompatibleImageResponseAsync(
+      {
+        data: [
+          {
+            url: "https://example.test/generated.png",
+            revised_prompt: "revised url",
+          },
+        ],
+      },
+      { downloadUrl, sniffMimeType: true },
+    );
+
+    expect(downloadUrl).toHaveBeenCalledWith({
+      url: "https://example.test/generated.png",
+      entry: {
+        url: "https://example.test/generated.png",
+        revised_prompt: "revised url",
+      },
+      index: 0,
+    });
+    expect(images).toEqual([
+      {
+        buffer: pngBytes,
+        mimeType: "image/png",
+        fileName: "image-1.png",
+        revisedPrompt: "revised url",
+      },
+    ]);
+  });
+
+  it("prefers OpenAI-compatible base64 image data over URL fallbacks", async () => {
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
+    const downloadUrl = vi.fn();
+
+    const images = await parseOpenAiCompatibleImageResponseAsync(
+      {
+        data: [
+          {
+            b64_json: jpegBytes.toString("base64"),
+            url: "https://example.test/ignored.png",
+          },
+        ],
+      },
+      { downloadUrl, sniffMimeType: true },
+    );
+
+    expect(downloadUrl).not.toHaveBeenCalled();
+    expect(images[0]?.mimeType).toBe("image/jpeg");
+    expect(images[0]?.buffer).toEqual(jpegBytes);
+  });
+
+  it("rejects OpenAI-compatible URL image responses that are not images", async () => {
+    await expect(
+      parseOpenAiCompatibleImageResponseAsync(
+        { data: [{ url: "https://example.test/not-image" }] },
+        {
+          downloadUrl: async () => ({
+            buffer: Buffer.from("<html></html>"),
+            mimeType: "text/html",
+          }),
+        },
+      ),
+    ).rejects.toThrow("OpenAI-compatible image URL download did not return an image");
   });
 
   it("resolves source upload filenames from explicit names or MIME types", () => {
