@@ -236,6 +236,7 @@ Current runtime behaviour:
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
+- `realtime.suppressInputDuringPlayback` (default **on**) is a half-duplex **echo / self-answer guard**: while assistant audio is playing, caller-leg input is dropped unless it is loud enough to be a genuine barge-in, so the bot does not answer its own voice echoing back off the caller's device — while the caller can still interrupt. Tune with `realtime.echoSuppressionWindowMs` (playout window in ms after the last sent frame; default 600) and `realtime.echoBargeInRms` (normalized RMS, 0–1, above which input during playback counts as a barge-in rather than echo; default 0.04). Set `suppressInputDuringPlayback: false` to disable.
 
 ### Tool policy
 
@@ -714,8 +715,13 @@ Key points:
 - **Outbound call-back:** when the caller asks to be **called back** (or a
   background task is dispatched with `deliverVia: "call"`), the bot places an
   outbound Teams call through the worker and **speaks the result**; configured
-  under `outbound` (`enabled`, `answerTimeoutMs`). If unanswered, Teams voicemail
-  captures the spoken result. The default delivery is a Teams **chat message**.
+  under `outbound` (`enabled`, `answerTimeoutMs`, `defaultMode`,
+  `notifyHangupDelaySec`). `defaultMode` (default `"notify"`) states the result
+  and hangs up after the audio drains (`notifyHangupDelaySec`, default 3); set
+  `"conversation"` to stay on the line. The result is spoken **only once the
+  callee answers** (greet-on-answer), not while the phone is still ringing. If
+  unanswered, Teams voicemail captures it. The default delivery is a Teams
+  **chat message**.
 - **Inbound video (vision):** with video enabled on the worker, the agent can
   **see** what the caller shares. The `look_at_screen` tool answers questions
   about the caller's **camera** or **screen-share (VBSS)** (the streaming path
@@ -731,6 +737,22 @@ Key points:
   changed inbound frame into the session as ambient context (`sendImage`), so the
   model stays visually aware between explicit `look_at_screen` calls —
   recording-gated and budget-capped.
+- **Greeting & verbal interrupts:** the bot greets the caller **by first name**
+  from the Teams roster, and honors **deterministic verbal interrupts** — "stop"
+  / "wait" / "never mind" (and Arabic equivalents such as "توقف") cut playback
+  immediately, handled in code at the audio egress rather than model-trusted.
+- **Bilingual (`msteams.bilingual`, default off):** when on, the realtime model
+  detects and mirrors Arabic↔English and translates on request; the deterministic
+  layers (verbal interrupts, viseme lip-sync) understand Arabic regardless.
+- **Meeting minutes (`msteams.meetingRecap`, default off):** at the end of a
+  meeting the bot posts minutes to the Teams chat (1:1) or the meeting thread
+  (group); an on-demand "summarize the meeting" also works mid-call.
+- **DTMF / IVR:** in-band keypad tones from the caller are surfaced to the
+  realtime model as a user message ("the caller pressed 1"), so the agent can run
+  "press 1 to…" flows.
+- **Governance:** when the Teams **channel** has DLP / audit-log configured
+  (`channels.msteams.dlp`, `channels.msteams.auditChannel`), those apply to the
+  bot's spoken-reply text too — see [Microsoft Teams channel governance](/channels/msteams#governance-dlp-audit-log--voice-message-transcription).
 
 See the [voice-call extension README](https://github.com/openclaw/openclaw/blob/main/extensions/voice-call/README.md)
 for the full WebSocket bridge protocol and worker setup.
