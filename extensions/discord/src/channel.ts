@@ -24,7 +24,9 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
 import {
+  isDiscordAccountEnabledForRuntime,
   listDiscordAccountIds,
+  resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
   resolveDiscordAccountAllowFrom,
   type ResolvedDiscordAccount,
@@ -220,15 +222,27 @@ const discordMessageActions = {
   },
 };
 
-function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): number {
+function resolveDiscordStartupAccountIds(cfg: OpenClawConfig): string[] {
   const startupAccountIds = listDiscordAccountIds(cfg).filter((candidateId) => {
     const candidate = resolveDiscordAccount({ cfg, accountId: candidateId });
     return (
-      candidate.enabled &&
+      isDiscordAccountEnabledForRuntime(candidate, cfg) &&
       (resolveConfiguredFromCredentialStatuses(candidate) ??
         Boolean(normalizeOptionalString(candidate.token)))
     );
   });
+  const defaultAccountId = resolveDefaultDiscordAccountId(cfg);
+  if (!startupAccountIds.includes(defaultAccountId)) {
+    return startupAccountIds;
+  }
+  return [
+    defaultAccountId,
+    ...startupAccountIds.filter((candidateId) => candidateId !== defaultAccountId),
+  ];
+}
+
+function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): number {
+  const startupAccountIds = resolveDiscordStartupAccountIds(cfg);
   const startupIndex = startupAccountIds.findIndex((candidateId) => candidateId === accountId);
   return startupIndex <= 0 ? 0 : startupIndex * DISCORD_ACCOUNT_STARTUP_STAGGER_MS;
 }
