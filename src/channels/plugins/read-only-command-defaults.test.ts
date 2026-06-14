@@ -107,4 +107,74 @@ describe("resolveReadOnlyChannelCommandDefaults", () => {
       nativeSkillsAutoEnabled: false,
     });
   });
+
+  it("skips unreadable plugin metadata rows while resolving command defaults", () => {
+    const unreadableChannels = Object.defineProperty(
+      {
+        id: "poisoned-channels",
+        origin: "global",
+      },
+      "channels",
+      {
+        get() {
+          throw new Error("read-only command channels exploded");
+        },
+      },
+    );
+    const unreadableChannelConfigs = Object.defineProperty(
+      {
+        id: "poisoned-channel-configs",
+        origin: "global",
+        channels: ["demo"],
+      },
+      "channelConfigs",
+      {
+        get() {
+          throw new Error("read-only command config exploded");
+        },
+      },
+    );
+    loadPluginMetadataSnapshot.mockReturnValue({
+      index: {
+        plugins: [
+          {
+            pluginId: "poisoned-channel-configs",
+            origin: "global",
+            enabled: true,
+            enabledByDefault: true,
+          },
+          {
+            pluginId: "healthy-demo",
+            origin: "global",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        unreadableChannels,
+        unreadableChannelConfigs,
+        {
+          id: "healthy-demo",
+          origin: "global",
+          channels: ["demo"],
+          channelConfigs: {
+            demo: {
+              commands: {
+                nativeCommandsAutoEnabled: true,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(
+      resolveReadOnlyChannelCommandDefaults("demo", {
+        config: {},
+      }),
+    ).toEqual({
+      nativeCommandsAutoEnabled: true,
+    });
+  });
 });
