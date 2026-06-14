@@ -671,6 +671,37 @@ describe("before_tool_call loop detection behavior", () => {
     expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
   });
 
+  it("retains committed delivery evidence from partially failed message outcomes", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "delivery partially failed" }],
+      details: {
+        status: "partial_failed",
+        results: [{ status: "sent", messageId: "message-1" }, { status: "failed" }],
+      },
+    });
+    const tool = createWrappedTool("message", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-partial-failed-message-outcome",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "message-partial-failed", {
+      action: "send",
+      to: "channel:123",
+      content: "partially delivered",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        failed: true,
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["partially delivered"],
+      }),
+    );
+  });
+
   it.each([
     ["dry-run", { ok: true, result: { dryRun: true } }],
     ["failure", { status: "ok", result: { status: "failed" } }],

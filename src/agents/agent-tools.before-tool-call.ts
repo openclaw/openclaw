@@ -1018,7 +1018,7 @@ function hasCommittedMessagingToolSendOutcome(params: {
   result: unknown;
   failed: boolean;
 }): boolean {
-  if (params.failed || !isMessagingTool(params.toolName) || !isPlainObject(params.toolParams)) {
+  if (!isMessagingTool(params.toolName) || !isPlainObject(params.toolParams)) {
     return false;
   }
   if (!isMessagingToolSendAction(params.toolName, params.toolParams)) {
@@ -1036,7 +1036,11 @@ function hasCommittedMessagingToolSendOutcome(params: {
   if (details.dryRun === true) {
     return false;
   }
-  if (hasCommittedMessagingToolResultDetails(details)) {
+  const hasCommittedDetails = hasCommittedMessagingToolResultDetails(details);
+  if (params.failed) {
+    return hasCommittedDetails && hasExplicitMessagingToolNonDeliveryEvidence(details);
+  }
+  if (hasCommittedDetails) {
     return true;
   }
   if (hasExplicitMessagingToolNonDeliveryEvidence(details)) {
