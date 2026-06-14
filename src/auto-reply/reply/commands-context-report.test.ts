@@ -22,6 +22,7 @@ function makeParams(
     storePath?: string;
     agentId?: string;
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
+    toolEntries?: NonNullable<SessionEntry["systemPromptReport"]>["tools"]["entries"];
   },
 ): HandleCommandsParams {
   return {
@@ -76,7 +77,9 @@ function makeParams(
         tools: {
           listChars: 10,
           schemaChars: 20,
-          entries: [{ name: "read", summaryChars: 10, schemaChars: 20, propertiesCount: 1 }],
+          entries: options?.toolEntries ?? [
+            { name: "read", summaryChars: 10, schemaChars: 20, propertiesCount: 1 },
+          ],
         },
       },
     },
@@ -270,6 +273,30 @@ describe("buildContextReply", () => {
     expect(result.text).not.toContain("~645 tok");
   });
 
+  it("omits unreadable tool report entries from detail output", async () => {
+    const malformedTool = {
+      get name(): string {
+        throw new Error("fuzzed unreadable report tool name");
+      },
+      summaryChars: 10,
+      schemaChars: 20,
+      propertiesCount: 1,
+    };
+
+    const result = await buildContextReply(
+      makeParams("/context detail", false, {
+        toolEntries: [
+          { name: "read", summaryChars: 10, schemaChars: 20, propertiesCount: 1 },
+          malformedTool,
+        ],
+      }),
+    );
+
+    expect(result.text).toContain("Tools: read");
+    expect(result.text).toContain("- read: 20 chars (~5 tok)");
+    expect(result.text).not.toContain("fuzzed unreadable");
+  });
+
   it("prefers the target session entry from sessionStore for cached context stats", async () => {
     const params = makeParams("/context detail", false, {
       contextTokens: 8_192,
@@ -323,6 +350,38 @@ describe("buildContextReply", () => {
       expect(png.subarray(12, 16).toString("ascii")).toBe("IHDR");
       expect(png.readUInt32BE(16)).toBe(1280);
       expect(png.readUInt32BE(20)).toBe(860);
+    } finally {
+      await unlink(result.mediaUrl);
+    }
+  });
+
+  it("omits unreadable tool report entries from context maps", async () => {
+    const malformedTool = {
+      get name(): string {
+        throw new Error("fuzzed unreadable report tool name");
+      },
+      summaryChars: 10,
+      schemaChars: 20,
+      propertiesCount: 1,
+    };
+    const result = await buildContextReply(
+      makeParams("/context map", false, {
+        contextTokens: 8_192,
+        totalTokens: 900,
+        toolEntries: [
+          { name: "read", summaryChars: 10, schemaChars: 20, propertiesCount: 1 },
+          malformedTool,
+        ],
+      }),
+    );
+    if (!result.mediaUrl) {
+      throw new Error("missing context map media path");
+    }
+    try {
+      const png = await readFile(result.mediaUrl);
+      expect(result.text).toContain("Context treemap");
+      expect(result.text).toContain("Tracked: 10,520 chars");
+      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     } finally {
       await unlink(result.mediaUrl);
     }
