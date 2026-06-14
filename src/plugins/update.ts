@@ -909,10 +909,23 @@ function resolveNpmUpdateSpecs(params: {
       recordSpec,
     };
   }
-  return resolveNpmInstallSpecsForUpdateChannel({
+  const specs = resolveNpmInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,
   });
+  // When the install spec is pinned to an exact version (e.g. @scope/pkg@1.2.3),
+  // strip the version selector so the update check queries npm for the latest
+  // available version instead of always resolving back to the same pinned version.
+  if (specs.installSpec) {
+    const parsed = parseRegistryNpmSpec(specs.installSpec);
+    if (parsed && parsed.selectorKind === "exact-version") {
+      return {
+        ...specs,
+        installSpec: parsed.name,
+      };
+    }
+  }
+  return specs;
 }
 
 function resolveClawHubUpdateSpecs(params: {
