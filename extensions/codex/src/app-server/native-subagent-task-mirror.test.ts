@@ -26,7 +26,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
       runtime,
     );
-
     mirror.handleNotification({
       method: "thread/started",
       params: {
@@ -82,7 +81,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
       runtime,
     );
-
     mirror.handleNotification({
       method: "thread/started",
       params: {
@@ -103,6 +101,45 @@ describe("CodexNativeSubagentTaskMirror", () => {
     expect(runtime.tryCreateRunningTaskRun).not.toHaveBeenCalled();
     expect(runtime.recordTaskRunProgressByRunId).not.toHaveBeenCalled();
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("finalizes collab completion when no authoritative result path is available", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        now: () => 44_000,
+      },
+      runtime,
+    );
+
+    mirror.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "parent-thread",
+        item: {
+          type: "collabAgentToolCall",
+          tool: "spawn_agent",
+          prompt: "inspect one thing",
+          agentsStates: {
+            "child-thread": {
+              status: "completed",
+              message: "done",
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      status: "succeeded",
+      endedAt: 44_000,
+      lastEventAt: 44_000,
+      progressSummary: "done",
+      terminalSummary: "done",
+    });
   });
 
   it("deduplicates repeated thread-started notifications for the same child thread", () => {
@@ -147,7 +184,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
       runtime,
     );
-
     mirror.handleNotification({
       method: "thread/status/changed",
       params: {
@@ -190,7 +226,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
       runtime,
     );
-
+    mirror.markAuthoritativeCompletionExpected("child-thread");
     mirror.handleNotification({
       method: "item/completed",
       params: {
@@ -265,7 +301,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
       runtime,
     );
-
     mirror.handleNotification({
       method: "item/started",
       params: {
@@ -297,6 +332,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
       runtime,
     );
+    mirror.markAuthoritativeCompletionExpected("child-thread");
 
     mirror.handleNotification({
       method: "item/completed",
@@ -465,6 +501,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
       runtime,
     );
+    mirror.markAuthoritativeCompletionExpected("child-thread");
 
     mirror.handleNotification({
       method: "item/completed",
@@ -610,6 +647,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
       runtime,
     );
+    mirror.markAuthoritativeCompletionExpected("child-thread");
 
     mirror.handleNotification({
       method: "item/completed",

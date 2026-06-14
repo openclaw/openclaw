@@ -535,6 +535,10 @@ export class CodexNativeSubagentMonitor {
       normalizedChildThreadId,
     );
     const agentPath = normalizeOptionalString(options.agentPath);
+    const state = this.parentStates.get(normalizedParentThreadId);
+    if (state?.mirror && (this.codexHome || agentPath)) {
+      state.mirror.markAuthoritativeCompletionExpected(normalizedChildThreadId);
+    }
     if (agentPath) {
       this.childThreadIdsByAgentPath.set(
         buildParentAgentPathKey(normalizedParentThreadId, agentPath),

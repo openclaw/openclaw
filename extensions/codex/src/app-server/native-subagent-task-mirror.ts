@@ -37,6 +37,7 @@ export class CodexNativeSubagentTaskMirror {
   private readonly failedMirrorThreadIds = new Set<string>();
   private readonly terminalRunIds = new Set<string>();
   private readonly authoritativeRunIds = new Set<string>();
+  private readonly expectedAuthoritativeRunIds = new Set<string>();
   private readonly now: () => number;
 
   constructor(
@@ -52,6 +53,12 @@ export class CodexNativeSubagentTaskMirror {
     // finalizes and delivers this task, later mirror events must not rewrite it.
     this.authoritativeRunIds.add(runId);
     this.terminalRunIds.add(runId);
+  }
+
+  markAuthoritativeCompletionExpected(childThreadId: string): void {
+    // Local transcripts and V2 agent paths can supply the real result later.
+    // Remote V1 lacks both and must keep collab-completed as its fallback.
+    this.expectedAuthoritativeRunIds.add(codexNativeSubagentRunId(childThreadId));
   }
 
   handleNotification(notification: CodexServerNotification): void {
@@ -304,11 +311,25 @@ export class CodexNativeSubagentTaskMirror {
     }
     if (normalizedStatus === "completed") {
       this.terminalRunIds.add(runId);
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary: trimOptional(message) ?? "Codex native subagent completed.",
-      });
+      const summary = trimOptional(message) ?? "Codex native subagent completed.";
+      if (this.expectedAuthoritativeRunIds.has(runId)) {
+        this.runtime.recordTaskRunProgressByRunId({
+          runId,
+          lastEventAt: eventAt,
+          progressSummary: summary,
+        });
+      } else {
+        // Remote V1 has no trusted completion envelope or local transcript.
+        // Its collab-completed state is therefore the terminal fallback.
+        this.runtime.finalizeTaskRunByRunId({
+          runId,
+          status: "succeeded",
+          endedAt: eventAt,
+          lastEventAt: eventAt,
+          progressSummary: summary,
+          terminalSummary: summary,
+        });
+      }
       return;
     }
     if (normalizedStatus === "blocked") {

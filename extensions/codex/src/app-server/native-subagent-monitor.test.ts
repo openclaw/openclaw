@@ -212,6 +212,62 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "remote V1", codexHome: undefined, finalizes: true },
+    { label: "local transcript-backed V1", codexHome: "/tmp/codex-home", finalizes: false },
+  ])(
+    "uses collab completion as a terminal fallback only for $label",
+    async ({ codexHome, finalizes }) => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, { codexHome });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        taskRuntimeScope: createTaskScope("agent:main:main"),
+        agentId: "main",
+      });
+
+      await notifyChildStarted(client, "parent-thread", "child-thread", "");
+      await client.notify({
+        method: "item/completed",
+        params: {
+          threadId: "parent-thread",
+          item: {
+            type: "collabAgentToolCall",
+            tool: "wait",
+            senderThreadId: "parent-thread",
+            agentsStates: {
+              "child-thread": {
+                status: "completed",
+                message: "child final result",
+              },
+            },
+          },
+        },
+      });
+
+      if (finalizes) {
+        expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runId: "codex-thread:child-thread",
+            status: "succeeded",
+            terminalSummary: "child final result",
+          }),
+        );
+      } else {
+        expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runId: "codex-thread:child-thread",
+            progressSummary: "child final result",
+          }),
+        );
+        expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+      }
+      monitor.dispose();
+    },
+  );
+
   it("does not complete mirrored task rows from idle status before native completion", async () => {
     const client = createClient();
     const runtime = createRuntime();
