@@ -1,6 +1,7 @@
 // Memory Core plugin module implements manager atomic reindex behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 type MemoryIndexFileOps = {
@@ -19,6 +20,12 @@ type MemoryIndexFileOptions = {
 
 type ResolvedMemoryIndexFileOptions = Required<MemoryIndexFileOptions>;
 
+type SweepMemoryIndexTempFilesOptions = MemoryIndexFileOptions & {
+  minTempAgeMs?: number;
+  nowMs?: number;
+  onError?: (error: unknown, tempPath: string) => void;
+};
+
 const defaultFileOps: MemoryIndexFileOps = {
   rename: fs.rename,
   rm: fs.rm,
@@ -30,6 +37,7 @@ const defaultMaxRenameAttempts = 6;
 const defaultRenameRetryDelayMs = 25;
 const defaultMaxRemoveAttempts = 10;
 const defaultRemoveRetryDelayMs = 50;
+const defaultTempSweepMinAgeMs = 10 * 60 * 1000;
 
 function isTransientFileError(err: unknown): boolean {
   return transientFileErrorCodes.has((err as NodeJS.ErrnoException).code ?? "");
@@ -84,10 +92,13 @@ export async function moveMemoryIndexFiles(
   }
 }
 
-async function rmWithRetry(path: string, options: ResolvedMemoryIndexFileOptions): Promise<void> {
+async function rmWithRetry(
+  filePath: string,
+  options: ResolvedMemoryIndexFileOptions,
+): Promise<void> {
   for (let attempt = 1; attempt <= options.maxRemoveAttempts; attempt++) {
     try {
-      await options.fileOps.rm(path, { force: true });
+      await options.fileOps.rm(filePath, { force: true });
       return;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -111,6 +122,86 @@ export async function removeMemoryIndexFiles(
   for (const suffix of suffixes) {
     await rmWithRetry(`${basePath}${suffix}`, resolvedOptions);
   }
+}
+
+function normalizeMemoryIndexTempBase(entryName: string, tempPrefix: string): string | undefined {
+  if (!entryName.startsWith(tempPrefix)) {
+    return undefined;
+  }
+  if (entryName.endsWith("-wal")) {
+    return entryName.slice(0, -"-wal".length);
+  }
+  if (entryName.endsWith("-shm")) {
+    return entryName.slice(0, -"-shm".length);
+  }
+  return entryName;
+}
+
+async function newestExistingMemoryIndexTempMtimeMs(basePath: string): Promise<number | undefined> {
+  const paths = [basePath, `${basePath}-wal`, `${basePath}-shm`];
+  let newestMtimeMs: number | undefined;
+  for (const filePath of paths) {
+    try {
+      const stat = await fs.stat(filePath);
+      newestMtimeMs = Math.max(newestMtimeMs ?? stat.mtimeMs, stat.mtimeMs);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+  }
+  return newestMtimeMs;
+}
+
+export async function sweepMemoryIndexTempFiles(
+  targetPath: string,
+  options: SweepMemoryIndexTempFilesOptions = {},
+): Promise<string[]> {
+  try {
+    await fs.stat(targetPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
+
+  const dir = path.dirname(targetPath);
+  const tempPrefix = `${path.basename(targetPath)}.tmp-`;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
+
+  const nowMs = options.nowMs ?? Date.now();
+  const minTempAgeMs = options.minTempAgeMs ?? defaultTempSweepMinAgeMs;
+  const candidates = new Set<string>();
+  for (const entryName of entries) {
+    const tempBaseName = normalizeMemoryIndexTempBase(entryName, tempPrefix);
+    if (tempBaseName) {
+      candidates.add(path.join(dir, tempBaseName));
+    }
+  }
+
+  const removed: string[] = [];
+  for (const tempPath of Array.from(candidates).toSorted()) {
+    const newestMtimeMs = await newestExistingMemoryIndexTempMtimeMs(tempPath);
+    if (newestMtimeMs === undefined || nowMs - newestMtimeMs < minTempAgeMs) {
+      continue;
+    }
+    try {
+      await removeMemoryIndexFiles(tempPath, options);
+      removed.push(tempPath);
+    } catch (err) {
+      options.onError?.(err, tempPath);
+    }
+  }
+  return removed;
 }
 
 async function removeMemoryIndexSidecars(

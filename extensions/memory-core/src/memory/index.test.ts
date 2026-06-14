@@ -399,6 +399,34 @@ describe("memory index", () => {
     }
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
+  it("sweeps aged orphaned temp index files before opening a manager", async () => {
+    const storePath = path.join(workspaceDir, "index-startup-temp-sweep.sqlite");
+    const cfg = createCfg({ storePath });
+    const firstManager = await getFreshManager(cfg);
+    await firstManager.close?.();
+    await closeAllMemorySearchManagers();
+
+    const tempPath = `${storePath}.tmp-startup`;
+    await fs.copyFile(storePath, tempPath);
+    await fs.writeFile(`${tempPath}-wal`, "stale wal");
+    await fs.writeFile(`${tempPath}-shm`, "stale shm");
+    const oldDate = new Date(Date.now() - 20 * 60 * 1000);
+    await fs.utimes(tempPath, oldDate, oldDate);
+    await fs.utimes(`${tempPath}-wal`, oldDate, oldDate);
+    await fs.utimes(`${tempPath}-shm`, oldDate, oldDate);
+
+    const manager = await getFreshManager(cfg);
+    managersForCleanup.add(manager);
+
+    await expectPathMissing(tempPath);
+    await expectPathMissing(`${tempPath}-wal`);
+    await expectPathMissing(`${tempPath}-shm`);
+  });
+
   it("does not prepare vector deletes after unsafe reset drops a missing vector table", async () => {
     const cfg = createCfg({
       storePath: path.join(workspaceDir, "index-vector-missing-table.sqlite"),

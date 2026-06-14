@@ -8,6 +8,7 @@ import {
   moveMemoryIndexFiles,
   removeMemoryIndexFiles,
   runMemoryAtomicReindex,
+  sweepMemoryIndexTempFiles,
 } from "./manager-atomic-reindex.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -389,6 +390,39 @@ describe("memory manager atomic reindex", () => {
 
     expect(published).toBe(true);
     expect(readChunkMarker(indexPath)).toBe("after");
+  });
+
+  it("sweeps aged orphaned temp index triplets without touching young reindexes", async () => {
+    writeChunkMarker(indexPath, "live");
+    const oldTempPath = `${indexPath}.tmp-old`;
+    const youngTempPath = `${indexPath}.tmp-young`;
+    writeChunkMarker(oldTempPath, "old temp");
+    writeChunkMarker(youngTempPath, "young temp");
+    await fs.writeFile(`${oldTempPath}-wal`, "old wal");
+    await fs.writeFile(`${oldTempPath}-shm`, "old shm");
+    await fs.writeFile(`${youngTempPath}-wal`, "young wal");
+
+    const nowMs = Date.now();
+    const oldDate = new Date(nowMs - 10_000);
+    const youngDate = new Date(nowMs - 500);
+    await fs.utimes(oldTempPath, oldDate, oldDate);
+    await fs.utimes(`${oldTempPath}-wal`, oldDate, oldDate);
+    await fs.utimes(`${oldTempPath}-shm`, oldDate, oldDate);
+    await fs.utimes(youngTempPath, youngDate, youngDate);
+    await fs.utimes(`${youngTempPath}-wal`, youngDate, youngDate);
+
+    const removed = await sweepMemoryIndexTempFiles(indexPath, {
+      minTempAgeMs: 1_000,
+      nowMs,
+    });
+
+    expect(removed.map((filePath) => path.basename(filePath))).toEqual(["index.sqlite.tmp-old"]);
+    await expectPathMissing(oldTempPath);
+    await expectPathMissing(`${oldTempPath}-wal`);
+    await expectPathMissing(`${oldTempPath}-shm`);
+    await expect(fs.readFile(`${youngTempPath}-wal`, "utf8")).resolves.toBe("young wal");
+    expect(readChunkMarker(youngTempPath)).toBe("young temp");
+    expect(readChunkMarker(indexPath)).toBe("live");
   });
 
   it("restores backed-up target sidecars when publishing the main index fails", async () => {
