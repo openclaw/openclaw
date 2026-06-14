@@ -339,7 +339,10 @@ vi.mock("../routing/session-key.js", async () => {
       const lowered = key?.trim().toLowerCase();
       return lowered === "global" || lowered === "unknown";
     },
-    isSubagentSessionKey: () => false,
+    isSubagentSessionKey: (key?: string | null) => {
+      const raw = key?.trim() ?? "";
+      return raw.includes(":subagent:");
+    },
     normalizeAgentId: (id: string) => id,
     resolveAgentIdFromSessionKey: () => "default",
     scopeLegacySessionKeyToAgent: ({
