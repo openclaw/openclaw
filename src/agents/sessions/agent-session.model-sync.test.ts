@@ -1,6 +1,6 @@
 // Tests for syncModelFromStoreEntry — ensures the session store model override
 // is applied to agent.state.model before prompt() validates the model.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const mockReadSessionEntry = vi.hoisted(() =>
@@ -73,10 +73,8 @@ describe("syncModelFromStoreEntry", () => {
     mockReadSessionEntry.mockReset();
   });
 
-  it("skips sync when storePath is undefined", async () => {
-    // Can't easily create AgentSession directly without the full SDK.
-    // Integration test: create session via SDK and verify.
-    // Skip this test - pure sync logic is covered by other tests.
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("applies model override when liveModelSwitchPending is true and model is in registry with auth", async () => {
@@ -95,7 +93,7 @@ describe("syncModelFromStoreEntry", () => {
     // Since inMemory creates with no models.json, models are empty.
     // We need to use refresh or push to internal array.
     // For test purposes, we'll mock modelRegistry.find and hasConfiguredAuth.
-    const findSpy = vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) => {
+    vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) => {
       if (provider === "test-provider" && id === "test-model") {
         return testModel;
       }
@@ -104,7 +102,7 @@ describe("syncModelFromStoreEntry", () => {
       }
       return undefined;
     });
-    const authSpy = vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation((m) => {
+    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation((m) => {
       return m.provider === "test-provider" || m.provider === "switched-provider";
     });
 
@@ -153,9 +151,6 @@ describe("syncModelFromStoreEntry", () => {
     expect(session.model?.provider).toBe("switched-provider");
     expect(session.model?.id).toBe("switched-model");
     expect(appendModelChangeSpy).toHaveBeenCalledWith("switched-provider", "switched-model");
-
-    findSpy.mockRestore();
-    authSpy.mockRestore();
   });
 
   it("does not sync when liveModelSwitchPending is false", async () => {
@@ -168,8 +163,8 @@ describe("syncModelFromStoreEntry", () => {
     authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
-    const authSpy = vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+    vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
+    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
 
     mockReadSessionEntry.mockReturnValue({
       sessionId: "test-session",
@@ -204,9 +199,6 @@ describe("syncModelFromStoreEntry", () => {
     expect(session.model?.provider).toBe("test-provider");
     expect(session.model?.id).toBe("test-model");
     expect(appendModelChangeSpy).not.toHaveBeenCalled();
-
-    findSpy.mockRestore();
-    authSpy.mockRestore();
   });
 
   it("does not crash when model not in registry", async () => {
@@ -219,8 +211,8 @@ describe("syncModelFromStoreEntry", () => {
     authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(undefined);
-    const authSpy = vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+    vi.spyOn(modelRegistry, "find").mockReturnValue(undefined);
+    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
 
     mockReadSessionEntry.mockReturnValue({
       sessionId: "test-session",
@@ -249,9 +241,6 @@ describe("syncModelFromStoreEntry", () => {
     // Model should remain unchanged (model not in registry)
     expect(session.model?.provider).toBe("test-provider");
     expect(session.model?.id).toBe("test-model");
-
-    findSpy.mockRestore();
-    authSpy.mockRestore();
   });
 
   it("does not sync when providerOverride is missing", async () => {
@@ -264,8 +253,8 @@ describe("syncModelFromStoreEntry", () => {
     authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
-    const authSpy = vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+    vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
+    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
 
     mockReadSessionEntry.mockReturnValue({
       sessionId: "test-session",
@@ -291,9 +280,6 @@ describe("syncModelFromStoreEntry", () => {
     }
 
     expect(session.model?.provider).toBe("test-provider");
-
-    findSpy.mockRestore();
-    authSpy.mockRestore();
   });
 
   it("does not sync when auth not configured for the target model", async () => {
@@ -306,7 +292,7 @@ describe("syncModelFromStoreEntry", () => {
     authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    const findSpy = vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) => {
+    vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) => {
       if (provider === "switched-provider" && id === "switched-model") {
         return switchedModel;
       }
@@ -315,9 +301,9 @@ describe("syncModelFromStoreEntry", () => {
       }
       return undefined;
     });
-    const authSpy = vi
-      .spyOn(modelRegistry, "hasConfiguredAuth")
-      .mockImplementation((m) => m.provider === "test-provider");
+    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation(
+      (m) => m.provider === "test-provider",
+    );
 
     mockReadSessionEntry.mockReturnValue({
       sessionId: "test-session",
@@ -344,9 +330,6 @@ describe("syncModelFromStoreEntry", () => {
     }
 
     expect(session.model?.provider).toBe("test-provider");
-
-    findSpy.mockRestore();
-    authSpy.mockRestore();
   });
 
   it("does not crash when storePath is undefined (no-op)", async () => {
@@ -359,8 +342,8 @@ describe("syncModelFromStoreEntry", () => {
     authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
-    const authSpy = vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+    vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
+    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
 
     mockReadSessionEntry.mockReturnValue({
       sessionId: "test-session",
@@ -390,9 +373,100 @@ describe("syncModelFromStoreEntry", () => {
 
     // readSessionEntry should not have been called
     expect(mockReadSessionEntry).not.toHaveBeenCalled();
+  });
 
-    findSpy.mockRestore();
-    authSpy.mockRestore();
+  it("skips sync when model already matches the store entry", async () => {
+    const { createAgentSession } = await import("./sdk.js");
+    const { AuthStorage } = await import("./auth-storage.js");
+    const { ModelRegistry } = await import("./model-registry.js");
+    const { SessionManager } = await import("./session-manager.js");
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
+
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
+    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+
+    mockReadSessionEntry.mockReturnValue({
+      sessionId: "test-session",
+      updatedAt: Date.now(),
+      liveModelSwitchPending: true,
+      providerOverride: "test-provider",
+      modelOverride: "test-model",
+    });
+
+    const sessionManager = SessionManager.inMemory();
+    const appendModelChangeSpy = vi.spyOn(sessionManager, "appendModelChange");
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createMockResourceLoader(),
+      sessionManager,
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry,
+      storePath: "/tmp/sessions.json",
+      sessionKey: "main",
+    });
+
+    appendModelChangeSpy.mockClear();
+
+    try {
+      await session.prompt("test message");
+    } catch {
+      // Expected
+    }
+
+    // Model unchanged because store entry matches current model
+    expect(session.model?.provider).toBe("test-provider");
+    expect(session.model?.id).toBe("test-model");
+    expect(appendModelChangeSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not sync when modelOverride is missing (providerOverride present)", async () => {
+    const { createAgentSession } = await import("./sdk.js");
+    const { AuthStorage } = await import("./auth-storage.js");
+    const { ModelRegistry } = await import("./model-registry.js");
+    const { SessionManager } = await import("./session-manager.js");
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
+
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
+    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+
+    mockReadSessionEntry.mockReturnValue({
+      sessionId: "test-session",
+      updatedAt: Date.now(),
+      liveModelSwitchPending: true,
+      providerOverride: "test-provider",
+    });
+
+    const sessionManager = SessionManager.inMemory();
+    const appendModelChangeSpy = vi.spyOn(sessionManager, "appendModelChange");
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createMockResourceLoader(),
+      sessionManager,
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry,
+      storePath: "/tmp/sessions.json",
+      sessionKey: "main",
+    });
+
+    appendModelChangeSpy.mockClear();
+
+    try {
+      await session.prompt("test message");
+    } catch {
+      // Expected
+    }
+
+    // Model unchanged because modelOverride is missing
+    expect(session.model?.provider).toBe("test-provider");
+    expect(appendModelChangeSpy).not.toHaveBeenCalled();
   });
 
   it("does not crash on readSessionEntry error", async () => {
@@ -405,8 +479,8 @@ describe("syncModelFromStoreEntry", () => {
     authStorage.set("test-provider", { type: "api_key", key: "test-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    const findSpy = vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
-    const authSpy = vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
+    vi.spyOn(modelRegistry, "find").mockReturnValue(testModel);
+    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
 
     mockReadSessionEntry.mockImplementation(() => {
       throw new Error("read error");
@@ -430,8 +504,5 @@ describe("syncModelFromStoreEntry", () => {
 
     // Model unchanged after read error (graceful no-op)
     expect(session.model?.provider).toBe("test-provider");
-
-    findSpy.mockRestore();
-    authSpy.mockRestore();
   });
 });
