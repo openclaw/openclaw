@@ -598,6 +598,48 @@ describe("openai transport stream", () => {
     ]);
   });
 
+  it("keeps backfill message items separated by a reasoning item as distinct blocks", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-backfill-reasoning-boundary",
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                id: "msg_1",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Step one." }],
+              },
+              { type: "reasoning", id: "rs_1", summary: [] },
+              {
+                type: "message",
+                id: "msg_2",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Step one. Step two." }],
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    // A reasoning item is a real boundary even in backfill: msg_2 must not
+    // collapse into msg_1 despite being a strict extension (mirrors streaming).
+    expect(output.content).toEqual([
+      { type: "text", text: "Step one.", textSignature: '{"v":1,"id":"msg_1"}' },
+      { type: "text", text: "Step one. Step two.", textSignature: '{"v":1,"id":"msg_2"}' },
+    ]);
+  });
+
   it("backfills Azure Responses completed function calls when item events are absent", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
