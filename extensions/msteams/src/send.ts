@@ -102,6 +102,13 @@ function createMSTeamsSendResult(params: {
   };
 }
 
+function resolveProactiveThreadActivityId(ctx: MSTeamsProactiveContext): string | undefined {
+  if (ctx.conversationType !== "channel" || ctx.replyStyle !== "thread") {
+    return undefined;
+  }
+  return ctx.ref.threadId ?? ctx.ref.activityId;
+}
+
 type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
@@ -303,10 +310,12 @@ export async function sendMessageMSTeams(
           text: messageText || undefined,
           attachments: [fileCardAttachment],
         };
+        const threadActivityId = resolveProactiveThreadActivityId(ctx);
         const messageId = await sendProactiveActivityRaw({
           app,
           ref,
           activity,
+          ...(threadActivityId ? { threadActivityId } : {}),
           serviceUrlBoundary: sdkCloudOptions,
         });
 
@@ -347,10 +356,12 @@ export async function sendMessageMSTeams(
         type: "message",
         text: messageText ? `${messageText}\n\n${fileLink}` : fileLink,
       };
+      const threadActivityId = resolveProactiveThreadActivityId(ctx);
       const messageId = await sendProactiveActivityRaw({
         app,
         ref,
         activity,
+        ...(threadActivityId ? { threadActivityId } : {}),
         serviceUrlBoundary: sdkCloudOptions,
       });
 
@@ -446,6 +457,7 @@ type ProactiveActivityParams = {
   ref: MSTeamsProactiveContext["ref"];
   activity: Record<string, unknown>;
   errorPrefix: string;
+  threadActivityId?: string;
   serviceUrlBoundary: MSTeamsProactiveContext["sdkCloudOptions"];
 };
 
@@ -455,10 +467,12 @@ async function sendProactiveActivityRaw({
   app,
   ref,
   activity,
+  threadActivityId,
   serviceUrlBoundary,
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ref);
   const response = await sendMSTeamsActivityWithReference(app, baseRef, activity, {
+    ...(threadActivityId ? { threadActivityId } : {}),
     serviceUrlBoundary,
   });
   return extractMessageId(response) ?? "unknown";
