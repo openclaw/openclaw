@@ -2114,6 +2114,75 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
+  it.each([
+    ["top-level ok", { ok: true }],
+    ["top-level success", { success: true }],
+    ["top-level ok status", { status: "ok" }],
+    ["raw ok", "ok"],
+    ["raw sent", "sent"],
+  ])("commits legacy explicit message success with %s", async (_label, result) => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-legacy-success",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "confirmed by legacy plugin",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-legacy-success",
+      isError: false,
+      result,
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["confirmed by legacy plugin"]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:123",
+      text: "confirmed by legacy plugin",
+    });
+  });
+
+  it("does not commit normalized message tool errors with receipt-like results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-normalized-error-receipt",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "not delivered",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-normalized-error-receipt",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          error: "delivery failed after middleware",
+          messageId: "message-1",
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toHaveLength(0);
+    expect(ctx.state.messagingToolSentTargets).toHaveLength(0);
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+    expect(ctx.state.lastToolError?.toolName).toBe("message");
+  });
+
   it("commits partially failed message sends when delivery results prove a send", async () => {
     const { ctx } = createTestContext();
 

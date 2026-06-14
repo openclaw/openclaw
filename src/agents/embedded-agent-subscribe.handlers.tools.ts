@@ -365,6 +365,20 @@ function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean
   );
 }
 
+const EXPLICIT_MESSAGING_TOOL_SUCCESS_TEXT = new Set(["ok", "sent", "success"]);
+
+function hasExplicitMessagingToolSuccess(value: unknown): boolean {
+  if (typeof value === "string") {
+    return EXPLICIT_MESSAGING_TOOL_SUCCESS_TEXT.has(value.trim().toLowerCase());
+  }
+  const record = readRecordField(value);
+  if (!record) {
+    return false;
+  }
+  const status = normalizeOptionalLowercaseString(record.status);
+  return record.ok === true || record.success === true || status === "ok";
+}
+
 function applyCurrentMessageProvider(
   toolName: string,
   args: Record<string, unknown>,
@@ -756,11 +770,24 @@ function hasCommittedMessagingToolSendResult(result: unknown): boolean {
   if (contentReceipt) {
     return true;
   }
-  if (!details) {
-    return false;
-  }
-  const status = normalizeOptionalLowercaseString(details?.status);
-  return details.ok === true || details.success === true || status === "ok";
+  return hasExplicitMessagingToolSuccess(result) || hasExplicitMessagingToolSuccess(details);
+}
+
+function hasCommittedMessagingToolPartialDeliveryResult(result: unknown): boolean {
+  const resultRecord = readRecordField(result);
+  const details = readToolResultDetailsRecord(result);
+  const hasPartialFailureStatus = [resultRecord, details].some((record) => {
+    const status = normalizeOptionalLowercaseString(record?.status);
+    const deliveryStatus =
+      normalizeOptionalLowercaseString(record?.deliveryStatus) ??
+      normalizeOptionalLowercaseString(record?.delivery_status);
+    return status === "partial_failed" || deliveryStatus === "partial_failed";
+  });
+  return (
+    hasPartialFailureStatus &&
+    (hasCommittedMessagingToolResultDetails(resultRecord) ||
+      hasCommittedMessagingToolResultDetails(details))
+  );
 }
 
 function queuePendingToolMedia(
@@ -1472,8 +1499,12 @@ export async function handleToolExecutionEnd(
       Boolean(executedMessagingMediaUrl) ||
       executedMessagingMediaUrls.length > 0 ||
       hasExecutedRichMessagingPayload);
+  const hasCommittedMessagingSendResult = hasCommittedMessagingToolSendResult(result);
   const hasCommittedMessagingSend =
-    !isError && isMessagingSend && hasCommittedMessagingToolSendResult(result);
+    !isError &&
+    isMessagingSend &&
+    hasCommittedMessagingSendResult &&
+    (!isToolError || hasCommittedMessagingToolPartialDeliveryResult(result));
   const committedMediaUrls = hasCommittedMessagingSend
     ? [
         ...new Set([
