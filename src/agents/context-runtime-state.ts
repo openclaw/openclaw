@@ -1,10 +1,9 @@
 /**
  * Process-global context-window runtime state.
- * Keeps model-config loads, backoff counters, and token cache reset behavior
+ * Keeps discovery loads, config backoff, and token cache reset behavior
  * shared across module reloads and runtime seams.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createLazyImportLoader, type LazyPromiseLoader } from "../shared/lazy-promise.js";
 import {
   MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
   MODEL_CONTEXT_TOKEN_CACHE,
@@ -20,16 +19,15 @@ type ContextWindowRuntimeState = {
   configuredConfig: OpenClawConfig | undefined;
   configLoadFailures: number;
   nextConfigLoadAttemptAtMs: number;
-  modelsConfigRuntimeLoader: LazyPromiseLoader<typeof import("./models-config.runtime.js")>;
 };
 
-/** Shared mutable state for context-window resolution and model config loading. */
+/** Shared mutable state for context-window resolution and model discovery. */
 export const CONTEXT_WINDOW_RUNTIME_STATE = (() => {
   const globalState = globalThis as typeof globalThis & {
     [CONTEXT_WINDOW_RUNTIME_STATE_KEY]?: ContextWindowRuntimeState;
   };
   if (!globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY]) {
-    // The loader is lifecycle-owned here; callers reuse the same pending load
+    // Discovery is lifecycle-owned here; callers reuse the same pending load
     // promise and backoff counters instead of racing config discovery.
     globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY] = {
       generation: 0,
@@ -38,7 +36,6 @@ export const CONTEXT_WINDOW_RUNTIME_STATE = (() => {
       configuredConfig: undefined,
       configLoadFailures: 0,
       nextConfigLoadAttemptAtMs: 0,
-      modelsConfigRuntimeLoader: createLazyImportLoader(() => import("./models-config.runtime.js")),
     };
   }
   return globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY];
@@ -63,5 +60,4 @@ export function resetContextWindowCache(): void {
 /** Reset context-window runtime state and token cache for isolated tests. */
 export function resetContextWindowCacheForTest(): void {
   resetContextWindowCache();
-  CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.clear();
 }

@@ -209,9 +209,17 @@ export async function loadStatusScanModuleForTest(
 
   vi.doMock("../config/io.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
+    readBestEffortConfigSnapshot: async () => {
+      const config = await mocks.readBestEffortConfig();
+      return { config, sourceConfig: config };
+    },
   }));
   vi.doMock("../config/config.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
+    readBestEffortConfigSnapshot: async () => {
+      const config = await mocks.readBestEffortConfig();
+      return { config, sourceConfig: config };
+    },
   }));
   vi.doMock("../cli/command-secret-targets.js", () => ({
     getStatusCommandSecretTargetIds,

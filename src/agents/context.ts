@@ -3,14 +3,9 @@
 
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveDefaultAgentId,
-} from "./agent-scope.js";
 import {
   lookupCachedContextTokens,
   lookupCachedContextWindow,
@@ -45,16 +40,15 @@ type ModelEntry = {
   contextWindow?: number;
   contextTokens?: number;
 };
-type ModelRegistryLike = {
-  getAvailable?: () => ModelEntry[];
-  getAll: () => ModelEntry[];
-};
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
   factor: 2,
   jitter: 0,
 };
+const loadModelCatalogRuntime = () => import("./model-catalog.runtime.js");
+const loadStaticModelCatalogRuntime = () =>
+  import("./embedded-agent-runner/model.static-catalog.js");
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -157,10 +151,6 @@ export function applyConfiguredContextWindows(params: {
   }
 }
 
-function loadModelsConfigRuntime() {
-  return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.load();
-}
-
 function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawConfig {
   applyConfiguredContextWindows({
     cache: MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
@@ -207,62 +197,47 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
   if (!cfg) {
     return Promise.resolve();
   }
-  const previousLoad = CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   const stagedTokenCache = new Map<string, number>();
 
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = (async () => {
-    // A reset may happen while models.json is being prepared. Serialize the
-    // replacement load so an older config cannot overwrite the fresh result.
-    await previousLoad;
-    if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-      return;
-    }
-    const agentDir = resolveDefaultAgentDir(cfg);
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-    try {
-      await (
-        await loadModelsConfigRuntime()
-      ).ensureOpenClawModelsJson(cfg, agentDir, {
-        workspaceDir,
-        // Context resolution needs deterministic local metadata, not live
-        // provider catalog calls that can stall gateway reloads.
-        providerDiscoveryEntriesOnly: true,
-      });
-    } catch {
-      // Continue with best-effort discovery/overrides.
-    }
-
-    try {
-      const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir, {
-        normalizeModels: false,
-        workspaceDir,
-      }) as unknown as ModelRegistryLike;
-      const models =
-        typeof modelRegistry.getAvailable === "function"
-          ? modelRegistry.getAvailable()
-          : modelRegistry.getAll();
+  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = Promise.resolve()
+    .then(async () => {
       if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
         return;
       }
-      applyDiscoveredContextWindows({
-        cache: stagedTokenCache,
-        models,
-      });
-    } catch {
-      // If model discovery fails, continue with config overrides only.
-    }
+      try {
+        // Read-only catalog loading overlays current config and manifest rows
+        // onto persisted discovery without rewriting models.json.
+        const [{ loadModelCatalog }, { loadBundledProviderStaticCatalogContextModels }] =
+          await Promise.all([loadModelCatalogRuntime(), loadStaticModelCatalogRuntime()]);
+        const [modelsResult, providerStaticModelsResult] = await Promise.allSettled([
+          loadModelCatalog({ config: cfg, readOnly: true }),
+          loadBundledProviderStaticCatalogContextModels({ cfg }),
+        ]);
+        if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
+          return;
+        }
+        const models = modelsResult.status === "fulfilled" ? modelsResult.value : [];
+        const providerStaticModels =
+          providerStaticModelsResult.status === "fulfilled" ? providerStaticModelsResult.value : [];
+        applyDiscoveredContextWindows({
+          cache: stagedTokenCache,
+          models: [...models, ...providerStaticModels],
+        });
+      } catch {
+        // If model discovery fails, continue with config overrides only.
+      }
 
-    if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-      return;
-    }
-    MODEL_CONTEXT_TOKEN_CACHE.clear();
-    for (const [key, value] of stagedTokenCache) {
-      MODEL_CONTEXT_TOKEN_CACHE.set(key, value);
-    }
-  })().catch(() => {
-    // Keep lookup best-effort.
-  });
+      if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
+        return;
+      }
+      MODEL_CONTEXT_TOKEN_CACHE.clear();
+      for (const [key, value] of stagedTokenCache) {
+        MODEL_CONTEXT_TOKEN_CACHE.set(key, value);
+      }
+    })
+    .catch(() => {
+      // Keep lookup best-effort.
+    });
   CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
   return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
 }
@@ -285,7 +260,7 @@ function prepareContextWindowCache(options?: {
   }
   if (options?.allowAsyncLoad === false) {
     // Read-only callers still need synchronous config-backed overrides, but they
-    // should not start background model discovery or models.json writes.
+    // should not start background model discovery.
     primeConfiguredContextWindows();
   } else {
     // Best-effort: kick off loading on demand, but don't block lookups.
@@ -334,8 +309,14 @@ export function resolveContextTokensForModel(
     skipRuntimeConfigLoad: Boolean(params.cfg),
   };
   prepareContextWindowCache(lookupOptions);
+  const sourceCfg =
+    params.sourceCfg !== undefined
+      ? params.sourceCfg
+      : params.cfg
+        ? projectConfigOntoRuntimeSourceSnapshot(params.cfg)
+        : undefined;
   return resolveContextTokensForModelFromCache(
-    params,
+    { ...params, sourceCfg },
     (modelId) => lookupCachedContextTokens(modelId),
     (modelId) => lookupCachedContextWindow(modelId),
   );

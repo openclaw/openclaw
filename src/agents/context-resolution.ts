@@ -20,6 +20,7 @@ export type ModelsConfig = {
 
 export type ContextTokenResolutionParams = {
   cfg?: OpenClawConfig;
+  sourceCfg?: OpenClawConfig | null;
   provider?: string;
   model?: string;
   contextTokensOverride?: number;
@@ -71,7 +72,7 @@ function resolveProviderModelRef(params: {
 }
 
 function resolveConfiguredProviderContextTokens(
-  cfg: OpenClawConfig | undefined,
+  cfg: OpenClawConfig | null | undefined,
   provider: string,
   model: string,
 ): ConfiguredContextTokens | undefined {
@@ -183,6 +184,12 @@ export function resolveContextTokensForModelFromCache(
       explicitProvider,
       ref.model,
     );
+    const sourceConfig = params.sourceCfg === undefined ? params.cfg : params.sourceCfg;
+    const sourceConfiguredWindow = resolveConfiguredProviderContextTokens(
+      sourceConfig,
+      explicitProvider,
+      ref.model,
+    );
     const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);
     const providerResult = lookupContextTokens(
       providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
@@ -212,13 +219,25 @@ export function resolveContextTokensForModelFromCache(
             : Math.min(configuredWindow.value, fixedContextWindow);
         return capOverride(effectiveCap);
       }
-      // Runtime config fills omitted contextWindow values with 200k, so this
-      // field cannot lower a fixed provider contract. contextTokens remains
-      // the explicit effective-cap override above.
-      if (fixedContextWindow !== undefined) {
+      const authoredContextWindow =
+        sourceConfiguredWindow?.source === "contextWindow"
+          ? sourceConfiguredWindow.value
+          : undefined;
+      // Runtime config fills omitted contextWindow values with 200k. Only an
+      // authored window may lower a fixed provider contract; contextTokens is
+      // always an explicit effective-cap override above.
+      if (fixedContextWindow !== undefined && authoredContextWindow === undefined) {
         const effectiveCap =
           runtimeCap === undefined ? fixedContextWindow : Math.min(runtimeCap, fixedContextWindow);
         return capOverride(effectiveCap);
+      }
+      if (fixedContextWindow !== undefined) {
+        const effectiveCap = minPositiveContextTokens(
+          authoredContextWindow,
+          fixedContextWindow,
+          runtimeCap,
+        );
+        return effectiveCap === undefined ? undefined : capOverride(effectiveCap);
       }
       if (runtimeCap !== undefined) {
         return capOverride(Math.min(configuredWindow.value, runtimeCap));

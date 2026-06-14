@@ -101,6 +101,7 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  projectConfigOntoRuntimeSourceSnapshot: vi.fn((config) => config),
 }));
 
 vi.mock("../config/sessions/paths.js", () => ({

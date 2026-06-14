@@ -3,7 +3,7 @@
 
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -199,6 +199,10 @@ export async function getStatusSummary(
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
+  const contextSourceConfig =
+    options.sourceConfig !== undefined
+      ? options.sourceConfig
+      : projectConfigOntoRuntimeSourceSnapshot(cfg);
   const { resolveManifestModel, createProviderContextResolver } =
     await loadStaticModelCatalogResolvers();
   const resolveProviderContext = createProviderContextResolver({ cfg });
@@ -294,6 +298,7 @@ export async function getStatusSummary(
   const configContextTokens =
     resolveContextTokensForModel({
       cfg,
+      sourceCfg: contextSourceConfig,
       provider: resolved.provider ?? DEFAULT_PROVIDER,
       model: configModel,
       ...configModelContext,
@@ -358,6 +363,7 @@ export async function getStatusSummary(
         const contextTokens =
           resolveContextTokensForModel({
             cfg,
+            sourceCfg: contextSourceConfig,
             provider: resolvedModel.provider,
             model,
             ...modelContext,

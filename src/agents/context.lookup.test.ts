@@ -1,6 +1,5 @@
-// Covers context-token lookup caches, discovery warmup, and provider-qualified
+// Covers context-token lookup caches, catalog warmup, and provider-qualified
 // model resolution.
-import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -16,13 +15,11 @@ const contextTestState = vi.hoisted(() => {
   const state = {
     loadConfigImpl: () => ({}) as unknown,
     discoveredModels: [] as DiscoveredModel[],
-    ensureOpenClawModelsJson: vi.fn(async () => {}),
-    discoverAuthStorage: vi.fn(() => ({})),
-    discoverModels: vi.fn(
-      (_authStorage: unknown, _agentDir: string, _options?: { normalizeModels?: boolean }) => ({
-        getAll: () => state.discoveredModels,
-      }),
-    ),
+    staticCatalogModels: [] as DiscoveredModel[],
+    runtimeConfigSnapshot: null as OpenClawConfig | null,
+    runtimeConfigSourceSnapshot: null as OpenClawConfig | null,
+    loadModelCatalog: vi.fn(async () => state.discoveredModels),
+    loadStaticCatalog: vi.fn(async () => state.staticCatalogModels),
   };
   return state;
 });
@@ -31,13 +28,19 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => contextTestState.loadConfigImpl(),
 }));
 
-vi.mock("./models-config.runtime.js", () => ({
-  ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
+vi.mock("../config/runtime-source-projection.js", () => ({
+  projectConfigOntoRuntimeSourceSnapshot: (config: OpenClawConfig) =>
+    contextTestState.runtimeConfigSnapshot && contextTestState.runtimeConfigSourceSnapshot
+      ? contextTestState.runtimeConfigSourceSnapshot
+      : config,
 }));
 
-vi.mock("./agent-model-discovery.js", () => ({
-  discoverAuthStorage: contextTestState.discoverAuthStorage,
-  discoverModels: contextTestState.discoverModels,
+vi.mock("./model-catalog.runtime.js", () => ({
+  loadModelCatalog: contextTestState.loadModelCatalog,
+}));
+
+vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
+  loadBundledProviderStaticCatalogContextModels: contextTestState.loadStaticCatalog,
 }));
 
 function mockContextDeps(params: {
@@ -48,8 +51,6 @@ function mockContextDeps(params: {
   // dependency seams before asking the already-imported module for values.
   contextTestState.loadConfigImpl = params.getRuntimeConfig;
   contextTestState.discoveredModels = params.discoveredModels ?? [];
-  contextTestState.ensureOpenClawModelsJson.mockClear();
-  return { ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson };
 }
 
 function mockContextModuleDeps(loadConfigImpl: () => unknown) {
@@ -125,9 +126,14 @@ describe("lookupContextTokens", () => {
   beforeEach(() => {
     contextTestState.loadConfigImpl = () => ({});
     contextTestState.discoveredModels = [];
-    contextTestState.ensureOpenClawModelsJson.mockClear();
-    contextTestState.discoverAuthStorage.mockClear();
-    contextTestState.discoverModels.mockClear();
+    contextTestState.staticCatalogModels = [];
+    contextTestState.runtimeConfigSnapshot = null;
+    contextTestState.runtimeConfigSourceSnapshot = null;
+    contextTestState.loadModelCatalog.mockClear();
+    contextTestState.loadStaticCatalog.mockClear();
+    contextTestState.loadStaticCatalog.mockImplementation(
+      async () => contextTestState.staticCatalogModels,
+    );
     contextModule.resetContextWindowCacheForTest();
   });
 
@@ -264,20 +270,7 @@ describe("lookupContextTokens", () => {
     }
   });
 
-  it("serializes refreshed discovery behind an in-flight stale models.json preparation", async () => {
-    let releaseModelsJson: (() => void) | undefined;
-    const modelsJsonEvents: string[] = [];
-    contextTestState.ensureOpenClawModelsJson
-      .mockImplementationOnce(async () => {
-        modelsJsonEvents.push("old:start");
-        await new Promise<void>((resolve) => {
-          releaseModelsJson = resolve;
-        });
-        modelsJsonEvents.push("old:end");
-      })
-      .mockImplementationOnce(async () => {
-        modelsJsonEvents.push("new:start", "new:end");
-      });
+  it("replaces a configured token override before refreshing discovery", async () => {
     mockContextDeps({
       getRuntimeConfig: () => ({
         models: {
@@ -298,24 +291,16 @@ describe("lookupContextTokens", () => {
     });
 
     const { lookupContextTokens, refreshContextWindowCache } = await importContextModule();
-    expect(lookupContextTokens("claude-sonnet")).toBe(111_000);
-    await vi.waitFor(() => {
-      expect(modelsJsonEvents).toEqual(["old:start"]);
-    });
+    expect(lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(111_000);
 
     const nextConfig = createContextOverrideConfig("openrouter", "claude-sonnet", 222_000);
     contextTestState.discoveredModels = [
       { provider: "openrouter", id: "claude-sonnet", contextWindow: 222_000 },
     ];
     const refreshPromise = refreshContextWindowCache(nextConfig);
-    await Promise.resolve();
-    expect(modelsJsonEvents).toEqual(["old:start"]);
     expect(lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(222_000);
-
-    releaseModelsJson?.();
     await refreshPromise;
 
-    expect(modelsJsonEvents).toEqual(["old:start", "old:end", "new:start", "new:end"]);
     expect(lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(222_000);
   });
 
@@ -334,7 +319,10 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
   });
 
-  it("skips model normalization during warmup but preserves provider-owned context metadata", async () => {
+  it("loads the read-only catalog during warmup and preserves provider-owned context metadata", async () => {
+    const config = {
+      agents: { defaults: { workspace: "/tmp/context-catalog-workspace" } },
+    } as OpenClawConfig;
     mockDiscoveryDeps([
       {
         id: "anthropic/claude-opus-4.7-20260219",
@@ -342,27 +330,72 @@ describe("lookupContextTokens", () => {
         contextWindow: 200_000,
       },
     ]);
+    contextTestState.loadConfigImpl = () => config;
 
     const { lookupContextTokens } = await importContextModule();
     lookupContextTokens("anthropic/claude-opus-4.7-20260219");
     await flushAsyncWarmup();
 
-    expect(contextTestState.discoverModels).toHaveBeenCalledTimes(1);
-    const discoverCall = contextTestState.discoverModels.mock.calls.at(0);
-    if (!discoverCall) {
-      throw new Error("expected discoverModels to be called");
-    }
-    const discoverAgentDir = discoverCall[1];
-    expect(discoverCall[0]).toEqual({});
-    expect(typeof discoverAgentDir).toBe("string");
-    expect(
-      path.normalize(discoverAgentDir).endsWith(path.join(".openclaw", "agents", "main", "agent")),
-    ).toBe(true);
-    expect(discoverCall[2]).toEqual({
-      normalizeModels: false,
-      workspaceDir: expect.any(String),
+    expect(contextTestState.loadModelCatalog).toHaveBeenCalledOnce();
+    expect(contextTestState.loadModelCatalog).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
     });
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
+  });
+
+  it("warms context metadata from bundled provider static catalogs", async () => {
+    contextTestState.staticCatalogModels = [
+      {
+        id: "gemini-3.1-pro-preview",
+        provider: "google",
+        contextWindow: 1_048_576,
+      },
+    ];
+
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("gemini-3.1-pro-preview");
+    await flushAsyncWarmup();
+
+    expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(1_048_576);
+  });
+
+  it("keeps persisted context metadata when provider static warmup fails", async () => {
+    mockDiscoveryDeps([
+      {
+        id: "claude-sonnet",
+        provider: "openrouter",
+        contextWindow: 654_321,
+      },
+    ]);
+    contextTestState.loadStaticCatalog.mockRejectedValueOnce(new Error("catalog unavailable"));
+
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("claude-sonnet");
+    await flushAsyncWarmup();
+
+    expect(lookupContextTokens("claude-sonnet")).toBe(654_321);
+  });
+
+  it("uses projected source config for a cloned runtime config", async () => {
+    const runtimeConfig = createContextOverrideConfig(
+      "anthropic-vertex",
+      "claude-sonnet-4-6",
+      200_000,
+    );
+    contextTestState.runtimeConfigSnapshot = runtimeConfig;
+    contextTestState.runtimeConfigSourceSnapshot = {};
+    const clonedConfig = structuredClone(runtimeConfig);
+
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+    expect(
+      resolveContextTokensForModel({
+        cfg: clonedConfig,
+        provider: "anthropic-vertex",
+        model: "claude-sonnet-4-6",
+        allowAsyncLoad: false,
+      }),
+    ).toBe(1_000_000);
   });
 
   it("resolveContextTokensForModel handles self-prefixed provider-owned discovery ids", async () => {

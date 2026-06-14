@@ -385,6 +385,44 @@ async function loadBundledProviderStaticCatalogModels(params: {
   return modelsByProvider;
 }
 
+/** Loads all enabled bundled provider static-catalog rows without live discovery or writes. */
+export async function loadBundledProviderStaticCatalogContextModels(
+  params: BundledProviderStaticCatalogResolverParams = {},
+): Promise<ProviderRuntimeModel[]> {
+  const env = params.env ?? process.env;
+  const discoveryEntryPluginIds = new Set(
+    loadPluginManifestRegistry({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    }).plugins.flatMap((plugin) =>
+      plugin.origin === "bundled" && plugin.providerDiscoverySource ? [plugin.id] : [],
+    ),
+  );
+  const pluginIds = resolveBundledProviderCompatPluginIds({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env,
+  }).filter((pluginId) => discoveryEntryPluginIds.has(pluginId));
+  if (pluginIds.length === 0) {
+    return [];
+  }
+  const catalogs = await Promise.allSettled(
+    pluginIds.map(
+      async (pluginId) =>
+        await loadBundledProviderStaticCatalogModels({
+          pluginIds: [pluginId],
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env,
+        }),
+    ),
+  );
+  return catalogs.flatMap((result) =>
+    result.status === "fulfilled" ? [...result.value.values()].flat() : [],
+  );
+}
+
 function createScopedBundledProviderStaticCatalogModelResolver(
   params: BundledProviderStaticCatalogResolverParams = {},
 ): (

@@ -106,8 +106,12 @@ function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolean {
       (path) =>
         path === "models" ||
         path.startsWith("models.") ||
+        path === "agents" ||
+        path === "agents.defaults" ||
         path === "agents.list" ||
-        path.startsWith("agents.list."),
+        path.startsWith("agents.list.") ||
+        path === "agents.defaults.workspace" ||
+        path.startsWith("agents.defaults.workspace."),
     )
   );
 }

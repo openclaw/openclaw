@@ -1,5 +1,6 @@
 // Covers context-window cache application and session-manager runtime registry.
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import {
   MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
@@ -17,7 +18,10 @@ import {
   resolveContextTokensForModel,
 } from "./context.js";
 
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
+  projectConfigOntoRuntimeSourceSnapshot: (config: unknown) => config,
+}));
 
 function testModelContextWindow(id: string, contextWindow: number) {
   return {
@@ -430,6 +434,87 @@ describe("resolveContextTokensForModel", () => {
     },
   );
 
+  it.each([
+    ["anthropic", "claude-fable-5"],
+    ["anthropic-vertex", "claude-fable-5"],
+    ["anthropic", "claude-sonnet-4-6"],
+    ["anthropic-vertex", "claude-sonnet-4-6"],
+  ])("honors an authored %s window for fixed model %s", (provider, modelId) => {
+    expect(
+      resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              [provider]: {
+                baseUrl: "https://aiplatform.googleapis.com",
+                models: [testModelContextWindow(modelId, 200_000)],
+              },
+            },
+          },
+        },
+        provider,
+        model: modelId,
+        fallbackContextTokens: 200_000,
+        allowAsyncLoad: false,
+      }),
+    ).toBe(200_000);
+  });
+
+  it("clamps an authored Anthropic window to the fixed provider limit", () => {
+    expect(
+      resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.com",
+                models: [testModelContextWindow("claude-sonnet-4-6", 2_000_000)],
+              },
+            },
+          },
+        },
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        allowAsyncLoad: false,
+      }),
+    ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("uses an authored provider window instead of the model's materialized default", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            contextWindow: 500_000,
+            models: [testModelContextWindow("claude-sonnet-4-6", 200_000)],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const sourceCfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            contextWindow: 500_000,
+            models: [{ id: "claude-sonnet-4-6" } as never],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveContextTokensForModel({
+        cfg,
+        sourceCfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        allowAsyncLoad: false,
+      }),
+    ).toBe(500_000);
+  });
+
   it("keeps fixed Anthropic context above stale static native-window metadata", () => {
     expect(
       resolveContextTokensForModel({
@@ -461,6 +546,7 @@ describe("resolveContextTokensForModel", () => {
             },
           },
         },
+        sourceCfg: {},
         provider,
         model: modelId,
         fallbackContextTokens: 200_000,

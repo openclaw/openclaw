@@ -7,7 +7,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
-import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+import { diffConfigPaths } from "./config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  type ChannelKind,
+  type GatewayReloadPlan,
+} from "./config-reload-plan.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   createGatewayReloadHandlers,
@@ -286,6 +291,59 @@ describe("gateway hot reload model state", () => {
 
     expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
+  });
+
+  it("refreshes context metadata when the default workspace changes", async () => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const nextConfig = {
+      agents: { defaults: { workspace: "/tmp/next-workspace" } },
+    } as OpenClawConfig;
+
+    await applyHotReload(
+      {
+        changedPaths: ["agents.defaults.workspace"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["agents.defaults.workspace"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: false,
+        restartChannels: new Set(),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      nextConfig,
+    );
+
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+  });
+
+  it.each([
+    {
+      label: "adds the agents object",
+      previousConfig: {},
+      nextConfig: { agents: { defaults: { workspace: "/tmp/next-workspace" } } },
+      expectedPath: "agents",
+    },
+    {
+      label: "removes the defaults object",
+      previousConfig: { agents: { defaults: { workspace: "/tmp/previous-workspace" } } },
+      nextConfig: { agents: {} },
+      expectedPath: "agents.defaults",
+    },
+  ])("refreshes context metadata when a workspace change $label", async (testCase) => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const previousConfig = testCase.previousConfig as OpenClawConfig;
+    const nextConfig = testCase.nextConfig as OpenClawConfig;
+    const changedPaths = diffConfigPaths(previousConfig, nextConfig);
+    expect(changedPaths).toEqual([testCase.expectedPath]);
+
+    await applyHotReload(buildGatewayReloadPlan(changedPaths), nextConfig);
+
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
   });
 });
 

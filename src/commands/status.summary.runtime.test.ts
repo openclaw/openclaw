@@ -152,6 +152,7 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
             },
           },
         } as never,
+        sourceCfg: {},
         provider: "anthropic",
         model: "claude-sonnet-4-6",
         contextTokensOverride: 1_200_000,

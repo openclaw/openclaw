@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const manifestMocks = vi.hoisted(() => ({
   listOpenClawPluginManifestMetadata: vi.fn(),
   loadPluginManifest: vi.fn(),
+  loadPluginManifestRegistry: vi.fn(),
 }));
 const providerMocks = vi.hoisted(() => ({
   normalizePluginDiscoveryResult: vi.fn(),
@@ -20,6 +21,11 @@ vi.mock("../../plugins/manifest-metadata-scan.js", () => ({
 vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/manifest.js")>()),
   loadPluginManifest: manifestMocks.loadPluginManifest,
+}));
+
+vi.mock("../../plugins/manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/manifest-registry.js")>()),
+  loadPluginManifestRegistry: manifestMocks.loadPluginManifestRegistry,
 }));
 
 vi.mock("../../plugins/providers.js", async (importOriginal) => ({
@@ -40,6 +46,7 @@ import {
   createBundledProviderStaticCatalogContextResolver,
   createBundledProviderStaticCatalogModelResolver,
   createBundledStaticCatalogModelResolver,
+  loadBundledProviderStaticCatalogContextModels,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
@@ -108,12 +115,14 @@ function createMistralManifestPlugin(overrides?: {
 beforeEach(() => {
   manifestMocks.listOpenClawPluginManifestMetadata.mockReset();
   manifestMocks.loadPluginManifest.mockReset();
+  manifestMocks.loadPluginManifestRegistry.mockReset();
   providerMocks.normalizePluginDiscoveryResult.mockReset();
   providerMocks.resolveBundledProviderCompatPluginIds.mockReset();
   providerMocks.resolveOwningPluginIdsForProviderRef.mockReset();
   providerMocks.resolveRuntimePluginDiscoveryProviders.mockReset();
   providerMocks.runProviderStaticCatalog.mockReset();
   setManifestPlugins([]);
+  manifestMocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [] });
   providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue([]);
   providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(undefined);
   providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
@@ -216,6 +225,128 @@ describe("resolveBundledStaticCatalogModel", () => {
 });
 
 describe("resolveBundledProviderStaticCatalogModel", () => {
+  it("loads every enabled bundled provider static catalog for context warmup", async () => {
+    const cfg = { plugins: { entries: { google: { enabled: true } } } };
+    const provider = {
+      id: "google",
+      pluginId: "google",
+      label: "Google",
+      auth: [],
+      staticCatalog: { run: vi.fn() },
+    };
+    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
+    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
+        },
+      ],
+    });
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+    providerMocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
+    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
+      google: {
+        models: [
+          {
+            id: "gemini-3.1-pro-preview",
+            name: "Gemini Pro",
+            contextWindow: 1_048_576,
+          },
+        ],
+      },
+    });
+
+    await expect(loadBundledProviderStaticCatalogContextModels({ cfg })).resolves.toEqual([
+      expect.objectContaining({
+        id: "gemini-3.1-pro-preview",
+        provider: "google",
+        contextWindow: 1_048_576,
+      }),
+    ]);
+    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith({
+      config: cfg,
+      workspaceDir: undefined,
+      env: process.env,
+      onlyPluginIds: ["google"],
+      includeUntrustedWorkspacePlugins: false,
+      requireCompleteDiscoveryEntryCoverage: true,
+      discoveryEntriesOnly: true,
+      includeManifestModelCatalogProviders: false,
+    });
+    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips bundled providers without discovery entries during context warmup", async () => {
+    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google", "openai"]);
+    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
+        },
+        { id: "openai", origin: "bundled" },
+      ],
+    });
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
+
+    await loadBundledProviderStaticCatalogContextModels();
+
+    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledOnce();
+    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({ onlyPluginIds: ["google"] }),
+    );
+  });
+
+  it("keeps successful provider context rows when another static catalog fails", async () => {
+    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google", "minimax"]);
+    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
+        },
+        {
+          id: "minimax",
+          origin: "bundled",
+          providerDiscoverySource: "/fixtures/minimax/provider-discovery.ts",
+        },
+      ],
+    });
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
+      async ({ onlyPluginIds }: { onlyPluginIds: string[] }) =>
+        onlyPluginIds[0] === "google"
+          ? [{ id: "google", pluginId: "google", label: "Google", auth: [] }]
+          : [{ id: "minimax", pluginId: "minimax", label: "MiniMax", auth: [] }],
+    );
+    providerMocks.runProviderStaticCatalog.mockImplementation(
+      async ({ provider }: { provider: { id: string } }) => {
+        if (provider.id === "minimax") {
+          throw new Error("catalog unavailable");
+        }
+        return { marker: "google-static-result" };
+      },
+    );
+    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
+      google: {
+        models: [
+          {
+            id: "gemini-3.1-pro-preview",
+            name: "Gemini Pro",
+            contextWindow: 1_048_576,
+          },
+        ],
+      },
+    });
+
+    await expect(loadBundledProviderStaticCatalogContextModels()).resolves.toEqual([
+      expect.objectContaining({ provider: "google", contextWindow: 1_048_576 }),
+    ]);
+  });
+
   it("resolves exact rows from bundled provider static catalogs", async () => {
     const cfg = { plugins: { entries: { google: { enabled: true } } } };
     const provider = {
