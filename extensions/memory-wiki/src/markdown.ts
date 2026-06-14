@@ -12,8 +12,10 @@ import YAML from "yaml";
 const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
 export const WIKI_RELATED_START_MARKER = "<!-- openclaw:wiki:related:start -->";
 export const WIKI_RELATED_END_MARKER = "<!-- openclaw:wiki:related:end -->";
+export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
 
 export type WikiPageKind = (typeof WIKI_PAGE_KINDS)[number];
+type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
 type ParsedWikiMarkdown = {
   hasFrontmatter: boolean;
@@ -96,6 +98,8 @@ export type WikiPageSummary = {
   sourceType?: string;
   provenanceMode?: string;
   importedSourceBody?: "bridge" | "unsafe-local";
+  generatedSourceBody?: GeneratedSourceBody;
+  unmanagedRawSourceBody?: boolean;
   sourcePath?: string;
   bridgeRelativePath?: string;
   bridgeWorkspaceDir?: string;
@@ -105,7 +109,7 @@ export type WikiPageSummary = {
   updatedAt?: string;
 };
 
-const FRONTMATTER_PATTERN = /^---\n([\s\S]*?)\n---\n?/;
+const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(([^)]+)\)/g;
 const RELATED_BLOCK_PATTERN = new RegExp(
@@ -120,6 +124,8 @@ const MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES =
   Buffer.byteLength(FS_SAFE_PINNED_WRITE_TEMP_SUFFIX) -
   Buffer.byteLength(".");
 const WIKI_SEGMENT_HASH_BYTES = 12;
+const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
+const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 
 function truncateUtf8CodePointSafe(value: string, maxBytes: number): string {
   let result = "";
@@ -402,21 +408,110 @@ function extractWikiLinks(markdown: string, sourceRelativePath: string): string[
   return links;
 }
 
-function detectImportedSourceBody(markdown: string): "bridge" | "unsafe-local" | undefined {
-  const normalized = markdown.replace(/\r\n?/g, "\n");
+function normalizeMarkdownLines(markdown: string): string[] {
+  return markdown
+    .replace(/\r\n?/g, "\n")
+    .trimStart()
+    .split("\n")
+    .map((line) => line.trimEnd());
+}
+
+function hasGeneratedWrapperLines(lines: string[], patterns: RegExp[]): boolean {
+  if (!patterns[0]?.test(lines[0] ?? "")) {
+    return false;
+  }
+  const remainingLines = lines
+    .slice(1)
+    .filter((line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER);
+  if (patterns[1] && !patterns[1].test(remainingLines[0] ?? "")) {
+    return false;
+  }
+  let patternIndex = 2;
+  for (const line of remainingLines.slice(1)) {
+    const pattern = patterns[patternIndex];
+    if (!pattern) {
+      return true;
+    }
+    if (pattern.test(line)) {
+      patternIndex += 1;
+    }
+  }
+  return patternIndex === patterns.length;
+}
+
+function hasHumanNotesBlock(markdown: string): boolean {
+  return markdown.includes(HUMAN_START_MARKER) && markdown.includes(HUMAN_END_MARKER);
+}
+
+function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
+  const lines = normalizeMarkdownLines(markdown);
+  const normalized = lines.join("\n");
   if (
-    /^## Bridge Source\s*$/mu.test(normalized) ||
-    /^sourceType:\s*memory-bridge(?:-events)?\s*$/mu.test(normalized)
+    hasGeneratedWrapperLines(lines, [
+      /^# Memory Bridge(?:\s*\(|:)/u,
+      /^## Bridge Source\s*$/u,
+      /^## Content\s*$/u,
+    ]) &&
+    hasHumanNotesBlock(normalized)
   ) {
     return "bridge";
   }
   if (
-    /^## Unsafe Local Source\s*$/mu.test(normalized) ||
-    /^(?:sourceType:\s*memory-unsafe-local|provenanceMode:\s*unsafe-local)\s*$/mu.test(normalized)
+    hasGeneratedWrapperLines(lines, [
+      /^# Unsafe Local Import:/u,
+      /^## Unsafe Local Source\s*$/u,
+      /^## Content\s*$/u,
+    ]) &&
+    hasHumanNotesBlock(normalized)
   ) {
     return "unsafe-local";
   }
+  if (
+    hasGeneratedWrapperLines(lines, [
+      /^#\s+\S/u,
+      /^## Source\s*$/u,
+      /^- Type: `local-file`\s*$/u,
+      /^## Content\s*$/u,
+    ]) &&
+    hasHumanNotesBlock(normalized)
+  ) {
+    return "local-file";
+  }
+  if (
+    hasGeneratedWrapperLines(lines, [
+      /^# ChatGPT Export:/u,
+      /^## Source\s*$/u,
+      /^- Conversation id: `[^`]+`\s*$/u,
+      /^## Active Branch Transcript\s*$/u,
+    ]) &&
+    hasHumanNotesBlock(normalized)
+  ) {
+    return "chatgpt-export";
+  }
   return undefined;
+}
+
+function detectUnmanagedRawSourceBody(markdown: string): boolean {
+  const trimBlankLines = (value: string): string => value.replace(/^(?:[ \t]*\n)+/u, "");
+  const normalized = trimBlankLines(markdown.replace(/\r\n?/g, "\n"));
+  const withoutTitle = trimBlankLines(normalized.replace(/^#\s+.+?\s*\n/u, ""));
+  return (
+    normalized.startsWith(WIKI_RAW_SOURCE_MARKER) || withoutTitle.startsWith(WIKI_RAW_SOURCE_MARKER)
+  );
+}
+
+function hasWikiSourceFrontmatter(frontmatter: Record<string, unknown>): boolean {
+  return (
+    normalizeOptionalString(frontmatter.pageType) !== undefined ||
+    normalizeOptionalString(frontmatter.sourceType) !== undefined ||
+    normalizeOptionalString(frontmatter.provenanceMode) !== undefined
+  );
+}
+
+export function isUnmanagedRawSourceSummary(page: WikiPageSummary): boolean {
+  return (
+    page.kind === "source" && page.unmanagedRawSourceBody === true && !page.generatedSourceBody
+  );
 }
 
 export function formatWikiLink(params: {
@@ -478,9 +573,17 @@ export function toWikiPageSummary(params: {
     (typeof parsed.frontmatter.title === "string" && parsed.frontmatter.title.trim()) ||
     extractTitleFromMarkdown(parsed.body) ||
     path.basename(params.relativePath, ".md");
-  const importedSourceBody = parsed.hasFrontmatter
+  const generatedSourceBody = parsed.hasFrontmatter
     ? undefined
-    : detectImportedSourceBody(params.raw);
+    : detectGeneratedSourceBody(params.raw);
+  const importedSourceBody =
+    generatedSourceBody === "bridge" || generatedSourceBody === "unsafe-local"
+      ? generatedSourceBody
+      : undefined;
+  const unmanagedRawSourceBody =
+    !generatedSourceBody &&
+    !hasWikiSourceFrontmatter(parsed.frontmatter) &&
+    detectUnmanagedRawSourceBody(parsed.body);
 
   return {
     absolutePath: params.absolutePath,
@@ -511,6 +614,8 @@ export function toWikiPageSummary(params: {
     sourceType: normalizeOptionalString(parsed.frontmatter.sourceType),
     provenanceMode: normalizeOptionalString(parsed.frontmatter.provenanceMode),
     ...(importedSourceBody ? { importedSourceBody } : {}),
+    ...(generatedSourceBody ? { generatedSourceBody } : {}),
+    ...(unmanagedRawSourceBody ? { unmanagedRawSourceBody } : {}),
     sourcePath: normalizeOptionalString(parsed.frontmatter.sourcePath),
     bridgeRelativePath: normalizeOptionalString(parsed.frontmatter.bridgeRelativePath),
     bridgeWorkspaceDir: normalizeOptionalString(parsed.frontmatter.bridgeWorkspaceDir),

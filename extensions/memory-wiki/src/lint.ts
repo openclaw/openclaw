@@ -13,7 +13,11 @@ import {
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderWikiMarkdown, type WikiPageSummary } from "./markdown.js";
+import {
+  isUnmanagedRawSourceSummary,
+  renderWikiMarkdown,
+  type WikiPageSummary,
+} from "./markdown.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 
 type MemoryWikiLintIssue = {
@@ -57,10 +61,7 @@ function isUnmanagedRawSourcePage(
   managedImportedSourcePagePaths: Set<string>,
 ): boolean {
   return (
-    page.kind === "source" &&
-    !page.hasFrontmatter &&
-    !page.importedSourceBody &&
-    !managedImportedSourcePagePaths.has(page.relativePath)
+    isUnmanagedRawSourceSummary(page) && !managedImportedSourcePagePaths.has(page.relativePath)
   );
 }
 
@@ -115,9 +116,11 @@ function collectPageIssues(
         });
       }
     } else {
-      const current = pagesById.get(page.id) ?? [];
-      current.push(page);
-      pagesById.set(page.id, current);
+      if (requiresStructuredPageMetadata) {
+        const current = pagesById.get(page.id) ?? [];
+        current.push(page);
+        pagesById.set(page.id, current);
+      }
     }
 
     if (!page.pageType) {
@@ -219,7 +222,11 @@ function collectPageIssues(
     }
 
     const freshness = assessPageFreshness(page);
-    if (page.kind !== "report" && (freshness.level === "stale" || freshness.level === "unknown")) {
+    if (
+      requiresStructuredPageMetadata &&
+      page.kind !== "report" &&
+      (freshness.level === "stale" || freshness.level === "unknown")
+    ) {
       issues.push({
         severity: "warning",
         category: "quality",

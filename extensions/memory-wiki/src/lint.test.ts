@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   renderWikiMarkdown,
+  WIKI_RAW_SOURCE_MARKER,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
@@ -73,7 +74,17 @@ describe("lintMemoryWikiVault", () => {
     await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "sources", "raw-alpha.md"),
-      "# Raw Alpha Source\n\nRaw source notes stay usable as source evidence.\n",
+      `# Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes stay usable as source evidence.\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "raw-native-frontmatter.md"),
+      `---\nid: note\n---\n\n# Raw Native Frontmatter\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes stay usable as source evidence.\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "raw-native-frontmatter-copy.md"),
+      `---\nid: note\n---\n\n# Raw Native Frontmatter Copy\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes stay usable as source evidence.\n`,
       "utf8",
     );
 
@@ -82,9 +93,39 @@ describe("lintMemoryWikiVault", () => {
     const rawIssueCodes = issueCodesForPath(result, "sources/raw-alpha.md");
     expect(rawIssueCodes).not.toContain("missing-id");
     expect(rawIssueCodes).not.toContain("missing-page-type");
+    expect(rawIssueCodes).not.toContain("stale-page");
     expect(
       result.issuesByCategory.structure.filter((issue) => issue.path === "sources/raw-alpha.md"),
     ).toHaveLength(0);
+    const nativeFrontmatterIssueCodes = issueCodesForPath(
+      result,
+      "sources/raw-native-frontmatter.md",
+    );
+    expect(nativeFrontmatterIssueCodes).not.toContain("missing-id");
+    expect(nativeFrontmatterIssueCodes).not.toContain("missing-page-type");
+    expect(nativeFrontmatterIssueCodes).not.toContain("stale-page");
+    expect(nativeFrontmatterIssueCodes).not.toContain("duplicate-id");
+    expect(issueCodesForPath(result, "sources/raw-native-frontmatter-copy.md")).not.toContain(
+      "duplicate-id",
+    );
+  });
+
+  it("keeps unmarked source pages without frontmatter visible to structure lint", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-unmarked-sources-",
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "unmarked-alpha.md"),
+      "# Unmarked Alpha Source\n\nThis page has no raw-source designation.\n",
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(issueCodesForPath(result, "sources/unmarked-alpha.md")).toEqual(
+      expect.arrayContaining(["missing-id", "missing-page-type", "stale-page"]),
+    );
   });
 
   it("keeps malformed imported source bodies visible to structure lint", async () => {
@@ -103,6 +144,10 @@ describe("lintMemoryWikiVault", () => {
         "",
         "## Content",
         "alpha bridge body",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
       ].join("\n"),
       "utf8",
     );
@@ -117,6 +162,10 @@ describe("lintMemoryWikiVault", () => {
         "",
         "## Content",
         "alpha unsafe-local body",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
       ].join("\n"),
       "utf8",
     );
@@ -187,6 +236,61 @@ describe("lintMemoryWikiVault", () => {
     );
     expect(issueCodesForPath(result, "sources/unsafe-truncated.md")).toEqual(
       expect.arrayContaining(["missing-id", "missing-page-type"]),
+    );
+  });
+
+  it("keeps generated source pages with missing frontmatter visible to structure lint", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-generated-source-bodies-",
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "local-file.md"),
+      [
+        "# Local File Source",
+        "",
+        "## Source",
+        "- Type: `local-file`",
+        "- Path: `/tmp/source.md`",
+        "",
+        "## Content",
+        "source body",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "chatgpt-export.md"),
+      [
+        "# ChatGPT Export: Alpha",
+        "",
+        "## Source",
+        "- Conversation id: `abc123`",
+        "- Export file: `/tmp/conversations.json`",
+        "",
+        "## Active Branch Transcript",
+        "### User",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(issueCodesForPath(result, "sources/local-file.md")).toEqual(
+      expect.arrayContaining(["missing-id", "missing-page-type", "stale-page"]),
+    );
+    expect(issueCodesForPath(result, "sources/chatgpt-export.md")).toEqual(
+      expect.arrayContaining(["missing-id", "missing-page-type", "stale-page"]),
     );
   });
 
