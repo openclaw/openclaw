@@ -279,6 +279,8 @@ type ListedCollection = {
   pattern?: string;
 };
 
+const SESSION_COLLECTION_BASE = "sessions";
+
 type ManagedCollection = {
   name: string;
   path: string;
@@ -579,7 +581,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     // fall back to best-effort idempotent `qmd collection add`.
     const existing = await this.listCollectionsBestEffort();
 
-    await this.migrateLegacyUnscopedCollections(existing);
+    await this.migrateLegacyScopedCollections(existing);
 
     for (const collection of this.qmd.collections) {
       const listed = existing.get(collection.name);
@@ -774,13 +776,28 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     if (!conflictName) {
+      // `qmd collection list` omits the path, so a conflicting collection whose name we
+      // cannot reconstruct stays invisible to path/pattern matching — the duplicate
+      // custom-name upgrade case, where the legacy scoped name disambiguated as
+      // `<base>-<agent>-<n>` while the unscoped probe is `<base>-<n>-<agent>`, so
+      // migrateLegacyScopedCollections never removes it. Fall back to the name qmd reports
+      // in the add error and confirm its path+pattern via `collection show` before
+      // rebinding — never remove on a parsed name alone.
       const parsedConflictName = this.parseConflictingCollectionNameFromAddError(addErrorMessage);
-      if (parsedConflictName) {
-        log.warn(
-          `qmd collection add conflict for ${collection.name}: qmd reported existing collection ${parsedConflictName}, but list output did not include verifiable path/pattern metadata; refusing automatic rebind. If ${parsedConflictName} is stale, remove it manually with 'qmd collection remove ${parsedConflictName}'`,
-        );
+      if (
+        parsedConflictName &&
+        parsedConflictName !== collection.name &&
+        (await this.conflictMatchesManagedCollection(collection, parsedConflictName))
+      ) {
+        conflictName = parsedConflictName;
+      } else {
+        if (parsedConflictName) {
+          log.warn(
+            `qmd collection add conflict for ${collection.name}: qmd reported existing collection ${parsedConflictName}, but its path/pattern could not be confirmed via 'qmd collection show'; refusing automatic rebind. If ${parsedConflictName} is stale, remove it manually with 'qmd collection remove ${parsedConflictName}'`,
+          );
+        }
+        return false;
       }
-      return false;
     }
     if (conflictName === collection.name) {
       existing.set(collection.name, {
@@ -820,14 +837,39 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private async migrateLegacyUnscopedCollections(
+  // Confirms the collection qmd named in a path+pattern add-conflict actually binds the
+  // same (path, pattern) as the desired managed collection before we remove it. Reuses the
+  // `collection show` enrichment (the only command that surfaces the path); with no verified
+  // matching path we fail closed — never remove a collection on a parsed name alone.
+  private async conflictMatchesManagedCollection(
+    collection: ManagedCollection,
+    conflictName: string,
+  ): Promise<boolean> {
+    const shown = await this.enrichLegacyCollectionPath(conflictName, {});
+    if (!shown.path || !this.pathsMatch(shown.path, collection.path)) {
+      return false;
+    }
+    if (typeof shown.pattern !== "string") {
+      return false;
+    }
+    return this.patternsMatchForManagedCollection(
+      collection.path,
+      shown.pattern,
+      collection.pattern,
+    );
+  }
+
+  private async migrateLegacyScopedCollections(
     existing: Map<string, ListedCollection>,
   ): Promise<void> {
     for (const collection of this.qmd.collections) {
-      if (existing.has(collection.name)) {
-        continue;
-      }
-      const legacyName = this.deriveLegacyCollectionName(collection.name);
+      // The session collection's name is disambiguated (e.g. "sessions-2") when a user
+      // collection already claims "sessions", but the shipped legacy collection was always
+      // scoped from the base "sessions" — derive its legacy name from that base so the
+      // orphan ("sessions-<agentId>") is still found and removed.
+      const legacyBaseName =
+        collection.kind === "sessions" ? SESSION_COLLECTION_BASE : collection.name;
+      const legacyName = this.deriveLegacyScopedName(legacyBaseName);
       if (!legacyName) {
         continue;
       }
@@ -835,7 +877,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!listedLegacy) {
         continue;
       }
-      if (!this.canMigrateLegacyCollection(collection, listedLegacy)) {
+      // Custom (user-owned) legacy collections must be verified by path before removal;
+      // `collection list` omits the path, so enrich it via `collection show` so a name
+      // match alone never deletes a user collection.
+      const legacyMeta =
+        collection.kind === "custom"
+          ? await this.enrichLegacyCollectionPath(legacyName, listedLegacy)
+          : listedLegacy;
+      if (!this.canMigrateLegacyCollection(collection, legacyMeta)) {
         log.debug(
           `qmd legacy collection migration skipped for ${legacyName} (path/pattern mismatch)`,
         );
@@ -853,20 +902,60 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private deriveLegacyCollectionName(scopedName: string): string | null {
-    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
-    if (!scopedName.endsWith(agentSuffix)) {
+  private deriveLegacyScopedName(unscopedName: string): string | null {
+    const agentSegment = this.sanitizeCollectionNameSegment(this.agentId);
+    if (!agentSegment) {
       return null;
     }
-    const legacyName = scopedName.slice(0, -agentSuffix.length).trim();
-    return legacyName || null;
+    return `${unscopedName}-${agentSegment}`;
+  }
+
+  // `qmd collection list` omits the filesystem path, so a custom legacy candidate can
+  // only be confirmed as ours by enriching its path via `collection show`. On failure
+  // the path stays undefined and canMigrateLegacyCollection fails closed (keeps it).
+  private async enrichLegacyCollectionPath(
+    name: string,
+    base: ListedCollection,
+  ): Promise<ListedCollection> {
+    if (base.path) {
+      return base;
+    }
+    try {
+      const showResult = await this.runQmd(["collection", "show", name], {
+        timeoutMs: this.qmd.update.commandTimeoutMs,
+      });
+      const shown = this.parseShownCollection(showResult.stdout);
+      if (shown.path) {
+        base.path = shown.path;
+      }
+      if (shown.pattern && !base.pattern) {
+        base.pattern = shown.pattern;
+      }
+    } catch {
+      // show failed (old qmd, timeout, missing) → path undefined → fail closed.
+    }
+    return base;
   }
 
   private canMigrateLegacyCollection(
     collection: ManagedCollection,
     listedLegacy: ListedCollection,
   ): boolean {
-    if (listedLegacy.path && !this.pathsMatch(listedLegacy.path, collection.path)) {
+    // Engine-owned kinds (memory, sessions): the legacy scoped name
+    // (<base>-<agentId>) was generated by OpenClaw, not the user. Removing it
+    // is always safe — the unscoped sibling reindexes from source with zero
+    // data loss. An orphaned engine collection is still re-walked and
+    // re-embedded on every `qmd update`, so cleaning it removes a recurring
+    // reindex cost.
+    if (collection.kind === "memory" || collection.kind === "sessions") {
+      return true;
+    }
+    // User-owned kind (custom): the base name is user-supplied (e.g. "notes" →
+    // "notes-<agentId>"). Remove ONLY after VERIFYING path ownership — a name (or
+    // even name+pattern) match alone could be a different user collection. `qmd
+    // collection list` omits the path, so the caller enriches it via `collection
+    // show`; with no verified matching path we fail closed and keep the collection.
+    if (!listedLegacy.path || !this.pathsMatch(listedLegacy.path, collection.path)) {
       return false;
     }
     if (
@@ -2526,7 +2615,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private pickSessionCollectionName(): string {
     const existing = new Set(this.qmd.collections.map((collection) => collection.name));
-    const base = `sessions-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    const base = SESSION_COLLECTION_BASE;
     if (!existing.has(base)) {
       return base;
     }
