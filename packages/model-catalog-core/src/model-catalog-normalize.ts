@@ -420,6 +420,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     compat.cacheControlFormat = "anthropic";
   }
 
+  const systemPromptPlacement = normalizeOptionalString(value.systemPromptPlacement) ?? "";
+  if (systemPromptPlacement === "input" || systemPromptPlacement === "instructions") {
+    compat.systemPromptPlacement = systemPromptPlacement;
+  }
+
   const openRouterRouting = normalizeOpenRouterRouting(value.openRouterRouting);
   if (openRouterRouting) {
     compat.openRouterRouting = openRouterRouting;

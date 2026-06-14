@@ -50,4 +50,27 @@ describe("ModelsConfigSchema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts Responses system prompt placement compatibility overrides", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "responses-proxy": {
+          baseUrl: "http://localhost:18300/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              reasoning: true,
+              compat: {
+                systemPromptPlacement: "instructions",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

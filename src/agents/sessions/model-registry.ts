@@ -131,6 +131,9 @@ const OpenAICompletionsCompatSchema = Type.Object({
 
 const OpenAIResponsesCompatSchema = Type.Object({
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
+  systemPromptPlacement: Type.Optional(
+    Type.Union([Type.Literal("input"), Type.Literal("instructions")]),
+  ),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
 
