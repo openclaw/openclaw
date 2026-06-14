@@ -1,0 +1,176 @@
+name: Android APK Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: "Android flavor to build"
+        required: true
+        default: "thirdParty"
+        type: choice
+        options:
+          - play
+          - thirdParty
+      build_type:
+        description: "Build type"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/android-apk-build.yml"
+      - "apps/android/**"
+      - "apps/shared/**"
+      - "package.json"
+      - "bun.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-build-${{ github.ref }}-${{ github.event.inputs.variant || 'thirdParty' }}-${{ github.event.inputs.build_type || 'debug' }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Build ${{ github.event.inputs.variant || 'thirdParty' }} ${{ github.event.inputs.build_type || 'debug' }} APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      OPENCLAW_ANDROID_STORE_FILE: ${{ secrets.OPENCLAW_ANDROID_STORE_FILE }}
+      OPENCLAW_ANDROID_STORE_PASSWORD: ${{ secrets.OPENCLAW_ANDROID_STORE_PASSWORD }}
+      OPENCLAW_ANDROID_KEY_ALIAS: ${{ secrets.OPENCLAW_ANDROID_KEY_ALIAS }}
+      OPENCLAW_ANDROID_KEY_PASSWORD: ${{ secrets.OPENCLAW_ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
+          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+      - name: Restore Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure release signing
+        if: ${{ github.event.inputs.build_type == 'release' }}
+        working-directory: apps/android
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=0
+          for name in \
+            OPENCLAW_ANDROID_STORE_FILE \
+            OPENCLAW_ANDROID_STORE_PASSWORD \
+            OPENCLAW_ANDROID_KEY_ALIAS \
+            OPENCLAW_ANDROID_KEY_PASSWORD
+          do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is required for release APK builds"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+          mkdir -p "$(dirname "$OPENCLAW_ANDROID_STORE_FILE")"
+          if [ -n "${OPENCLAW_ANDROID_KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$OPENCLAW_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$OPENCLAW_ANDROID_STORE_FILE"
+          fi
+
+          if [ ! -f "$OPENCLAW_ANDROID_STORE_FILE" ]; then
+            echo "::error::Release keystore file does not exist at $OPENCLAW_ANDROID_STORE_FILE"
+            exit 1
+          fi
+
+          {
+            echo "OPENCLAW_ANDROID_STORE_FILE=$OPENCLAW_ANDROID_STORE_FILE"
+            echo "OPENCLAW_ANDROID_STORE_PASSWORD=$OPENCLAW_ANDROID_STORE_PASSWORD"
+            echo "OPENCLAW_ANDROID_KEY_ALIAS=$OPENCLAW_ANDROID_KEY_ALIAS"
+            echo "OPENCLAW_ANDROID_KEY_PASSWORD=$OPENCLAW_ANDROID_KEY_PASSWORD"
+          } >> gradle.properties
+        env:
+          OPENCLAW_ANDROID_KEYSTORE_BASE64: ${{ secrets.OPENCLAW_ANDROID_KEYSTORE_BASE64 }}
+
+      - name: Resolve build task
+        id: task
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          variant="${{ github.event.inputs.variant || 'thirdParty' }}"
+          build_type="${{ github.event.inputs.build_type || 'debug' }}"
+
+          case "$variant:$build_type" in
+            play:debug)
+              task=":app:assemblePlayDebug"
+              output_dir="app/build/outputs/apk/play/debug"
+              ;;
+            thirdParty:debug)
+              task=":app:assembleThirdPartyDebug"
+              output_dir="app/build/outputs/apk/thirdParty/debug"
+              ;;
+            play:release)
+              task=":app:assemblePlayRelease"
+              output_dir="app/build/outputs/apk/play/release"
+              ;;
+            thirdParty:release)
+              task=":app:assembleThirdPartyRelease"
+              output_dir="app/build/outputs/apk/thirdParty/release"
+              ;;
+            *)
+              echo "::error::Unsupported Android APK build target: $variant:$build_type"
+              exit 1
+              ;;
+          esac
+
+          echo "task=$task" >> "$GITHUB_OUTPUT"
+          echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+          echo "variant=$variant" >> "$GITHUB_OUTPUT"
+          echo "build_type=$build_type" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        working-directory: apps/android
+        shell: bash
+        run: ./gradlew --no-daemon --build-cache "${{ steps.task.outputs.task }}"
+
+      - name: Check APK output
+        working-directory: apps/android
+        shell: bash
+        run: |
+          set -euo pipefail
+          find "${{ steps.task.outputs.output_dir }}" -name "*.apk" -type f -print -exec sha256sum {} \;
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-${{ steps.task.outputs.variant }}-${{ steps.task.outputs.build_type }}-apk
+          path: apps/android/${{ steps.task.outputs.output_dir }}/*.apk
+          if-no-files-found: error
+          retention-days: 30
