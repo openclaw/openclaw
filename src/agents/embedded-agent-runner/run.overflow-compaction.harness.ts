@@ -129,6 +129,7 @@ export const mockedResolveModelAsync = vi.fn(
       provider: "anthropic",
       contextWindow: 200000,
       api: "messages",
+      reasoning: false,
     },
     error: null,
     authStorage: {
@@ -340,6 +341,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
       provider: "anthropic",
       contextWindow: 200000,
       api: "messages",
+      reasoning: false,
     },
     error: null,
     authStorage: {
