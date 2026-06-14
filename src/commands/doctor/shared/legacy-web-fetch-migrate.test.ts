@@ -84,4 +84,47 @@ describe("legacy web fetch config", () => {
       }),
     ).toEqual(["tools.web.fetch.firecrawl.apiKey", "tools.web.fetch.firecrawl.maxAgeMs"]);
   });
+
+  it("removes retired web fetch egress policy keys while keeping current fetch config", () => {
+    const res = migrateLegacyWebFetchConfig({
+      tools: {
+        web: {
+          fetch: {
+            enabled: true,
+            timeoutSeconds: 15,
+            useTrustedEnvProxy: true,
+            ssrfPolicy: {
+              allowRfc2544BenchmarkRange: true,
+              allowIpv6UniqueLocalRange: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(res.config.tools?.web?.fetch).toEqual({
+      enabled: true,
+      timeoutSeconds: 15,
+    });
+    expect(res.changes).toEqual([
+      "Removed retired tools.web.fetch useTrustedEnvProxy/ssrfPolicy knobs. Configure proxy.enabled=true and enforce SSRF/private-network egress policy in the operator-managed external proxy.",
+    ]);
+  });
+
+  it("lists retired web fetch egress policy config paths", () => {
+    expect(
+      listLegacyWebFetchConfigPaths({
+        tools: {
+          web: {
+            fetch: {
+              useTrustedEnvProxy: true,
+              ssrfPolicy: {
+                allowRfc2544BenchmarkRange: true,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual(["tools.web.fetch.useTrustedEnvProxy", "tools.web.fetch.ssrfPolicy"]);
+  });
 });

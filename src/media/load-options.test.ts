@@ -39,6 +39,10 @@ describe("media load options", () => {
       expected: { maxBytes: 2048, localRoots: undefined },
     },
     {
+      params: { maxBytes: 2048, trustExplicitProxyDns: true },
+      expected: { maxBytes: 2048, trustExplicitProxyDns: true },
+    },
+    {
       params: {
         maxBytes: 4096,
         mediaAccess: {

@@ -1113,7 +1113,6 @@ describe("loadWebMedia", () => {
           maxBytes: 1024 * 1024,
           fetchImpl,
           readIdleTimeoutMs,
-          ssrfPolicy: { allowedHostnames: ["example.test"] },
         }),
       readIdleTimeoutMs,
     );
@@ -1132,12 +1131,30 @@ describe("loadWebMedia", () => {
       maxBytes: 1024 * 1024,
       fetchImpl,
       readIdleTimeoutMs: 20,
-      ssrfPolicy: { allowedHostnames: ["example.test"] },
     });
 
     expect(result.kind).toBe("document");
     expect(result.contentType).toBe("application/pdf");
     expect(result.buffer.toString()).toContain("%PDF-1.4");
+  });
+
+  it("enforces caller-provided SSRF policy for shared remote web media loads", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Buffer.from("%PDF-1.4\n%%EOF"), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        }),
+    );
+
+    await expect(
+      loadWebMediaRaw("http://127.0.0.1/private.pdf", {
+        maxBytes: 1024 * 1024,
+        fetchImpl,
+        ssrfPolicy: { hostnameAllowlist: ["assets.example.test"] },
+      }),
+    ).rejects.toThrow(/blocked|allowlist|private/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported media store URI locations", async () => {

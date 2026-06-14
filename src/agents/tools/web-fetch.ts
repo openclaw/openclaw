@@ -1,8 +1,11 @@
 /**
  * web_fetch built-in tool.
  *
- * Fetches HTTP(S) content through SSRF guards, provider config, caching, and bounded extraction.
+ * Fetches HTTP(S) content through app egress transport, provider config, caching, and bounded extraction.
  */
+import type { LookupAddress } from "node:dns";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -10,7 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
+import { isBlockedHostnameOrIp, type LookupFn } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -128,10 +131,6 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
     return fetch.readability;
   }
   return true;
-}
-
-function resolveFetchUseTrustedEnvProxy(fetch?: WebFetchConfig): boolean {
-  return fetch?.useTrustedEnvProxy === true;
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
@@ -290,11 +289,6 @@ type WebFetchRuntimeParams = {
   userAgent: string;
   readabilityEnabled: boolean;
   config?: OpenClawConfig;
-  useTrustedEnvProxy: boolean;
-  ssrfPolicy?: {
-    allowRfc2544BenchmarkRange?: boolean;
-    allowIpv6UniqueLocalRange?: boolean;
-  };
   providerCacheKey?: string;
   lookupFn?: LookupFn;
   signal?: AbortSignal;
@@ -408,19 +402,88 @@ function normalizeProviderWebFetchPayload(params: {
   };
 }
 
+function normalizeLookupResults(
+  results: LookupAddress | LookupAddress[],
+): readonly LookupAddress[] {
+  return Array.isArray(results) ? results : [results];
+}
+
+function normalizeUrlHostnameForLookup(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+
+async function canDelegateToExternalWebFetchProvider(params: {
+  url: string;
+  lookupFn?: LookupFn;
+}): Promise<boolean> {
+  let parsed: URL;
+  try {
+    parsed = new URL(params.url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false;
+  }
+  const lookupHostname = normalizeUrlHostnameForLookup(parsed.hostname);
+  if (isBlockedHostnameOrIp(lookupHostname)) {
+    return false;
+  }
+  if (isIP(lookupHostname) !== 0) {
+    return true;
+  }
+  const lookup = params.lookupFn ?? dnsLookup;
+  let resolved: LookupAddress | LookupAddress[];
+  try {
+    resolved = await lookup(lookupHostname, { all: true, verbatim: true });
+  } catch {
+    return false;
+  }
+  return normalizeLookupResults(resolved).every((entry) => !isBlockedHostnameOrIp(entry.address));
+}
+
+function isSameCanonicalHttpUrl(a: string, b: string): boolean {
+  try {
+    const first = new URL(a);
+    const second = new URL(b);
+    return (
+      (first.protocol === "http:" || first.protocol === "https:") &&
+      (second.protocol === "http:" || second.protocol === "https:") &&
+      first.href === second.href
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function maybeFetchProviderWebFetchPayload(
   params: WebFetchRuntimeParams & {
     urlToFetch: string;
     cacheKey: string;
+    localFetchRedirected?: boolean;
     tookMs: number;
   },
 ): Promise<Record<string, unknown> | null> {
+  if (params.localFetchRedirected === true) {
+    return null;
+  }
+  if (!isSameCanonicalHttpUrl(params.urlToFetch, params.url)) {
+    return null;
+  }
+  if (
+    !(await canDelegateToExternalWebFetchProvider({
+      url: params.urlToFetch,
+      lookupFn: params.lookupFn,
+    }))
+  ) {
+    return null;
+  }
   const providerFallback = await params.resolveProviderFallback();
   if (!providerFallback) {
     return null;
   }
   const rawPayload = await providerFallback.definition.execute({
-    url: params.urlToFetch,
+    url: params.url,
     extractMode: params.extractMode,
     maxChars: params.maxChars,
   });
@@ -437,18 +500,8 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
-  const allowIpv6UniqueLocalRange = params.ssrfPolicy?.allowIpv6UniqueLocalRange === true;
-  const useTrustedEnvProxy = params.useTrustedEnvProxy;
-  const ssrfPolicy: SsrFPolicy | undefined =
-    allowRfc2544BenchmarkRange || allowIpv6UniqueLocalRange
-      ? {
-          ...(allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : {}),
-          ...(allowIpv6UniqueLocalRange ? { allowIpv6UniqueLocalRange } : {}),
-        }
-      : undefined;
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}:readability:${params.readabilityEnabled ? "on" : "off"}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -466,9 +519,27 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
 
   const start = Date.now();
+  if (!params.readabilityEnabled) {
+    const payload = await maybeFetchProviderWebFetchPayload({
+      ...params,
+      urlToFetch: params.url,
+      cacheKey,
+      localFetchRedirected: false,
+      tookMs: Date.now() - start,
+    });
+    if (payload) {
+      return payload;
+    }
+    throw new Error(
+      "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
+    );
+  }
+
   let res: Response;
   let release: (() => Promise<void>) | null;
   let finalUrl = params.url;
+  let lastAttemptedFetchUrl = params.url;
+  let localFetchRedirected = false;
   try {
     const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
     const result = await fetchWithWebToolsNetworkGuard({
@@ -476,15 +547,19 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
-      lookupFn: params.lookupFn,
-      useEnvProxy: useTrustedEnvProxy,
-      policy: ssrfPolicy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
           "User-Agent": params.userAgent,
           "Accept-Language": "en-US,en;q=0.9",
         },
+      },
+      validateUrl: (url) => {
+        lastAttemptedFetchUrl = url.toString();
+      },
+      onRedirect: (url) => {
+        localFetchRedirected = true;
+        lastAttemptedFetchUrl = url.toString();
       },
     });
     res = result.response;
@@ -499,16 +574,14 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       );
     }
   } catch (error) {
-    if (error instanceof SsrFBlockedError) {
-      throw error;
-    }
     if (params.signal?.aborted) {
       throw error;
     }
     const payload = await maybeFetchProviderWebFetchPayload({
       ...params,
-      urlToFetch: finalUrl,
+      urlToFetch: lastAttemptedFetchUrl,
       cacheKey,
+      localFetchRedirected,
       tookMs: Date.now() - start,
     });
     if (payload) {
@@ -524,8 +597,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       }
       const payload = await maybeFetchProviderWebFetchPayload({
         ...params,
-        urlToFetch: params.url,
+        urlToFetch: finalUrl,
         cacheKey,
+        localFetchRedirected,
         tookMs: Date.now() - start,
       });
       if (payload) {
@@ -562,61 +636,47 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         text = markdownToText(body);
       }
     } else if (contentType.includes("text/html")) {
-      if (params.readabilityEnabled) {
-        const readable = await extractReadableContent({
-          html: body,
-          url: finalUrl,
-          extractMode: params.extractMode,
-          config: params.config,
-        });
-        if (readable?.text) {
-          text = readable.text;
-          title = readable.title;
-          extractor = readable.extractor;
-        } else {
-          let payload: Record<string, unknown> | null = null;
-          try {
-            payload = await maybeFetchProviderWebFetchPayload({
-              ...params,
-              urlToFetch: finalUrl,
-              cacheKey,
-              tookMs: Date.now() - start,
-            });
-          } catch {
-            payload = null;
-          }
-          if (payload) {
-            return payload;
-          }
-          const basic = await extractBasicHtmlContent({
-            html: body,
-            extractMode: params.extractMode,
-          });
-          if (basic?.text) {
-            text = basic.text;
-            title = basic.title;
-            extractor = "raw-html";
-          } else {
-            const providerLabel =
-              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
-            throw new Error(
-              `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
-            );
-          }
-        }
+      const readable = await extractReadableContent({
+        html: body,
+        url: finalUrl,
+        extractMode: params.extractMode,
+        config: params.config,
+      });
+      if (readable?.text) {
+        text = readable.text;
+        title = readable.title;
+        extractor = readable.extractor;
       } else {
-        const payload = await maybeFetchProviderWebFetchPayload({
-          ...params,
-          urlToFetch: finalUrl,
-          cacheKey,
-          tookMs: Date.now() - start,
-        });
+        let payload: Record<string, unknown> | null = null;
+        try {
+          payload = await maybeFetchProviderWebFetchPayload({
+            ...params,
+            urlToFetch: finalUrl,
+            cacheKey,
+            localFetchRedirected,
+            tookMs: Date.now() - start,
+          });
+        } catch {
+          payload = null;
+        }
         if (payload) {
           return payload;
         }
-        throw new Error(
-          "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
-        );
+        const basic = await extractBasicHtmlContent({
+          html: body,
+          extractMode: params.extractMode,
+        });
+        if (basic?.text) {
+          text = basic.text;
+          title = basic.title;
+          extractor = "raw-html";
+        } else {
+          const providerLabel =
+            (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
+          throw new Error(
+            `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
+          );
+        }
       }
     } else if (contentType.includes("application/json")) {
       try {
@@ -757,8 +817,6 @@ export function createWebFetchTool(options?: {
           userAgent,
           readabilityEnabled,
           config,
-          useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
-          ssrfPolicy: executionFetch?.ssrfPolicy,
           ...(providerCacheKey ? { providerCacheKey } : {}),
           lookupFn: options?.lookupFn,
           signal,

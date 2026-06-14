@@ -1,7 +1,8 @@
 /**
- * Guarded fetch wrappers for web tools.
+ * Fetch transport wrappers for web tools.
  *
- * Applies SSRF policy, timeout normalization, and trusted/self-hosted endpoint modes.
+ * Applies timeout normalization for app-owned fetches and keeps credentialed
+ * provider endpoints on guarded SSRF/private-network egress.
  */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -11,6 +12,11 @@ import {
   withStrictGuardedFetchMode,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../../infra/net/fetch-guard.js";
+import {
+  fetchWithAppNetworkTransport,
+  type AppFetchTransportOptions,
+  type AppFetchTransportResult,
+} from "../../infra/net/fetch-transport.js";
 import {
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   type SsrFPolicy,
@@ -23,6 +29,10 @@ const WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   allowIpv6UniqueLocalRange: true,
 };
 
+type WebToolAppFetchOptions = Omit<AppFetchTransportOptions, "timeoutMs"> & {
+  timeoutSeconds?: number;
+  timeoutMs?: number;
+};
 type WebToolGuardedFetchOptions = Omit<
   GuardedFetchOptions,
   "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
@@ -50,8 +60,18 @@ function resolveTimeoutMs(params: {
   return undefined;
 }
 
-/** Runs a guarded fetch with strict or trusted-env-proxy web tool policy. */
+/** Runs a web tool fetch through the shared app egress transport. */
 export async function fetchWithWebToolsNetworkGuard(
+  params: WebToolAppFetchOptions,
+): Promise<AppFetchTransportResult> {
+  const { timeoutSeconds, ...rest } = params;
+  return await fetchWithAppNetworkTransport({
+    ...rest,
+    timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
+  });
+}
+
+async function fetchWithGuardedWebToolsNetwork(
   params: WebToolGuardedFetchOptions,
 ): Promise<GuardedFetchResult> {
   const { timeoutSeconds, useEnvProxy, ...rest } = params;
@@ -59,18 +79,18 @@ export async function fetchWithWebToolsNetworkGuard(
     ...rest,
     timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
   };
-  return fetchWithSsrFGuard(
+  return await fetchWithSsrFGuard(
     useEnvProxy
       ? withTrustedEnvProxyGuardedFetchMode(resolved)
       : withStrictGuardedFetchMode(resolved),
   );
 }
 
-async function withWebToolsNetworkGuard<T>(
+async function withGuardedWebToolsNetwork<T>(
   params: WebToolGuardedFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
-  const { response, finalUrl, release } = await fetchWithWebToolsNetworkGuard(params);
+  const { response, finalUrl, release } = await fetchWithGuardedWebToolsNetwork(params);
   try {
     return await run({ response, finalUrl });
   } finally {
@@ -84,7 +104,7 @@ export async function withTrustedWebToolsEndpoint<T>(
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
   const trustedPolicy = ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(params.url) ?? {};
-  return await withWebToolsNetworkGuard(
+  return await withGuardedWebToolsNetwork(
     {
       ...params,
       policy: trustedPolicy,
@@ -99,7 +119,7 @@ export async function withSelfHostedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
-  return await withWebToolsNetworkGuard(
+  return await withGuardedWebToolsNetwork(
     {
       ...params,
       policy: WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY,
@@ -114,5 +134,5 @@ export async function withStrictWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
-  return await withWebToolsNetworkGuard(params, run);
+  return await withGuardedWebToolsNetwork(params, run);
 }

@@ -24,7 +24,6 @@ import type {
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   resolveConfiguredMediaMaxBytes,
@@ -87,7 +86,6 @@ import {
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
-  resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
@@ -546,7 +544,6 @@ async function loadReferenceImages(params: {
   maxBytes?: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
-  ssrfPolicy?: SsrFPolicy;
 }): Promise<
   Array<{
     sourceImage: ImageGenerationSourceImage;
@@ -623,7 +620,6 @@ async function loadReferenceImages(params: {
         : await loadWebMedia(resolvedPath ?? resolvedImage, {
             maxBytes: params.maxBytes,
             localRoots,
-            ssrfPolicy: params.ssrfPolicy,
             ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
           });
     if (media.kind !== "image") {
@@ -700,7 +696,6 @@ async function executeImageGenerationJob(params: {
   inputImages: ImageGenerationSourceImage[];
   timeoutMs?: number;
   providerOptions?: ImageGenerationProviderOptions;
-  ssrfPolicy?: SsrFPolicy;
   filename?: string;
   loadedReferenceImages: LoadedReferenceImage[];
   taskHandle?: ImageGenerationTaskHandle | null;
@@ -728,7 +723,6 @@ async function executeImageGenerationJob(params: {
     inputImages: params.inputImages,
     timeoutMs: params.timeoutMs,
     providerOptions: params.providerOptions,
-    ssrfPolicy: params.ssrfPolicy,
   });
   if (params.taskHandle) {
     recordImageGenerationTaskProgress({
@@ -918,7 +912,6 @@ export function createImageGenerateTool(options?: {
       const explicitModelConfig = hasExplicitImageGenerationModelConfig(cfg);
       const effectiveCfg =
         applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
-      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const prompt = readStringParam(params, "prompt", { required: true });
 
       const activeDuplicateGuardResult = createImageGenerateDuplicateGuardResult(
@@ -997,7 +990,6 @@ export function createImageGenerateTool(options?: {
         maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
-        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
       const modeCaps =
@@ -1070,7 +1062,6 @@ export function createImageGenerateTool(options?: {
               inputImages,
               timeoutMs,
               providerOptions,
-              ssrfPolicy: remoteMediaSsrfPolicy,
               filename,
               loadedReferenceImages,
               taskHandle,
@@ -1127,7 +1118,6 @@ export function createImageGenerateTool(options?: {
           inputImages,
           timeoutMs,
           providerOptions,
-          ssrfPolicy: remoteMediaSsrfPolicy,
           filename,
           loadedReferenceImages,
           taskHandle,

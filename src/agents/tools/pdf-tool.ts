@@ -30,7 +30,6 @@ import {
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
-  resolveRemoteMediaSsrfPolicy,
 } from "./media-tool-shared.js";
 import { hasToolModelConfig } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
@@ -331,7 +330,6 @@ export function createPdfTool(options?: {
 
   const description =
     "Analyze PDFs with model. Anthropic/Google native PDF when supported; else text/image extraction. Use pdf for one, pdfs for max 10; prompt says what to inspect.";
-  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   return {
     label: "PDF",
@@ -463,7 +461,6 @@ export function createPdfTool(options?: {
               maxBytes,
               localRoots,
               ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
-              ssrfPolicy: remoteMediaSsrfPolicy,
             });
 
         if (media.kind !== "document") {

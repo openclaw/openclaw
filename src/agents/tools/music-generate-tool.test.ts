@@ -1124,7 +1124,6 @@ describe("createMusicGenerateTool", () => {
             musicGenerationModel: { primary: "minimax/music-2.6", timeoutMs: 180_000 },
           },
         },
-        tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
       }),
     });
     if (!tool) {
@@ -1147,7 +1146,7 @@ describe("createMusicGenerateTool", () => {
       ssrfPolicy?: unknown;
     };
     expect(loadOptions.requestInit?.signal).toBeInstanceOf(AbortSignal);
-    expect(loadOptions.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+    expect(loadOptions.ssrfPolicy).toBeUndefined();
     expect(generateMusicOptions().timeoutMs).toBe(180_000);
     expect(fetchTimeout.buildTimeoutAbortSignal).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mock.calls[0]?.[0]).toEqual({

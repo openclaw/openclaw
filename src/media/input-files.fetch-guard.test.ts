@@ -1,12 +1,12 @@
 // Input file fetch guard tests cover network fetch limits for media inputs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fetchWithSsrFGuardMock = vi.fn();
+const fetchWithAppNetworkTransportMock = vi.fn();
 const convertHeicToJpegMock = vi.fn();
 const detectMimeMock = vi.fn();
 
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+vi.mock("../infra/net/fetch-transport.js", () => ({
+  fetchWithAppNetworkTransport: (...args: unknown[]) => fetchWithAppNetworkTransportMock(...args),
 }));
 
 vi.mock("./media-services.js", () => ({
@@ -70,7 +70,7 @@ function mockUrlFetchResponse(params: {
 
   const release = vi.fn(async () => {});
   const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
-  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+  fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
     response: new Response(
       responseBody.buffer.slice(
         responseBody.byteOffset,
@@ -247,7 +247,7 @@ describe("fetchWithGuard", () => {
       },
     });
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
       response: new Response(stream, {
         status: 503,
         statusText: "Service Unavailable",
@@ -280,7 +280,7 @@ describe("fetchWithGuard", () => {
       },
     });
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
       response: new Response(stream, {
         status: 200,
         headers: { "content-length": "2048", "content-type": "application/octet-stream" },
@@ -313,7 +313,7 @@ describe("fetchWithGuard", () => {
       },
     });
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
       response: new Response(stream, {
         status: 200,
         headers: { "content-length": "1e9", "content-type": "application/octet-stream" },
@@ -355,7 +355,7 @@ describe("fetchWithGuard", () => {
     });
 
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
       response: new Response(stream, {
         status: 200,
         headers: { "content-type": "application/octet-stream" },
@@ -377,6 +377,44 @@ describe("fetchWithGuard", () => {
     await waitForMicrotaskTurn();
 
     expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes hostname allowlist as a redirect-aware URL validator", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithAppNetworkTransportMock.mockResolvedValueOnce({
+      response: new Response("ok", {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+      release,
+      finalUrl: "https://allowed.example/file.bin",
+    });
+
+    await fetchWithGuard({
+      url: "https://allowed.example/file.bin",
+      maxBytes: 1024,
+      timeoutMs: 1000,
+      maxRedirects: 3,
+      hostnameAllowlist: ["ALLOWED.EXAMPLE."],
+    });
+
+    const transportOptions = fetchWithAppNetworkTransportMock.mock.calls[0]?.[0] as
+      | {
+          validateUrl?: (url: URL, context: { redirectCount: number }) => void;
+        }
+      | undefined;
+    expect(transportOptions?.validateUrl).toBeTypeOf("function");
+    expect(() =>
+      transportOptions?.validateUrl?.(new URL("https://allowed.example./redirected.bin"), {
+        redirectCount: 1,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      transportOptions?.validateUrl?.(new URL("https://blocked.example/redirected.bin"), {
+        redirectCount: 1,
+      }),
+    ).toThrow("URL hostname is not allowed by config: blocked.example");
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

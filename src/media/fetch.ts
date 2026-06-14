@@ -13,6 +13,7 @@ import {
   withStrictGuardedFetchMode,
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
+import { fetchWithAppNetworkTransport } from "../infra/net/fetch-transport.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
@@ -38,7 +39,7 @@ export type SavedRemoteMedia = SavedMedia & {
 /** Closed error classes callers can use for retry and diagnostic policy. */
 export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
-/** Retry policy applied around the complete guarded fetch and body read/save operation. */
+/** Retry policy applied around the complete fetch and body read/save operation. */
 export type MediaFetchRetryOptions = RetryOptions;
 
 /** Structured fetch error used for retry decisions and caller-facing diagnostics. */
@@ -61,7 +62,7 @@ export class MediaFetchError extends Error {
 /** Fetch-compatible injection point used by tests and guarded network callers. */
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-/** Alternate dispatcher/lookup pair tried inside a single guarded fetch attempt. */
+/** Alternate dispatcher tried inside a single fetch attempt. */
 export type FetchDispatcherAttempt = {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   lookupFn?: LookupFn;
@@ -74,7 +75,7 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
-  /** Abort the guarded fetch request if it has not completed by this deadline (ms). */
+  /** Abort the fetch request if it has not completed by this deadline (ms). */
   timeoutMs?: number;
   /** Abort if the response body stops yielding data for this long (ms). */
   readIdleTimeoutMs?: number;
@@ -84,14 +85,10 @@ type FetchMediaOptions = {
   dispatcherAttempts?: FetchDispatcherAttempt[];
   shouldRetryFetchError?: (error: unknown) => boolean;
   /**
-   * Retries the complete guarded fetch/read-or-save operation. Dispatcher
+   * Retries the complete fetch/read-or-save operation. Dispatcher
    * attempts still run inside each retry attempt.
    */
   retry?: MediaFetchRetryOptions;
-  /**
-   * Allow an operator-configured explicit proxy to resolve target DNS after
-   * hostname-policy checks instead of forcing local pinned-DNS first.
-   */
   trustExplicitProxyDns?: boolean;
 };
 
@@ -179,6 +176,22 @@ function redactMediaUrl(url: string): string {
   return redactSensitiveText(url);
 }
 
+function usesLegacyGuardedFetch(params: {
+  ssrfPolicy?: SsrFPolicy;
+  lookupFn?: LookupFn;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  dispatcherAttempts?: FetchDispatcherAttempt[];
+  trustExplicitProxyDns?: boolean;
+}): boolean {
+  return Boolean(
+    params.ssrfPolicy ||
+    params.lookupFn ||
+    params.dispatcherPolicy ||
+    params.trustExplicitProxyDns ||
+    (params.dispatcherAttempts && params.dispatcherAttempts.length > 0),
+  );
+}
+
 async function fetchGuardedMediaResponse(
   options: FetchMediaOptions,
 ): Promise<GuardedMediaResponse> {
@@ -197,28 +210,43 @@ async function fetchGuardedMediaResponse(
   } = options;
   const sourceUrl = redactMediaUrl(url);
 
-  // Dispatcher attempts are fallback routes inside one logical guarded fetch operation.
+  // Dispatcher attempts are fallback routes inside one logical fetch operation.
   const attempts =
     dispatcherAttempts && dispatcherAttempts.length > 0
       ? dispatcherAttempts
       : [{ dispatcherPolicy, lookupFn }];
   const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
-    await fetchWithSsrFGuard(
-      (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
-        ? withTrustedExplicitProxyGuardedFetchMode
-        : withStrictGuardedFetchMode)({
-        url,
-        fetchImpl,
-        init: requestInit,
-        maxRedirects,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        policy: ssrfPolicy,
-        lookupFn: attempt.lookupFn ?? lookupFn,
-        dispatcherPolicy: attempt.dispatcherPolicy,
-      }),
-    );
+    usesLegacyGuardedFetch({
+      ssrfPolicy,
+      lookupFn,
+      dispatcherPolicy,
+      dispatcherAttempts,
+      trustExplicitProxyDns,
+    })
+      ? await fetchWithSsrFGuard(
+          (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
+            ? withTrustedExplicitProxyGuardedFetchMode
+            : withStrictGuardedFetchMode)({
+            url,
+            fetchImpl,
+            init: requestInit,
+            maxRedirects,
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+            policy: ssrfPolicy,
+            lookupFn: attempt.lookupFn ?? lookupFn,
+            dispatcherPolicy: attempt.dispatcherPolicy,
+          }),
+        )
+      : await fetchWithAppNetworkTransport({
+          url,
+          fetchImpl,
+          init: requestInit,
+          maxRedirects,
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          dispatcherPolicy: attempt.dispatcherPolicy,
+        });
   try {
-    let result!: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    let result!: Awaited<ReturnType<typeof fetchWithAppNetworkTransport>>;
     const attemptErrors: unknown[] = [];
     for (let i = 0; i < attempts.length; i += 1) {
       try {
@@ -594,7 +622,7 @@ export async function saveResponseMedia(
   });
 }
 
-/** Fetches media through SSRF guards and saves the body into the media store. */
+/** Fetches media through app egress transport and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
   return await withMediaFetchRetry(options, () => saveRemoteMediaOnce(options));
 }
@@ -627,7 +655,7 @@ async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<Sav
   }
 }
 
-/** Fetches media through SSRF guards and returns the bounded response body as a buffer. */
+/** Fetches media through app egress transport and returns the bounded response body as a buffer. */
 export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
   return await withMediaFetchRetry(options, () => readRemoteMediaBufferOnce(options));
 }

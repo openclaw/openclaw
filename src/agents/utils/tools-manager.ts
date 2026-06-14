@@ -20,7 +20,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { fetchWithAppNetworkTransport } from "../../infra/net/fetch-transport.js";
 import { APP_NAME, getBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
@@ -125,10 +125,9 @@ export function getToolPath(tool: "fd" | "rg"): string | null {
 
 // Fetch latest release version from GitHub
 async function getLatestVersion(repo: string): Promise<string> {
-  const guarded = await fetchWithSsrFGuard({
+  const guarded = await fetchWithAppNetworkTransport({
     url: `https://api.github.com/repos/${repo}/releases/latest`,
     timeoutMs: NETWORK_TIMEOUT_MS,
-    auditContext: "tools-manager-release-check",
     init: {
       headers: { "User-Agent": `${APP_NAME}-coding-agent` },
     },
@@ -149,10 +148,9 @@ async function getLatestVersion(repo: string): Promise<string> {
 
 // Download a file from URL
 async function downloadFile(url: string, dest: string): Promise<void> {
-  const guarded = await fetchWithSsrFGuard({
+  const guarded = await fetchWithAppNetworkTransport({
     url,
     timeoutMs: DOWNLOAD_TIMEOUT_MS,
-    auditContext: "tools-manager-download",
   });
   const { response } = guarded;
 
