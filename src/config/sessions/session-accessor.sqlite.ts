@@ -53,7 +53,11 @@ type SessionSqliteDatabase = Pick<
   | "transcript_events"
 >;
 type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_entries"]>;
-type ResolvedSessionEntryRow = { entry: SessionEntry; row: SessionEntryRow };
+type ResolvedSessionEntryRow = {
+  entry: SessionEntry;
+  legacyKeys: string[];
+  row: SessionEntryRow;
+};
 
 type ResolvedSqliteScope = {
   agentId: string;
@@ -131,14 +135,7 @@ export function listSqliteSessionEntries(
 export function readSqliteSessionUpdatedAt(scope: SessionAccessScope): number | undefined {
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("session_entries")
-      .select("updated_at")
-      .where("session_key", "=", resolved.sessionKey),
-  );
+  const row = readSessionEntryRow(database, resolved.sessionKey)?.row;
   return row ? normalizeSqliteNumber(row.updated_at) : undefined;
 }
 
@@ -189,8 +186,8 @@ export async function patchSqliteSessionEntry(
 
     let result: SessionEntry | null = null;
     runOpenClawAgentWriteTransaction((writeDatabase) => {
-      const fresh = readSessionEntryRow(writeDatabase, resolved.sessionKey)?.entry;
-      const writeBase = fresh ?? options.fallbackEntry;
+      const fresh = readSessionEntryRow(writeDatabase, resolved.sessionKey);
+      const writeBase = fresh?.entry ?? options.fallbackEntry;
       if (!writeBase) {
         result = null;
         return;
@@ -201,6 +198,7 @@ export async function patchSqliteSessionEntry(
           ? mergeSessionEntryPreserveActivity(writeBase, patch)
           : mergeSessionEntry(writeBase, patch);
       writeSessionEntry(writeDatabase, resolved.sessionKey, next);
+      deleteLegacySessionEntryRows(writeDatabase, fresh?.legacyKeys ?? [], resolved.sessionKey);
       result = cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
     return result;
@@ -229,13 +227,14 @@ export async function updateSqliteSessionEntry(
 
     let result: SessionEntry | null = null;
     runOpenClawAgentWriteTransaction((writeDatabase) => {
-      const fresh = readSessionEntryRow(writeDatabase, resolved.sessionKey)?.entry;
+      const fresh = readSessionEntryRow(writeDatabase, resolved.sessionKey);
       if (!fresh) {
         result = null;
         return;
       }
-      const next = mergeSessionEntry(fresh, patch);
+      const next = mergeSessionEntry(fresh.entry, patch);
       writeSessionEntry(writeDatabase, resolved.sessionKey, next);
+      deleteLegacySessionEntryRows(writeDatabase, fresh.legacyKeys, resolved.sessionKey);
       result = cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
     return result;
@@ -640,7 +639,7 @@ function readSessionEntryRow(
       continue;
     }
     store[row.session_key] = entry;
-    entries.set(row.session_key, { entry, row });
+    entries.set(row.session_key, { entry, legacyKeys: [], row });
   }
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
   if (!resolved.existing) {
@@ -648,7 +647,7 @@ function readSessionEntryRow(
   }
   for (const value of entries.values()) {
     if (value.entry === resolved.existing) {
-      return value;
+      return { ...value, legacyKeys: resolved.legacyKeys };
     }
   }
   return undefined;
@@ -667,7 +666,31 @@ function readExactSessionEntryRow(
     return undefined;
   }
   const entry = parseSessionEntryRow(row);
-  return entry ? { entry, row } : undefined;
+  return entry ? { entry, legacyKeys: [], row } : undefined;
+}
+
+function deleteLegacySessionEntryRows(
+  database: OpenClawAgentDatabase,
+  legacyKeys: string[],
+  sessionKey: string,
+): void {
+  if (legacyKeys.length === 0) {
+    return;
+  }
+  const db = getSessionKysely(database.db);
+  for (const legacyKey of legacyKeys) {
+    if (legacyKey === sessionKey) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_routes").where("session_key", "=", legacyKey),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_entries").where("session_key", "=", legacyKey),
+    );
+  }
 }
 
 function sessionKeySegmentStartsWith(sessionKey: string, prefix: string): boolean {
