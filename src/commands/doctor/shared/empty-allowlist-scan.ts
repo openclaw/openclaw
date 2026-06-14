@@ -115,12 +115,13 @@ export function scanEmptyAllowlistPolicyWarnings(
           }
           hasEnabledAccount = true;
           const acct = accounts[id] as DoctorAccountRecord;
-          if (
-            !hasAllowFromEntries(
-              (acct.groupAllowFrom as DoctorAllowFromList | undefined) ??
-                (acct.allowFrom as DoctorAllowFromList | undefined),
-            )
-          ) {
+          const ownGroupAllowFrom = acct.groupAllowFrom as DoctorAllowFromList | undefined;
+          const ownAllowFrom = acct.allowFrom as DoctorAllowFromList | undefined;
+          // groupAllowFrom: [] (explicit empty array) is falsy for
+          // hasAllowFromEntries, so check both fields separately —
+          // a populated allowFrom covers the account on channels that
+          // support groupAllowFromFallbackToAllowFrom.
+          if (!hasAllowFromEntries(ownGroupAllowFrom) && !hasAllowFromEntries(ownAllowFrom)) {
             return false;
           }
         }
