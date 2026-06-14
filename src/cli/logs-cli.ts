@@ -49,15 +49,16 @@ type LogCursorState = {
   gateway?: number;
   journal?: string;
   journalSince?: string;
-  forceJournal?: boolean;
 };
 
-class JournalFallbackUnavailableError extends Error {
-  constructor() {
-    super("Active systemd journal unavailable for logs follow fallback");
-    this.name = "JournalFallbackUnavailableError";
-  }
-}
+type LogSourceIdentity = {
+  file?: string;
+  source?: string;
+  sourceKind?: LogsTailPayload["sourceKind"];
+  servicePid?: number;
+  serviceUnit?: string;
+  localFallback?: boolean;
+};
 
 async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
   return await import("./logs-cli.runtime.js");
@@ -97,6 +98,42 @@ function parsePositiveInt(value: string | undefined, fallback: number, flag: str
   return parsed;
 }
 
+function normalizeLogTailPayloadSource(payload: LogsTailPayload): LogsTailPayload {
+  if (payload.sourceKind || !payload.file) {
+    return payload;
+  }
+  return { ...payload, sourceKind: "file" };
+}
+
+function buildLogSourceIdentity(payload: LogsTailPayload): string | undefined {
+  const sourceKind = payload.sourceKind ?? (payload.file ? "file" : undefined);
+  if (!sourceKind && !payload.file && !payload.source) {
+    return undefined;
+  }
+  const identity: LogSourceIdentity = {
+    file: payload.file,
+    source: payload.source,
+    sourceKind,
+    servicePid: payload.service?.pid,
+    serviceUnit: payload.service?.unit,
+    localFallback: payload.localFallback === true ? true : undefined,
+  };
+  return JSON.stringify(identity);
+}
+
+function buildLogMetaRecord(payload: LogsTailPayload): Record<string, unknown> {
+  return {
+    type: "meta",
+    file: payload.file,
+    source: payload.source,
+    sourceKind: payload.sourceKind ?? (payload.file ? "file" : undefined),
+    service: payload.service,
+    cursor: payload.cursor,
+    size: payload.size,
+    localFallback: payload.localFallback === true ? true : undefined,
+  };
+}
+
 async function fetchLogs(
   opts: LogsCliOptions,
   cursors: LogCursorState,
@@ -104,18 +141,6 @@ async function fetchLogs(
   params: { limit: number; maxBytes: number },
 ): Promise<LogsTailPayload> {
   const { limit, maxBytes } = params;
-  if (cursors.forceJournal) {
-    const journalPayload = await readSystemdJournalFallback({
-      cursor: cursors.journal,
-      since: cursors.journalSince,
-      limit,
-      maxBytes,
-    });
-    if (journalPayload) {
-      return journalPayload;
-    }
-    throw new JournalFallbackUnavailableError();
-  }
   try {
     const payload = await callGatewayFromCli(
       "logs.tail",
@@ -333,9 +358,6 @@ const FOLLOW_BACKOFF_POLICY = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitt
 // Auth errors (4xxx), policy violations (1008), and pairing-required messages are
 // non-recoverable without user action and must not loop.
 function isTransientFollowError(error: unknown): boolean {
-  if (error instanceof JournalFallbackUnavailableError) {
-    return true;
-  }
   if (isGatewayTransportError(error)) {
     if (error.kind === "timeout") {
       return true;
@@ -508,8 +530,8 @@ export function registerLogsCli(program: Command) {
     let gatewayCursor: number | undefined;
     let journalCursor: string | undefined;
     let journalSince: string | undefined;
-    let forceJournal = false;
     let first = true;
+    let lastSourceIdentity: string | undefined;
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false;
@@ -524,14 +546,11 @@ export function registerLogsCli(program: Command) {
       try {
         payload = await fetchLogs(
           opts,
-          { gateway: gatewayCursor, journal: journalCursor, journalSince, forceJournal },
+          { gateway: gatewayCursor, journal: journalCursor, journalSince },
           showProgress,
           { limit, maxBytes },
         );
       } catch (err) {
-        if (err instanceof JournalFallbackUnavailableError) {
-          forceJournal = false;
-        }
         if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
           followRetryAttempt += 1;
           const backoffMs = computeBackoff(FOLLOW_BACKOFF_POLICY, followRetryAttempt);
@@ -568,20 +587,14 @@ export function registerLogsCli(program: Command) {
         }
       }
       followRetryAttempt = 0;
+      payload = normalizeLogTailPayloadSource(payload);
+      const sourceIdentity = buildLogSourceIdentity(payload);
+      const sourceChanged = sourceIdentity !== undefined && sourceIdentity !== lastSourceIdentity;
+      const shouldEmitSourceMetadata = first || sourceChanged;
       const lines = Array.isArray(payload.lines) ? payload.lines : [];
       if (jsonMode) {
-        if (first) {
-          if (
-            !emitJsonLine({
-              type: "meta",
-              file: payload.file,
-              source: payload.source,
-              sourceKind: payload.sourceKind,
-              service: payload.service,
-              cursor: payload.cursor,
-              size: payload.size,
-            })
-          ) {
+        if (shouldEmitSourceMetadata) {
+          if (!emitJsonLine(buildLogMetaRecord(payload))) {
             return;
           }
         }
@@ -616,14 +629,14 @@ export function registerLogsCli(program: Command) {
           }
         }
       } else {
-        if (first && payload.localFallback === true) {
+        if (shouldEmitSourceMetadata && payload.localFallback === true) {
           const notice =
             payload.sourceKind === "journal" ? JOURNAL_FALLBACK_NOTICE : LOCAL_FALLBACK_NOTICE;
           if (!errorLine(colorize(rich, theme.warn, notice))) {
             return;
           }
         }
-        if (first) {
+        if (shouldEmitSourceMetadata) {
           if (payload.sourceKind === "journal" && payload.source) {
             const prefix = pretty ? colorize(rich, theme.muted, "Log source:") : "Log source:";
             if (!logLine(`${prefix} ${payload.source}`)) {
@@ -670,7 +683,10 @@ export function registerLogsCli(program: Command) {
         }
       }
       if (payload.sourceKind === "journal") {
-        forceJournal = true;
+        // Journal fallback is a temporary bridge for transient local RPC outages.
+        // Keep the journal cursor so repeated outages do not duplicate journal lines,
+        // but keep probing logs.tail on the next follow iteration so recovered RPC
+        // switches back to the Gateway's normal file/log formatting.
         if (typeof payload.cursor === "string" && payload.cursor.trim().length > 0) {
           journalCursor = payload.cursor;
         }
@@ -681,6 +697,9 @@ export function registerLogsCli(program: Command) {
         }
       } else if (typeof payload.cursor === "string" && payload.cursor.trim().length > 0) {
         journalCursor = payload.cursor;
+      }
+      if (sourceIdentity !== undefined) {
+        lastSourceIdentity = sourceIdentity;
       }
       first = false;
 
