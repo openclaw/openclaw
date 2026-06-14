@@ -1,5 +1,6 @@
 // Status text helpers render runtime status summaries for CLI output.
 import os from "node:os";
+import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
@@ -57,6 +58,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "google-gemini-cli",
   "openai",
 ]);
+const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 
 let statusMessageRuntimePromise: Promise<typeof import("../auto-reply/status.runtime.js")> | null =
   null;
@@ -249,6 +251,15 @@ function resolveStatusRuntimeProvider(params: {
   return params.provider;
 }
 
+function resolveStatusCodexCliCredentialsHome(params: {
+  agentDir: string;
+  effectiveHarness?: string;
+}): string | undefined {
+  return normalizeOptionalLowercaseString(params.effectiveHarness) === "codex"
+    ? path.join(params.agentDir, CODEX_APP_SERVER_HOME_DIRNAME)
+    : undefined;
+}
+
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
@@ -313,6 +324,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionKey,
       sessionEntry,
     }));
+  const codexCliCredentialsHome = resolveStatusCodexCliCredentialsHome({
+    agentDir: statusAgentDir,
+    effectiveHarness,
+  });
   const selectedStatusProvider = resolveStatusRuntimeProvider({
     provider,
     effectiveHarness,
@@ -341,6 +356,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         sessionEntry,
         agentDir: statusAgentDir,
         workspaceDir: statusWorkspaceDir,
+        codexCliCredentialsHome,
         includeExternalProfiles: false,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
@@ -353,6 +369,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           sessionEntry,
           agentDir: statusAgentDir,
           workspaceDir: statusWorkspaceDir,
+          codexCliCredentialsHome,
           includeExternalProfiles: false,
         })
       : selectedModelAuth;
