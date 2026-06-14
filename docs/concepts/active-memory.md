@@ -747,8 +747,10 @@ extra 30000 ms during cold-start so model warm-up, embedding-index load, and
 the first recall could share one larger budget. v2026.5.2 moved that grace
 behind an explicit `setupGraceTimeoutMs` config — your configured `timeoutMs`
 is now the recall-work budget by default, unless you opt in. The blocking hook
-reserves a fixed additional 1500 ms only for abort settlement and transcript
-recovery after recall work stops; it does not extend model or tool execution.
+uses two bounded phases around that budget: up to 1500 ms for session/config
+preflight before recall starts, then a separate fixed 1500 ms for abort
+settlement and transcript recovery after recall work stops. Neither allowance
+extends model or tool execution.
 
 If you upgraded from v2026.4.x and you set `timeoutMs` to a value tuned for the
 old implicit-grace world (the recommended starter `timeoutMs: 15000` is one
@@ -771,13 +773,15 @@ outer watchdog budgets back to the pre-v5.2 effective values:
 ```
 
 The v2026.5.2 change removed the old implicit 30000 ms cold-start extension.
-Only the fixed 1500 ms completion allowance remains beyond the configured
-recall-work budget.
+Beyond the configured recall-work budget, the hook can use up to 1500 ms for
+preflight and another 1500 ms for post-recall completion. Its worst-case
+blocking time is therefore `timeoutMs + setupGraceTimeoutMs + 3000` ms.
 
 The embedded recall runner uses the same effective timeout budget, so
 `setupGraceTimeoutMs` covers both the outer prompt-build watchdog and the inner
-blocking recall run. The outer hook then uses the fixed completion allowance to
-settle abort cleanup and read any final transcript state.
+blocking recall run. The preflight cap covers session/config checks before that
+budget begins. The post-recall allowance lets the outer hook settle abort
+cleanup and read any final transcript state.
 
 For resource-tight gateways where cold-start latency is a known trade-off,
 lower values (5000–15000 ms) work too — the trade-off is a higher chance of

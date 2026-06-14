@@ -124,11 +124,11 @@
     },
     "timeoutMs": {
       "label": "Timeout (ms)",
-      "help": "Recall work budget on the main lane. The hook reserves an additional fixed 1500 ms only for abort settlement and transcript recovery after recall work stops."
+      "help": "Recall work budget on the main lane. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
     },
     "setupGraceTimeoutMs": {
       "label": "Setup Grace Timeout (ms)",
-      "help": "Advanced: extra recall-work budget for cold embedded-run setup. Defaults to 0; the hook still reserves its fixed 1500 ms completion allowance."
+      "help": "Advanced: extra recall-work budget for cold embedded-run setup. Defaults to 0. The separate 1500 ms preflight cap and 1500 ms post-recall completion allowance still apply."
     },
     "queryMode": {
       "label": "Query Mode",
