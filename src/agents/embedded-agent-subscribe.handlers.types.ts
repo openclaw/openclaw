@@ -273,6 +273,7 @@ type ToolHandlerParams = Pick<
   | "onAgentEvent"
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
+  | "onAgentToolResult"
   | "onToolResult"
   | "sessionKey"
   | "sessionId"

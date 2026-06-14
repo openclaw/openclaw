@@ -61,6 +61,7 @@ type RuntimePlanOverrides = Partial<Omit<AgentRuntimePlan, "auth" | "resolvedRef
 function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
   // Forwarding cases prove request-scoped flags survive the overflow-compaction
   // route into the eventual embedded attempt.
+  const onAgentToolResult = vi.fn();
   return {
     runId: "forward-attempt-params",
     params: {
@@ -72,6 +73,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       requireExplicitMessageTarget: true,
       chatType: "channel",
       internalEvents,
+      onAgentToolResult,
     },
     expected: {
       toolsAllow: ["exec", "read"],
@@ -81,6 +83,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
       chatType: "channel",
+      onAgentToolResult,
     },
   } satisfies {
     runId: string;

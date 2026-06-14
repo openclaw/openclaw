@@ -3412,6 +3412,7 @@ export async function runEmbeddedAttempt(
           shouldEmitToolOutput: params.shouldEmitToolOutput,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           hasDeliveredMessageToolOnlySourceReply: () => didDeliverSourceReplyViaMessageTool,
+          onAgentToolResult: params.onAgentToolResult,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
