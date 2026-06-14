@@ -106,6 +106,29 @@ describe("admin-http-rpc plugin handler", () => {
     });
   });
 
+  it("dispatches agents.setDefault through the admin HTTP RPC surface", async () => {
+    dispatchGatewayMethod.mockResolvedValueOnce({
+      ok: true,
+      payload: { ok: true, defaultId: "research" },
+    });
+
+    const result = await invoke({
+      id: "set-default",
+      method: "agents.setDefault",
+      params: { agentId: "research" },
+    });
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("agents.setDefault", {
+      agentId: "research",
+    });
+    expect(result.captured.statusCode).toBe(200);
+    expect(result.json).toEqual({
+      id: "set-default",
+      ok: true,
+      payload: { ok: true, defaultId: "research" },
+    });
+  });
+
   it.each([
     ["web.login.start", { force: true, timeoutMs: 1000 }],
     ["web.login.wait", { timeoutMs: 1000 }],

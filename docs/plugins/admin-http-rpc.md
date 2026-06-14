@@ -173,7 +173,7 @@ HTTP status follows the Gateway error when possible. For example, `INVALID_REQUE
 - channels: `channels.status`, `channels.start`, `channels.stop`, `channels.logout`
 - web: `web.login.start`, `web.login.wait`
 - models: `models.list`, `models.authStatus`
-- agents: `agents.list`, `agents.create`, `agents.update`, `agents.delete`
+- agents: `agents.list`, `agents.create`, `agents.update`, `agents.setDefault`, `agents.delete`
 - approvals: `exec.approvals.get`, `exec.approvals.set`, `exec.approvals.node.get`, `exec.approvals.node.set`
 - cron: `cron.status`, `cron.list`, `cron.get`, `cron.runs`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`
 - devices: `device.pair.list`, `device.pair.approve`, `device.pair.reject`, `device.pair.remove`
