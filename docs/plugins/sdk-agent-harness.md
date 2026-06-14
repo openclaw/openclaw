@@ -160,11 +160,12 @@ Codex `0.124.0`, while pinning OpenClaw to the newer tested stable line.
 
 ### Tool-result middleware
 
-Bundled plugins can attach runtime-neutral tool-result middleware through
+Bundled plugins and explicitly enabled installed plugins with matching manifest
+contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before OpenClaw or Codex feeds
-tool output back into the model.
+seam is for async tool-result transforms that must run before OpenClaw or Codex
+feeds tool output back into the model.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only

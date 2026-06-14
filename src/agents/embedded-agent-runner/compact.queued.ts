@@ -39,6 +39,7 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import {
+  compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
@@ -145,6 +146,31 @@ async function deferOwningContextEngineBudgetCompaction(params: {
     ok: true,
     compacted: false,
     reason: DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+  };
+}
+
+function mergeSecondaryNativeHarnessCompactionDetails(params: {
+  details: unknown;
+  nativeResult: EmbeddedAgentCompactResult | undefined;
+  detailsKey: "codexNativeCompaction" | "nativeHarnessCompaction";
+}): unknown {
+  if (!params.nativeResult) {
+    return params.details;
+  }
+  if (params.details && typeof params.details === "object" && !Array.isArray(params.details)) {
+    return {
+      ...(params.details as Record<string, unknown>),
+      [params.detailsKey]: params.nativeResult,
+    };
+  }
+  if (params.details !== undefined) {
+    return {
+      contextEngine: params.details,
+      [params.detailsKey]: params.nativeResult,
+    };
+  }
+  return {
+    [params.detailsKey]: params.nativeResult,
   };
 }
 
@@ -261,14 +287,16 @@ export async function compactEmbeddedAgentSession(
     contextTokenBudget,
     contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
-  const harnessResult = attemptNativeHarnessCompaction
-    ? await maybeCompactAgentHarnessSession({
-        ...params,
-        contextEngine,
-        contextTokenBudget,
-        contextEngineRuntimeContext,
-      })
-    : undefined;
+  const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+  const harnessResult =
+    attemptNativeHarnessCompaction && !contextEngineOwnsCompaction
+      ? await maybeCompactAgentHarnessSession({
+          ...params,
+          contextEngine,
+          contextTokenBudget,
+          contextEngineRuntimeContext,
+        })
+      : undefined;
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
       await contextEngine.dispose?.();
@@ -495,6 +523,54 @@ export async function compactEmbeddedAgentSession(
             });
           }
         }
+        let secondaryNativeHarnessCompaction: EmbeddedAgentCompactResult | undefined;
+        if (
+          engineOwnsCompaction &&
+          result.ok &&
+          result.compacted &&
+          attemptNativeHarnessCompaction
+        ) {
+          try {
+            secondaryNativeHarnessCompaction = await compactWithSafetyTimeout(
+              (compactAbortSignal) =>
+                maybeCompactAgentHarnessSession(
+                  {
+                    ...params,
+                    sessionId: postCompactionSessionId,
+                    sessionFile: postCompactionSessionFile,
+                    contextEngine,
+                    contextTokenBudget,
+                    contextEngineRuntimeContext,
+                    abortSignal: compactAbortSignal,
+                  },
+                  { nativeCompactionRequest: "after_context_engine" },
+                ),
+              resolveCompactionTimeoutMs(params.config),
+              params.abortSignal ? { abortSignal: params.abortSignal } : undefined,
+            );
+            if (secondaryNativeHarnessCompaction && !secondaryNativeHarnessCompaction.ok) {
+              log.warn(
+                "secondary native harness compaction failed after context-engine compaction",
+                {
+                  reason: secondaryNativeHarnessCompaction.reason,
+                },
+              );
+            }
+          } catch (err) {
+            secondaryNativeHarnessCompaction = {
+              ok: false,
+              compacted: false,
+              reason: formatErrorMessage(err),
+            };
+            log.warn("secondary native harness compaction threw after context-engine compaction", {
+              errorMessage: formatErrorMessage(err),
+            });
+          }
+        }
+        const secondaryNativeDetailsKey =
+          normalizeOptionalAgentRuntimeId(selectedHarnessRuntime) === "codex"
+            ? "codexNativeCompaction"
+            : "nativeHarnessCompaction";
         return {
           ok: result.ok,
           compacted: result.compacted,
@@ -505,7 +581,11 @@ export async function compactEmbeddedAgentSession(
                 firstKeptEntryId: result.result.firstKeptEntryId ?? "",
                 tokensBefore: result.result.tokensBefore,
                 tokensAfter: result.result.tokensAfter,
-                details: result.result.details,
+                details: mergeSecondaryNativeHarnessCompactionDetails({
+                  details: result.result.details,
+                  nativeResult: secondaryNativeHarnessCompaction,
+                  detailsKey: secondaryNativeDetailsKey,
+                }),
                 ...(postCompactionSessionId !== params.sessionId
                   ? { sessionId: postCompactionSessionId }
                   : {}),

@@ -111,6 +111,7 @@ describe("ensureRuntimePluginsLoaded", () => {
         config,
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["telegram", "memory-core"],
+        forceFullRuntimeForChannelPlugins: true,
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
@@ -138,6 +139,7 @@ describe("ensureRuntimePluginsLoaded", () => {
         config: {} as never,
         onlyPluginIds: ["telegram"],
         workspaceDir: "/tmp/workspace",
+        forceFullRuntimeForChannelPlugins: true,
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
@@ -174,6 +176,7 @@ describe("ensureRuntimePluginsLoaded", () => {
         config,
         onlyPluginIds: ["telegram"],
         workspaceDir: "/tmp/workspace",
+        forceFullRuntimeForChannelPlugins: true,
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },

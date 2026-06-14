@@ -1,13 +1,19 @@
 // Exercises startup provider discovery scoping without loading real plugin manifests.
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   runProviderCatalog: vi.fn(),
   runProviderStaticCatalog: vi.fn(),
 }));
+const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
 
 vi.mock("../plugins/provider-discovery.js", () => ({
   resolveRuntimePluginDiscoveryProviders: mocks.resolveRuntimePluginDiscoveryProviders,
@@ -203,6 +209,47 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
     expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+  });
+
+  it("fills missing static catalog apiKey from Google Vertex ADC auth evidence", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(credentialsPath, JSON.stringify({ type: "authorized_user" }));
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      createStaticOnlyProvider("google"),
+    ]);
+    mocks.runProviderStaticCatalog.mockResolvedValue({
+      providers: {
+        "google-vertex": {
+          baseUrl: "https://aiplatform.googleapis.com",
+          api: "google-vertex" as const,
+          models: [createTextModel("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview")],
+        },
+      },
+    });
+
+    const providers = await withEnvAsync(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      },
+      async () =>
+        await resolveImplicitProviders({
+          agentDir: "/tmp/openclaw-agent",
+          config: {},
+          env: {
+            OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_PROJECT: "vertex-project",
+            GOOGLE_CLOUD_LOCATION: "global",
+          } as NodeJS.ProcessEnv,
+          explicitProviders: {},
+          providerDiscoveryEntriesOnly: true,
+        }),
+    );
+
+    expect(providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
   });
 
   it("falls back to static provider catalogs when runtime discovery has no rows", async () => {

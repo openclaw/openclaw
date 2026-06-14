@@ -26,6 +26,7 @@ const scenarios = [
     surface: "dm",
     objective: "test DM",
     successCriteria: ["reply"],
+    execution: { kind: "flow" as const },
   },
   {
     id: "thread-lifecycle",
@@ -33,6 +34,18 @@ const scenarios = [
     surface: "thread",
     objective: "test thread",
     successCriteria: ["thread reply"],
+    execution: { kind: "flow" as const },
+  },
+  {
+    id: "control-ui-chat-flow-playwright",
+    title: "Control UI Playwright",
+    surface: "control-ui",
+    objective: "test Control UI",
+    successCriteria: ["playwright pass"],
+    execution: {
+      kind: "playwright" as const,
+      path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+    },
   },
 ];
 
@@ -44,7 +57,7 @@ describe("qa run config", () => {
     );
   });
 
-  it("creates a live-by-default selection that arms every scenario", () => {
+  it("creates a live-by-default selection that arms flow scenarios", () => {
     expect(createDefaultQaRunSelection(scenarios)).toEqual({
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.5",
@@ -98,6 +111,17 @@ describe("qa run config", () => {
         scenarios,
       ).scenarioIds,
     ).toEqual(["dm-chat-baseline", "thread-lifecycle"]);
+  });
+
+  it("filters non-flow scenarios from lab runner selections", () => {
+    expect(
+      normalizeQaRunSelection(
+        {
+          scenarioIds: ["control-ui-chat-flow-playwright", "thread-lifecycle"],
+        },
+        scenarios,
+      ).scenarioIds,
+    ).toEqual(["thread-lifecycle"]);
   });
 
   it("keeps idle snapshots on static defaults so startup does not inspect auth profiles", () => {

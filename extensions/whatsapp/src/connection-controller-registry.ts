@@ -1,8 +1,20 @@
 // Whatsapp plugin module implements connection controller registry behavior.
+import type { WASocket } from "baileys";
+import type { WhatsAppSelfIdentity } from "./identity.js";
 import type { ActiveWebListener } from "./inbound/types.js";
 
 type WhatsAppConnectionControllerHandle = {
   getActiveListener(): ActiveWebListener | null;
+  getCurrentSock(): WASocket | null;
+  /**
+   * The self identity (jid + lid) of the controller's currently-authenticated
+   * socket, or `null` if the socket is not connected or not authenticated yet.
+   * Used as the session-identity guard for outbound socket fallback so an
+   * in-place relink to a different phone number is not silently accepted.
+   * Compared via `identitiesOverlap()` so JID-vs-LID and device-scoped JID
+   * differences between the two controllers' user records are normalized away.
+   */
+  getSelfIdentity(): WhatsAppSelfIdentity | null;
 };
 
 type ConnectionRegistryState = {

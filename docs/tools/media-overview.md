@@ -52,30 +52,31 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
 
 ## Provider capability matrix
 
-| Provider    | Image | Video | Music | TTS | STT | Realtime voice | Media understanding |
-| ----------- | :---: | :---: | :---: | :-: | :-: | :------------: | :-----------------: |
-| Alibaba     |       |   ✓   |       |     |     |                |                     |
-| BytePlus    |       |   ✓   |       |     |     |                |                     |
-| ComfyUI     |   ✓   |   ✓   |   ✓   |     |     |                |                     |
-| DeepInfra   |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
-| Deepgram    |       |       |       |     |  ✓  |       ✓        |                     |
-| ElevenLabs  |       |       |       |  ✓  |  ✓  |                |                     |
-| fal         |   ✓   |   ✓   |   ✓   |     |     |                |                     |
-| Google      |   ✓   |   ✓   |   ✓   |  ✓  |     |       ✓        |          ✓          |
-| Gradium     |       |       |       |  ✓  |     |                |                     |
-| Local CLI   |       |       |       |  ✓  |     |                |                     |
-| Microsoft   |       |       |       |  ✓  |     |                |                     |
-| MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
-| Mistral     |       |       |       |     |  ✓  |                |                     |
-| OpenAI      |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
-| OpenRouter  |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |                |          ✓          |
-| Qwen        |       |   ✓   |       |     |     |                |                     |
-| Runway      |       |   ✓   |       |     |     |                |                     |
-| SenseAudio  |       |       |       |     |  ✓  |                |                     |
-| Together    |       |   ✓   |       |     |     |                |                     |
-| Vydra       |   ✓   |   ✓   |       |  ✓  |     |                |                     |
-| xAI         |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
-| Xiaomi MiMo |   ✓   |       |       |  ✓  |     |                |          ✓          |
+| Provider          | Image | Video | Music | TTS | STT | Realtime voice | Media understanding |
+| ----------------- | :---: | :---: | :---: | :-: | :-: | :------------: | :-----------------: |
+| Alibaba           |       |   ✓   |       |     |     |                |                     |
+| BytePlus          |       |   ✓   |       |     |     |                |                     |
+| ComfyUI           |   ✓   |   ✓   |   ✓   |     |     |                |                     |
+| DeepInfra         |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
+| Deepgram          |       |       |       |     |  ✓  |       ✓        |                     |
+| ElevenLabs        |       |       |       |  ✓  |  ✓  |                |                     |
+| fal               |   ✓   |   ✓   |   ✓   |     |     |                |                     |
+| Google            |   ✓   |   ✓   |   ✓   |  ✓  |     |       ✓        |          ✓          |
+| Gradium           |       |       |       |  ✓  |     |                |                     |
+| Local CLI         |       |       |       |  ✓  |     |                |                     |
+| Microsoft         |       |       |       |  ✓  |     |                |                     |
+| Microsoft Foundry |   ✓   |       |       |     |     |                |                     |
+| MiniMax           |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
+| Mistral           |       |       |       |     |  ✓  |                |                     |
+| OpenAI            |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
+| OpenRouter        |   ✓   |   ✓   |   ✓   |  ✓  |  ✓  |                |          ✓          |
+| Qwen              |       |   ✓   |       |     |     |                |                     |
+| Runway            |       |   ✓   |       |     |     |                |                     |
+| SenseAudio        |       |       |       |     |  ✓  |                |                     |
+| Together          |       |   ✓   |       |     |     |                |                     |
+| Vydra             |   ✓   |   ✓   |       |  ✓  |     |                |                     |
+| xAI               |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
+| Xiaomi MiMo       |   ✓   |       |       |  ✓  |     |                |          ✓          |
 
 <Note>
 Media understanding uses any vision-capable or audio-capable model registered

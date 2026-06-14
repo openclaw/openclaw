@@ -6,7 +6,7 @@ const loadChatHistoryMock = vi.fn();
 const applySessionsChangedEventMock = vi.fn();
 const clearPendingQueueItemsForRunMock = vi.fn();
 const flushChatQueueForEventMock = vi.fn();
-const handleChatEventMock = vi.fn(() => "idle");
+const handleChatEventMock = vi.fn((_state?: any) => "idle");
 const handleSessionOperationEventMock = vi.fn();
 const recordFirstAssistantChatTimingMock = vi.fn();
 
@@ -714,6 +714,29 @@ describe("handleGatewayEvent session.message", () => {
     });
     await Promise.resolve();
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("defers history reload when a session message confirms the chat run is still active", () => {
+    loadChatHistoryMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    loadSessionsMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+    host.chatRunId = "run-123";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:qa:main", hasActiveRun: true },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+    expect(
+      (host as typeof host & { pendingSessionMessageReloadSessionKey?: string | null })
+        .pendingSessionMessageReloadSessionKey,
+    ).toBe("agent:qa:main");
   });
 
   it("scopes selected-global session.message refreshes while a chat run is active", async () => {

@@ -24,6 +24,7 @@ import {
   clearEmbeddedRunAbandonment,
   consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunHandleActive,
   isEmbeddedRunAbandoned,
   formatEmbeddedAgentQueueFailureSummary,
@@ -91,6 +92,20 @@ describe("embedded-agent runner run registry", () => {
     expect(abortNormal).not.toHaveBeenCalled();
   });
 
+  it("keeps queued reply operations out of compact abort checks", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-reply-run",
+      resetTriggered: false,
+    });
+
+    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(false);
+
+    operation.setPhase("running");
+
+    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(true);
+  });
+
   it("aborts every active run in all mode", () => {
     const abortA = vi.fn();
     const abortB = vi.fn();
@@ -103,6 +118,14 @@ describe("embedded-agent runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortA).toHaveBeenCalledTimes(1);
     expect(abortB).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes restart ownership to every aborted run", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun("session-restart", createRunHandle({ abort }));
+
+    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
+    expect(abort).toHaveBeenCalledWith("restart");
   });
 
   it("resolves active embedded runs by canonical session file", async () => {

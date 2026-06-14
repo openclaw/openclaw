@@ -162,6 +162,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
             mode: "recent",
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+            allowResetArchiveFallback: true,
           },
         )
       : [];

@@ -151,6 +151,7 @@ export type SkillProposalReviseInput = {
 
 export type SkillProposalActionInput = {
   workspaceDir: string;
+  config?: OpenClawConfig;
   proposalId: string;
   reason?: string;
 };

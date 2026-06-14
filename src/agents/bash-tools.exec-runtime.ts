@@ -19,7 +19,10 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
+import {
+  isDangerousHostInheritedEnvVarName,
+  sanitizeHostInheritedEnvEntry,
+} from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
@@ -93,15 +96,12 @@ export function detectCursorKeyMode(raw: string): "application" | "normal" | nul
 export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
   const sanitized: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    const upperKey = key.toUpperCase();
-    if (upperKey === "PATH") {
-      sanitized[key] = value;
+    const sanitizedEntry = sanitizeHostInheritedEnvEntry(key, value);
+    if (!sanitizedEntry) {
       continue;
     }
-    if (isDangerousHostInheritedEnvVarName(upperKey)) {
-      continue;
-    }
-    sanitized[key] = value;
+    const [sanitizedKey, sanitizedValue] = sanitizedEntry;
+    sanitized[sanitizedKey] = sanitizedValue;
   }
   return sanitized;
 }

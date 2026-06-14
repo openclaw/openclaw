@@ -1,7 +1,5 @@
 // TTS core tests cover provider selection, synthesis, and error handling.
 import { describe, expect, it, vi } from "vitest";
-import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
-import { AuthStorage, ModelRegistry } from "../agents/sessions/index.js";
 import type { AssistantMessage, Model, Usage } from "../llm/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
@@ -66,9 +64,7 @@ describe("TTS core", () => {
         apiKey: "key",
         source: "test",
         mode: "api-key",
-      } satisfies ResolvedProviderAuth;
-      const authStorage = AuthStorage.inMemory();
-      const modelRegistry = ModelRegistry.inMemory(authStorage);
+      } as const;
       const assistant = {
         role: "assistant",
         content: [{ type: "text", text: "Short summary." }],
@@ -90,14 +86,8 @@ describe("TTS core", () => {
         },
         {
           completeSimple: vi.fn(async () => assistant),
-          getApiKeyForModel: vi.fn(async () => auth),
-          prepareModelForSimpleCompletion: vi.fn(() => model),
+          prepareSimpleCompletionModel: vi.fn(async () => ({ model, auth })),
           requireApiKey: vi.fn(() => "key"),
-          resolveModelAsync: vi.fn(async () => ({
-            model,
-            authStorage,
-            modelRegistry,
-          })),
         },
       );
 

@@ -79,7 +79,7 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
     ).toBe(false);
   });
 
-  it("keeps non-package updates tied to the loaded service state", () => {
+  it("keeps non-package updates tied to the matching loaded service state", () => {
     expect(
       shouldPrepareUpdatedInstallRestart({
         updateMode: "git",
@@ -92,6 +92,26 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
         updateMode: "git",
         serviceInstalled: true,
         serviceLoaded: true,
+        serviceMatchesUpdateRoot: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "git",
+        serviceInstalled: true,
+        serviceLoaded: true,
+        serviceMatchesUpdateRoot: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("prepares git restart when this update stopped the managed service", () => {
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "git",
+        serviceInstalled: true,
+        serviceLoaded: false,
+        serviceStoppedForUpdate: true,
       }),
     ).toBe(true);
   });
@@ -150,6 +170,19 @@ describe("resolvePostUpdateServiceStateReadEnv", () => {
         prePackageServiceEnv,
       }),
     ).toBe(processEnv);
+  });
+
+  it("uses the managed service environment for git updates stopped by this updater", () => {
+    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" } as NodeJS.ProcessEnv;
+    const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" } as NodeJS.ProcessEnv;
+
+    expect(
+      resolvePostUpdateServiceStateReadEnv({
+        updateMode: "git",
+        processEnv,
+        preManagedServiceEnv,
+      }),
+    ).toBe(preManagedServiceEnv);
   });
 });
 
@@ -675,7 +708,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
           "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
         guidance: [
           "Run `openclaw doctor` to inspect the config validation errors.",
-          "Once the config parses, rerun `openclaw update`.",
+          "Once the config parses, rerun `openclaw update repair`.",
         ],
       },
     ]);
@@ -694,7 +727,7 @@ describe("buildInvalidConfigPostCoreUpdateResult", () => {
     const built = buildInvalidConfigPostCoreUpdateResult();
     expect(built.guidance).toStrictEqual([
       "Run `openclaw doctor` to inspect the config validation errors.",
-      "Once the config parses, rerun `openclaw update`.",
+      "Once the config parses, rerun `openclaw update repair`.",
     ]);
     expect(built.result.warnings).toStrictEqual([
       {

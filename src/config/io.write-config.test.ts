@@ -74,7 +74,14 @@ describe("config io write", () => {
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = await suiteRootTracker.make("case");
-    return fn(home);
+    return withEnvAsync(
+      {
+        OPENCLAW_DEFER_SHELL_ENV_FALLBACK: undefined,
+        OPENCLAW_LOAD_SHELL_ENV: undefined,
+        OPENCLAW_SHELL_ENV_TIMEOUT_MS: undefined,
+      },
+      () => fn(home),
+    );
   }
 
   beforeAll(async () => {

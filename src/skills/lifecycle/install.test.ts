@@ -109,7 +109,7 @@ async function withWorkspaceCase(
   }
 }
 
-describe("installSkill install policy hooks", () => {
+describe("installSkill before_install hooks", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
     runCommandWithTimeoutMock.mockClear();
@@ -273,7 +273,7 @@ describe("installSkill install policy hooks", () => {
   it("blocks install when before_install rejects the skill", async () => {
     const handler = vi.fn().mockReturnValue({
       block: true,
-      blockReason: "Blocked by enterprise policy",
+      blockReason: "Blocked by plugin lifecycle hook",
     });
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
 
@@ -287,7 +287,7 @@ describe("installSkill install policy hooks", () => {
       });
 
       expect(result.ok).toBe(false);
-      expect(result.message).toBe("Blocked by enterprise policy");
+      expect(result.message).toBe("Blocked by plugin lifecycle hook");
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });

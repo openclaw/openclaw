@@ -258,6 +258,31 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Errors: suppressed");
   });
 
+  it("prints GUI-session wording before generic missing-supervision wording", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: false,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: {
+            status: "unknown",
+            missingSupervision: true,
+            missingGuiSession: true,
+            detail: "Bootstrap failed: 125: Domain does not support specified action",
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.error, "macOS has no usable GUI session");
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).not.toContain("launchd has no loaded job");
+  });
+
   it("prints probe kind and capability separately", () => {
     printDaemonStatus(
       {

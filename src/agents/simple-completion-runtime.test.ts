@@ -475,6 +475,37 @@ describe("prepareSimpleCompletionModel", () => {
     );
   });
 
+  it("can preserve asynchronous provider model discovery", async () => {
+    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
+      model: {
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      useAsyncModelResolution: true,
+      modelResolver: hoisted.resolveModelAsyncMock,
+    });
+
+    expectPreparedModelResult(result);
+    expect(hoisted.resolveModelMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
+      "anthropic",
+      "claude-opus-4-6",
+      undefined,
+      undefined,
+      {},
+    );
+  });
+
   it("passes static catalog fallback opt-in to skip-discovery model resolution", async () => {
     hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {

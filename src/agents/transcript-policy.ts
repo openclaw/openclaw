@@ -23,6 +23,7 @@ export type TranscriptPolicy = {
   sanitizeMode: TranscriptSanitizeMode;
   sanitizeToolCallIds: boolean;
   toolCallIdMode?: ToolCallIdMode;
+  duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds: boolean;
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;
@@ -69,6 +70,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",
   sanitizeToolCallIds: false,
   toolCallIdMode: undefined,
+  duplicateToolCallIdStyle: undefined,
   preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
@@ -186,6 +188,7 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "kimi-for-coding",
   "kimi-k2.5",
   "kimi-k2.6",
+  "kimi-k2.7-code",
   "kimi-k2-thinking",
   "kimi-k2-thinking-turbo",
   "mimo-v2-pro",
@@ -225,6 +228,9 @@ function mergeTranscriptPolicy(
       ? { sanitizeToolCallIds: policy.sanitizeToolCallIds }
       : {}),
     ...(policy.toolCallIdMode ? { toolCallIdMode: policy.toolCallIdMode as ToolCallIdMode } : {}),
+    ...(policy.duplicateToolCallIdStyle
+      ? { duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle }
+      : {}),
     ...(typeof policy.preserveNativeAnthropicToolUseIds === "boolean"
       ? { preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds }
       : {}),

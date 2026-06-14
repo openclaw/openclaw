@@ -11,9 +11,9 @@ import {
   identitiesOverlap,
   type WhatsAppIdentity,
 } from "../identity.js";
+import type { WebInboundMessage } from "../inbound/types.js";
 import { isWhatsAppGroupJid } from "../normalize-target.js";
 import { isSelfChatMode, normalizeE164 } from "../text-runtime.js";
-import type { WebInboundMsg } from "./types.js";
 
 export type MentionConfig = {
   mentionRegexes: RegExp[];
@@ -35,14 +35,14 @@ export function buildMentionConfig(
   return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
 }
 
-export function resolveMentionTargets(msg: WebInboundMsg, authDir?: string): MentionTargets {
+export function resolveMentionTargets(msg: WebInboundMessage, authDir?: string): MentionTargets {
   const normalizedMentions = getMentionIdentities(msg, authDir);
   const self = getSelfIdentity(msg, authDir);
   return { normalizedMentions, self };
 }
 
 export function isBotMentionedFromTargets(
-  msg: WebInboundMsg,
+  msg: WebInboundMessage,
   mentionCfg: MentionConfig,
   targets: MentionTargets,
 ): boolean {
@@ -78,7 +78,7 @@ export function isBotMentionedFromTargets(
   } else if (hasMentions && isSelfChat) {
     // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in self-chat triggers the bot.
   }
-  const bodyClean = clean(msg.body);
+  const bodyClean = clean(msg.payload.body);
   if (mentionCfg.mentionRegexes.some((re) => re.test(bodyClean))) {
     return true;
   }
@@ -91,7 +91,7 @@ export function isBotMentionedFromTargets(
       if (bodyDigits.includes(selfDigits)) {
         return true;
       }
-      const bodyNoSpace = msg.body.replace(/[\s-]/g, "");
+      const bodyNoSpace = msg.payload.body.replace(/[\s-]/g, "");
       const pattern = new RegExp(`\\+?${selfDigits}`, "i");
       if (pattern.test(bodyNoSpace)) {
         return true;
@@ -103,7 +103,7 @@ export function isBotMentionedFromTargets(
 }
 
 export function debugMention(
-  msg: WebInboundMsg,
+  msg: WebInboundMessage,
   mentionCfg: MentionConfig,
   authDir?: string,
 ): { wasMentioned: boolean; details: Record<string, unknown> } {
@@ -111,15 +111,15 @@ export function debugMention(
   const result = isBotMentionedFromTargets(msg, mentionCfg, mentionTargets);
   const details = {
     from: msg.from,
-    body: msg.body,
-    bodyClean: normalizeMentionText(msg.body),
-    mentionedJids: msg.mentions ?? msg.mentionedJids ?? null,
+    body: msg.payload.body,
+    bodyClean: normalizeMentionText(msg.payload.body),
+    mentionedJids: msg.group?.mentions?.jids ?? null,
     normalizedMentionedJids: mentionTargets.normalizedMentions.length
       ? mentionTargets.normalizedMentions.map((identity) => getComparableIdentityValues(identity))
       : null,
-    selfJid: msg.self?.jid ?? msg.selfJid ?? null,
-    selfLid: msg.self?.lid ?? msg.selfLid ?? null,
-    selfE164: msg.self?.e164 ?? msg.selfE164 ?? null,
+    selfJid: msg.platform.self?.jid ?? msg.platform.selfJid ?? null,
+    selfLid: msg.platform.self?.lid ?? msg.platform.selfLid ?? null,
+    selfE164: msg.platform.self?.e164 ?? msg.platform.selfE164 ?? null,
     resolvedSelf: mentionTargets.self,
   };
   return { wasMentioned: result, details };

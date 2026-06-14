@@ -246,7 +246,6 @@ function resolvePersistedRegistryMemoLookupContextHash(params: {
 
 function resolvePersistedRegistryMemoState(params: {
   env: NodeJS.ProcessEnv;
-  index?: InstalledPluginIndex;
   preferPersisted?: boolean;
   stateDir?: string;
 }): PersistedRegistryMemoState {
@@ -263,12 +262,10 @@ function resolvePersistedRegistryMemoState(params: {
       fingerprint: fastFingerprint,
     };
   }
-  const index =
-    params.index ??
-    readPersistedInstalledPluginIndexSync({
-      env: params.env,
-      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-    });
+  const index = readPersistedInstalledPluginIndexSync({
+    env: params.env,
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+  });
   return {
     contextHash,
     fastHash,
@@ -617,19 +614,11 @@ export function loadPluginMetadataSnapshot(
   );
   const snapshot = freezePluginMetadataSnapshot(result.snapshot);
   if (canMemoizePluginMetadataSnapshotResult(result)) {
-    const cachedRegistryState =
-      result.registrySource === "derived"
-        ? resolvePersistedRegistryMemoState({
-            env,
-            index: snapshot.index,
-            ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
-            ...(params.preferPersisted !== undefined
-              ? { preferPersisted: params.preferPersisted }
-              : {}),
-          })
-        : registryState;
+    // Store under the exact key this call looked up by. Derived registries used
+    // to re-key off the freshly built snapshot.index, so the store key never
+    // matched the next lookup and every call re-ran the full manifest scan.
     rememberPluginMetadataSnapshotMemo({
-      key: computePluginMetadataSnapshotMemoKey({ params, registryState: cachedRegistryState }),
+      key: memoKey,
       lookupContextHash: resolvePersistedRegistryMemoLookupContextHash({
         env,
         ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
@@ -637,7 +626,7 @@ export function loadPluginMetadataSnapshot(
           ? { preferPersisted: params.preferPersisted }
           : {}),
       }),
-      registryState: cachedRegistryState,
+      registryState,
       snapshot,
     });
   }

@@ -33,7 +33,7 @@ import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enableExplicitlySelectedPluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
@@ -384,7 +384,7 @@ export async function setupChannels(
       );
       return false;
     }
-    const result = enablePluginInConfig(next, channel);
+    const result = enableExplicitlySelectedPluginInConfig(next, channel);
     next = result.config;
     if (!result.enabled) {
       await prompter.note(

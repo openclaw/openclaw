@@ -18,6 +18,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -28,6 +29,7 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { isReasoningOnlyLengthAssistantTurn } from "../replay-turn-classification.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -235,15 +237,6 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
   return touched ? out : messages;
 }
 
-// `provider:"openclaw"` assistant entries written by the channel-delivery
-// transcript mirror (`model:"delivery-mirror"`, see config/sessions/transcript.ts)
-// and by the Gateway transcript-inject helper (`model:"gateway-injected"`, see
-// gateway/server-methods/chat-transcript-inject.ts) are user-visible transcript
-// records, not model output. Replaying them to the actual provider duplicates
-// content and, on Bedrock or strict OpenAI-compatible providers, can also
-// trigger turn-ordering rejections.
-const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
-
 function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   if (!message || message.role !== "user") {
     return message;
@@ -275,19 +268,6 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
     return null;
   }
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
-}
-
-function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const provider = (message as { provider?: unknown }).provider;
-  const model = (message as { model?: unknown }).model;
-  return (
-    provider === "openclaw" &&
-    typeof model === "string" &&
-    TRANSCRIPT_ONLY_OPENCLAW_MODELS.has(model)
-  );
 }
 
 function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
@@ -357,7 +337,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       out.push(message);
       continue;
     }
-    if (isTranscriptOnlyOpenclawAssistant(message)) {
+    if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
       // Drop from the in-memory replay copy; the persisted JSONL keeps the
       // entry so user-facing transcript surfaces are unchanged.
       touched = true;
@@ -382,12 +362,19 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (Array.isArray(replayContent)) {
       const normalized = normalizeAssistantReplayBlockContent(assistantMessage, replayContent);
       if (normalized !== assistantMessage) {
-        if (normalized) {
-          out.push(normalized);
-        }
         touched = true;
-        continue;
+        if (!normalized) {
+          continue;
+        }
+        assistantMessage = normalized as AssistantReplayMessage;
+        replayContent = assistantMessage.content;
       }
+    }
+    if (isReasoningOnlyLengthAssistantTurn(assistantMessage)) {
+      // Token-limited thinking is incomplete provider state. Replaying it can
+      // resend a partial signature, while visible text or tool calls remain useful.
+      touched = true;
+      continue;
     }
     if (Array.isArray(replayContent) && replayContent.length === 0) {
       // An assistant turn can legitimately end with `content: []` — for
@@ -726,6 +713,7 @@ export async function sanitizeSessionHistory(params: {
       sanitizeToolCallIds:
         policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
       toolCallIdMode: policy.toolCallIdMode,
+      duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
       preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
@@ -790,6 +778,7 @@ export async function sanitizeSessionHistory(params: {
     policy.sanitizeToolCallIds && policy.toolCallIdMode
       ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
           preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
           allowedToolNames: params.allowedToolNames,
         })

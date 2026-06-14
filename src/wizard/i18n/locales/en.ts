@@ -998,6 +998,7 @@ export const en = {
       webSearchGetKey: "Get your key at: {url}",
       webSearchAuthProfile: "Credential: existing {provider} auth profile.",
       webSearchKeyEnv: "API key: provided via {env} env var.",
+      webSearchKeyFree: "Web search is ready — this provider works with no API key.",
       webSearchKeyRef: "API key: configured via secret reference.",
       webSearchKeyStored: "API key: stored in config.",
       webSearchNeedsKey: "web_search will not work until a key is added.",

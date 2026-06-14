@@ -1,6 +1,7 @@
 Sources/Calendar/CalendarService.swift
 Sources/Camera/CameraController.swift
 Sources/Capabilities/NodeCapabilityRouter.swift
+Sources/Chat/AppleReviewDemoChatTransport.swift
 Sources/Chat/IOSGatewayChatTransport.swift
 Sources/Contacts/ContactsService.swift
 Sources/Device/DeviceInfoHelper.swift
@@ -20,6 +21,7 @@ Sources/Design/SettingsProTab.swift
 Sources/Design/SettingsProTabSupport.swift
 Sources/Design/SettingsProTabSections.swift
 Sources/Design/SettingsProTabActions.swift
+Sources/Design/TalkRuntimeIssueBanner.swift
 Sources/Design/CommandCenterSupport.swift
 Sources/Design/AgentProTab+Overview.swift
 Sources/Design/AgentProTab+Destinations.swift
@@ -29,6 +31,15 @@ Sources/Design/AgentProTab+Usage.swift
 Sources/Design/AgentProTab+DetailComponents.swift
 Sources/Design/AgentProTab+GatewayData.swift
 Sources/Design/AgentProModels.swift
+Sources/Design/IPadActivityScreen.swift
+Sources/Design/IPadSidebarFeaturePreviews.swift
+Sources/Design/IPadSidebarFeatureScreens.swift
+Sources/Design/IPadSkillWorkshopScreen.swift
+Sources/Design/IPadSidebarScreenChrome.swift
+Sources/Design/IPadWorkboardScreen.swift
+Sources/Design/OpenClawDocsScreen.swift
+Sources/Design/RootTabsPhoneControlHub.swift
+Sources/Design/SettingsChannelsDestination.swift
 Sources/EventKit/EventKitAuthorization.swift
 Sources/Gateway/DeepLinkAgentPromptAlert.swift
 Sources/Gateway/ExecApprovalPromptDialog.swift
@@ -71,6 +82,7 @@ Sources/Push/PushRelayClient.swift
 Sources/Push/PushRelayKeychainStore.swift
 Sources/Reminders/RemindersService.swift
 Sources/RootTabs.swift
+Sources/RootTabsNavigation.swift
 Sources/RootView.swift
 Sources/Screen/ScreenController.swift
 Sources/Screen/ScreenRecordService.swift
@@ -84,7 +96,6 @@ Sources/SessionKey.swift
 Sources/Settings/PrivacyAccessSectionView.swift
 Sources/Settings/SettingsNetworkingHelpers.swift
 Sources/Settings/VoiceWakeWordsSettingsView.swift
-Sources/Status/GatewayActionsDialog.swift
 Sources/Status/GatewayStatusBuilder.swift
 Sources/Status/VoiceWakeToast.swift
 Sources/Voice/TalkGatewayPermissionState.swift

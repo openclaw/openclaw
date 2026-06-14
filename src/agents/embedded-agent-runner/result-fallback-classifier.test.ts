@@ -75,6 +75,23 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
+  it("does not fallback on deliberate silent terminal replies after payload filtering", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 42,
+          finalAssistantRawText: "NO_REPLY",
+          finalAssistantVisibleText: "NO_REPLY",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("uses provider-scoped failover matching for business-denial payloads", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openrouter",
