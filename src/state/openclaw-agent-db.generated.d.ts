@@ -31,6 +31,19 @@ export interface CacheEntries {
   value_json: string | null;
 }
 
+export interface QmdSessionExportCache {
+  content_fingerprint: string;
+  export_dir: string;
+  hash: string;
+  ino: number;
+  mtime_ms: number;
+  render_version: number;
+  session_file: string;
+  size: number;
+  target: string;
+  updated_at: number;
+}
+
 export interface SchemaMeta {
   agent_id: string | null;
   app_version: string | null;
@@ -45,5 +58,6 @@ export interface DB {
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
   cache_entries: CacheEntries;
+  qmd_session_export_cache: QmdSessionExportCache;
   schema_meta: SchemaMeta;
 }

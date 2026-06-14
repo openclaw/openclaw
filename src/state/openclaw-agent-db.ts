@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -30,7 +31,7 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
+const OPENCLAW_AGENT_SCHEMA_VERSION = 2;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
@@ -58,9 +59,57 @@ export type OpenClawRegisteredAgentDatabase = {
 };
 
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
+type OpenClawAgentQmdExportCacheDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "qmd_session_export_cache"
+>;
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
+
+/** Options for QMD's per-agent session export cache. */
+export type QmdSessionExportCacheOptions = {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  path?: string;
+};
+
+/** Cache key for one exported session markdown target. */
+export type QmdSessionExportCacheKey = {
+  exportDir: string;
+  renderVersion: number;
+  sessionFile: string;
+};
+
+/** Persisted QMD session export cache row, exposed without raw DB access. */
+export type QmdSessionExportCacheEntry = QmdSessionExportCacheKey & {
+  contentFingerprint: string;
+  hash: string;
+  ino: number;
+  mtimeMs: number;
+  size: number;
+  target: string;
+  updatedAt: number;
+};
+
+export type UpsertQmdSessionExportCacheEntry = QmdSessionExportCacheEntry;
+
+function toQmdSessionExportCacheEntry(
+  row: OpenClawAgentKyselyDatabase["qmd_session_export_cache"],
+): QmdSessionExportCacheEntry {
+  return {
+    sessionFile: row.session_file,
+    exportDir: row.export_dir,
+    renderVersion: row.render_version,
+    size: row.size,
+    mtimeMs: row.mtime_ms,
+    ino: row.ino,
+    contentFingerprint: row.content_fingerprint,
+    hash: row.hash,
+    target: row.target,
+    updatedAt: row.updated_at,
+  };
+}
 
 type ExistingSchemaMeta = {
   agentId: string | null;
@@ -295,6 +344,105 @@ export function runOpenClawAgentWriteTransaction<T>(
   const result = runSqliteImmediateTransactionSync(database.db, () => operation(database));
   ensureOpenClawAgentDatabasePermissions(database.path, options);
   return result;
+}
+
+/** Read one QMD session export cache row for a normalized agent database. */
+export function readQmdSessionExportCacheEntry(
+  options: QmdSessionExportCacheOptions,
+  key: QmdSessionExportCacheKey,
+): QmdSessionExportCacheEntry | null {
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<OpenClawAgentQmdExportCacheDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("qmd_session_export_cache")
+      .selectAll()
+      .where("session_file", "=", key.sessionFile)
+      .where("export_dir", "=", key.exportDir)
+      .where("render_version", "=", key.renderVersion),
+  );
+  return row ? toQmdSessionExportCacheEntry(row) : null;
+}
+
+/** Upsert QMD's per-agent session export cache without exposing the raw DB. */
+export function upsertQmdSessionExportCacheEntry(
+  options: QmdSessionExportCacheOptions,
+  entry: UpsertQmdSessionExportCacheEntry,
+): void {
+  runOpenClawAgentWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<OpenClawAgentQmdExportCacheDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("qmd_session_export_cache")
+        .values({
+          session_file: entry.sessionFile,
+          export_dir: entry.exportDir,
+          render_version: entry.renderVersion,
+          size: entry.size,
+          mtime_ms: entry.mtimeMs,
+          ino: entry.ino,
+          content_fingerprint: entry.contentFingerprint,
+          hash: entry.hash,
+          target: entry.target,
+          updated_at: entry.updatedAt,
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["session_file", "export_dir", "render_version"]).doUpdateSet({
+            size: entry.size,
+            mtime_ms: entry.mtimeMs,
+            ino: entry.ino,
+            content_fingerprint: entry.contentFingerprint,
+            hash: entry.hash,
+            target: entry.target,
+            updated_at: entry.updatedAt,
+          }),
+        ),
+    );
+  }, options);
+}
+
+/** List cached rows for one QMD export target scope. */
+export function listQmdSessionExportCacheEntries(
+  options: QmdSessionExportCacheOptions,
+  key: Pick<QmdSessionExportCacheKey, "exportDir" | "renderVersion">,
+): QmdSessionExportCacheEntry[] {
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<OpenClawAgentQmdExportCacheDatabase>(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("qmd_session_export_cache")
+      .selectAll()
+      .where("export_dir", "=", key.exportDir)
+      .where("render_version", "=", key.renderVersion),
+  ).rows.map(toQmdSessionExportCacheEntry);
+}
+
+/** Delete specific QMD session export cache rows for one export target scope. */
+export function deleteQmdSessionExportCacheEntries(
+  options: QmdSessionExportCacheOptions,
+  params: Pick<QmdSessionExportCacheKey, "exportDir" | "renderVersion"> & {
+    sessionFiles: readonly string[];
+  },
+): void {
+  if (params.sessionFiles.length === 0) {
+    return;
+  }
+  runOpenClawAgentWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<OpenClawAgentQmdExportCacheDatabase>(database.db);
+    for (const sessionFile of params.sessionFiles) {
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("qmd_session_export_cache")
+          .where("session_file", "=", sessionFile)
+          .where("export_dir", "=", params.exportDir)
+          .where("render_version", "=", params.renderVersion),
+      );
+    }
+  }, options);
 }
 
 /** Close cached agent databases so tests can remove temp dirs and reopen cleanly. */

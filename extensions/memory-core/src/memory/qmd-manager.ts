@@ -10,14 +10,18 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
+  deleteQmdSessionExportCacheEntries,
   isPathInside,
+  listQmdSessionExportCacheEntries,
   root,
   resolveAgentContextLimits,
   resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveStateDir,
+  upsertQmdSessionExportCacheEntry,
   type OpenClawConfig,
+  type QmdSessionExportCacheOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -84,6 +88,39 @@ const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
+// Bump SESSION_EXPORT_RENDER_VERSION when changing renderSessionMarkdown,
+// redactSensitiveText, line-wrapping, or anything else that affects the bytes
+// written to <qmdDir>/sessions/*.md. The persistent export-state cache uses
+// this to invalidate stale entries cleanly across deploys.
+const SESSION_EXPORT_RENDER_VERSION = 1;
+// Number of bytes read from the start and end of a JSONL file to produce a
+// lightweight content fingerprint. Sized to span a typical last-line append
+// while staying well under a single read syscall's worth of IO.
+const QMD_EXPORT_FINGERPRINT_EDGE_BYTES = 512;
+
+// Compute a cheap content fingerprint from the first and last N bytes of a
+// JSONL file. This is NOT a full-file hash; it hardens the stat fast path
+// against common append/truncate/edge rewrites without paying the IO cost of
+// reading the entire file.
+async function computeContentFingerprint(filePath: string): Promise<string> {
+  const fd = await fs.open(filePath, "r");
+  try {
+    const stat = await fd.stat();
+    const size = stat.size;
+    const edgeBytes = QMD_EXPORT_FINGERPRINT_EDGE_BYTES;
+    const headBuf = Buffer.alloc(Math.min(edgeBytes, size));
+    await fd.read(headBuf, 0, headBuf.length, 0);
+    let tailBuf = headBuf;
+    if (size > edgeBytes) {
+      tailBuf = Buffer.alloc(Math.min(edgeBytes, size - edgeBytes));
+      await fd.read(tailBuf, 0, tailBuf.length, Math.max(0, size - tailBuf.length));
+    }
+    return crypto.createHash("sha1").update(headBuf).update(tailBuf).digest("hex");
+  } finally {
+    await fd.close();
+  }
+}
+
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_WRITE_LOCK_MIN_WAIT_MS = 5 * 60 * 1000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
@@ -377,14 +414,6 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly docPathCache = new Map<
     string,
     { rel: string; abs: string; source: MemorySource }
-  >();
-  private readonly exportedSessionState = new Map<
-    string,
-    {
-      hash: string;
-      mtimeMs: number;
-      target: string;
-    }
   >();
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
@@ -2464,6 +2493,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     return this.db;
   }
 
+  private exportCacheOptions(): QmdSessionExportCacheOptions {
+    return { agentId: this.agentId, env: process.env };
+  }
+
   private async exportSessions(): Promise<void> {
     if (!this.sessionExporter) {
       return;
@@ -2477,7 +2510,58 @@ export class QmdMemoryManager implements MemorySearchManager {
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
+    const exportCacheOptions = this.exportCacheOptions();
+    const cachedEntries = listQmdSessionExportCacheEntries(exportCacheOptions, {
+      exportDir,
+      renderVersion: SESSION_EXPORT_RENDER_VERSION,
+    });
+    const cachedBySessionFile = new Map(
+      cachedEntries.map((entry) => [entry.sessionFile, entry] as const),
+    );
     for (const sessionFile of files) {
+      let stat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        stat = await fs.stat(sessionFile);
+      } catch {
+        // File vanished between listing and stat; let orphan cleanup handle
+        // any stale export below.
+        continue;
+      }
+      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
+      const target = path.join(exportDir, targetName);
+      const cached = cachedBySessionFile.get(sessionFile) ?? null;
+      // Fast path: stat fields match the cached identity AND the content
+      // fingerprint confirms the file bytes are unchanged. Skip the full
+      // entry build, redaction, hashing, and write entirely.
+      let cachedTargetMissing = false;
+      const cachedTargetMatches = cached?.target === target;
+      if (
+        cached &&
+        cachedTargetMatches &&
+        cached.size === stat.size &&
+        cached.mtimeMs === stat.mtimeMs &&
+        cached.ino === stat.ino
+      ) {
+        if (cutoff && stat.mtimeMs < cutoff) {
+          continue;
+        }
+        // Verify content fingerprint: cheap sha1 over first+last 512 bytes
+        // catches any in-place modification that preserved size+mtime+ino.
+        const fingerprint = await computeContentFingerprint(sessionFile);
+        if (fingerprint === cached.contentFingerprint) {
+          // Verify the cached export target still exists on disk. If it was
+          // deleted out from under us, fall through to the slow rebuild path.
+          try {
+            await fs.access(target);
+            tracked.add(sessionFile);
+            keep.add(target);
+            continue;
+          } catch {
+            cachedTargetMissing = true;
+          }
+        }
+      }
+      // Slow path: rebuild the entry and write the markdown if needed.
       const entry = await buildSessionEntry(sessionFile);
       if (!entry) {
         continue;
@@ -2485,19 +2569,30 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
-      const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
-      const state = this.exportedSessionState.get(sessionFile);
-      if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
+      if (
+        cachedTargetMissing ||
+        !cachedTargetMatches ||
+        !cached ||
+        cached.hash !== entry.hash ||
+        cached.mtimeMs !== entry.mtimeMs
+      ) {
         await exportRoot.write(targetName, this.renderSessionMarkdown(entry), {
           encoding: "utf-8",
         });
       }
-      this.exportedSessionState.set(sessionFile, {
+      const fingerprint = await computeContentFingerprint(sessionFile);
+      upsertQmdSessionExportCacheEntry(exportCacheOptions, {
+        sessionFile,
+        exportDir,
+        renderVersion: SESSION_EXPORT_RENDER_VERSION,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        ino: stat.ino,
+        contentFingerprint: fingerprint,
         hash: entry.hash,
-        mtimeMs: entry.mtimeMs,
         target,
+        updatedAt: Date.now(),
       });
       keep.add(target);
     }
@@ -2511,11 +2606,16 @@ export class QmdMemoryManager implements MemorySearchManager {
         await exportRoot.remove(name).catch(() => undefined);
       }
     }
-    for (const [sessionFile, state] of this.exportedSessionState) {
-      if (!tracked.has(sessionFile) || !isPathInside(exportDir, state.target)) {
-        this.exportedSessionState.delete(sessionFile);
-      }
-    }
+    // Remove stale cache entries: session files no longer tracked or whose
+    // cached target has drifted outside the current export dir.
+    const staleSessionFiles = cachedEntries
+      .map((entry) => entry.sessionFile)
+      .filter((sessionFile) => !tracked.has(sessionFile));
+    deleteQmdSessionExportCacheEntries(exportCacheOptions, {
+      exportDir,
+      renderVersion: SESSION_EXPORT_RENDER_VERSION,
+      sessionFiles: staleSessionFiles,
+    });
   }
 
   private renderSessionMarkdown(entry: SessionFileEntry): string {
