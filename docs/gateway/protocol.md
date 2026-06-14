@@ -608,23 +608,31 @@ terminal summary, and sanitized error text.
     SHA-256. Commit only finalizes the upload; it does not install the skill.
   - Uploaded skill archives are zip archives containing a `SKILL.md` root. The
     archive's internal directory name never selects the install target.
-- Operators may call `skills.install` (`operator.admin`) in three modes:
-  - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
-    skill folder into the default agent workspace `skills/` directory.
-  - Upload mode: `{ source: "upload", uploadId, slug, force?, sha256?, timeoutMs? }`
-    installs a committed upload into the default agent workspace `skills/<slug>`
-    directory. The slug and force value must match the original
+- Operators may call `skills.install` (`operator.admin`) in three modes. Each
+  mode accepts optional `agentId`; omit it to install into the default agent
+  workspace, or pass a configured agent id to target that agent workspace.
+  Unknown agent ids are rejected.
+  - ClawHub mode:
+    `{ source: "clawhub", agentId?, slug, version?, force? }` installs a skill
+    folder into the selected agent workspace `skills/` directory.
+  - Upload mode:
+    `{ source: "upload", agentId?, uploadId, slug, force?, sha256?, timeoutMs? }`
+    installs a committed upload into the selected agent workspace
+    `skills/<slug>` directory. The slug and force value must match the original
     `skills.upload.begin` request. This mode is rejected unless
     `skills.install.allowUploadedArchives` is enabled. The setting does not
     affect ClawHub installs.
-  - Gateway installer mode: `{ name, installId, timeoutMs? }`
-    runs a declared `metadata.openclaw.install` action on the gateway host.
+  - Gateway installer mode:
+    `{ agentId?, name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+    runs a declared `metadata.openclaw.install` action on the gateway host for
+    the selected agent workspace.
     Older clients may still send `dangerouslyForceUnsafeInstall`; this field is
     deprecated, accepted only for protocol compatibility, and ignored. Use
     `security.installPolicy` for operator-owned install decisions.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
-  - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
-    the default agent workspace.
+  - ClawHub mode accepts optional `agentId`; omit it to update tracked ClawHub
+    installs in the default agent workspace, or pass a configured agent id to
+    update the selected agent workspace. Unknown agent ids are rejected.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
     `apiKey`, and `env`.
 
