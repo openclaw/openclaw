@@ -1,15 +1,18 @@
 // SSRF tests cover IP privacy classification and HTTP base URL policy builders.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { blockedIpv6MulticastLiterals } from "../../../packages/net-policy/src/ip-test-fixtures.js";
 import {
   assertHostnameAllowedWithPolicy,
+  type LookupFn,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   isSameSsrFPolicy,
+  resolvePinnedHostnameWithPolicy,
   resolveSsrFPolicyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  SsrFBlockedError,
 } from "./ssrf.js";
 
 const privateIpCases = [
@@ -92,6 +95,20 @@ const unsupportedLegacyIpv4Cases = [
 ];
 
 const nonIpHostnameCases = ["example.com", "abc.123.example", "1password.com", "0x.example.com"];
+
+const idnaMappedReservedHostnameCases = [
+  ["ｌｏｃａｌｈｏｓｔ", "localhost"],
+  ["ℓocalhost", "localhost"],
+  ["api.ｌｏｃａｌｈｏｓｔ", "api.localhost"],
+  ["svc.ｌｏｃａｌ", "svc.local"],
+  ["svc.ｉｎｔｅｒｎａｌ", "svc.internal"],
+  ["metadata.google.ｉｎｔｅｒｎａｌ", "metadata.google.internal"],
+  ["ｌｏｃａｌｈｏｓｔ.", "localhost"],
+] as const;
+
+function createPublicLookup(): LookupFn {
+  return vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
+}
 
 function expectIpPrivacyCases(cases: string[], expected: boolean) {
   for (const address of cases) {
@@ -280,6 +297,51 @@ describe("isBlockedHostnameOrIp", () => {
     expect(isBlockedHostnameOrIp(hostname)).toBe(true);
     expect(() => assertHostnameAllowedWithPolicy(hostname)).toThrow(/blocked/i);
   });
+
+  it.each(idnaMappedReservedHostnameCases)(
+    "blocks reserved hostname after IDNA mapping %s -> %s",
+    (hostname) => {
+      expect(isBlockedHostnameOrIp(hostname)).toBe(true);
+      expect(() => assertHostnameAllowedWithPolicy(hostname)).toThrow(/blocked/i);
+    },
+  );
+
+  it.each(idnaMappedReservedHostnameCases)(
+    "blocks IDNA-mapped reserved hostname before DNS lookup %s -> %s",
+    async (hostname) => {
+      const lookupFn = createPublicLookup();
+
+      await expect(resolvePinnedHostnameWithPolicy(hostname, { lookupFn })).rejects.toThrow(
+        SsrFBlockedError,
+      );
+      expect(lookupFn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["１２７．０．０．１", undefined, true],
+    ["１９８．１８．０．１", undefined, true],
+    ["１９８．１８．０．１", { allowRfc2544BenchmarkRange: true }, false],
+    ["８．８．８．８", undefined, false],
+  ] as const)("applies IP checks after IDNA mapping for %s", (value, policy, expected) => {
+    expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
+  });
+
+  it.each(["xn--loclhost-36g", "metadata.google.xn--internl-7fg"])(
+    "does not treat IDN homograph hostname %s as a reserved ASCII hostname",
+    (hostname) => {
+      expect(isBlockedHostnameOrIp(hostname)).toBe(false);
+    },
+  );
+
+  it.each(["xn--localhost-", "metadata.google.xn--internal-"])(
+    "does not over-block genuine xn-- A-labels that only decode to a reserved display form %s",
+    (hostname) => {
+      // new URL()/DNS keep these as the literal A-label, not localhost/internal,
+      // so ToASCII-based rechecking must leave them allowed.
+      expect(isBlockedHostnameOrIp(hostname)).toBe(false);
+    },
+  );
 
   it.each([
     ["2001:db8:1234::5efe:127.0.0.1", true],
