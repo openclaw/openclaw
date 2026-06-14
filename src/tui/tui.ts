@@ -414,10 +414,9 @@ export function isTuiBusyActivityStatus(status: string): boolean {
 export function resolveTuiToolsToggleActivityStatus(params: {
   currentStatus: string;
   toolsExpanded: boolean;
-  hasActiveOrPendingRun: boolean;
 }): string {
   const toolsStatus = params.toolsExpanded ? "tools expanded" : "tools collapsed";
-  if (params.hasActiveOrPendingRun && isTuiBusyActivityStatus(params.currentStatus)) {
+  if (isTuiBusyActivityStatus(params.currentStatus)) {
     return params.currentStatus;
   }
   return toolsStatus;
@@ -1473,14 +1472,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     toolsExpanded = !toolsExpanded;
     chatLog.setToolsExpanded(toolsExpanded);
     // Ctrl+O is presentation-only; preserve busy activity so the status loader
-    // does not disappear while an active or queued run is still in progress.
+    // does not disappear before the run lifecycle ends.
     setActivityStatus(
       resolveTuiToolsToggleActivityStatus({
         currentStatus: activityStatus,
         toolsExpanded,
-        hasActiveOrPendingRun: Boolean(
-          activeChatRunId || pendingChatRunId || pendingOptimisticUserMessage,
-        ),
       }),
     );
     tui.requestRender();

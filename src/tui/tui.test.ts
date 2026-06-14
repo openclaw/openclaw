@@ -198,17 +198,24 @@ describe("resolveTuiToolsToggleActivityStatus", () => {
       resolveTuiToolsToggleActivityStatus({
         currentStatus: "streaming",
         toolsExpanded: true,
-        hasActiveOrPendingRun: true,
       }),
     ).toBe("streaming");
   });
 
-  it("uses the tool toggle status when no run is active", () => {
+  it("preserves finishing context after the active run id clears", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "finishing context",
+        toolsExpanded: false,
+      }),
+    ).toBe("finishing context");
+  });
+
+  it("uses the tool toggle status when activity is idle", () => {
     expect(
       resolveTuiToolsToggleActivityStatus({
         currentStatus: "idle",
         toolsExpanded: false,
-        hasActiveOrPendingRun: false,
       }),
     ).toBe("tools collapsed");
   });
