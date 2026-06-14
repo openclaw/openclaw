@@ -40,11 +40,10 @@ jobs:
         startsWith(github.event.comment.body, '/claude-review ')))
     runs-on: ubuntu-latest
     continue-on-error: true
-    # No id-token: the action authenticates with ANTHROPIC_API_KEY, so OIDC is
-    # not needed; withholding it shrinks the privileged surface of this job.
     permissions:
       actions: read
       contents: read
+      id-token: write
       pull-requests: write
     steps:
       - name: Get PR head ref
@@ -81,11 +80,18 @@ jobs:
           fetch-depth: 1
           ref: ${{ steps.pr-ref.outputs.sha || github.event.pull_request.head.sha }}
 
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+          role-session-name: ${{ github.run_id }}
+
       - name: Run Claude PR Review
         if: steps.pr-ref.outputs.skip != 'true'
-        uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251 # v1
+        uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          use_bedrock: "true"
           # Only human-authored PRs auto-review. Add fork automation bots here as
           # needed; never use '*' — keep this an explicit allowlist.
           allowed_bots: ""
@@ -129,5 +135,5 @@ jobs:
             End with a total count: "**X findings** (Y critical issues, Z important issues, W suggestions)"
           claude_args: |
             --max-turns 50
-            --model claude-sonnet-4-6
+            --model ${{ vars.BEDROCK_MODEL_ID }}
             --allowedTools "Skill,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Glob,Grep,Task"
