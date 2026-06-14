@@ -843,3 +843,134 @@ export function createChannelIngressQueue<
     prune,
   };
 }
+
+/**
+ * Sweep all stale claims across every channel ingress queue.
+ *
+ * Called at gateway startup to release claimed rows left behind by a previous
+ * crash. A claim is stale when its `claim_owner` PID is no longer alive (dead
+ * process, empty, or non-numeric owner). This covers the gap where per-queue
+ * recovery only runs inside channel drain loops — after a crash those loops
+ * have not started yet, so claimed rows sit unrecovered indefinitely.
+ *
+ * Timing: this runs during `prepareGatewayPluginBootstrap`, which completes
+ * before `startChannels()`. At sweep time no channel workers are running, so
+ * every claimed row is stale from a previous crashed session. The PID liveness
+ * check is an additional guard for multi-gateway deployments where another
+ * gateway process on the same host may hold legitimate claims.
+ *
+ * PID recycling risk: if the OS reuses a dead PID before this sweep runs, the
+ * sweep will skip that row. This is the same trade-off as the existing Telegram
+ * spool recovery (`isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess`).
+ * Consequence: the claim stays stuck until the next restart — no worse than
+ * current behavior.
+ *
+ * Best-effort: errors are surfaced to the caller, who should log and continue.
+ *
+ * @see recoverStaleClaims — per-queue recovery during normal drain
+ * @see https://github.com/openclaw/openclaw/issues/90945
+ */
+export async function recoverAllStaleChannelIngressClaims(options?: {
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+  /** Minimum age in ms before a claim is considered stale. Defaults to 60s. */
+  staleMs?: number;
+  log?: { info: (message: string) => void };
+}): Promise<number> {
+  const staleMs = Math.max(0, Math.floor(options?.staleMs ?? 60_000));
+  const database = openOpenClawStateDatabase({
+    env: options?.env ?? process.env,
+  });
+
+  const nowMs = (options?.now ?? Date.now)();
+  const cutoff = nowMs - staleMs;
+
+  const kysely = getChannelIngressKysely(database.db);
+  const claimedRows = executeSqliteQuerySync(
+    database.db,
+    kysely
+      .selectFrom("channel_ingress_events")
+      .select(["queue_name", "event_id", "claim_token", "claim_owner", "claimed_at"])
+      .where("status", "=", "claimed")
+      .orderBy("claimed_at", "asc"),
+  ).rows;
+
+  if (claimedRows.length === 0) {
+    return 0;
+  }
+
+  // Filter to claims older than staleMs whose owner process is no longer alive.
+  // The age filter prevents releasing claims that were just taken by a
+  // concurrently-starting sibling gateway on the same host.
+  const staleRows = claimedRows.filter(
+    (row) => (row.claimed_at ?? 0) <= cutoff && !isIngressClaimProcessAlive(row.claim_owner),
+  );
+
+  if (staleRows.length === 0) {
+    return 0;
+  }
+
+  // Batch release all stale claims in a single write transaction. Each release
+  // is guarded by the exact claim_token observed during selection: between the
+  // read above and this write, a sibling gateway could release and re-claim the
+  // same event (new token), and releasing on `status = "claimed"` alone would
+  // drop that fresh claim into duplicate processing.
+  const released = runOpenClawStateWriteTransaction(
+    (tx) => {
+      const txKysely = getChannelIngressKysely(tx.db);
+      let count = 0;
+      for (const row of staleRows) {
+        const result = executeSqliteQuerySync(
+          tx.db,
+          txKysely
+            .updateTable("channel_ingress_events")
+            .set((eb) => ({
+              status: "pending" as const,
+              claim_token: null,
+              claim_owner: null,
+              claimed_at: null,
+              attempts: eb("attempts", "+", 1),
+              last_attempt_at: nowMs,
+              last_error: "recovered at startup: owner process gone",
+              updated_at: nowMs,
+            }))
+            .where("queue_name", "=", row.queue_name)
+            .where("event_id", "=", row.event_id)
+            .where("status", "=", "claimed")
+            .where("claim_token", "=", row.claim_token),
+        );
+        count += affectedRows(result);
+      }
+      return count;
+    },
+    { path: database.path },
+  );
+
+  if (released === 0) {
+    return 0;
+  }
+
+  options?.log?.info?.(
+    `gateway: recovered ${released} stale channel ingress claim(s) from previous session`,
+  );
+
+  return released;
+}
+
+/** Check whether the PID that owns a claim is still running. */
+function isIngressClaimProcessAlive(claimOwner: string | null | undefined): boolean {
+  // Owners are either a bare PID (queue default) or a compound `${pid}:${uuid}`
+  // (Telegram spool). Parse the PID prefix so a live compound owner is not
+  // misread as dead and its claim wrongly released into duplicate processing.
+  const pid = Number.parseInt(claimOwner?.split(":", 1)[0] ?? "", 10);
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    return code !== "ESRCH" && code !== "EINVAL";
+  }
+}
