@@ -49,10 +49,23 @@ function parseCpuPercent(raw) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function isTerminalZeroMemorySample(raw) {
+  const parts = String(raw || "").split("/");
+  if (parts.length !== 2) {
+    return false;
+  }
+  return parts.every((part) => parseMemoryMiB(part.trim()) === 0);
+}
+
 function assertSampleValue(value, raw, name, labelLocal) {
   if (value === undefined) {
     throw new Error(
       `docker stats sample for ${labelLocal} had invalid ${name}: ${JSON.stringify(raw)}`,
+    );
+  }
+  if (name === "MemUsage" && value <= 0) {
+    throw new Error(
+      `docker stats sample for ${labelLocal} had non-positive ${name}: ${JSON.stringify(raw)}`,
     );
   }
 }
@@ -86,6 +99,11 @@ await scanStatsFileLines(statsFile, (line) => {
   }
   const observedMemoryMiB = parseMemoryMiB(parsed.MemUsage);
   const observedCpuPercent = parseCpuPercent(parsed.CPUPerc);
+  // Docker can emit 0B / 0B after the target container exits; it proves
+  // lifecycle timing, not resource usage. Keep the real captured samples.
+  if (isTerminalZeroMemorySample(parsed.MemUsage)) {
+    return;
+  }
   assertSampleValue(observedMemoryMiB, parsed.MemUsage, "MemUsage", label);
   assertSampleValue(observedCpuPercent, parsed.CPUPerc, "CPUPerc", label);
   parsedSamples += 1;

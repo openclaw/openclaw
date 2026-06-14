@@ -1,6 +1,10 @@
 // Tests reply turn admission decisions for active, queued, and aborted runs.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createReplyOperation, testing } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  runAfterReplyOperationClear,
+  testing,
+} from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 describe("reply turn admission", () => {
@@ -105,6 +109,138 @@ describe("reply turn admission", () => {
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
+    }
+  });
+
+  it("keeps an already-waiting follow-up behind the delivery barrier", async () => {
+    const active = createReplyOperation({
+      sessionKey: "agent:main:discord:channel:42",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    let releaseBarrier: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const admitted = admitReplyTurn({
+      sessionKey: "agent:main:discord:channel:42",
+      sessionId: "queued-session",
+      kind: "queued_followup",
+      resetTriggered: false,
+    });
+    let settled = false;
+    void admitted.then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    active.completeWithAfterClearBarrier(barrier);
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+
+    releaseBarrier();
+    const result = await admitted;
+    expect(result.status).toBe("owned");
+    if (result.status === "owned") {
+      result.operation.complete();
+    }
+  });
+
+  it("allows a visible turn to claim the lane while delivery settles", async () => {
+    const active = createReplyOperation({
+      sessionKey: "agent:main:discord:channel:42",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    let releaseBarrier: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+
+    active.completeWithAfterClearBarrier(barrier);
+    const result = await admitReplyTurn({
+      sessionKey: "agent:main:discord:channel:42",
+      sessionId: "visible-session",
+      kind: "visible",
+      resetTriggered: false,
+    });
+
+    expect(result.status).toBe("owned");
+    if (result.status === "owned") {
+      result.operation.complete();
+    }
+    releaseBarrier();
+    await barrier;
+  });
+
+  it("skips heartbeat turns while delivery settles", async () => {
+    const active = createReplyOperation({
+      sessionKey: "agent:main:discord:channel:42",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    let releaseBarrier: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+
+    active.completeWithAfterClearBarrier(barrier);
+    const result = await admitReplyTurn({
+      sessionKey: "agent:main:discord:channel:42",
+      sessionId: "heartbeat-session",
+      kind: "heartbeat",
+      resetTriggered: false,
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: "active-run" });
+    releaseBarrier();
+    await barrier;
+  });
+
+  it("passes a visible turn's rotated session to after-clear work", async () => {
+    const active = createReplyOperation({
+      sessionKey: "agent:main:discord:channel:42",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    let releaseBarrier: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    let admissionSessionId: string | undefined;
+    runAfterReplyOperationClear(active, (sessionId) => {
+      admissionSessionId = sessionId;
+    });
+
+    active.completeWithAfterClearBarrier(barrier);
+    const visibleAdmission = await admitReplyTurn({
+      sessionKey: "agent:main:discord:channel:42",
+      sessionId: "visible-session",
+      kind: "visible",
+      resetTriggered: false,
+    });
+    expect(visibleAdmission.status).toBe("owned");
+    if (visibleAdmission.status === "owned") {
+      visibleAdmission.operation.updateSessionId("rotated-session");
+      visibleAdmission.operation.complete();
+    }
+
+    releaseBarrier();
+    await barrier;
+    await vi.waitFor(() => {
+      expect(admissionSessionId).toBe("rotated-session");
+    });
+    const queuedResult = await admitReplyTurn({
+      sessionKey: "agent:main:discord:channel:42",
+      sessionId: admissionSessionId ?? "queued-session",
+      kind: "queued_followup",
+      resetTriggered: false,
+    });
+    expect(queuedResult.status).toBe("owned");
+    if (queuedResult.status === "owned") {
+      expect(queuedResult.operation.sessionId).toBe("rotated-session");
+      queuedResult.operation.complete();
     }
   });
 

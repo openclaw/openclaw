@@ -227,6 +227,22 @@ describe("ensureConfigReady", () => {
     });
   });
 
+  it("runs doctor flow before agent commands when default exec approvals must move to a custom state dir", async () => {
+    const root = useTempOpenClawHome();
+    const stateDir = path.join(root, "custom-state");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    writeStateMarker(root, "exec-approvals.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
   it.each([
     ["Discord model picker preferences", "discord/model-picker-preferences.json"],
     ["Discord thread bindings", "discord/thread-bindings.json"],
@@ -238,7 +254,7 @@ describe("ensureConfigReady", () => {
     ["Telegram pairing allowFrom", "credentials/telegram-allowFrom.json"],
     ["iMessage reply short-id cache", "imessage/reply-cache.jsonl"],
     ["iMessage sent echo cache", "imessage/sent-echoes.jsonl"],
-    ["iMessage catchup cursor", "imessage/catchup/default.json"],
+    ["iMessage catchup cursor", "imessage/catchup/default__37a8eec1ce19.json"],
     ["WhatsApp root auth", "credentials/creds.json"],
   ])("runs doctor flow for bundled channel legacy state: %s", async (_label, relativePath) => {
     const root = useTempOpenClawHome();

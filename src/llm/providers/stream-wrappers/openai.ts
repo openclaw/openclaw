@@ -24,6 +24,7 @@ import {
 import { createOpenAIResponsesTransportStreamFn } from "../../../agents/openai-transport-stream.js";
 import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
+import type { SandboxToolPolicy } from "../../../agents/sandbox.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
@@ -122,15 +123,37 @@ function isCodeModeEnabled(config?: OpenClawConfig): boolean {
   );
 }
 
+function readPayloadToolField(record: Record<string, unknown>, field: string): unknown {
+  try {
+    return record[field];
+  } catch {
+    return undefined;
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
 function readPayloadToolName(tool: unknown): string | undefined {
   if (!tool || typeof tool !== "object") {
     return undefined;
   }
-  const record = tool as { name?: unknown; function?: { name?: unknown } };
-  if (typeof record.name === "string") {
-    return record.name;
+  const record = tool as Record<string, unknown>;
+  const name = readPayloadToolField(record, "name");
+  if (typeof name === "string") {
+    return name;
   }
-  return typeof record.function?.name === "string" ? record.function.name : undefined;
+  const fn = readPayloadToolField(record, "function");
+  if (!fn || typeof fn !== "object") {
+    return undefined;
+  }
+  const fnName = readPayloadToolField(fn as Record<string, unknown>, "name");
+  return typeof fnName === "string" ? fnName : undefined;
 }
 
 function isCodeModePayloadToolName(name: string | undefined): boolean {
@@ -153,7 +176,7 @@ function filterCodeModeGroupedToolDeclarations(tool: unknown): Record<string, un
   const record = tool as Record<string, unknown>;
   const filteredGroups: Record<string, unknown> = {};
   for (const key of ["functionDeclarations", "function_declarations"] as const) {
-    const filtered = filterCodeModeToolDeclarations(record[key]);
+    const filtered = filterCodeModeToolDeclarations(readPayloadToolField(record, key));
     if (filtered === undefined) {
       continue;
     }
@@ -180,6 +203,12 @@ function filterCodeModePayloadTools(payload: unknown): void {
     const grouped = filterCodeModeGroupedToolDeclarations(tool);
     return grouped ? [grouped] : [];
   });
+}
+
+function filterCodeModePayloadHookResult(payload: unknown, nextPayload: unknown): unknown {
+  const finalPayload = nextPayload === undefined ? payload : nextPayload;
+  filterCodeModePayloadTools(finalPayload);
+  return nextPayload === undefined ? undefined : finalPayload;
 }
 
 function hasCodeModeVisibleTools(context: { tools?: unknown }): boolean {
@@ -397,10 +426,10 @@ export function createOpenAIResponsesContextManagementWrapper(
     }
 
     const originalOnPayload = options?.onPayload;
+    const effectiveStore = policy.shouldStripStore ? false : policy.explicitStore;
     const replayResponsesItemIds =
-      policy.explicitStore === undefined
-        ? (options as OpenAIResponsesReplayOptions | undefined)?.replayResponsesItemIds
-        : policy.explicitStore;
+      effectiveStore ??
+      (options as OpenAIResponsesReplayOptions | undefined)?.replayResponsesItemIds;
     const nextOptions: OpenAIResponsesReplayOptions = {
       ...options,
       ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
@@ -613,7 +642,25 @@ export function createOpenAITextVerbosityWrapper(
 /** @deprecated OpenAI Codex provider-owned stream helper; do not use from third-party plugins. */
 export function createCodexNativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
-  params: { config?: OpenClawConfig; agentDir?: string; codeModeToolSurfaceEnabled?: boolean },
+  params: {
+    config?: OpenClawConfig;
+    agentDir?: string;
+    agentId?: string;
+    sessionKey?: string;
+    sandboxToolPolicy?: SandboxToolPolicy;
+    messageProvider?: string;
+    agentAccountId?: string | null;
+    groupId?: string | null;
+    groupChannel?: string | null;
+    groupSpace?: string | null;
+    spawnedBy?: string | null;
+    senderId?: string | null;
+    senderName?: string | null;
+    senderUsername?: string | null;
+    senderE164?: string | null;
+    nativeWebSearchAllowedByToolPolicy?: boolean;
+    codeModeToolSurfaceEnabled?: boolean;
+  },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -634,21 +681,44 @@ export function createCodexNativeWebSearchWrapper(
         onPayload: (payload) => {
           filterCodeModePayloadTools(payload);
           const nextPayload = originalOnPayload?.(payload, model);
-          if (nextPayload !== undefined) {
-            filterCodeModePayloadTools(nextPayload);
-            return nextPayload;
+          if (isPromiseLike(nextPayload)) {
+            return Promise.resolve(nextPayload).then((resolvedPayload) =>
+              filterCodeModePayloadHookResult(payload, resolvedPayload),
+            );
           }
-          filterCodeModePayloadTools(payload);
-          return undefined;
+          return filterCodeModePayloadHookResult(payload, nextPayload);
         },
       };
       return underlying(model, context, codeModeOptions);
+    }
+
+    if (params.nativeWebSearchAllowedByToolPolicy === false) {
+      log.debug(
+        `skipping Codex native web search (tool_policy_denied) for ${
+          model.provider ?? "unknown"
+        }/${model.id ?? "unknown"}`,
+      );
+      return underlying(model, context, options);
     }
 
     const activation = resolveCodexNativeSearchActivation({
       config: params.config,
       modelProvider: readStringValue(model.provider),
       modelApi: readStringValue(model.api),
+      modelId: readStringValue(model.id),
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sandboxToolPolicy: params.sandboxToolPolicy,
+      messageProvider: params.messageProvider,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
       agentDir: params.agentDir,
     });
 

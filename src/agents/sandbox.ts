@@ -20,6 +20,7 @@ export { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandb
 export {
   getSandboxBackendFactory,
   getSandboxBackendManager,
+  getSandboxBackendWorkdirResolver,
   registerSandboxBackend,
   requireSandboxBackendFactory,
 } from "./sandbox/backend.js";
@@ -69,6 +70,7 @@ export type {
   SandboxBackendManager,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
+  SandboxBackendWorkdirResolver,
 } from "./sandbox/backend.js";
 export type { RemoteShellSandboxHandle } from "./sandbox/remote-fs-bridge.js";
 export type {
