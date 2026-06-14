@@ -72,6 +72,10 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "messages.visibleReplies",
   "messages.groupChat.visibleReplies",
   "messages.groupChat.unmentionedInbound",
+  // Doctor may recommend switching restrictive plugin allowlists from legacy
+  // bundled-provider compatibility to strict allowlist discovery. This is a
+  // hardening edit, but keep loosening back to "compat" blocked below.
+  "plugins.bundledDiscovery",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
@@ -330,6 +334,16 @@ function assertGatewayConfigMutationAllowed(params: {
   if (disallowedPaths.length > 0) {
     throw new Error(
       `gateway ${params.action} cannot change protected config paths: ${disallowedPaths.join(", ")}`,
+    );
+  }
+
+  if (
+    changedPaths.includes("plugins.bundledDiscovery") &&
+    (nextConfig.plugins as { bundledDiscovery?: unknown } | undefined)?.bundledDiscovery !==
+      "allowlist"
+  ) {
+    throw new Error(
+      `gateway ${params.action} cannot loosen bundled plugin discovery; only plugins.bundledDiscovery="allowlist" is allowed`,
     );
   }
 
