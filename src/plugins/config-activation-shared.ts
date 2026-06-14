@@ -25,7 +25,8 @@ export type PluginActivationCause =
   | "enabled-by-effective-config"
   | "bundled-channel-configured"
   | "bundled-default-enablement"
-  | "bundled-disabled-by-default";
+  | "bundled-disabled-by-default"
+  | "dreaming-engine-sidecar";
 
 export type PluginActivationStateLike = {
   enabled: boolean;
@@ -70,6 +71,7 @@ export const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, st
   "bundled-channel-configured": "channel configured",
   "bundled-default-enablement": "bundled default enablement",
   "bundled-disabled-by-default": "bundled (disabled by default)",
+  "dreaming-engine-sidecar": "dreaming engine sidecar",
 };
 
 export function resolvePluginActivationReason(
@@ -134,6 +136,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   activationSource?: PluginActivationConfigSourceLike<TRootConfig>;
   autoEnabledReason?: string;
   allowBundledChannelExplicitBypassesAllowlist?: boolean;
+  dreamingEngineId?: string | null;
   isBundledChannelEnabledByChannelConfig: (
     rootConfig: TRootConfig | undefined,
     pluginId: string,
@@ -222,6 +225,27 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
       explicitlyEnabled: true,
       source: "explicit",
       cause: explicitSelection.cause,
+    };
+  }
+  // The dreaming engine is a runtime dependency of the selected memory-slot plugin.
+  // When dreaming is enabled it must activate even if a restrictive `plugins.allow`
+  // omits it, otherwise dreaming sweeps silently never run. Denylist and
+  // `entries.<id>.enabled: false` still win (those gates return above). Scoped to the
+  // bundled resolved dreaming engine id, and only when the plugin would otherwise be
+  // rejected by the allowlist gate below, so no other activation decision changes.
+  if (
+    params.dreamingEngineId != null &&
+    params.id === params.dreamingEngineId &&
+    params.origin === "bundled" &&
+    params.config.allow.length > 0 &&
+    !explicitlyAllowed
+  ) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      cause: "dreaming-engine-sidecar",
     };
   }
   if (params.config.allow.length > 0 && !explicitlyAllowed) {

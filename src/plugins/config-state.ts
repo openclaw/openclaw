@@ -1,9 +1,15 @@
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingPluginConfig,
+} from "../memory-host-sdk/dreaming.js";
 import {
   createEffectiveEnableStateResolver,
   createPluginEnableStateResolver,
@@ -156,6 +162,31 @@ export function isTestDefaultMemorySlotDisabled(
   return true;
 }
 
+/**
+ * Resolves the dreaming sidecar engine id for a config: the bundled dreaming engine
+ * (memory-core) when dreaming is enabled and a different plugin holds the memory slot,
+ * otherwise null. Shared by the loader fast-path guards and the activation decision so
+ * every registry surface agrees on when the sidecar must load.
+ */
+export function resolveDreamingSidecarEngineId(params: {
+  cfg: OpenClawConfig;
+  memorySlot: string | null | undefined;
+}): string | null {
+  const normalizedMemorySlot = normalizeLowercaseStringOrEmpty(params.memorySlot);
+  if (
+    !normalizedMemorySlot ||
+    normalizedMemorySlot === "none" ||
+    normalizedMemorySlot === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+  ) {
+    return null;
+  }
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(params.cfg),
+    cfg: params.cfg,
+  });
+  return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
+}
+
 export function resolvePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
@@ -175,6 +206,12 @@ export function resolvePluginActivationState(params: {
           plugins: params.config,
         }),
       allowBundledChannelExplicitBypassesAllowlist: true,
+      dreamingEngineId: params.rootConfig
+        ? resolveDreamingSidecarEngineId({
+            cfg: params.rootConfig,
+            memorySlot: params.config.slots.memory,
+          })
+        : null,
       isBundledChannelEnabledByChannelConfig,
     }),
   );
