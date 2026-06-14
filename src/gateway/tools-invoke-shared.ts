@@ -97,14 +97,19 @@ function mergeActionIntoArgsIfSupported(params: {
   if (!action || args.action !== undefined) {
     return args;
   }
-  const schemaObj = toolSchema as { properties?: Record<string, unknown> } | null;
-  const hasAction = Boolean(
-    schemaObj &&
-    typeof schemaObj === "object" &&
-    schemaObj.properties &&
-    "action" in schemaObj.properties,
-  );
-  return hasAction ? { ...args, action } : args;
+  return schemaSupportsAction(toolSchema) ? { ...args, action } : args;
+}
+
+function schemaSupportsAction(toolSchema: unknown): boolean {
+  if (!toolSchema || typeof toolSchema !== "object") {
+    return false;
+  }
+  try {
+    const properties = (toolSchema as { properties?: unknown }).properties;
+    return Boolean(properties && typeof properties === "object" && "action" in properties);
+  } catch {
+    return false;
+  }
 }
 
 function getErrorMessage(err: unknown): string {
