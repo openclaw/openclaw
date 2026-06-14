@@ -35,6 +35,8 @@ let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensure
 let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
 let getPluginToolMeta: typeof import("./tools.js").getPluginToolMeta;
 let resetPluginToolFactoryCache: typeof import("./tools.js").resetPluginToolFactoryCache;
+let buildPluginToolDescriptorCacheKey: typeof import("./tool-descriptor-cache.js").buildPluginToolDescriptorCacheKey;
+let writeCachedPluginToolDescriptors: typeof import("./tool-descriptor-cache.js").writeCachedPluginToolDescriptors;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let pinActivePluginChannelRegistry: typeof import("./runtime.js").pinActivePluginChannelRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
@@ -477,6 +479,8 @@ describe("resolvePluginTools optional tools", () => {
       resetPluginToolFactoryCache,
       resolvePluginTools,
     } = await import("./tools.js"));
+    ({ buildPluginToolDescriptorCacheKey, writeCachedPluginToolDescriptors } =
+      await import("./tool-descriptor-cache.js"));
     ({
       getActivePluginRegistry,
       pinActivePluginChannelRegistry,
@@ -2093,6 +2097,77 @@ describe("resolvePluginTools optional tools", () => {
       content: [{ type: "text", text: "mock-status-ok" }],
     });
     expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips poisoned cached plugin tool descriptors while preserving healthy cached tools", () => {
+    const context = {
+      ...createContext(),
+      config: {
+        ...createContext().config,
+        plugins: {
+          ...createContext().config.plugins,
+          allow: ["cache-poison"],
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: context.config,
+      plugin: {
+        id: "cache-poison",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["healthy_cached"],
+        },
+      },
+    });
+    writeCachedPluginToolDescriptors({
+      cacheKey: buildPluginToolDescriptorCacheKey({
+        pluginId: "cache-poison",
+        source: "cache-poison",
+        contractToolNames: ["healthy_cached"],
+        ctx: context as never,
+      }),
+      descriptors: [
+        {
+          optional: false,
+          descriptor: {
+            get name() {
+              throw new Error("cached plugin tool descriptor name exploded");
+            },
+            description: "Bad cached tool",
+            inputSchema: { type: "object", properties: {} },
+            owner: { kind: "plugin", pluginId: "cache-poison" },
+            executor: {
+              kind: "plugin",
+              pluginId: "cache-poison",
+              toolName: "bad_cached",
+            },
+          },
+        } as never,
+        {
+          optional: false,
+          descriptor: {
+            name: "healthy_cached",
+            description: "Healthy cached tool",
+            inputSchema: { type: "object", properties: {} },
+            owner: { kind: "plugin", pluginId: "cache-poison" },
+            executor: {
+              kind: "plugin",
+              pluginId: "cache-poison",
+              toolName: "healthy_cached",
+            },
+          },
+        },
+      ],
+    });
+
+    const tools = resolvePluginTools(createResolveToolsParams({ context }));
+
+    expectResolvedToolNames(tools, ["healthy_cached"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("reuses cached plugin tool descriptors across session identity changes", async () => {

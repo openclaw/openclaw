@@ -653,10 +653,25 @@ function cachedDescriptorsCoverToolNames(params: {
   descriptors: readonly CachedPluginToolDescriptor[];
   toolNames: readonly string[];
 }): boolean {
-  const descriptorNames = new Set(
-    params.descriptors.map((entry) => normalizeToolName(entry.descriptor.name)),
-  );
+  const descriptorNames = new Set<string>();
+  for (const entry of params.descriptors) {
+    const name = readCachedPluginToolDescriptorName(entry);
+    if (name) {
+      descriptorNames.add(normalizeToolName(name));
+    }
+  }
   return params.toolNames.every((name) => descriptorNames.has(normalizeToolName(name)));
+}
+
+function readCachedPluginToolDescriptorName(
+  cachedDescriptor: CachedPluginToolDescriptor,
+): string | undefined {
+  try {
+    const name = cachedDescriptor.descriptor.name;
+    return typeof name === "string" && name.trim() ? name : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function createCachedDescriptorPluginTool(params: {
@@ -825,10 +840,14 @@ function resolveCachedPluginTools(params: {
     let hasNameConflict = false;
     const localNormalizedNames = new Set<string>();
     for (const cachedDescriptor of cached) {
+      const cachedDescriptorName = readCachedPluginToolDescriptorName(cachedDescriptor);
+      if (!cachedDescriptorName) {
+        continue;
+      }
       if (
         !cachedDescriptor.optional &&
         !availableToolNames.some(
-          (name) => normalizeToolName(name) === normalizeToolName(cachedDescriptor.descriptor.name),
+          (name) => normalizeToolName(name) === normalizeToolName(cachedDescriptorName),
         )
       ) {
         continue;
@@ -836,18 +855,18 @@ function resolveCachedPluginTools(params: {
       if (
         cachedDescriptor.optional &&
         !isOptionalToolAllowed({
-          toolName: cachedDescriptor.descriptor.name,
+          toolName: cachedDescriptorName,
           pluginId: plugin.id,
           allowlist: params.allowlist,
         })
       ) {
         continue;
       }
-      const normalizedDescriptorName = normalizeToolName(cachedDescriptor.descriptor.name);
+      const normalizedDescriptorName = normalizeToolName(cachedDescriptorName);
       if (
         denylistBlocksPluginTool({
           pluginId: plugin.id,
-          toolName: cachedDescriptor.descriptor.name,
+          toolName: cachedDescriptorName,
           denylist: params.denylist,
         })
       ) {
