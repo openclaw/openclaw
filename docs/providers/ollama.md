@@ -260,10 +260,19 @@ answering from another configured fallback model.
 
 Isolated cron jobs do one extra local safety check before they start the agent
 turn. If the selected model resolves to a local, private-network, or `.local`
-Ollama provider and `/api/tags` is unreachable, OpenClaw records that cron run
-as `skipped` with the selected `ollama/<model>` in the error text. The endpoint
-preflight is cached for 5 minutes, so multiple cron jobs pointed at the same
-stopped Ollama daemon do not all launch failing model requests.
+Ollama provider and `/api/tags` is unreachable, OpenClaw advances to the next
+configured model fallback. It records the cron run as `skipped` with the
+selected `ollama/<model>` in the error text only when no candidate is reachable.
+The endpoint preflight is cached for 5 minutes, so multiple cron jobs pointed at
+the same stopped Ollama daemon do not all launch failing model requests. If a
+sleeping Ollama host needs more than the default single 2.5s probe to wake,
+configure
+`cron.modelPreflight.maxAttempts`, `cron.modelPreflight.retryDelayMs`, and/or
+`cron.modelPreflight.timeoutMs` to give it a short wake-up window before cron
+advances to a fallback or marks the run skipped. Keep the worst-case window at
+or below 55s; OpenClaw validates the configured endpoint window and enforces one
+shared 55s deadline across the full fallback candidate chain so local-provider
+preflight stays below cron's isolated-agent setup watchdog.
 
 Live-verify the local text path, native stream path, and embeddings against
 local Ollama with:

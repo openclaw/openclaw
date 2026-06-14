@@ -1082,6 +1082,38 @@ describe("cron webhook schema", () => {
     });
     expect(res.success).toBe(true);
   });
+
+  it("accepts cron.modelPreflight config", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        modelPreflight: {
+          timeoutMs: 10000,
+          maxAttempts: 3,
+          retryDelayMs: 5000,
+        },
+      },
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects cron.modelPreflight windows that exceed the setup watchdog budget", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        modelPreflight: {
+          timeoutMs: 30000,
+          maxAttempts: 2,
+          retryDelayMs: 1000,
+        },
+      },
+    });
+    expect(res.success).toBe(false);
+    if (res.success) {
+      throw new Error("expected cron.modelPreflight retry window validation to fail");
+    }
+    expect(res.error.issues[0]?.message).toContain(
+      "total retry window must be <= 55000ms per endpoint",
+    );
+  });
 });
 
 describe("broadcast", () => {

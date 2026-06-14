@@ -1723,6 +1723,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Compatibility setting for older file-backed cron run logs (for example `2mb`, default `2000000`). SQLite run history pruning is row-count based.",
   "cron.runLog.keepLines":
     "How many trailing run-history rows to retain per cron job (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+  "cron.modelPreflight":
+    "Controls the lightweight local model-provider preflight used before isolated cron agent turns. Tune this when local or LAN providers such as Ollama need a few seconds to wake before /api/tags or /models responds. Each configured endpoint window and the complete fallback candidate chain are capped at 55s to stay below cron's setup watchdog.",
+  "cron.modelPreflight.timeoutMs":
+    "Per-attempt timeout in milliseconds for local model-provider preflight probes (default: 2500). Increase for slow LAN or cold-starting providers while keeping the total retry window <= 55s.",
+  "cron.modelPreflight.maxAttempts":
+    "Number of local model-provider preflight attempts before cron advances to a configured fallback or marks the run skipped (default: 1). Increase to let sleeping Ollama/vLLM/LM Studio hosts wake before cron gives up, within the 55s preflight window cap.",
+  "cron.modelPreflight.retryDelayMs":
+    "Delay in milliseconds between failed local model-provider preflight attempts (default: 0). Use with maxAttempts to create a warm-up window before cron advances to a fallback or skips the run, within the 55s cap.",
   transcripts:
     "Core transcript capture settings for recording-capable agent tools and configured live meeting auto-start sources. Keep disabled unless operators explicitly want agents to capture or import meeting transcripts.",
   "transcripts.enabled":

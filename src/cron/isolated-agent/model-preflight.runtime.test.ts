@@ -1,5 +1,5 @@
 // Runtime model preflight tests cover provider/model checks before cron execution.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -39,6 +39,10 @@ describe("preflightCronModelProvider", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
     resetCronModelProviderPreflightCacheForTest();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("skips network checks for cloud provider URLs", async () => {
@@ -85,6 +89,40 @@ describe("preflightCronModelProvider", () => {
     const request = requireFetchPreflightRequest();
     expect(request.url).toBe("http://127.0.0.1:8000/v1/models");
     expect(request.timeoutMs).toBe(2500);
+  });
+
+  it("retries local provider preflight when configured", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("warming up"));
+    mockReachableResponse(200);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        cron: {
+          modelPreflight: {
+            maxAttempts: 2,
+            retryDelayMs: 0,
+            timeoutMs: 10_000,
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://192.168.1.117:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3:14b",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    const request = requireFetchPreflightRequest();
+    expect(request.url).toBe("http://192.168.1.117:11434/api/tags");
+    expect(request.timeoutMs).toBe(10000);
   });
 
   it("marks unreachable local Ollama endpoints unavailable and caches the result", async () => {
@@ -134,6 +172,102 @@ describe("preflightCronModelProvider", () => {
     const request = requireFetchPreflightRequest();
     expect(request.url).toBe("http://localhost:11434/api/tags");
     expect(request.auditContext).toBe("cron-model-provider-preflight");
+  });
+
+  it("reports configured attempts after repeated local provider preflight failures", async () => {
+    fetchWithSsrFGuardMock
+      .mockRejectedValueOnce(new Error("starting"))
+      .mockRejectedValueOnce(new Error("still starting"));
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        cron: {
+          modelPreflight: {
+            maxAttempts: 2,
+            retryDelayMs: 0,
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama" as const,
+              baseUrl: "http://localhost:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3:14b",
+      nowMs: 1000,
+    });
+
+    expect(result.status).toBe("unavailable");
+    if (result.status !== "unavailable") {
+      throw new Error(`expected preflight unavailable, got ${result.status}`);
+    }
+    expect(result.reason).toContain("after 2 preflight attempts");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache a local candidate skipped after the shared chain deadline expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("first endpoint unavailable"));
+
+    const cfg = {
+      models: {
+        providers: {
+          first: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:18001/v1",
+            models: [],
+          },
+          second: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:18002/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    const deadlineMs = 1_200;
+
+    const first = await preflightCronModelProvider({
+      cfg,
+      provider: "first",
+      model: "local-one",
+      deadlineMs,
+    });
+    expect(first.status).toBe("unavailable");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(requireFetchPreflightRequest().timeoutMs).toBe(200);
+
+    vi.setSystemTime(deadlineMs);
+    const second = await preflightCronModelProvider({
+      cfg,
+      provider: "second",
+      model: "local-two",
+      deadlineMs,
+    });
+
+    expect(second.status).toBe("unavailable");
+    if (second.status !== "unavailable") {
+      throw new Error(`expected second preflight unavailable, got ${second.status}`);
+    }
+    expect(second.reason).toContain("chain budget exhausted");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+
+    mockReachableResponse(200);
+    vi.setSystemTime(deadlineMs + 1);
+    const nextRun = await preflightCronModelProvider({
+      cfg,
+      provider: "second",
+      model: "local-two",
+    });
+
+    expect(nextRun).toEqual({ status: "available" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
   });
 
   it("retries an unavailable endpoint after the cache ttl", async () => {
