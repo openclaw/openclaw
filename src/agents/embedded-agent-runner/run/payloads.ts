@@ -25,6 +25,7 @@ import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import { parseInlineDirectives } from "../../../utils/directive-tags.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -49,6 +50,8 @@ type ToolErrorWarningPolicy = {
   showWarning: boolean;
   includeDetails: boolean;
 };
+
+const SHELL_FAILURE_COMMAND_EXCERPT_MAX_CHARS = 120;
 
 const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "required",
@@ -110,6 +113,110 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "full";
+}
+
+function longestBacktickRun(value: string): number {
+  let longest = 0;
+  let current = 0;
+  for (const char of value) {
+    if (char === "`") {
+      current += 1;
+      longest = Math.max(longest, current);
+      continue;
+    }
+    current = 0;
+  }
+  return longest;
+}
+
+function formatInlineCode(value: string, markdown: boolean): string {
+  if (!markdown) {
+    return value;
+  }
+  const delimiter = "`".repeat(longestBacktickRun(value) + 1);
+  const padding = value.startsWith("`") || value.endsWith("`") ? " " : "";
+  return `${delimiter}${padding}${value}${padding}${delimiter}`;
+}
+
+function extractShellExitCode(lastToolError: ToolErrorSummary): string | undefined {
+  const candidates = [lastToolError.errorCode, lastToolError.error];
+  for (const candidate of candidates) {
+    const normalized = normalizeOptionalString(candidate);
+    if (!normalized) {
+      continue;
+    }
+    const directCode = /^(?:exit[-_\s]?code[:=\s]*)?(\d{1,4})$/iu.exec(normalized)?.[1];
+    if (directCode) {
+      return directCode;
+    }
+    const contextualCode =
+      /\b(?:exited with code|exit code|exit status|code)\s*[:=]?\s*(\d{1,4})\b/iu.exec(
+        normalized,
+      )?.[1];
+    if (contextualCode) {
+      return contextualCode;
+    }
+  }
+  return undefined;
+}
+
+function formatShellFailureStatus(
+  lastToolError: ToolErrorSummary,
+  includeDetails: boolean,
+): string {
+  const normalizedToolName = normalizeOptionalLowercaseString(lastToolError.toolName);
+  const label = normalizedToolName === "bash" ? "Bash" : "Exec";
+  const error = normalizeOptionalString(lastToolError.error);
+  if (lastToolError.timedOut === true) {
+    return includeDetails && error ? `${label} timed out: ${error}` : `${label} timed out`;
+  }
+  const exitCode = extractShellExitCode(lastToolError);
+  if (exitCode) {
+    return `${label} exited with code ${exitCode}`;
+  }
+  return includeDetails && error ? `${label} failed: ${error}` : `${label} failed`;
+}
+
+function looksLikeShellStepList(value: string): boolean {
+  return value.includes("→") && /\brun\b/iu.test(value);
+}
+
+function resolveShellCommandExcerpt(lastToolError: ToolErrorSummary): string | undefined {
+  const excerpt =
+    normalizeOptionalString(lastToolError.commandExcerpt) ??
+    (lastToolError.meta && !looksLikeShellStepList(lastToolError.meta)
+      ? normalizeOptionalString(lastToolError.meta)
+      : undefined);
+  if (!excerpt) {
+    return undefined;
+  }
+  return excerpt.length > SHELL_FAILURE_COMMAND_EXCERPT_MAX_CHARS
+    ? `${truncateUtf16Safe(excerpt, SHELL_FAILURE_COMMAND_EXCERPT_MAX_CHARS)}…`
+    : excerpt;
+}
+
+function shouldUseDirectShellFailureSummary(params: {
+  lastToolError: ToolErrorSummary;
+  isCronTrigger?: boolean;
+  sessionKey: string;
+}): boolean {
+  return (
+    isExecLikeToolName(params.lastToolError.toolName) &&
+    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
+  );
+}
+
+function formatDirectShellFailureSummary(params: {
+  lastToolError: ToolErrorSummary;
+  includeDetails: boolean;
+  markdown: boolean;
+}): string {
+  const status = formatShellFailureStatus(params.lastToolError, params.includeDetails);
+  const excerpt = resolveShellCommandExcerpt(params.lastToolError);
+  if (!excerpt) {
+    return `🛠️ ${status}`;
+  }
+  return `🛠️ ${status}. Last command: ${formatInlineCode(excerpt, params.markdown)}`;
 }
 
 function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
@@ -546,16 +653,29 @@ export function buildEmbeddedRunPayloads(params: {
     // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (warningPolicy.showWarning) {
-      const toolSummary = formatToolAggregate(
-        params.lastToolError.toolName,
-        params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
-        { markdown: useMarkdown },
-      );
+      const useDirectShellSummary = shouldUseDirectShellFailureSummary({
+        lastToolError: params.lastToolError,
+        isCronTrigger: params.isCronTrigger,
+        sessionKey: params.sessionKey,
+      });
+      const toolSummary = useDirectShellSummary
+        ? formatDirectShellFailureSummary({
+            lastToolError: params.lastToolError,
+            includeDetails: warningPolicy.includeDetails,
+            markdown: useMarkdown,
+          })
+        : formatToolAggregate(
+            params.lastToolError.toolName,
+            params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+            { markdown: useMarkdown },
+          );
       const errorSuffix =
-        warningPolicy.includeDetails && params.lastToolError.error
+        !useDirectShellSummary && warningPolicy.includeDetails && params.lastToolError.error
           ? `: ${params.lastToolError.error}`
           : "";
-      const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
+      const warningText = useDirectShellSummary
+        ? `⚠️ ${toolSummary}`
+        : `⚠️ ${toolSummary} failed${errorSuffix}`;
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
         ? replyItems.some((item) => {

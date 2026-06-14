@@ -15,6 +15,7 @@ export type ToolErrorSummary = {
   middlewareError?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;
+  commandExcerpt?: string;
   fileTarget?: FileTarget;
 };
 

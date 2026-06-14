@@ -29,6 +29,20 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toContain("Exec failed");
   });
 
+  it("delivers direct shell failure summaries when no final assistant text exists", () => {
+    const text =
+      "⚠️ 🛠️ Bash exited with code 1. Last command: `mkdir -p ~/.openclaw/workspace/.tmp; if curl --fail https://example.test/webhook; then jq .; fi`";
+
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text, isError: true }],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe(text);
+    expect(result.outputText).toBe(text);
+    expect(result.deliveryPayloads).toEqual([{ text, isError: true }]);
+  });
+
   it("lets preferred final assistant text recover a plain tool warning", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
