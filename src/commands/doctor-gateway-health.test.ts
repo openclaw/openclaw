@@ -209,6 +209,73 @@ describe("probeGatewayMemoryStatus", () => {
     });
   });
 
+  it("carries dreaming status from the gateway memory payload", async () => {
+    const nextRunAtMs = Date.parse("2026-04-06T03:00:00.000Z");
+    callGateway.mockResolvedValue({
+      embedding: {
+        ok: false,
+        checked: false,
+        error:
+          "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+      },
+      dreaming: {
+        enabled: true,
+        verboseLogging: false,
+        storageMode: "inline",
+        separateReports: false,
+        shortTermCount: 0,
+        recallSignalCount: 0,
+        dailySignalCount: 0,
+        groundedSignalCount: 0,
+        totalSignalCount: 0,
+        phaseSignalCount: 0,
+        lightPhaseHitCount: 0,
+        remPhaseHitCount: 0,
+        promotedTotal: 0,
+        promotedToday: 0,
+        shortTermEntries: [],
+        signalEntries: [],
+        promotedEntries: [],
+        phases: {
+          light: {
+            enabled: true,
+            cron: "0 3 * * *",
+            lookbackDays: 7,
+            limit: 20,
+            managedCronPresent: true,
+            nextRunAtMs,
+          },
+          deep: {
+            enabled: true,
+            cron: "0 3 * * *",
+            minScore: 0.72,
+            minRecallCount: 2,
+            minUniqueQueries: 2,
+            recencyHalfLifeDays: 14,
+            limit: 20,
+            managedCronPresent: true,
+            nextRunAtMs,
+          },
+          rem: {
+            enabled: true,
+            cron: "0 3 * * *",
+            lookbackDays: 7,
+            limit: 20,
+            minPatternStrength: 0.4,
+            managedCronPresent: true,
+            nextRunAtMs,
+          },
+        },
+      },
+    });
+
+    const result = await probeGatewayMemoryStatus({ cfg });
+    expect(result.checked).toBe(false);
+    expect(result.skipped).toBe(true);
+    expect(result.dreaming?.enabled).toBe(true);
+    expect(result.dreaming?.phases.deep.nextRunAtMs).toBe(nextRunAtMs);
+  });
+
   it("treats outer gateway timeouts as inconclusive (skipped: false)", async () => {
     // A transport timeout must NOT be treated as a skipped probe. It is a real
     // diagnostic signal and the renderer should warn for key-optional providers.
