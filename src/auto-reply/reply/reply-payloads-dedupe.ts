@@ -223,6 +223,7 @@ function resolveOriginThreadIdForPayload(params: {
     accountId: params.accountId,
     threadId: originThreadId,
     replyToId,
+    replyToIsExplicit: params.replyToIsExplicit,
     replyDelivery: params.replyDelivery,
   });
   if (transport?.threadId != null) {

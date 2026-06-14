@@ -86,16 +86,18 @@ describe("buildReplyPayloads media filter integration", () => {
               resolveReplyTransport: ({
                 threadId,
                 replyToId,
+                replyToIsExplicit,
                 replyDelivery,
               }: ResolveReplyTransportParams) => {
+                const ambientThreadId = threadId != null ? String(threadId) : undefined;
                 const resolvedThreadId =
                   replyDelivery?.chatType === "direct"
                     ? undefined
-                    : replyDelivery
-                      ? threadId != null
-                        ? String(threadId)
-                        : (replyToId ?? undefined)
-                      : (replyToId ?? (threadId != null ? String(threadId) : undefined));
+                    : replyToIsExplicit
+                      ? (replyToId ?? ambientThreadId)
+                      : replyDelivery
+                        ? (ambientThreadId ?? replyToId ?? undefined)
+                        : (replyToId ?? ambientThreadId);
                 return {
                   replyToId: resolvedThreadId,
                   threadId: resolvedThreadId ?? null,
@@ -699,17 +701,43 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("dedupes an explicit Mattermost reply against the existing thread root", async () => {
+  it("does not dedupe an explicit Mattermost reply to another thread root", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       config: {},
-      payloads: [{ text: "same reply", replyToId: "child-post", replyToTag: true }],
+      payloads: [{ text: "same reply", replyToId: "other-root", replyToTag: true }],
       replyToMode: "all",
       replyToChannel: "mattermost",
       messageProvider: "mattermost",
       originatingChatType: "channel",
       originatingTo: "channel:C1",
       originatingThreadId: "root-post",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "mattermost",
+          provider: "mattermost",
+          to: "channel:C1",
+          threadId: "root-post",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+  });
+
+  it("dedupes an explicit Mattermost reply to the same thread root", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "root-post", replyToTag: true }],
+      replyToMode: "all",
+      replyToChannel: "mattermost",
+      messageProvider: "mattermost",
+      originatingChatType: "channel",
+      originatingTo: "channel:C1",
+      originatingThreadId: "ambient-root",
       messagingToolSentTexts: ["same reply"],
       messagingToolSentTargets: [
         {

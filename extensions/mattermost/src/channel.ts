@@ -896,15 +896,16 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     },
     resolveAutoThreadId: ({ to, replyToId, toolContext }) =>
       resolveMattermostAutoThreadId({ to, replyToId, toolContext }),
-    resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
+    resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
+      const ambientThreadId = threadId != null ? String(threadId) : undefined;
       const resolvedThreadId =
         replyDelivery?.chatType === "direct"
           ? undefined
-          : replyDelivery
-            ? threadId != null
-              ? String(threadId)
-              : (replyToId ?? undefined)
-            : (replyToId ?? (threadId != null ? String(threadId) : undefined));
+          : replyToIsExplicit
+            ? (replyToId ?? ambientThreadId)
+            : replyDelivery
+              ? (ambientThreadId ?? replyToId ?? undefined)
+              : (replyToId ?? ambientThreadId);
       return {
         replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
         threadId: resolvedThreadId ?? null,

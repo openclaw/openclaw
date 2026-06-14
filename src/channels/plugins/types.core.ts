@@ -440,6 +440,8 @@ export type ChannelThreadingAdapter = {
     accountId?: string | null;
     threadId?: string | number | null;
     replyToId?: string | null;
+    /** True when replyToId came from an explicit payload target or reply tag. */
+    replyToIsExplicit?: boolean;
     replyDelivery?: ReplyDeliveryContext;
   }) => ChannelReplyTransport | null;
   resolveFocusedBinding?: (params: {

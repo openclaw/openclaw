@@ -104,11 +104,16 @@ function resolveSlackThreadTsCandidate(value?: string | number | null): string |
 }
 
 const mattermostThreading: ChannelThreadingAdapter = {
-  resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
+  resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
+    const ambientThreadId = threadId != null && threadId !== "" ? String(threadId) : undefined;
     const resolvedThreadId =
       replyDelivery?.chatType === "direct"
         ? undefined
-        : (replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined));
+        : replyToIsExplicit
+          ? (replyToId ?? ambientThreadId)
+          : replyDelivery
+            ? (ambientThreadId ?? replyToId ?? undefined)
+            : (replyToId ?? ambientThreadId);
     return {
       replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
       threadId: resolvedThreadId ?? null,
@@ -473,6 +478,31 @@ describe("routeReply", () => {
       threadId: null,
     });
     expect(lastDeliveryPayload().replyToId).toBeUndefined();
+  });
+
+  it("preserves explicit Mattermost reply targets over the ambient thread", async () => {
+    const res = await routeReply({
+      payload: {
+        text: "hello",
+        replyToId: "other-root",
+        replyToTag: true,
+      },
+      channel: "mattermost",
+      to: "channel:C123",
+      threadId: "ambient-root",
+      replyDelivery: {
+        chatType: "channel",
+        replyToMode: "all",
+      },
+      cfg: {} as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDeliveryFields({
+      replyToId: "other-root",
+      threadId: "other-root",
+    });
+    expect(lastDeliveryPayload().replyToId).toBe("other-root");
   });
 
   it("preserves reply targets when an adapter returns undefined", async () => {

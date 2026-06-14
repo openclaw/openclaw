@@ -286,6 +286,21 @@ describe("mattermostPlugin", () => {
       expect(
         resolveReplyTransport({
           cfg: {},
+          replyToId: "other-root",
+          replyToIsExplicit: true,
+          threadId: "ambient-root",
+          replyDelivery: {
+            chatType: "channel",
+            replyToMode: "all",
+          },
+        }),
+      ).toEqual({
+        replyToId: "other-root",
+        threadId: "other-root",
+      });
+      expect(
+        resolveReplyTransport({
+          cfg: {},
           replyToId: "dm-post",
           replyDelivery: {
             chatType: "direct",
