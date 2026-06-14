@@ -19,7 +19,6 @@ import {
 } from "../../execution-contract.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
@@ -150,6 +149,25 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "glob",
   "ls",
 ]);
+// Blind attempt retries may repeat completed tools. Admit only names with an
+// unconditional read-only or idempotent contract; action-dependent and unknown tools fail closed.
+const REPLAY_SAFE_TOOL_NAMES = new Set([
+  ...SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES,
+  "web_search",
+  "web_fetch",
+  "x_search",
+  "memory_search",
+  "memory_get",
+  "sessions_list",
+  "sessions_history",
+  "agents_list",
+  "get_goal",
+  "update_plan",
+  "tool_search",
+  "tool_describe",
+  "image",
+  "process.poll",
+]);
 const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
   "google",
   "google-vertex",
@@ -249,10 +267,12 @@ export type PlanningOnlyPlanDetails = {
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
+  const hadUnsafeTools = params.toolMetas.some(
+    (entry) => !REPLAY_SAFE_TOOL_NAMES.has(normalizeLowercaseStringOrEmpty(entry.toolName)),
+  );
   const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
-    hadMutatingTools ||
+    hadUnsafeTools ||
     hadAsyncStartedTool ||
     hasMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
