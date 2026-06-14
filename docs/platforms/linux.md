@@ -83,10 +83,10 @@ Wants=network-online.target
 ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
-TimeoutStopSec=30
+TimeoutStopSec=330
 TimeoutStartSec=30
 SuccessExitStatus=0 143
-KillMode=control-group
+KillMode=mixed
 
 [Install]
 WantedBy=default.target

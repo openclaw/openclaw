@@ -27,6 +27,7 @@ import {
   isEnvironmentFileOnlySource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS } from "./service-stop-timeout.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 import { resolveSystemdUserUnitPath } from "./systemd.js";
 
@@ -71,7 +72,9 @@ export const SERVICE_AUDIT_CODES = {
   systemdAfterNetworkOnline: "systemd-after-network-online",
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
-  systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
+  systemdKillModeNotMixed: "systemd-kill-mode-not-mixed",
+  systemdTimeoutStopTooShort: "systemd-timeout-stop-too-short",
+  launchdExitTimeoutTooShort: "launchd-exit-timeout-too-short",
 } as const;
 
 /** Returns whether audit issues require migrating a daemon to a stable Node runtime. */
@@ -92,11 +95,13 @@ function parseSystemdUnit(content: string): {
   wants: Set<string>;
   restartSec?: string;
   killMode?: string;
+  effectiveTimeoutStopSec?: string;
 } {
   const after = new Set<string>();
   const wants = new Set<string>();
   let restartSec: string | undefined;
   let killMode: string | undefined;
+  let effectiveTimeoutStopSec: string | undefined;
 
   // Parse only unit keys relevant to service resilience; this is not a full
   // systemd parser and intentionally ignores sections.
@@ -136,10 +141,14 @@ function parseSystemdUnit(content: string): {
       restartSec = value;
     } else if (key === "KillMode") {
       killMode = value;
+    } else if (key === "TimeoutStopSec") {
+      effectiveTimeoutStopSec = value;
+    } else if (key === "TimeoutSec") {
+      effectiveTimeoutStopSec = value;
     }
   }
 
-  return { after, wants, restartSec, killMode };
+  return { after, wants, restartSec, killMode, effectiveTimeoutStopSec };
 }
 
 function isRestartSecPreferred(value: string | undefined): boolean {
@@ -147,21 +156,121 @@ function isRestartSecPreferred(value: string | undefined): boolean {
     return false;
   }
   const parsed = parseSystemdRestartSecSeconds(value);
-  if (parsed === undefined) {
+  if (parsed === undefined || parsed === "infinity") {
     return false;
   }
   return Math.abs(parsed - 5) < 0.01;
 }
 
-function parseSystemdRestartSecSeconds(value: string): number | undefined {
-  const match = value
-    .trim()
-    .match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:\s*(?:s|sec|secs|second|seconds))?$/iu);
+function parseSystemdRestartSecSeconds(value: string): number | "infinity" | undefined {
+  return parseSystemdDurationSeconds(value);
+}
+
+const SYSTEMD_DURATION_UNIT_SECONDS: Record<string, number> = {
+  usec: 0.000001,
+  us: 0.000001,
+  "\u03bcs": 0.000001,
+  msec: 0.001,
+  ms: 0.001,
+  millisecond: 0.001,
+  milliseconds: 0.001,
+  s: 1,
+  sec: 1,
+  secs: 1,
+  second: 1,
+  seconds: 1,
+  m: 60,
+  min: 60,
+  mins: 60,
+  minute: 60,
+  minutes: 60,
+  h: 3600,
+  hr: 3600,
+  hrs: 3600,
+  hour: 3600,
+  hours: 3600,
+  d: 86400,
+  day: 86400,
+  days: 86400,
+  w: 604800,
+  week: 604800,
+  weeks: 604800,
+  M: 2630016,
+  month: 2630016,
+  months: 2630016,
+  y: 31557600,
+  year: 31557600,
+  years: 31557600,
+};
+
+function normalizeSystemdDurationUnit(unit: string): string {
+  return unit === "M" ? unit : unit.toLowerCase();
+}
+
+function parseSystemdDurationSeconds(value: string): number | "infinity" | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (normalizeLowercaseStringOrEmpty(trimmed) === "infinity") {
+    return "infinity";
+  }
+
+  let consumed = 0;
+  let totalSeconds = 0;
+  const tokenRe =
+    /([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(milliseconds|millisecond|msec|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|months|month|hours|hour|hrs|hr|h|days|day|weeks|week|years|year|usec|us|\u03bcs|M|m|d|w|y)?/gu;
+  for (const match of trimmed.matchAll(tokenRe)) {
+    const [full, valueRaw, unitRaw] = match;
+    const index = match.index ?? -1;
+    if (!full || !valueRaw || index < 0) {
+      return undefined;
+    }
+    if (trimmed.slice(consumed, index).trim()) {
+      return undefined;
+    }
+    const valueNumber = Number(valueRaw);
+    if (!Number.isFinite(valueNumber) || valueNumber < 0) {
+      return undefined;
+    }
+    if (!unitRaw && full.length > valueRaw.length) {
+      return undefined;
+    }
+    const unit = unitRaw ? normalizeSystemdDurationUnit(unitRaw) : "s";
+    const multiplier = SYSTEMD_DURATION_UNIT_SECONDS[unit];
+    if (multiplier === undefined) {
+      return undefined;
+    }
+    totalSeconds += valueNumber * multiplier;
+    consumed = index + full.length;
+  }
+  if (consumed === 0 || trimmed.slice(consumed).trim()) {
+    return undefined;
+  }
+  return Number.isFinite(totalSeconds) ? totalSeconds : undefined;
+}
+
+function isStopTimeoutPreferred(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const parsed = parseSystemdDurationSeconds(value);
+  return (
+    parsed === "infinity" ||
+    (parsed !== undefined && (parsed === 0 || parsed >= GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS))
+  );
+}
+
+function readLaunchdInteger(content: string, key: string): number | undefined {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = content.match(
+    new RegExp(`<key>${escapedKey}</key>\\s*<integer>\\s*([+-]?\\d+)\\s*</integer>`, "iu"),
+  );
   if (!match) {
     return undefined;
   }
   const parsed = Number(match[1]);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 async function auditSystemdUnit(
@@ -201,13 +310,21 @@ async function auditSystemdUnit(
       level: "recommended",
     });
   }
-  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode);
-  if (killMode === "process" || killMode === "none") {
+  const stopTimeout = parsed.effectiveTimeoutStopSec;
+  if (!isStopTimeoutPreferred(stopTimeout)) {
     issues.push({
-      code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
-      message:
-        "KillMode is process/none; service child processes can survive gateway stops and restarts.",
-      detail: `${unitPath}: ${killMode}`,
+      code: SERVICE_AUDIT_CODES.systemdTimeoutStopTooShort,
+      message: `TimeoutStopSec should be at least ${GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS}s so the gateway can finish restart drain.`,
+      detail: `${unitPath}: ${stopTimeout || "unset"}`,
+      level: "recommended",
+    });
+  }
+  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode);
+  if (killMode !== "mixed") {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.systemdKillModeNotMixed,
+      message: "KillMode should be mixed so the gateway can drain before child cleanup.",
+      detail: `${unitPath}: ${killMode || "unset"}`,
       level: "recommended",
     });
   }
@@ -240,6 +357,18 @@ async function auditLaunchdPlist(
       code: SERVICE_AUDIT_CODES.launchdKeepAlive,
       message: "LaunchAgent is missing KeepAlive=true",
       detail: plistPath,
+      level: "recommended",
+    });
+  }
+  const exitTimeout = readLaunchdInteger(content, "ExitTimeOut");
+  if (
+    exitTimeout === undefined ||
+    (exitTimeout !== 0 && exitTimeout < GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS)
+  ) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.launchdExitTimeoutTooShort,
+      message: `LaunchAgent ExitTimeOut should be at least ${GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS}s so the gateway can finish restart drain.`,
+      detail: `${plistPath}: ${exitTimeout ?? "unset"}`,
       level: "recommended",
     });
   }

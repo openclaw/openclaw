@@ -11,6 +11,7 @@ import {
   SERVICE_AUDIT_CODES,
 } from "./service-audit.js";
 import { buildMinimalServicePath } from "./service-env.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS } from "./service-stop-timeout.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 function hasIssue(
@@ -67,6 +68,30 @@ async function writeSystemdUnitForAudit(home: string, lines: string[]) {
       "",
       "[Install]",
       "WantedBy=default.target",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
+async function writeLaunchAgentPlistForAudit(home: string, lines: string[]) {
+  const plistDir = path.join(home, "Library", "LaunchAgents");
+  const plistPath = path.join(plistDir, "ai.openclaw.gateway.plist");
+  await fs.mkdir(plistDir, { recursive: true });
+  await fs.writeFile(
+    plistPath,
+    [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<plist version="1.0">',
+      "<dict>",
+      ...lines,
+      "<key>ProgramArguments</key>",
+      "<array>",
+      "<string>/usr/bin/node</string>",
+      "<string>gateway</string>",
+      "</array>",
+      "</dict>",
+      "</plist>",
       "",
     ].join("\n"),
     "utf8",
@@ -426,7 +451,7 @@ describe("auditGatewayServiceConfig", () => {
     expectTokenAudit(audit, { embedded: true, mismatch: true });
   });
 
-  it.each(["process", "none"])(
+  it.each(["control-group", "process", "none"])(
     `warns when KillMode is %s in explicit unit file`,
     async (killMode) => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
@@ -446,20 +471,17 @@ describe("auditGatewayServiceConfig", () => {
         },
       });
       expect(
-        audit.issues.some(
-          (entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
-        ),
+        audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeNotMixed),
       ).toBe(true);
     },
   );
 
-  it("does not warn when KillMode is control-group", async () => {
+  it("warns when systemd KillMode is unset", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
     await writeSystemdUnitForAudit(home, [
       "After=network-online.target",
       "Wants=network-online.target",
       "RestartSec=5",
-      "KillMode=control-group",
     ]);
     const audit = await auditGatewayServiceConfig({
       env: { HOME: home },
@@ -470,8 +492,156 @@ describe("auditGatewayServiceConfig", () => {
       },
     });
     expect(
-      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone),
+      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeNotMixed),
+    ).toBe(true);
+  });
+
+  it("does not warn when KillMode is mixed", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      `TimeoutStopSec=${GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS}`,
+      "KillMode=mixed",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeNotMixed),
     ).toBe(false);
+  });
+
+  it("warns when systemd TimeoutStopSec is below the gateway stop budget", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-timeout-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "TimeoutStopSec=30",
+      "KillMode=mixed",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdTimeoutStopTooShort)).toBe(true);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdKillModeNotMixed)).toBe(false);
+  });
+
+  it("warns when systemd TimeoutStopSec uses a unit unsupported by service Sec settings", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-timeout-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "TimeoutStopSec=300000000000ns",
+      "KillMode=mixed",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdTimeoutStopTooShort)).toBe(true);
+  });
+
+  it.each(["0", "6 minutes", "10m", "1week", "1M", "1y"])(
+    "accepts systemd TimeoutStopSec=%s when it covers the gateway stop budget",
+    async (timeoutStopSec) => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-timeout-"));
+      await writeSystemdUnitForAudit(home, [
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "RestartSec=5",
+        `TimeoutStopSec=${timeoutStopSec}`,
+        "KillMode=mixed",
+      ]);
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: home },
+        platform: "linux",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+      });
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdTimeoutStopTooShort)).toBe(false);
+    },
+  );
+
+  it("accepts systemd TimeoutSec shorthand when it covers the gateway stop budget", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-timeout-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "TimeoutSec=6min",
+      "KillMode=mixed",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdTimeoutStopTooShort)).toBe(false);
+  });
+
+  it("accepts systemd TimeoutSec shorthand when it overrides an earlier stale TimeoutStopSec", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-timeout-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "TimeoutStopSec=30",
+      "TimeoutSec=6min",
+      "KillMode=mixed",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdTimeoutStopTooShort)).toBe(false);
+  });
+
+  it("warns when explicit systemd TimeoutStopSec is below a larger TimeoutSec shorthand", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-timeout-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "TimeoutSec=6min",
+      "TimeoutStopSec=30",
+      "KillMode=mixed",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdTimeoutStopTooShort)).toBe(true);
   });
 
   it("accepts systemd RestartSec values with seconds suffixes", async () => {
@@ -479,8 +649,9 @@ describe("auditGatewayServiceConfig", () => {
     await writeSystemdUnitForAudit(home, [
       "After=network-online.target",
       "Wants=network-online.target",
-      "RestartSec=5s",
-      "KillMode=control-group",
+      "RestartSec=5 seconds",
+      `TimeoutStopSec=${GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS}`,
+      "KillMode=mixed",
     ]);
     const audit = await auditGatewayServiceConfig({
       env: { HOME: home },
@@ -492,6 +663,57 @@ describe("auditGatewayServiceConfig", () => {
     });
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdRestartSec)).toBe(false);
   });
+
+  it("warns when launchd ExitTimeOut is below the gateway stop budget", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-launchd-"));
+    await writeLaunchAgentPlistForAudit(home, [
+      "<key>RunAtLoad</key>",
+      "<true/>",
+      "<key>KeepAlive</key>",
+      "<true/>",
+      "<key>ExitTimeOut</key>",
+      "<integer>20</integer>",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "darwin",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: buildMinimalServicePath({ platform: "darwin", env: { HOME: home } }),
+        },
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.launchdExitTimeoutTooShort)).toBe(true);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.launchdRunAtLoad)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.launchdKeepAlive)).toBe(false);
+  });
+
+  it.each(["0", String(GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS)])(
+    "accepts launchd ExitTimeOut=%s when it covers the gateway stop budget",
+    async (exitTimeout) => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-launchd-"));
+      await writeLaunchAgentPlistForAudit(home, [
+        "<key>RunAtLoad</key>",
+        "<true/>",
+        "<key>KeepAlive</key>",
+        "<true/>",
+        "<key>ExitTimeOut</key>",
+        `<integer>${exitTimeout}</integer>`,
+      ]);
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: home },
+        platform: "darwin",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: {
+            PATH: buildMinimalServicePath({ platform: "darwin", env: { HOME: home } }),
+          },
+        },
+      });
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.launchdExitTimeoutTooShort)).toBe(false);
+    },
+  );
 
   it("flags embedded service token even when it matches config token", async () => {
     const audit = await createGatewayAudit({

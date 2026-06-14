@@ -1,5 +1,6 @@
 // Systemd unit tests cover generated systemd unit files.
 import { describe, expect, it } from "vitest";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS } from "./service-stop-timeout.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 
 describe("buildSystemdUnit", () => {
@@ -13,14 +14,14 @@ describe("buildSystemdUnit", () => {
     expect(execStart).toBe('ExecStart=/usr/bin/openclaw gateway --name "My Bot"');
   });
 
-  it("renders control-group kill mode for child-process cleanup", () => {
+  it("renders mixed kill mode with enough stop budget for restart drain", () => {
     const unit = buildSystemdUnit({
       description: "OpenClaw Gateway",
       programArguments: ["/usr/bin/openclaw", "gateway", "run"],
       environment: {},
     });
-    expect(unit).toContain("KillMode=control-group");
-    expect(unit).toContain("TimeoutStopSec=30");
+    expect(unit).toContain("KillMode=mixed");
+    expect(unit).toContain(`TimeoutStopSec=${GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS}`);
     expect(unit).toContain("TimeoutStartSec=30");
     expect(unit).toContain("SuccessExitStatus=0 143");
     expect(unit).toContain("StartLimitBurst=5");

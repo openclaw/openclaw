@@ -26,6 +26,7 @@ import {
   resolveLaunchAgentPlistPath,
   stopLaunchAgent,
 } from "./launchd.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS } from "./service-stop-timeout.js";
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
@@ -953,7 +954,7 @@ describe("launchd install", () => {
     expect(state.dirModes.get(tmpDir)).toBe(0o700);
   });
 
-  it("writes KeepAlive=true policy with shutdown and throttle limits", async () => {
+  it("writes KeepAlive=true policy with drain, shutdown, and throttle limits", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -971,6 +972,7 @@ describe("launchd install", () => {
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
     expect(plist).toContain("<key>ExitTimeOut</key>");
+    expect(LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS);
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>`);
     expect(plist).toContain("<key>ProcessType</key>");
     expect(plist).toContain(`<string>${LAUNCH_AGENT_PROCESS_TYPE}</string>`);
