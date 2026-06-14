@@ -79,7 +79,7 @@ describe("compactWithSafetyTimeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("calls onCancel when compaction times out", async () => {
+  it("passes the timeout reason to onCancel when compaction times out", async () => {
     vi.useFakeTimers();
     const onCancel = vi.fn();
 
@@ -91,6 +91,11 @@ describe("compactWithSafetyTimeout", () => {
     await vi.advanceTimersByTimeAsync(30);
     await timeoutAssertion;
     expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onCancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(onCancel.mock.calls[0]?.[0]).toMatchObject({
+      name: "CompactionTimeoutError",
+      message: "Compaction timed out",
+    });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -111,6 +116,7 @@ describe("compactWithSafetyTimeout", () => {
     controller.abort(reason);
     await abortAssertion;
     expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledWith(reason);
     expect(vi.getTimerCount()).toBe(0);
   });
 
