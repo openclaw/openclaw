@@ -108,6 +108,7 @@ async function sendQQBotMedia(params: {
   mediaUrl?: string | null;
   accountId?: string | null;
   replyToId?: string | null;
+  extraLocalRoots?: readonly string[];
 }) {
   // Same guard as sendText — ensure adapters are registered.
   await loadGatewayModule();
@@ -120,6 +121,7 @@ async function sendQQBotMedia(params: {
     accountId: params.accountId,
     replyToId: params.replyToId,
     account: toGatewayAccount(account),
+    extraLocalRoots: params.extraLocalRoots,
   });
   return {
     channel: "qqbot" as const,
@@ -134,6 +136,9 @@ async function sendQQBotMedia(params: {
 }
 
 function toQQBotMessageSendResult(result: Awaited<ReturnType<typeof sendQQBotText>>) {
+  if (result.meta?.error) {
+    throw new Error(result.meta.error);
+  }
   return {
     messageId: result.messageId,
     receipt: result.receipt,
@@ -169,6 +174,7 @@ const qqbotMessageAdapter = defineChannelMessageAdapter({
           mediaUrl: ctx.mediaUrl,
           accountId: ctx.accountId,
           replyToId: ctx.replyToId,
+          extraLocalRoots: ctx.mediaLocalRoots,
         }),
       ),
   },

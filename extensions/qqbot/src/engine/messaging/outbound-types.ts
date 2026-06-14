@@ -13,6 +13,7 @@ export interface OutboundContext {
 export interface MediaOutboundContext extends OutboundContext {
   mediaUrl: string;
   mimeType?: string;
+  extraLocalRoots?: readonly string[];
 }
 
 /**
@@ -45,4 +46,5 @@ export interface MediaTargetContext {
   account: GatewayAccount;
   replyToId?: string;
   logPrefix?: string;
+  extraLocalRoots?: readonly string[];
 }
