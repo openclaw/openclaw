@@ -100,6 +100,7 @@ function loadBundleSettingsFile(params: {
 export function loadEnabledBundleAgentSettingsSnapshot(params: {
   cwd: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }): AgentSettingsSnapshot {
@@ -174,6 +175,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
   const embeddedAgentMcp = loadEmbeddedAgentMcpConfig({
     workspaceDir,
     cfg: config,
+    agentId: params.agentId,
     manifestRegistry: metadataSnapshot.manifestRegistry,
   });
   for (const diagnostic of embeddedAgentMcp.diagnostics) {

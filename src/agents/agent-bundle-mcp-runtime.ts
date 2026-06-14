@@ -421,6 +421,7 @@ function createCatalogFingerprint(servers: Record<string, unknown>): string {
 function loadSessionMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   logDiagnostics?: boolean;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): {
@@ -430,6 +431,7 @@ function loadSessionMcpConfig(params: {
   const loaded = loadEmbeddedAgentMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    agentId: params.agentId,
     manifestRegistry: params.manifestRegistry,
   });
   if (params.logDiagnostics !== false) {
@@ -490,11 +492,13 @@ export function createSessionMcpRuntime(params: {
   sessionKey?: string;
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): SessionMcpRuntime {
   const { loaded, fingerprint: configFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    agentId: params.agentId,
     logDiagnostics: true,
     manifestRegistry: params.manifestRegistry,
   });
@@ -961,6 +965,7 @@ function createSessionMcpRuntimeManager(
       const { fingerprint: nextFingerprint } = loadSessionMcpConfig({
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
+        agentId: params.agentId,
         logDiagnostics: false,
       });
       const existing = runtimesBySessionId.get(params.sessionId);
@@ -997,6 +1002,7 @@ function createSessionMcpRuntimeManager(
           sessionKey: params.sessionKey,
           workspaceDir: params.workspaceDir,
           cfg: params.cfg,
+          agentId: params.agentId,
           configFingerprint: nextFingerprint,
         }),
       ).then((runtime) => {
@@ -1080,6 +1086,7 @@ export async function getOrCreateSessionMcpRuntime(params: {
   sessionKey?: string;
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): Promise<SessionMcpRuntime> {
   return await getSessionMcpRuntimeManager().getOrCreate(params);
 }

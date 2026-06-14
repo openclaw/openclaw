@@ -267,6 +267,54 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     expect(patch).toBeUndefined();
   });
 
+  it("honors the generic top-level agents allowlist on the Codex app-server path", () => {
+    // Regression: a server scoped only via the generic `agents` field must not
+    // silently widen to every agent on the Codex app-server runtime.
+    const cfg = {
+      mcp: {
+        servers: {
+          finance: {
+            transport: "stdio",
+            command: "node",
+            args: ["finance-mcp.js"],
+            agents: ["migdalia"],
+          },
+          global: { transport: "stdio", command: "node", args: ["global-mcp.js"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const migdaliaPatch = buildCodexUserMcpServersThreadConfigPatch(cfg, {
+      agentId: "migdalia",
+    });
+    expect(Object.keys(migdaliaPatch!.mcp_servers).toSorted()).toEqual(["finance", "global"]);
+
+    const maxPatch = buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "max" });
+    expect(Object.keys(maxPatch!.mcp_servers).toSorted()).toEqual(["global"]);
+    expect(maxPatch!.mcp_servers).not.toHaveProperty("finance");
+  });
+
+  it("lets the generic agents allowlist take precedence over codex.agents", () => {
+    const cfg = {
+      mcp: {
+        servers: {
+          scoped: {
+            transport: "stdio",
+            command: "node",
+            args: ["scoped-mcp.js"],
+            agents: ["migdalia"],
+            codex: { agents: ["max"] },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    // Generic `agents` wins: migdalia (in generic list) gets it...
+    expect(buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "migdalia" })).toBeDefined();
+    // ...and max (only in codex.agents) does not.
+    expect(buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "max" })).toBeUndefined();
+  });
+
   it("preserves multiple user MCP servers as independent mcp_servers entries", () => {
     const patch = buildCodexUserMcpServersThreadConfigPatch({
       mcp: {

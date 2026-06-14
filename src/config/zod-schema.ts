@@ -386,6 +386,15 @@ const TalkSchema = z
 const McpServerSchema = z
   .object({
     enabled: z.boolean().optional(),
+    agents: z
+      .array(
+        z
+          .string()
+          .trim()
+          .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i),
+      )
+      .min(1)
+      .optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
