@@ -143,12 +143,17 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
         `Provider ${providerId} baseUrl (${providerEntry.baseUrl}) targets a private or loopback host. Set memory-external-reranker.allowPrivateNetwork=true to opt in.`,
       );
     }
-    const { value: apiKey } = await resolveConfiguredSecretInputString({
+    const { value: apiKey, unresolvedRefReason } = await resolveConfiguredSecretInputString({
       config: this.openclawConfig,
       env: process.env,
       value: providerEntry.apiKey,
       path: `models.providers.${providerId}.apiKey`,
     });
+    if (unresolvedRefReason) {
+      throw new Error(
+        `[memory-external-reranker] API key SecretRef for provider ${providerId} could not be resolved: ${unresolvedRefReason}`,
+      );
+    }
     const ssrfPolicy = resolveRerankerNetworkPolicy({
       baseUrl: providerEntry.baseUrl,
       allowPrivateNetwork: this.cfg.allowPrivateNetwork,

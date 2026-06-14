@@ -297,4 +297,29 @@ describe("ExternalMmrReranker", () => {
       expect(mockFn).not.toHaveBeenCalled();
     });
   });
+
+  describe("API key SecretRef resolution", () => {
+    it("throws and does not fetch when a configured SecretRef cannot be resolved", async () => {
+      const mockFn = vi.fn();
+      setExternalRerankerFetchGuardForTesting(mockFn);
+      // Reference an env var that is guaranteed absent in this test.
+      vi.stubEnv("RERANKER_TEST_MISSING_KEY_8f3c2", undefined as never);
+
+      const reranker = new ExternalMmrReranker(
+        { provider: "cohere", model: "rerank-english-v3.0" },
+        makeTestConfig({
+          cohere: {
+            baseUrl: "https://api.cohere.ai",
+            apiKey: { source: "env", provider: "default", id: "RERANKER_TEST_MISSING_KEY_8f3c2" },
+          },
+        }),
+      );
+
+      const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
+      await expect(reranker.rerank({ query: "test", documents: docs, limit: 5 })).rejects.toThrow(
+        /API key SecretRef for provider cohere could not be resolved/,
+      );
+      expect(mockFn).not.toHaveBeenCalled();
+    });
+  });
 });
