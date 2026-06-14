@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  isExplicitOpenClawHomeStateDir: () => false,
   resolveGatewayPort: mocks.resolveGatewayPort,
   resolveIsNixMode: mocks.resolveIsNixMode,
 }));
