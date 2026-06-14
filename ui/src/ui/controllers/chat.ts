@@ -1204,13 +1204,59 @@ export async function sendSteerChatMessage(
   return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
+function reconcileSuccessfulLocalAbort(state: ChatState, runId: string | null) {
+  if (!runId && state.chatStream == null) {
+    return;
+  }
+  state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+  reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    outcome: "interrupted",
+    sessionStatus: "killed",
+    runId,
+    sessionKey: state.sessionKey,
+    clearLocalRun: true,
+    clearChatStream: true,
+    clearToolStream: true,
+    clearSideResultTerminalRuns: true,
+    armLocalTerminalReconcile: Boolean(runId),
+  });
+}
+
+function abortedRunIdsFromResult(result: unknown): Set<string> {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return new Set();
+  }
+  const runIds = (result as { runIds?: unknown }).runIds;
+  if (!Array.isArray(runIds)) {
+    return new Set();
+  }
+  return new Set(runIds.filter((runId): runId is string => typeof runId === "string"));
+}
+
+function shouldReconcileSuccessfulLocalAbort(
+  state: ChatState,
+  capturedRunId: string | null,
+  result: unknown,
+): boolean {
+  if (state.chatRunId !== capturedRunId) {
+    return false;
+  }
+  if (!capturedRunId || !result || typeof result !== "object" || Array.isArray(result)) {
+    return false;
+  }
+  if ((result as { aborted?: unknown }).aborted !== true) {
+    return false;
+  }
+  return abortedRunIdsFromResult(result).has(capturedRunId);
+}
+
 export async function abortChatRun(state: ChatState): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;
   }
   const runId = state.chatRunId;
   try {
-    await state.client.request(
+    const result = await state.client.request(
       "chat.abort",
       runId
         ? {
@@ -1229,6 +1275,9 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
             })(),
           },
     );
+    if (shouldReconcileSuccessfulLocalAbort(state, runId, result)) {
+      reconcileSuccessfulLocalAbort(state, runId);
+    }
     return true;
   } catch (err) {
     setChatError(state, formatConnectError(err));

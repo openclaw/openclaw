@@ -3014,7 +3014,7 @@ describe("handleAbortChat", () => {
   });
 
   it("preserves the draft for connected toolbar aborts", async () => {
-    const request = vi.fn(async () => ({ aborted: true }));
+    const request = vi.fn(async () => ({ aborted: true, runIds: ["run-main"] }));
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatRunId: "run-main",
@@ -3029,11 +3029,11 @@ describe("handleAbortChat", () => {
       sessionKey: "agent:main",
     });
     expect(host.chatMessage).toBe("next prompt");
-    expect(host.chatRunId).toBe("run-main");
+    expect(host.chatRunId).toBeNull();
   });
 
   it("clears typed stop commands after aborting the active run", async () => {
-    const request = vi.fn(async () => ({ aborted: true }));
+    const request = vi.fn(async () => ({ aborted: true, runIds: ["run-main"] }));
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatRunId: "run-main",
@@ -3048,6 +3048,7 @@ describe("handleAbortChat", () => {
       sessionKey: "agent:main",
     });
     expect(host.chatMessage).toBe("");
+    expect(host.chatRunId).toBeNull();
   });
 
   it("queues the active run abort while disconnected", async () => {

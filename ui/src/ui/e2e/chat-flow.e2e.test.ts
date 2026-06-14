@@ -382,6 +382,87 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("recovers after stopping a streaming WebChat turn and sends the next turn", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
+
+      const firstPrompt = "start a stoppable streaming response";
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill(firstPrompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const firstSendRequest = await gateway.waitForRequest("chat.send");
+      const firstParams = requireRecord(firstSendRequest.params);
+      const firstRunId = requireString(firstParams.idempotencyKey, "first run id");
+      expect(firstParams.sessionKey).toBe("main");
+      expect(firstParams.message).toBe(firstPrompt);
+
+      const partialText = "PR92003 first turn is streaming before Stop.";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: partialText,
+        message: {
+          content: [{ text: partialText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId: firstRunId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.locator(".chat-thread").getByText(partialText).waitFor({ timeout: 10_000 });
+
+      await gateway.resolveDeferred("chat.send", { runId: firstRunId, status: "started" });
+      const stopButton = page.getByRole("button", { name: "Stop generating" });
+      await stopButton.waitFor({ state: "visible", timeout: 10_000 });
+
+      await gateway.deferNext("chat.abort");
+      await stopButton.click();
+      const abortRequest = await gateway.waitForRequest("chat.abort");
+      const abortParams = requireRecord(abortRequest.params);
+      expect(abortParams.sessionKey).toBe("main");
+      expect(abortParams.runId).toBe(firstRunId);
+
+      await gateway.resolveDeferred("chat.abort", {
+        aborted: true,
+        runIds: [firstRunId],
+        sessionKeys: ["main"],
+      });
+      await page.locator(".chat-thread").getByText(partialText).waitFor({ timeout: 10_000 });
+      await stopButton.waitFor({ state: "detached", timeout: 10_000 });
+
+      const secondPrompt = "PR92003 second turn should complete after Stop";
+      await composer.fill(secondPrompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequests = await waitForRequests(gateway, "chat.send", 2);
+      const secondParams = requireRecord(sendRequests[1]?.params);
+      const secondRunId = requireString(secondParams.idempotencyKey, "second run id");
+      expect(secondRunId).not.toBe(firstRunId);
+      expect(secondParams.sessionKey).toBe("main");
+      expect(secondParams.message).toBe(secondPrompt);
+
+      await gateway.emitChatFinal({
+        runId: secondRunId,
+        text: "PR92003 second turn completed after Stop.",
+      });
+      await page
+        .locator(".chat-thread")
+        .getByText("PR92003 second turn completed after Stop.")
+        .waitFor({ timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps chat usable while sessions are still loading", async () => {
     const context = await browser.newContext({
       locale: "en-US",
