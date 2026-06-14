@@ -42,6 +42,19 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const inspectPortUsages = vi.fn(async (ports: readonly number[]) => {
+  return new Map(
+    ports.map((port) => [
+      port,
+      {
+        port,
+        status: "free" as const,
+        listeners: [],
+        hints: [],
+      },
+    ]),
+  );
+});
 const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>(
   async (port: number) => ({
     port,
@@ -201,6 +214,7 @@ vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
 vi.mock("../../infra/ports.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
+  inspectPortUsages: (ports: readonly number[]) => inspectPortUsages(ports),
   formatPortDiagnostics: () => [],
 }));
 
@@ -268,6 +282,8 @@ describe("gatherDaemonStatus", () => {
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
     inspectPortConnections.mockClear();
+    inspectPortUsage.mockClear();
+    inspectPortUsages.mockClear();
     readGatewayRestartHandoffSync.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
@@ -318,6 +334,17 @@ describe("gatherDaemonStatus", () => {
       expect(status.cli?.entrypoint).toBe(process.argv[1]);
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
+  });
+
+  it("batches daemon and CLI port status inspection when ports differ", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(inspectPortUsages).toHaveBeenCalledWith([19001, 18789]);
+    expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
   it("falls back to probe version when server metadata is unavailable", async () => {
