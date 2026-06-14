@@ -7,16 +7,27 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
+import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
 type SessionDeltaState = { lastSize: number; pendingBytes: number; pendingMessages: number };
+type SyncSessionParams = { needsFullReindex: boolean; targetSessionFiles?: string[] };
 
 type ReindexHarness = {
+  sync: (params: { reason?: string; force?: boolean }) => Promise<void>;
   runSafeReindex: (params: { reason?: string; force?: boolean }) => Promise<void>;
   runUnsafeReindex: (params: { reason?: string; force?: boolean }) => Promise<void>;
-  syncMemoryFiles: () => Promise<unknown>;
-  syncSessionFiles: () => Promise<unknown>;
-  writeMeta: () => void;
+  syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+  syncSessionFiles: (params: SyncSessionParams) => Promise<unknown>;
+  upsertEmbeddingCacheEntries: (
+    entries: Array<{ hash: string; embedding: number[] }>,
+    provider?: { id: string; model: string } | null,
+  ) => void;
+  db: DatabaseSync;
+  writeMeta: (meta: MemoryIndexMeta) => void;
+  embeddingCacheMirrorDb: DatabaseSync | null;
+  providerKey: string | null;
   dirty: boolean;
+  memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
   sessionsFullRetryDirty: boolean;
   sessionsDirtyFiles: Set<string>;
@@ -156,6 +167,7 @@ describe("memory manager reindex recovery", () => {
       );
 
       expect(harness.dirty).toBe(true);
+      expect(harness.memoryFullRetryDirty).toBe(true);
       expect(harness.sessionsDirty).toBe(true);
       expect(Array.from(harness.sessionsDirtyFiles)).toEqual([dirtySessionFile]);
       expect(harness.sessionDeltas.get(dirtySessionFile)).toEqual(originalDelta);
@@ -192,6 +204,120 @@ describe("memory manager reindex recovery", () => {
       expect(harness.sessionsDirtyFiles.size).toBe(0);
     },
   );
+
+  it("forces source-wide session sync when retrying a failed full reindex", async () => {
+    const storePath = path.join(workspaceDir, "index-full-session-retry.sqlite");
+    const memoryManager = await openManager(
+      createCfg({
+        storePath,
+        provider: "none",
+        sources: ["sessions"],
+      }),
+    );
+    await memoryManager.sync({ reason: "test", force: true });
+
+    const harness = memoryManager as unknown as ReindexHarness;
+    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
+    const sessionSyncCalls: SyncSessionParams[] = [];
+
+    harness.sessionsDirty = true;
+    harness.sessionsFullRetryDirty = true;
+    harness.sessionsDirtyFiles.clear();
+    harness.syncSessionFiles = async (params) => {
+      sessionSyncCalls.push(params);
+      return emptySyncPlan;
+    };
+
+    await harness.sync({ reason: "test" });
+
+    expect(sessionSyncCalls).toHaveLength(1);
+    expect(sessionSyncCalls[0]).toMatchObject({ needsFullReindex: true });
+    expect(sessionSyncCalls[0]?.targetSessionFiles).toBeUndefined();
+    expect(harness.sessionsDirty).toBe(false);
+    expect(harness.sessionsFullRetryDirty).toBe(false);
+  });
+
+  it("full-reindexes sessions-only retry state when metadata is mismatched", async () => {
+    const storePath = path.join(workspaceDir, "index-full-session-identity-retry.sqlite");
+    const memoryManager = await openManager(
+      createCfg({
+        storePath,
+        provider: "none",
+        sources: ["sessions"],
+      }),
+    );
+    await memoryManager.sync({ reason: "test", force: true });
+
+    const harness = memoryManager as unknown as ReindexHarness;
+    const reindexCalls: Array<{ reason?: string; force?: boolean }> = [];
+
+    harness.db
+      .prepare(
+        `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "sessions-retry-chunk",
+        "sessions/retry.jsonl",
+        "sessions",
+        1,
+        1,
+        "sessions-retry-hash",
+        "fts-only",
+        "sessions retry marker",
+        "[]",
+        Date.now(),
+      );
+    harness.writeMeta({
+      model: "fts-only",
+      provider: "none",
+      providerKey: harness.providerKey ?? undefined,
+      sources: ["memory"],
+      chunkTokens: 4000,
+      chunkOverlap: 0,
+    });
+    harness.sessionsDirty = true;
+    harness.sessionsFullRetryDirty = true;
+    harness.runSafeReindex = async (params) => {
+      reindexCalls.push(params);
+    };
+
+    await harness.sync({ reason: "test" });
+
+    expect(reindexCalls).toHaveLength(1);
+    expect(reindexCalls[0]).toMatchObject({ reason: "test" });
+  });
+
+  it("forces source-wide memory sync when retrying a failed full reindex", async () => {
+    const storePath = path.join(workspaceDir, "index-full-memory-retry.sqlite");
+    const memoryManager = await openManager(
+      createCfg({
+        storePath,
+        provider: "none",
+        sources: ["memory"],
+      }),
+    );
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "alpha", "utf8");
+    await memoryManager.sync({ reason: "test", force: true });
+
+    const harness = memoryManager as unknown as ReindexHarness;
+    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
+    const memorySyncCalls: Array<{ needsFullReindex: boolean }> = [];
+
+    harness.dirty = true;
+    harness.memoryFullRetryDirty = true;
+    harness.syncMemoryFiles = async (params: { needsFullReindex: boolean }) => {
+      memorySyncCalls.push(params);
+      return emptySyncPlan;
+    };
+
+    await harness.sync({ reason: "test" });
+
+    expect(memorySyncCalls).toHaveLength(1);
+    expect(memorySyncCalls[0]).toMatchObject({ needsFullReindex: true });
+    expect(harness.dirty).toBe(false);
+    expect(harness.memoryFullRetryDirty).toBe(false);
+  });
 
   it("mirrors each successful safe-reindex cache batch into the old index", async () => {
     const storePath = path.join(workspaceDir, "index-cache-mirror.sqlite");
@@ -238,5 +364,31 @@ describe("memory manager reindex recovery", () => {
 
     expect(embedBatchMock).toHaveBeenCalledTimes(2);
     expect(readCacheRowCount(storePath)).toBe(3);
+  });
+
+  it("keeps reindex cache writes non-fatal when the old-index mirror fails", async () => {
+    const storePath = path.join(workspaceDir, "index-cache-mirror-best-effort.sqlite");
+    const memoryManager = await openManager(
+      createCfg({
+        storePath,
+        cacheEnabled: true,
+      }),
+    );
+    const harness = memoryManager as unknown as ReindexHarness;
+    harness.providerKey = "mirror-provider-key";
+    harness.embeddingCacheMirrorDb = {
+      prepare: () => {
+        throw new Error("mirror database locked");
+      },
+    } as unknown as DatabaseSync;
+
+    expect(() => {
+      harness.upsertEmbeddingCacheEntries([{ hash: "mirror-hash", embedding: [1, 2, 3] }], {
+        id: "openai",
+        model: "mock-embed",
+      });
+    }).not.toThrow();
+
+    expect(readCacheRowCount(storePath)).toBe(1);
   });
 });

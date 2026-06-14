@@ -122,6 +122,7 @@ type MemorySessionDeltaState = { lastSize: number; pendingBytes: number; pending
 
 type MemoryReindexRetryState = {
   dirty: boolean;
+  memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
   sessionsFullRetryDirty: boolean;
   sessionsDirtyFiles: Set<string>;
@@ -275,6 +276,9 @@ export abstract class MemoryManagerSyncOps {
   protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
+  // Failed full memory reindexes must retry as full rebuilds, not incremental
+  // dirty syncs that can skip unchanged files against the still-live index.
+  protected memoryFullRetryDirty = false;
   protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   protected sessionsDirty = false;
   // Failed full reindexes can start with no per-file dirty set. Keep a
@@ -324,6 +328,7 @@ export abstract class MemoryManagerSyncOps {
   private snapshotReindexRetryState(): MemoryReindexRetryState {
     return {
       dirty: this.dirty,
+      memoryFullRetryDirty: this.memoryFullRetryDirty,
       sessionsDirty: this.sessionsDirty,
       sessionsFullRetryDirty: this.sessionsFullRetryDirty,
       sessionsDirtyFiles: new Set(this.sessionsDirtyFiles),
@@ -335,6 +340,7 @@ export abstract class MemoryManagerSyncOps {
 
   private restoreReindexRetryState(snapshot: MemoryReindexRetryState): void {
     this.dirty = snapshot.dirty || this.dirty;
+    this.memoryFullRetryDirty = snapshot.memoryFullRetryDirty || this.memoryFullRetryDirty;
     this.sessionsFullRetryDirty = snapshot.sessionsFullRetryDirty || this.sessionsFullRetryDirty;
     this.sessionsDirtyFiles = new Set([...snapshot.sessionsDirtyFiles, ...this.sessionsDirtyFiles]);
     const currentDeltas = this.sessionDeltas;
@@ -354,6 +360,7 @@ export abstract class MemoryManagerSyncOps {
   private markFailedFullReindexRetry(params: { memory: boolean; sessions: boolean }): void {
     if (params.memory) {
       this.dirty = true;
+      this.memoryFullRetryDirty = true;
     }
     if (params.sessions) {
       this.sessionsDirty = true;
@@ -365,6 +372,11 @@ export abstract class MemoryManagerSyncOps {
     this.sessionsDirty = false;
     this.sessionsFullRetryDirty = false;
     this.sessionsDirtyFiles.clear();
+  }
+
+  private clearMemoryRetryState(): void {
+    this.dirty = false;
+    this.memoryFullRetryDirty = false;
   }
 
   private refreshSessionDirtyFlag(): void {
@@ -428,6 +440,7 @@ export abstract class MemoryManagerSyncOps {
     shouldSyncMemory: boolean;
     shouldSyncSessions: boolean;
     needsFullReindex: boolean;
+    needsFullSessionReindex?: boolean;
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }): Promise<void> {
@@ -440,7 +453,7 @@ export abstract class MemoryManagerSyncOps {
       : this.emptySourceSyncPlan();
     if (params.shouldSyncSessions) {
       await this.syncSessionFiles({
-        needsFullReindex: params.needsFullReindex,
+        needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
         targetSessionFiles: params.targetSessionFiles,
         progress: params.progress,
         deferIndex: true,
@@ -2153,7 +2166,7 @@ export abstract class MemoryManagerSyncOps {
       indexIdentity.status === "missing" &&
       hasIndexedChunks &&
       this.provider === null &&
-      this.settings.provider &&
+      Boolean(this.settings.provider) &&
       this.settings.provider !== "none";
     const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
     const canRebuildMissingIdentity =
@@ -2165,11 +2178,16 @@ export abstract class MemoryManagerSyncOps {
       indexIdentity.status === "missing" && !hasTargetSessionFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
+    const canRunRetryFullReindex =
+      indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
     const needsFullReindex =
       (params?.force && !hasTargetSessionFiles) ||
       needsInitialIndex ||
       needsMissingIdentityReindex ||
-      needsExplicitIdentityReindex;
+      needsExplicitIdentityReindex ||
+      (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
+      (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
+    const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
     if (indexIdentity.status !== "valid" && !needsFullReindex) {
       this.dirty = true;
       const sessionsDirty = markMemoryTargetSessionFilesDirty({
@@ -2181,12 +2199,13 @@ export abstract class MemoryManagerSyncOps {
       }
       return;
     }
-    if (!needsFullReindex) {
+    if (!needsFullSessionReindex) {
       const targetedSessionSync = await runMemoryTargetedSessionSync({
         hasSessionSource: this.sources.has("sessions"),
         targetSessionFiles,
         reason: params?.reason,
         progress: progress ?? undefined,
+        sessionsFullRetryDirty: this.sessionsFullRetryDirty,
         sessionsDirtyFiles: this.sessionsDirtyFiles,
         syncSessionFiles: async (targetedParams) => {
           await this.syncSessionFiles(targetedParams);
@@ -2230,11 +2249,12 @@ export abstract class MemoryManagerSyncOps {
           shouldSyncMemory,
           shouldSyncSessions,
           needsFullReindex,
+          needsFullSessionReindex,
           targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
           progress: progress ?? undefined,
         });
         if (shouldSyncMemory) {
-          this.dirty = false;
+          this.clearMemoryRetryState();
         }
         if (shouldSyncSessions) {
           this.clearSessionRetryState();
@@ -2244,12 +2264,12 @@ export abstract class MemoryManagerSyncOps {
       } else {
         if (shouldSyncMemory) {
           await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-          this.dirty = false;
+          this.clearMemoryRetryState();
         }
 
         if (shouldSyncSessions) {
           await this.syncSessionFiles({
-            needsFullReindex,
+            needsFullReindex: needsFullSessionReindex,
             targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
             progress: progress ?? undefined,
           });
@@ -2406,6 +2426,7 @@ export abstract class MemoryManagerSyncOps {
     this.ensureSchema();
 
     let nextMeta: MemoryIndexMeta | null;
+    let publishedIndex = false;
 
     try {
       nextMeta = await runMemoryAtomicReindex({
@@ -2416,6 +2437,9 @@ export abstract class MemoryManagerSyncOps {
             closeMemoryDatabase(tempDb);
             tempDbClosed = true;
           }
+        },
+        afterPublish: () => {
+          publishedIndex = true;
         },
         build: async () => {
           await this.seedEmbeddingCache(originalDb);
@@ -2430,7 +2454,7 @@ export abstract class MemoryManagerSyncOps {
               progress: params.progress,
             });
             if (shouldSyncMemory) {
-              this.dirty = false;
+              this.clearMemoryRetryState();
             }
             if (shouldSyncSessions) {
               this.clearSessionRetryState();
@@ -2440,7 +2464,7 @@ export abstract class MemoryManagerSyncOps {
           } else {
             if (shouldSyncMemory) {
               await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-              this.dirty = false;
+              this.clearMemoryRetryState();
             }
 
             if (shouldSyncSessions) {
@@ -2501,6 +2525,13 @@ export abstract class MemoryManagerSyncOps {
           tempDbClosed = true;
         }
       } catch {}
+      if (publishedIndex) {
+        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, false);
+        this.resetVectorState();
+        this.ensureSchema();
+        this.vector.dims = this.readMeta()?.vectorDims;
+        throw err;
+      }
       restoreOriginalState();
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({
@@ -2538,7 +2569,7 @@ export abstract class MemoryManagerSyncOps {
           progress: params.progress,
         });
         if (shouldSyncMemory) {
-          this.dirty = false;
+          this.clearMemoryRetryState();
         }
         if (shouldSyncSessions) {
           this.clearSessionRetryState();
@@ -2548,7 +2579,7 @@ export abstract class MemoryManagerSyncOps {
       } else {
         if (shouldSyncMemory) {
           await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-          this.dirty = false;
+          this.clearMemoryRetryState();
         }
 
         if (shouldSyncSessions) {
