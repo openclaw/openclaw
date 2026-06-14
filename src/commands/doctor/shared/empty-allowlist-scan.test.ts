@@ -130,6 +130,28 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings.filter((w) => w.includes("group messages")).length).toBe(0);
   });
 
+  it("still warns when top-level has botToken credentials with named accounts", () => {
+    // Top-level botToken creates an implicit default account. Even though
+    // named accounts have their own allowFrom, the implicit default account
+    // uses the top-level's empty groupAllowFrom — warning must fire.
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              bot1: { groupAllowFrom: ["@alice"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+    expect(warnings.some((w) => w.includes("group messages"))).toBe(true);
+  });
+
   it("still warns on empty top-level groupAllowFrom when no accounts are configured", () => {
     const warnings = scanEmptyAllowlistPolicyWarnings(
       {

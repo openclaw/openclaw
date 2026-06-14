@@ -104,12 +104,41 @@ export function scanEmptyAllowlistPolicyWarnings(
     // empty groupAllowFrom is an unused parent/fallback and should not
     // trigger a warning.  If any account lacks its own list and relies on
     // the top-level, the warning is still legitimate.
-    // When sub-accounts exist and the top-level itself has no groupAllowFrom
-    // or allowFrom entries, the top-level is just a parent/fallback — not an
-    // active account. Skip the false-positive group-allowlist warning.
+    // When sub-accounts exist and the top-level has no allowFrom entries or
+    // credentials of its own, it is just a parent/fallback — skip the
+    // false-positive group-allowlist warning.
+    // Implicit default accounts (created by top-level botToken, tokenFile, or
+    // SecretRef credentials) are active accounts — preserve their warnings.
     const parentHasOwnAllowFrom =
       hasAllowFromEntries(channelConfig.groupAllowFrom as DoctorAllowFromList | undefined) ||
       hasAllowFromEntries(channelConfig.allowFrom as DoctorAllowFromList | undefined);
+    const parentHasCredentials =
+      channelConfig &&
+      typeof channelConfig === "object" &&
+      Object.keys(channelConfig).some((k) => {
+        if (
+          k === "accounts" ||
+          k === "enabled" ||
+          k === "groupPolicy" ||
+          k === "dmPolicy" ||
+          k === "groupAllowFrom" ||
+          k === "allowFrom" ||
+          k === "groups" ||
+          k === "channels" ||
+          k === "defaultAccount" ||
+          k === "name" ||
+          k.startsWith("_")
+        ) {
+          return false;
+        }
+        const v = (channelConfig as Record<string, unknown>)[k];
+        // SecretRef credentials e.g. { env: "TELEGRAM_BOT_TOKEN" }
+        if (v && typeof v === "object" && !Array.isArray(v)) {
+          return "env" in v || "file" in v || "raw" in v || "command" in v;
+        }
+        // Plain-text credential strings e.g. botToken, tokenFile, apiKey
+        return typeof v === "string" && v.length > 0;
+      });
 
     const hasActiveAccounts =
       accounts && Object.keys(accounts).some((id) => !isDisabledRecord(accounts[id]));
@@ -119,7 +148,7 @@ export function scanEmptyAllowlistPolicyWarnings(
       `channels.${channelName}`,
       channelName,
       undefined,
-      hasActiveAccounts && !parentHasOwnAllowFrom ? true : undefined,
+      hasActiveAccounts && !parentHasOwnAllowFrom && !parentHasCredentials ? true : undefined,
     );
 
     if (!accounts) {
