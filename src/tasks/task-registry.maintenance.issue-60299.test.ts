@@ -726,4 +726,154 @@ describe("task-registry maintenance issue #60299", () => {
     }
     expect(hookNow).toBeGreaterThanOrEqual(beforeMaintenance);
   });
+
+  it("reconciles stale subagent tasks whose backing CLI child is already terminal (regresses #92285)", async () => {
+    const staleAt = Date.now() - 45 * 60_000;
+    const sharedRunId = "run-shared-subagent-child";
+    const ownerKey = "agent:main:main";
+    const childTask = makeStaleTask({
+      runtime: "cli",
+      runId: sharedRunId,
+      ownerKey,
+      status: "lost",
+      error: "backing session missing",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+      endedAt: staleAt,
+    });
+    const parentSubagentTask = makeStaleTask({
+      runtime: "subagent",
+      runId: sharedRunId,
+      ownerKey,
+      status: "running",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+      // No childSessionKey — this is the case where hasBackingSession
+      // falls through to the childless-codex-native guard and returns true,
+      // preventing standard shouldMarkLost reconciliation.
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [childTask, parentSubagentTask],
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, parentSubagentTask.taskId, "lost");
+    expect(requireTaskRecord(currentTasks, parentSubagentTask.taskId).error).toBe(
+      "backing session missing",
+    );
+    // The already-terminal child task should not be double-reconciled.
+    expectTaskStatus(currentTasks, childTask.taskId, "lost");
+  });
+
+  it("preserves the backing CLI child terminal outcome for non-lost statuses (regresses #92285)", async () => {
+    const staleAt = Date.now() - 45 * 60_000;
+    const sharedRunId = "run-preserve-outcome";
+    const ownerKey = "agent:main:main";
+
+    for (const childStatus of ["succeeded", "failed", "cancelled", "timed_out"] as const) {
+      const terminalSummary = `child finished with ${childStatus}`;
+      const childTask = makeStaleTask({
+        runtime: "cli",
+        runId: sharedRunId,
+        ownerKey,
+        status: childStatus,
+        terminalSummary,
+        createdAt: staleAt,
+        startedAt: staleAt,
+        lastEventAt: staleAt,
+        endedAt: staleAt,
+      });
+      const parentSubagentTask = makeStaleTask({
+        taskId: `task-parent-${childStatus}`,
+        runtime: "subagent",
+        runId: sharedRunId,
+        ownerKey,
+        status: "running",
+        createdAt: staleAt,
+        startedAt: staleAt,
+        lastEventAt: staleAt,
+      });
+
+      const { currentTasks } = createTaskRegistryMaintenanceHarness({
+        tasks: [childTask, parentSubagentTask],
+      });
+
+      await runTaskRegistryMaintenance();
+      expectTaskStatus(currentTasks, parentSubagentTask.taskId, childStatus);
+      expect(requireTaskRecord(currentTasks, parentSubagentTask.taskId).terminalSummary).toBe(
+        terminalSummary,
+      );
+    }
+  });
+
+  it("does not reconcile subagent when backing child has different owner scope (regresses #92285)", async () => {
+    const staleAt = Date.now() - 45 * 60_000;
+    const sharedRunId = "run-different-scope";
+    const childTask = makeStaleTask({
+      runtime: "cli",
+      runId: sharedRunId,
+      ownerKey: "agent:other:workspace",
+      status: "lost",
+      error: "backing session missing",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+      endedAt: staleAt,
+    });
+    const parentSubagentTask = makeStaleTask({
+      runtime: "subagent",
+      runId: sharedRunId,
+      ownerKey: "agent:main:main",
+      status: "running",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [childTask, parentSubagentTask],
+    });
+
+    // Should not reconcile: child is in a different owner scope.
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, parentSubagentTask.taskId, "running");
+  });
+
+  it("skips subagent reconciliation when multiple terminal tasks share the same runId but none is a scoped CLI child (regresses #92285)", async () => {
+    const staleAt = Date.now() - 45 * 60_000;
+    const sharedRunId = "run-ambiguous-scope";
+    const ownerKey = "agent:main:main";
+    // A non-CLI terminal task sharing the runId should not trigger reconciliation.
+    const cronTask = makeStaleTask({
+      runtime: "cron",
+      runId: sharedRunId,
+      ownerKey,
+      status: "lost",
+      error: "cron timeout",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+      endedAt: staleAt,
+    });
+    const parentSubagentTask = makeStaleTask({
+      runtime: "subagent",
+      runId: sharedRunId,
+      ownerKey,
+      status: "running",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [cronTask, parentSubagentTask],
+    });
+
+    // Should not reconcile: the terminal task is cron, not a CLI child.
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, parentSubagentTask.taskId, "running");
+  });
 });
