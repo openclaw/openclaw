@@ -563,6 +563,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "clientToolCalls"
     | "yieldDetected"
     | "didSendDeterministicApprovalPrompt"
+    | "heartbeatToolResponse"
     | "lastToolError"
     | "replayMetadata"
   >;
@@ -575,6 +576,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.heartbeatToolResponse ||
     params.attempt.lastToolError
   ) {
     return false;

@@ -309,6 +309,16 @@ describe("runEmbeddedAgent silent-error retry", () => {
     ],
     ["yield", { yieldDetected: true }],
     ["approval prompts", { didSendDeterministicApprovalPrompt: true }],
+    [
+      "heartbeat responses",
+      {
+        heartbeatToolResponse: {
+          outcome: "progress",
+          notify: false,
+          summary: "Still working",
+        },
+      },
+    ],
     ["tool errors", { lastToolError: { toolName: "read", error: "read failed" } }],
   ] satisfies Array<[string, Partial<EmbeddedRunAttemptResult>]>)(
     "does not retry after terminal %s",
