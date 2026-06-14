@@ -23,27 +23,80 @@ import type {
 } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+type McpToolInventoryDisplaySnapshot = {
+  name: string;
+  label: string;
+  rawDescription: string;
+  displaySummary?: string;
+};
+
 const BUNDLE_MCP_PLUGIN_ID = "bundle-mcp";
 
-function resolveMcpToolLabel(tool: AnyAgentTool): string {
-  const rawLabel = normalizeOptionalString(tool.label) ?? "";
+function readMcpToolInventoryStringField(
+  tool: AnyAgentTool,
+  field: "description" | "displaySummary" | "label" | "name",
+): string | undefined {
+  try {
+    return normalizeOptionalString((tool as unknown as Record<string, unknown>)[field]);
+  } catch {
+    return undefined;
+  }
+}
+
+function readMcpToolInventoryUnknownField(tool: AnyAgentTool, field: "parameters"): unknown {
+  try {
+    return (tool as unknown as Record<string, unknown>)[field];
+  } catch {
+    return undefined;
+  }
+}
+
+function snapshotMcpToolInventoryDisplay(
+  tool: AnyAgentTool,
+): McpToolInventoryDisplaySnapshot | undefined {
+  const name = readMcpToolInventoryStringField(tool, "name");
+  if (!name) {
+    return undefined;
+  }
+  const displaySummary = readMcpToolInventoryStringField(tool, "displaySummary");
+  return {
+    name,
+    label: readMcpToolInventoryStringField(tool, "label") ?? "",
+    rawDescription: readMcpToolInventoryStringField(tool, "description") ?? "",
+    ...(displaySummary ? { displaySummary } : {}),
+  };
+}
+
+function snapshotMcpToolForInventoryNormalization(tool: AnyAgentTool): AnyAgentTool | undefined {
+  const snapshot = snapshotMcpToolInventoryDisplay(tool);
+  if (!snapshot) {
+    return undefined;
+  }
+  return {
+    name: snapshot.name,
+    label: snapshot.label,
+    description: snapshot.rawDescription,
+    parameters: readMcpToolInventoryUnknownField(tool, "parameters"),
+    execute: async () => ({ text: "" }),
+    ...(snapshot.displaySummary ? { displaySummary: snapshot.displaySummary } : {}),
+  } as unknown as AnyAgentTool;
+}
+
+function resolveMcpToolLabel(snapshot: McpToolInventoryDisplaySnapshot): string {
+  const rawLabel = snapshot.label;
   if (
     rawLabel &&
-    normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(tool.name)
+    normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(snapshot.name)
   ) {
     return rawLabel;
   }
-  return resolveToolDisplay({ name: tool.name }).title;
+  return resolveToolDisplay({ name: snapshot.name }).title;
 }
 
-function resolveRawToolDescription(tool: AnyAgentTool): string {
-  return normalizeOptionalString(tool.description) ?? "";
-}
-
-function summarizeToolDescription(tool: AnyAgentTool): string {
+function summarizeToolDescription(snapshot: McpToolInventoryDisplaySnapshot): string {
   return summarizeToolDescriptionText({
-    rawDescription: resolveRawToolDescription(tool),
-    displaySummary: tool.displaySummary,
+    rawDescription: snapshot.rawDescription,
+    displaySummary: snapshot.displaySummary,
   });
 }
 
@@ -79,17 +132,23 @@ function buildMcpToolInventoryEntries(
 ): EffectiveToolInventoryEntry[] {
   return disambiguateLabels(
     tools
-      .map(
-        (tool) =>
-          ({
-            id: tool.name,
-            label: resolveMcpToolLabel(tool),
-            description: summarizeToolDescription(tool),
-            rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
+      .flatMap((tool) => {
+        const snapshot = snapshotMcpToolInventoryDisplay(tool);
+        if (!snapshot) {
+          return [];
+        }
+        const description = summarizeToolDescription(snapshot);
+        return [
+          {
+            id: snapshot.name,
+            label: resolveMcpToolLabel(snapshot),
+            description,
+            rawDescription: snapshot.rawDescription || description,
             source: "mcp",
             pluginId: BUNDLE_MCP_PLUGIN_ID,
-          }) satisfies EffectiveToolInventoryEntry,
-      )
+          } satisfies EffectiveToolInventoryEntry,
+        ];
+      })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );
 }
@@ -112,7 +171,10 @@ export function buildRuntimeCompatibleMcpToolInventory(params: {
     ...preNormalizationProjection.diagnostics,
   ];
   const normalizedTools = normalizeAgentRuntimeTools({
-    tools: [...preNormalizationProjection.tools],
+    tools: preNormalizationProjection.tools.flatMap((tool) => {
+      const safeTool = snapshotMcpToolForInventoryNormalization(tool);
+      return safeTool ? [safeTool] : [];
+    }),
     provider: params.modelProvider ?? "",
     config: params.cfg,
     workspaceDir: params.workspaceDir,
