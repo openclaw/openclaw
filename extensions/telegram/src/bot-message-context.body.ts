@@ -32,6 +32,7 @@ import type {
   TelegramLogger,
   TelegramMediaRef,
   TelegramMessageContextOptions,
+  TelegramVoiceSttTelemetry,
 } from "./bot-message-context.types.js";
 import {
   buildSenderLabel,
@@ -49,6 +50,10 @@ import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 
 type StickerVisionRuntime = typeof import("./sticker-vision.runtime.js");
 type MediaUnderstandingRuntime = typeof import("./media-understanding.runtime.js");
+type AudioPreflightRuntimeResult = Awaited<
+  ReturnType<MediaUnderstandingRuntime["transcribeFirstAudioWithTelemetry"]>
+>;
+type AudioPreflightRuntimeTelemetry = NonNullable<AudioPreflightRuntimeResult>["telemetry"];
 
 let stickerVisionRuntimePromise: Promise<StickerVisionRuntime> | undefined;
 let mediaUnderstandingRuntimePromise: Promise<MediaUnderstandingRuntime> | undefined;
@@ -73,12 +78,31 @@ export type TelegramInboundBodyResult = {
   shouldBypassMention: boolean;
   hasControlCommand: boolean;
   audioTranscribedMediaIndex?: number;
+  audioPreflightTelemetry?: TelegramVoiceSttTelemetry;
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
 };
 
-function formatAudioTranscriptForAgent(transcript: string): string {
-  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
+function formatAudioTranscriptForAgent(
+  transcript: string,
+  telemetry?: TelegramVoiceSttTelemetry,
+): string {
+  const labels = ["machine-generated", telemetry?.transcript.trusted ? "trusted" : "untrusted"];
+  if (telemetry?.transcript.truncated) {
+    labels.push("truncated");
+  }
+  return `[Audio transcript (${labels.join(", ")})]: ${JSON.stringify(transcript)}`;
+}
+
+function formatAudioTranscriptUnavailableForAgent(
+  telemetry?: TelegramVoiceSttTelemetry,
+): string {
+  const status = telemetry?.stt.status ?? "missing";
+  const errorClass = telemetry?.stt.errorClass ? `/${telemetry.stt.errorClass}` : "";
+  return (
+    `[Audio transcript unavailable: ${status}${errorClass}] ` +
+    "Voice message received, but STT did not produce a usable transcript."
+  );
 }
 
 type TelegramSavedMediaKind = "audio" | "document" | "image" | "video";
@@ -95,6 +119,14 @@ function resolveSavedMediaKind(contentType: string | undefined): TelegramSavedMe
     return "video";
   }
   return "document";
+}
+
+function isTelegramAudioMedia(media: TelegramMediaRef): boolean {
+  return (
+    media.contentType?.startsWith("audio/") === true ||
+    media.mediaKind === "voice" ||
+    media.mediaKind === "audio"
+  );
 }
 
 function formatSavedMediaPlaceholder(allMedia: TelegramMediaRef[]): string | undefined {
@@ -117,6 +149,42 @@ function formatSavedMediaPlaceholder(allMedia: TelegramMediaRef[]): string | und
     return `<media:audio> (${allMedia.length} audio attachments)`;
   }
   return `<media:document> (${allMedia.length} attachments)`;
+}
+
+function buildTelegramVoiceSttTelemetry(params: {
+  media?: TelegramMediaRef;
+  preflight: AudioPreflightRuntimeTelemetry;
+}): TelegramVoiceSttTelemetry {
+  const { media, preflight } = params;
+  return {
+    media: {
+      kind: media?.mediaKind,
+      fileId: media?.telegramFileId,
+      fileUniqueId: media?.telegramFileUniqueId,
+      mediaReference: media?.telegramFilePath ?? media?.path,
+      durationSeconds: media?.durationSeconds,
+    },
+    download: {
+      bytes: media?.size,
+      mime: media?.contentType ?? media?.telegramMimeType,
+      path: media?.path,
+    },
+    stt: {
+      status: preflight.status,
+      provider: preflight.provider,
+      model: preflight.model,
+      baseUrl: preflight.baseUrl,
+      durationMs: preflight.durationMs,
+      errorClass: preflight.errorClass,
+    },
+    transcript: {
+      length: preflight.transcript.length,
+      sha256: preflight.transcript.sha256,
+      trusted: preflight.transcript.trusted,
+      truncated: preflight.transcript.truncated,
+      enteredAgentContext: false,
+    },
+  };
 }
 
 async function resolveStickerVisionSupport(params: {
@@ -252,7 +320,7 @@ export async function resolveTelegramInboundBody(params: {
       : placeholder;
     bodyText = `${mediaTag}\n${bodyText}`.trim();
   }
-  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
+  const hasAudio = allMedia.some(isTelegramAudioMedia);
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
@@ -260,6 +328,7 @@ export async function resolveTelegramInboundBody(params: {
     !useAccessGroups || !allowForCommands.hasEntries || commandAuthorized;
 
   let preflightTranscript: string | undefined;
+  let audioPreflightTelemetry: TelegramVoiceSttTelemetry | undefined;
   const needsPreflightTranscription =
     hasAudio &&
     !hasUserText &&
@@ -271,7 +340,7 @@ export async function resolveTelegramInboundBody(params: {
 
   if (needsPreflightTranscription) {
     try {
-      const { transcribeFirstAudio } = await loadMediaUnderstandingRuntime();
+      const { transcribeFirstAudioWithTelemetry } = await loadMediaUnderstandingRuntime();
       const tempCtx: MsgContext = {
         Provider: "telegram",
         Surface: "telegram",
@@ -285,11 +354,19 @@ export async function resolveTelegramInboundBody(params: {
             ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
             : undefined,
       };
-      preflightTranscript = await transcribeFirstAudio({
+      const preflightResult = await transcribeFirstAudioWithTelemetry({
         ctx: tempCtx,
         cfg,
         agentDir: undefined,
       });
+      preflightTranscript = preflightResult?.transcript;
+      if (preflightResult?.telemetry) {
+        const audioMedia = allMedia.find(isTelegramAudioMedia);
+        audioPreflightTelemetry = buildTelegramVoiceSttTelemetry({
+          media: audioMedia,
+          preflight: preflightResult.telemetry,
+        });
+      }
     } catch (err) {
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
     }
@@ -297,10 +374,12 @@ export async function resolveTelegramInboundBody(params: {
   const audioTranscribedMediaIndex =
     preflightTranscript === undefined
       ? undefined
-      : allMedia.findIndex((media) => media.contentType?.startsWith("audio/"));
+      : allMedia.findIndex(isTelegramAudioMedia);
 
   if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
-    bodyText = formatAudioTranscriptForAgent(preflightTranscript);
+    bodyText = formatAudioTranscriptForAgent(preflightTranscript, audioPreflightTelemetry);
+  } else if (hasAudio && bodyText === "<media:audio>" && audioPreflightTelemetry) {
+    bodyText = formatAudioTranscriptUnavailableForAgent(audioPreflightTelemetry);
   }
 
   const savedMediaPlaceholder = formatSavedMediaPlaceholder(allMedia);
@@ -310,8 +389,10 @@ export async function resolveTelegramInboundBody(params: {
   if (!bodyText && allMedia.length > 0) {
     if (hasAudio) {
       bodyText = preflightTranscript
-        ? formatAudioTranscriptForAgent(preflightTranscript)
-        : "<media:audio>";
+        ? formatAudioTranscriptForAgent(preflightTranscript, audioPreflightTelemetry)
+        : audioPreflightTelemetry
+          ? formatAudioTranscriptUnavailableForAgent(audioPreflightTelemetry)
+          : "<media:audio>";
     } else {
       bodyText = savedMediaPlaceholder ?? "<media:document>";
     }
@@ -438,6 +519,7 @@ export async function resolveTelegramInboundBody(params: {
     ...(audioTranscribedMediaIndex !== undefined && audioTranscribedMediaIndex >= 0
       ? { audioTranscribedMediaIndex }
       : {}),
+    ...(audioPreflightTelemetry ? { audioPreflightTelemetry } : {}),
     stickerCacheHit,
     locationData: locationData ?? undefined,
   };

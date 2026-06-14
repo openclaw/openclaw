@@ -85,6 +85,8 @@ interface MediaMetadata {
     | TelegramContext["message"]["voice"];
   fileName?: string;
   mimeType?: string;
+  mediaKind?: "voice" | "audio" | "video_note" | "video" | "document" | "photo" | "sticker";
+  durationSeconds?: number;
 }
 
 function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
@@ -107,6 +109,21 @@ function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
       msg.video?.mime_type ??
       msg.document?.mime_type ??
       msg.animation?.mime_type,
+    mediaKind: msg.voice
+      ? "voice"
+      : msg.audio
+        ? "audio"
+        : msg.video_note
+          ? "video_note"
+          : msg.video
+            ? "video"
+            : msg.document
+              ? "document"
+              : msg.photo
+                ? "photo"
+                : undefined,
+    durationSeconds:
+      msg.voice?.duration ?? msg.audio?.duration ?? msg.video_note?.duration ?? msg.video?.duration,
   };
 }
 
@@ -275,6 +292,11 @@ async function resolveStickerMedia(params: {
       path: string;
       contentType?: string;
       placeholder: string;
+      size?: number;
+      mediaKind?: "sticker";
+      telegramFileId?: string;
+      telegramFileUniqueId?: string;
+      telegramFilePath?: string;
       stickerMetadata?: StickerMetadata;
     }
   | null
@@ -330,6 +352,11 @@ async function resolveStickerMedia(params: {
         path: saved.path,
         contentType: saved.contentType,
         placeholder: "<media:sticker>",
+        size: saved.size,
+        mediaKind: "sticker",
+        telegramFileId: fileId,
+        telegramFileUniqueId: sticker.file_unique_id,
+        telegramFilePath: file.file_path,
         stickerMetadata: {
           emoji,
           setName,
@@ -345,6 +372,11 @@ async function resolveStickerMedia(params: {
       path: saved.path,
       contentType: saved.contentType,
       placeholder: "<media:sticker>",
+      size: saved.size,
+      mediaKind: "sticker",
+      telegramFileId: sticker.file_id,
+      telegramFileUniqueId: sticker.file_unique_id,
+      telegramFilePath: file.file_path,
       stickerMetadata: {
         emoji: sticker.emoji ?? undefined,
         setName: sticker.set_name ?? undefined,
@@ -370,6 +402,14 @@ export async function resolveMedia(params: {
   path: string;
   contentType?: string;
   placeholder: string;
+  size?: number;
+  mediaKind?: MediaMetadata["mediaKind"];
+  telegramFileId?: string;
+  telegramFileUniqueId?: string;
+  telegramFilePath?: string;
+  telegramFileName?: string;
+  telegramMimeType?: string;
+  durationSeconds?: number;
   stickerMetadata?: StickerMetadata;
 } | null> {
   const {
@@ -421,5 +461,17 @@ export async function resolveMedia(params: {
     dangerouslyAllowPrivateNetwork,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
-  return { path: saved.path, contentType: saved.contentType, placeholder };
+  return {
+    path: saved.path,
+    contentType: saved.contentType,
+    placeholder,
+    size: saved.size,
+    mediaKind: metadata.mediaKind,
+    telegramFileId: m.file_id,
+    telegramFileUniqueId: "file_unique_id" in m ? m.file_unique_id : undefined,
+    telegramFilePath: file.file_path,
+    telegramFileName: metadata.fileName,
+    telegramMimeType: metadata.mimeType,
+    durationSeconds: metadata.durationSeconds,
+  };
 }

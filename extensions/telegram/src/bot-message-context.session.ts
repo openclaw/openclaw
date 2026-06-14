@@ -31,6 +31,7 @@ import type {
   TelegramMessageContextOptions,
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
+  TelegramVoiceSttTelemetry,
 } from "./bot-message-context.types.js";
 import {
   buildGroupLabel,
@@ -154,6 +155,22 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
 }
 
+function markTelegramVoiceSttAgentContext(params: {
+  telemetry?: TelegramVoiceSttTelemetry;
+  transcriptEnteredAgentContext: boolean;
+}): TelegramVoiceSttTelemetry | undefined {
+  if (!params.telemetry) {
+    return undefined;
+  }
+  return {
+    ...params.telemetry,
+    transcript: {
+      ...params.telemetry.transcript,
+      enteredAgentContext: params.transcriptEnteredAgentContext,
+    },
+  };
+}
+
 export async function buildTelegramInboundContextPayload(params: {
   cfg: OpenClawConfig;
   primaryCtx: TelegramContext;
@@ -182,6 +199,7 @@ export async function buildTelegramInboundContextPayload(params: {
   effectiveWasMentioned: boolean;
   hasControlCommand: boolean;
   audioTranscribedMediaIndex?: number;
+  audioPreflightTelemetry?: TelegramVoiceSttTelemetry;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
@@ -231,6 +249,7 @@ export async function buildTelegramInboundContextPayload(params: {
     effectiveWasMentioned,
     hasControlCommand,
     audioTranscribedMediaIndex,
+    audioPreflightTelemetry,
     commandAuthorized,
     locationData,
     options,
@@ -444,6 +463,23 @@ export async function buildTelegramInboundContextPayload(params: {
   const hasAbortRequest = isAbortRequestText(rawBody, {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
   });
+  const telegramVoiceSttTelemetry = markTelegramVoiceSttAgentContext({
+    telemetry: audioPreflightTelemetry,
+    transcriptEnteredAgentContext:
+      audioTranscribedMediaIndex !== undefined &&
+      bodyText.includes("[Audio transcript") &&
+      !bodyText.includes("Audio transcript unavailable"),
+  });
+  const telegramVoiceSttUntrustedContext = telegramVoiceSttTelemetry
+    ? [
+        {
+          label: "Telegram voice/STT handoff telemetry",
+          type: "telegram_voice_stt_handoff",
+          source: "telegram",
+          payload: telegramVoiceSttTelemetry,
+        },
+      ]
+    : undefined;
   const conversationKind = isGroup ? "group" : "direct";
   const inboundEventKind = classifyChannelInboundEvent({
     conversation: { kind: conversationKind },
@@ -562,6 +598,8 @@ export async function buildTelegramInboundContextPayload(params: {
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
+      TelegramVoiceSttTelemetry: telegramVoiceSttTelemetry,
+      UntrustedStructuredContext: telegramVoiceSttUntrustedContext,
       ...locationContext,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,

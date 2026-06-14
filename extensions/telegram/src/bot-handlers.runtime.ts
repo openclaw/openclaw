@@ -935,11 +935,7 @@ export const registerTelegramHandlers = ({
           continue;
         }
         if (media) {
-          allMedia.push({
-            path: media.path,
-            contentType: media.contentType,
-            stickerMetadata: media.stickerMetadata,
-          });
+          allMedia.push(media);
         } else {
           skippedCount++;
         }
@@ -1191,13 +1187,7 @@ export const registerTelegramHandlers = ({
             maxBytes: mediaMaxBytes,
             ...mediaRuntimeOptions,
           });
-          mediaRef = media
-            ? {
-                path: media.path,
-                ...(media.contentType ? { contentType: media.contentType } : {}),
-                ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
-              }
-            : undefined;
+          mediaRef = media ?? undefined;
         } catch (err) {
           logger.warn(
             { chatId: ctx.message.chat.id, error: String(err) },
@@ -2024,15 +2014,7 @@ export const registerTelegramHandlers = ({
       return;
     }
 
-    const allMedia = media
-      ? [
-          {
-            path: media.path,
-            contentType: media.contentType,
-            stickerMetadata: media.stickerMetadata,
-          },
-        ]
-      : [];
+    const allMedia: TelegramMediaRef[] = media ? [media] : [];
     const conversationKey = buildTelegramInboundDebounceConversationKey({
       chatId,
       threadId: resolvedThreadId ?? dmThreadId,

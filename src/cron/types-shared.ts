@@ -17,3 +17,24 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     delivery?: TDelivery;
     failureAlert?: TFailureAlert;
   };
+
+/** Audit metadata for deterministic command jobs and legacy agentTurn scripts. */
+export type CronPayloadAuditExecutionKind =
+  | "system-event"
+  | "agent-turn"
+  | "deterministic-command";
+
+export type CronPayloadAuditWarningCode = "hidden-agent-turn-script";
+
+export type CronPayloadAuditWarning = {
+  code: CronPayloadAuditWarningCode;
+  severity: "warn";
+  message: string;
+  recommendation?: string;
+};
+
+export type CronPayloadAuditMetadata = {
+  executionKind: CronPayloadAuditExecutionKind;
+  deterministic: boolean;
+  warnings: CronPayloadAuditWarning[];
+};

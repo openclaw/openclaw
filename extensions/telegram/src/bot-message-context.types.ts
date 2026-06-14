@@ -15,7 +15,53 @@ import type { TelegramReplyChainEntry } from "./message-cache.js";
 export type TelegramMediaRef = {
   path: string;
   contentType?: string;
+  size?: number;
+  mediaKind?: "voice" | "audio" | "video_note" | "video" | "document" | "photo" | "sticker";
+  telegramFileId?: string;
+  telegramFileUniqueId?: string;
+  telegramFilePath?: string;
+  telegramFileName?: string;
+  telegramMimeType?: string;
+  durationSeconds?: number;
   stickerMetadata?: StickerMetadata;
+};
+
+export type TelegramVoiceSttStatus =
+  | "success"
+  | "missing"
+  | "timeout"
+  | "failed"
+  | "truncated"
+  | "disabled";
+
+export type TelegramVoiceSttTelemetry = {
+  media: {
+    kind?: TelegramMediaRef["mediaKind"];
+    fileId?: string;
+    fileUniqueId?: string;
+    mediaReference?: string;
+    durationSeconds?: number;
+  };
+  download: {
+    bytes?: number;
+    mime?: string;
+    path?: string;
+  };
+  stt: {
+    status: TelegramVoiceSttStatus;
+    provider?: string;
+    model?: string;
+    baseUrl?: string;
+    durationMs?: number;
+    errorClass?: string;
+  };
+  transcript: {
+    length: number;
+    sha256?: string;
+    trusted: boolean;
+    truncated: boolean;
+    enteredAgentContext: boolean;
+  };
 };
 
 export type TelegramMessageContextOptions = {

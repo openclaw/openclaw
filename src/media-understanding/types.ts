@@ -29,6 +29,9 @@ export type MediaUnderstandingOutput = {
   text: string;
   provider: string;
   model?: string;
+  baseUrl?: string;
+  truncated?: boolean;
+  trusted?: boolean;
 };
 
 type MediaUnderstandingDecisionOutcome =
@@ -111,6 +114,8 @@ export type AudioTranscriptionRequest = {
 export type AudioTranscriptionResult = {
   text: string;
   model?: string;
+  truncated?: boolean;
+  trusted?: boolean;
 };
 
 export type VideoDescriptionRequest = {
