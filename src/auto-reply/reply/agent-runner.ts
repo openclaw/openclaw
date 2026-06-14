@@ -1524,6 +1524,65 @@ export async function runReplyAgent(params: {
       }
     }
   };
+  type SessionResetOptions = {
+    failureLabel: string;
+    buildLogMessage: (nextSessionId: string) => string;
+    cleanupTranscripts?: boolean;
+  };
+  const resetSession = async ({
+    failureLabel,
+    buildLogMessage,
+    cleanupTranscripts,
+  }: SessionResetOptions): Promise<boolean> =>
+    await resetReplyRunSession({
+      options: {
+        failureLabel,
+        buildLogMessage,
+        cleanupTranscripts,
+      },
+      sessionKey,
+      queueKey,
+      activeSessionEntry,
+      activeSessionStore,
+      storePath,
+      messageThreadId:
+        typeof sessionCtx.MessageThreadId === "string" ? sessionCtx.MessageThreadId : undefined,
+      followupRun,
+      onActiveSessionEntry: (nextEntry) => {
+        activeSessionEntry = nextEntry;
+      },
+      onNewSession: () => {
+        activeIsNewSession = true;
+      },
+    });
+  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
+    resetSession({
+      failureLabel: "role ordering conflict",
+      buildLogMessage: (nextSessionId) =>
+        `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+      cleanupTranscripts: true,
+    });
+  // Reuse the existing compaction notice gate; a memory flush failure is a
+  // background-maintenance degradation the same operators want to surface.
+  const shouldNotifyUserAboutMemoryFlushFailure =
+    cfg?.agents?.defaults?.compaction?.notifyUser === true;
+  const sendMemoryFlushDegradedNotice = async (): Promise<void> => {
+    if (!opts?.onBlockReply) {
+      return;
+    }
+    const noticePayload = applyReplyToMode({
+      text: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
+      replyToId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    try {
+      await opts.onBlockReply(noticePayload);
+    } catch (err) {
+      // Non-terminal notice: delivery failure must not abort the user reply.
+      logVerbose(`memory flush degraded notice delivery failed (non-fatal): ${String(err)}`);
+    }
+  };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied;
 
@@ -1551,6 +1610,10 @@ export async function runReplyAgent(params: {
       (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
     const visibleMemoryFlushErrorPayloads: ReplyPayload[] = [];
+    const preMemoryFlushFailureCount = Math.max(
+      0,
+      activeSessionEntry?.memoryFlushFailureCount ?? 0,
+    );
     activeSessionEntry = await traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
         cfg,
@@ -1575,43 +1638,50 @@ export async function runReplyAgent(params: {
     );
 
     if (visibleMemoryFlushErrorPayloads.length > 0) {
-      const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-      const payloadResult = await buildReplyPayloads({
-        config: cfg,
-        payloads: visibleMemoryFlushErrorPayloads,
-        isHeartbeat,
-        didLogHeartbeatStrip: false,
-        silentExpected: true,
-        blockStreamingEnabled,
-        blockReplyPipeline,
-        replyToMode,
-        replyToChannel,
-        currentMessageId,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        messageProvider: followupRun.run.messageProvider,
-        originatingChannel: sessionCtx.OriginatingChannel,
-        originatingChatType: sessionCtx.ChatType,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: sessionCtx.OriginatingTo,
-          to: sessionCtx.To,
-        }),
-        originatingThreadId: replyRouteThreadId,
-        accountId: sessionCtx.AccountId,
-        normalizeMediaPaths: replyMediaContext.normalizePayload,
-      });
-      const replyPayloads = payloadResult.replyPayloads.map((payload) =>
-        markReplyPayloadForSourceSuppressionDelivery(payload),
-      );
-      if (replyPayloads.length > 0) {
-        replyOperation.fail(
-          "run_failed",
-          new Error("memory flush produced visible error payloads"),
-        );
-        await signalTypingIfNeeded(replyPayloads, typingSignals);
-        return returnWithQueuedFollowupDrain(
-          replyPayloads.length === 1 ? replyPayloads[0] : replyPayloads,
+      for (const payload of visibleMemoryFlushErrorPayloads) {
+        logVerbose(
+          `memory flush maintenance error ignored before user reply: ${
+            typeof payload.text === "string" && payload.text.trim().length > 0
+              ? payload.text
+              : JSON.stringify(payload)
+          }`,
         );
       }
+    }
+
+    const postMemoryFlushFailureCount = Math.max(
+      0,
+      activeSessionEntry?.memoryFlushFailureCount ?? 0,
+    );
+    const memoryFlushCompactionCount = activeSessionEntry?.memoryFlushCompactionCount;
+    const currentCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+    const memoryFlushExhaustedThisTurn =
+      postMemoryFlushFailureCount > preMemoryFlushFailureCount &&
+      memoryFlushCompactionCount === currentCompactionCount;
+    if (memoryFlushExhaustedThisTurn) {
+      await resetSession({
+        failureLabel: "memory flush exhaustion",
+        buildLogMessage: (nextSessionId) =>
+          `Memory flush exhausted. Rotating bloated session ${sessionKey} -> ${nextSessionId}.`,
+        // Rotation alone breaks the flush death loop: the new session no longer
+        // hits the bloated transcript. Keep the old transcript file on disk
+        // (no unlink) so it stays available for forensics/recovery; the active
+        // session only replays the recent turns regardless of this flag.
+        cleanupTranscripts: false,
+      });
+      if (activeSessionEntry?.sessionId) {
+        replyOperation.updateSessionId(activeSessionEntry.sessionId);
+      }
+    }
+
+    // Opt-in, non-terminal degraded notice. Memory flush failures are
+    // log-and-continue (see #85645): the main reply still proceeds. When the
+    // operator enabled compaction notices we surface a short heads-up only on
+    // the meaningful exhaustion event (retries spent, session rotated) so
+    // transient single-turn flush failures don't add notice noise — without
+    // ever calling replyOperation.fail() or aborting the reply.
+    if (shouldNotifyUserAboutMemoryFlushFailure && memoryFlushExhaustedThisTurn) {
+      await sendMemoryFlushDegradedNotice();
     }
 
     runFollowupTurn = createFollowupRunner({
@@ -1628,44 +1698,6 @@ export async function runReplyAgent(params: {
     });
 
     let responseUsageLine: string | undefined;
-    type SessionResetOptions = {
-      failureLabel: string;
-      buildLogMessage: (nextSessionId: string) => string;
-      cleanupTranscripts?: boolean;
-    };
-    const resetSession = async ({
-      failureLabel,
-      buildLogMessage,
-      cleanupTranscripts,
-    }: SessionResetOptions): Promise<boolean> =>
-      await resetReplyRunSession({
-        options: {
-          failureLabel,
-          buildLogMessage,
-          cleanupTranscripts,
-        },
-        sessionKey,
-        queueKey,
-        activeSessionEntry,
-        activeSessionStore,
-        storePath,
-        messageThreadId:
-          typeof sessionCtx.MessageThreadId === "string" ? sessionCtx.MessageThreadId : undefined,
-        followupRun,
-        onActiveSessionEntry: (nextEntry) => {
-          activeSessionEntry = nextEntry;
-        },
-        onNewSession: () => {
-          activeIsNewSession = true;
-        },
-      });
-    const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
-      resetSession({
-        failureLabel: "role ordering conflict",
-        buildLogMessage: (nextSessionId) =>
-          `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
-        cleanupTranscripts: true,
-      });
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
