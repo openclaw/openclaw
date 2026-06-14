@@ -51,7 +51,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-90 plugins
+91 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -96,6 +96,8 @@ Each entry lists the package, distribution route, and description.
 - **[duckduckgo](/plugins/reference/duckduckgo)** (`@openclaw/duckduckgo-plugin`) - included in OpenClaw. Adds web search provider support.
 
 - **[elevenlabs](/plugins/reference/elevenlabs)** (`@openclaw/elevenlabs-speech`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support. Adds text-to-speech provider support.
+
+- **[evolink](/plugins/reference/evolink)** (`@openclaw/evolink-provider`) - included in OpenClaw. Adds EvoLink model provider support to OpenClaw.
 
 - **[exa](/plugins/reference/exa)** (`@openclaw/exa-plugin`) - included in OpenClaw. Adds web search provider support.
 

@@ -364,6 +364,10 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: evolink":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/evolink/**"
 "extensions: gmi":
   - changed-files:
       - any-glob-to-any-file:

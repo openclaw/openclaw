@@ -116,6 +116,7 @@ function humanizeId(value) {
     ["deepseek", "DeepSeek"],
     ["duckduckgo", "DuckDuckGo"],
     ["exa", "Exa"],
+    ["evolink", "EvoLink"],
     ["fal", "fal"],
     ["feishu", "Feishu"],
     ["github", "GitHub"],
