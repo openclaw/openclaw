@@ -1295,6 +1295,7 @@ export async function runMemoryFlushIfNeeded(params: {
       run: async (provider, model, runOptions) => {
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,
+          replyRoute: params.followupRun,
           sessionCtx: params.sessionCtx,
           hasRepliedRef: params.opts?.hasRepliedRef,
           provider,

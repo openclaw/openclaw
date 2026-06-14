@@ -237,6 +237,7 @@ export type EmbeddedAgentSubscribeContext = {
     chunkerHasBuffered: boolean;
   }) => void;
   trimMessagingToolSent: () => void;
+  consumeToolSendReceipt: (toolCallId: string) => unknown;
   ensureCompactionPromise: () => void;
   noteCompactionRetry: () => void;
   resolveCompactionRetry: () => void;
@@ -273,7 +274,15 @@ type ToolHandlerParams = Pick<
   | "onHeartbeatToolResponse"
   | "onAgentToolResult"
   | "onToolResult"
+  | "config"
+  | "messageChannel"
   | "sessionKey"
+  | "currentChannelId"
+  | "currentMessagingTarget"
+  | "currentThreadId"
+  | "currentMessageId"
+  | "replyToMode"
+  | "hasRepliedRef"
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
@@ -326,6 +335,7 @@ export type ToolHandlerContext = {
   emitToolSummary: (toolName?: string, meta?: string) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   trimMessagingToolSent: () => void;
+  consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };
 
 export type EmbeddedAgentSubscribeEvent =

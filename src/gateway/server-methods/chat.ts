@@ -2442,6 +2442,7 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionFile: string | undefined;
   messageId: string;
   sessionStartedAt?: number;
+  allowResetArchiveFallback?: boolean;
 }): Promise<boolean> {
   if (params.sessionStartedAt === undefined) {
     return true;
@@ -2453,6 +2454,7 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
     {
       mode: "full",
       reason: "chat.message.get visibility",
+      ...(params.allowResetArchiveFallback === true ? { allowResetArchiveFallback: true } : {}),
     },
   );
   return dropPreSessionStartAnnouncePairs(messages, params.sessionStartedAt).some(
@@ -2565,6 +2567,7 @@ async function handleChatHistoryRequest({
       ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
           ...localHistoryReadOptions,
           maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+          allowResetArchiveFallback: true,
         })
       : [];
   const overreadContextMessage =
@@ -2746,6 +2749,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       entry?.sessionFile,
       messageId,
+      { allowResetArchiveFallback: true },
     );
     if (!resolved.found) {
       respond(true, { ok: false, unavailableReason: "not_found" });
@@ -2758,6 +2762,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       messageId,
       sessionStartedAt:
         typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+      allowResetArchiveFallback: true,
     });
     if (!visible) {
       respond(true, { ok: false, unavailableReason: "not_found" });

@@ -1030,6 +1030,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
     const codexAuthStore = {
       version: 1,
+      runtimePersistedProfileIds: ["anthropic:work", "openai:other", "openai:work", "xai:work"],
       profiles: {
         "openai:work": {
           type: "oauth" as const,
@@ -1109,6 +1110,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const forwardedAuthStore = expectRecordFields(harnessParams.authProfileStore, {});
     const authProfiles = expectRecordFields(forwardedAuthStore.profiles, {});
     expect(Object.keys(authProfiles)).toEqual(["openai:work"]);
+    expect(forwardedAuthStore.runtimePersistedProfileIds).toEqual(["openai:work"]);
+    expect(forwardedAuthStore.runtimeExternalProfileIds).toBeUndefined();
+    expect(forwardedAuthStore.runtimeExternalProfileIdsAuthoritative).toBeUndefined();
     expectRecordFields(authProfiles["openai:work"], {
       provider: "openai",
     });
@@ -1216,6 +1220,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     const codexAuthStore = {
       version: 1 as const,
+      runtimePersistedProfileIds: ["openai:work"],
       profiles: {
         "openai:work": {
           type: "oauth" as const,
@@ -1311,6 +1316,8 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     const codexAuthStore = {
       version: 1 as const,
+      runtimePersistedProfileIds: ["xai:work"],
+      runtimeExternalProfileIds: ["openai:default"],
       profiles: {
         "openai:default": {
           type: "oauth" as const,
@@ -1431,6 +1438,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const forwardedAuthStore = expectRecordFields(harnessParams.authProfileStore, {});
     const authProfiles = expectRecordFields(forwardedAuthStore.profiles, {});
     expect(Object.keys(authProfiles)).toEqual(["openai:default"]);
+    expect(forwardedAuthStore.runtimePersistedProfileIds).toBeUndefined();
+    expect(forwardedAuthStore.runtimeExternalProfileIds).toEqual(["openai:default"]);
+    expect(forwardedAuthStore.runtimeExternalProfileIdsAuthoritative).toBeUndefined();
     expectRecordFields(authProfiles["openai:default"], {
       provider: "openai",
     });

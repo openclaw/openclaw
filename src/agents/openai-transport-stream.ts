@@ -60,6 +60,7 @@ import {
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
   isOpenAIGpt54MiniModel,
+  isOpenAIGpt55Model,
   normalizeOpenAIReasoningEffort,
   resolveOpenAIReasoningEffortForModel,
   type OpenAIApiReasoningEffort,
@@ -83,6 +84,7 @@ import {
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForProjection,
 } from "./openai-tool-schema.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildGuardedModelFetch,
@@ -350,19 +352,32 @@ function responseInputRoles(input: unknown): string {
   return [...roles].toSorted().join(",");
 }
 
+function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
+  try {
+    return record[field];
+  } catch {
+    return undefined;
+  }
+}
+
 function readResponsesToolDisplayName(tool: unknown): string {
   if (!tool || typeof tool !== "object") {
     return "";
   }
   const record = tool as Record<string, unknown>;
-  if (typeof record.name === "string") {
-    return record.name;
+  const name = readToolPayloadField(record, "name");
+  if (typeof name === "string") {
+    return name;
   }
-  const fn = record.function;
-  if (fn && typeof fn === "object" && typeof (fn as Record<string, unknown>).name === "string") {
-    return (fn as Record<string, unknown>).name as string;
+  const fn = readToolPayloadField(record, "function");
+  if (fn && typeof fn === "object") {
+    const fnName = readToolPayloadField(fn as Record<string, unknown>, "name");
+    if (typeof fnName === "string") {
+      return fnName;
+    }
   }
-  return typeof record.type === "string" ? record.type : "";
+  const type = readToolPayloadField(record, "type");
+  return typeof type === "string" && type !== "function" ? type : "";
 }
 
 function summarizeResponsesTools(tools: unknown): string {
@@ -381,11 +396,16 @@ function responsesPayloadToolName(tool: unknown): string | undefined {
   if (!isRecord(tool)) {
     return undefined;
   }
-  if (typeof tool.name === "string") {
-    return tool.name;
+  const name = readToolPayloadField(tool, "name");
+  if (typeof name === "string") {
+    return name;
   }
-  const fn = tool.function;
-  return isRecord(fn) && typeof fn.name === "string" ? fn.name : undefined;
+  const fn = readToolPayloadField(tool, "function");
+  if (!isRecord(fn)) {
+    return undefined;
+  }
+  const fnName = readToolPayloadField(fn, "name");
+  return typeof fnName === "string" ? fnName : undefined;
 }
 
 function enforceCodeModeResponsesToolSurface(payload: unknown): void {
@@ -781,10 +801,14 @@ function isInvalidEncryptedContentError(error: unknown): boolean {
     return false;
   }
   const record = error as { code?: unknown; message?: unknown };
-  if (record.code === "invalid_encrypted_content") {
+  if (record.code === "invalid_encrypted_content" || record.code === "thinking_signature_invalid") {
     return true;
   }
-  return typeof record.message === "string" && record.message.includes("invalid_encrypted_content");
+  return (
+    typeof record.message === "string" &&
+    (record.message.includes("invalid_encrypted_content") ||
+      record.message.includes("thinking_signature_invalid"))
+  );
 }
 
 function stripEncryptedContentFields(value: unknown): { value: unknown; changed: boolean } {
@@ -2535,6 +2559,21 @@ function isAzureOpenAICompatibleHost(hostname: string): boolean {
   );
 }
 
+function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
+  if (!model.baseUrl.trim()) {
+    return true;
+  }
+  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  if (endpointClass === "openai-public" || endpointClass === "azure-openai") {
+    return true;
+  }
+  try {
+    return isAzureOpenAICompatibleHost(new URL(model.baseUrl).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function buildOpenAICompletionsClientConfig(
   model: Model,
   context: Context,
@@ -4249,8 +4288,11 @@ export function buildOpenAICompletionsParams(
         fallbackMap: compat.reasoningEffortMap,
       })
     : undefined;
-  const omitGpt54MiniToolReasoningEffort =
-    isOpenAIGpt54MiniModel(model) && Array.isArray(params.tools) && params.tools.length > 0;
+  const omitChatCompletionsToolReasoningEffort =
+    Array.isArray(params.tools) &&
+    params.tools.length > 0 &&
+    (isOpenAIGpt54MiniModel(model) ||
+      (isOpenAIGpt55Model(model) && isKnownOpenAICompletionsEndpoint(model)));
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
@@ -4276,7 +4318,7 @@ export function buildOpenAICompletionsParams(
     model.reasoning &&
     compat.supportsReasoningEffort &&
     !handledQwenThinkingFormat &&
-    !omitGpt54MiniToolReasoningEffort
+    !omitChatCompletionsToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
   }
@@ -4362,6 +4404,7 @@ export const testing = {
   buildOpenAIResponsesReasoningReplayMetadata,
   normalizeResponsesFailedEvent,
   prepareOpenAIResponsesReasoningItemForReplay,
+  createResponsesStreamWithEncryptedContentRetry,
   stripResponsesRequestEncryptedContent,
   tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,

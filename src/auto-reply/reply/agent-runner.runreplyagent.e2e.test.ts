@@ -377,6 +377,25 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("cleans up typing when followup admission is rejected", async () => {
+    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps typing alive when a followup is queued behind a live active run", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },

@@ -29,6 +29,7 @@ import {
   createEmbeddedRunReplayState,
   mergeEmbeddedRunReplayState,
 } from "./embedded-agent-runner/replay-state.js";
+import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import {
@@ -1262,6 +1263,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     resetForCompactionRetry,
     finalizeAssistantTexts,
     trimMessagingToolSent,
+    consumeToolSendReceipt: (toolCallId) =>
+      consumeEmbeddedToolSendReceipt(params.session.sessionManager, toolCallId),
     ensureCompactionPromise,
     noteCompactionRetry,
     resolveCompactionRetry,
