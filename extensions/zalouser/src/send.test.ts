@@ -121,6 +121,56 @@ describe("zalouser send helpers", () => {
     expect(result.receipt.primaryPlatformMessageId).toBe("mid-1");
   });
 
+  it("runs the outbound normalizer on the markdown path (HR stripped)", async () => {
+    // Prove normalization is wired into the markdown path using an HR line,
+    // which the normalizer strips. An HR signal is stable under the markdown
+    // style parser (no list markers for it to restructure), unlike a bullet
+    // list whose `- ` prefixes the parser rewrites into native Zalo styling.
+    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-1", "thread-norm-1"));
+
+    await sendMessageZalouser("thread-norm-1", "hello\n\n---\n\nworld", {
+      textMode: "markdown",
+    });
+
+    const sent = requireSendTextCall(0)[1] as string;
+    expect(sent).not.toContain("---");
+    expect(sent).toContain("hello");
+    expect(sent).toContain("world");
+  });
+
+  it("preserves --- inside a fenced code block on the markdown path", async () => {
+    // The fence-aware normalizer must skip fenced content so YAML
+    // frontmatter or any code snippet containing a `---` line is intact.
+    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-2", "thread-norm-2"));
+
+    const input = "Config:\n```yaml\nfoo: bar\n---\nbaz: qux\n```";
+    await sendMessageZalouser("thread-norm-2", input, { textMode: "markdown" });
+
+    // Code-fence body preserved; surrounding prose has nothing to collapse.
+    expect(requireSendTextCall(0)[1]).toContain("foo: bar\n---\nbaz: qux");
+  });
+
+  it("does NOT normalize default / plain sends (literal contract)", async () => {
+    // Review finding P1: default sends (no textMode: markdown) are literal
+    // by contract. A tool that sends a bare `---` or deliberate blank-line
+    // spacing must reach Zalo byte-for-byte - the normalizer must not touch
+    // it. Covers both the with-textStyles and without-textStyles cases.
+    const literal = "Greeting\n\n\n---\n\n- bullet one\n\n- bullet two";
+
+    // (a) plain send, no styles: reaches transport unchanged.
+    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-3a", "thread-norm-3"));
+    await sendMessageZalouser("thread-norm-3", literal);
+    expect(requireSendTextCall(0)[1]).toBe(literal);
+
+    // (b) plain send WITH caller styles: still literal, offsets stay aligned.
+    mockSendText.mockReset();
+    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-3b", "thread-norm-3"));
+    const callerStyles = [{ start: 0, len: 8, st: TextStyle.Bold }];
+    await sendMessageZalouser("thread-norm-3", literal, { textStyles: callerStyles });
+    expect(requireSendTextCall(0)[1]).toBe(literal);
+    expectSendTextOptions(0, { textStyles: callerStyles });
+  });
+
   it("formats markdown text when markdown mode is enabled", async () => {
     mockSendText.mockResolvedValueOnce(sendResult("mid-1b", "thread-1"));
 

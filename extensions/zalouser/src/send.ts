@@ -1,4 +1,5 @@
 // Zalouser plugin module implements send behavior.
+import { normalizeZalouserOutboundText } from "./outbound-format.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import { parseZalouserTextStyles } from "./text-styles.js";
 import type { ZaloEventMessage, ZaloSendOptions, ZaloSendResult } from "./types.js";
@@ -30,9 +31,20 @@ export async function sendMessageZalouser(
   text: string,
   options: ZalouserSendOptions = {},
 ): Promise<ZalouserSendResult> {
+  // Normalize agent-emitted markdown for the Zalo client ONLY on the
+  // explicit markdown path. The Zalo personal-account UI renders
+  // triple-dash horizontal rules as literal text and preserves blank
+  // lines inside lists, both of which look broken to the recipient - but
+  // that cleanup is a markdown-rendering concern. Default / plain sends
+  // (no textMode: "markdown") are literal by contract: a tool that sends
+  // a bare `---` or deliberate blank-line spacing must reach Zalo
+  // byte-for-byte, and caller-supplied textStyles offsets describe that
+  // exact literal text. So we normalize inside the markdown branch only;
+  // parseZalouserTextStyles then re-derives styles from the normalized
+  // text, keeping offsets aligned without any special-casing.
   const prepared =
     options.textMode === "markdown"
-      ? parseZalouserTextStyles(text)
+      ? parseZalouserTextStyles(normalizeZalouserOutboundText(text))
       : { text, styles: options.textStyles };
   const textChunkLimit = options.textChunkLimit ?? ZALO_TEXT_LIMIT;
   const chunks = splitStyledText(
