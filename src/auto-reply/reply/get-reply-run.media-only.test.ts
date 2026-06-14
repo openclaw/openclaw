@@ -651,6 +651,69 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.originatingChannel).toBe(channel);
   });
 
+  it.each(["steer", "followup", "collect"] as const)(
+    "routes active reply prompt answers through steering in %s mode",
+    async (mode) => {
+      const queueSettings = await import("./queue/settings-runtime.js");
+      vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+        mode,
+        debounceMs: 500,
+        cap: 20,
+        dropPolicy: "summarize",
+      });
+      const activeRun = createReplyOperation({
+        sessionId: "active-prompt-session",
+        sessionKey: "session-key",
+        resetTriggered: false,
+      });
+      activeRun.attachBackend({
+        kind: "cli",
+        cancel: vi.fn(),
+        isStreaming: () => true,
+        isAwaitingUserInput: () => true,
+        queueMessage: vi.fn(async () => {}),
+      });
+      activeRun.setPhase("running");
+
+      try {
+        await runPreparedReply(
+          baseParams({
+            isNewSession: false,
+            sessionId: "active-prompt-session",
+            ctx: {
+              Body: "2",
+              RawBody: "2",
+              CommandBody: "2",
+              Provider: "slack",
+              Surface: "slack",
+              ChatType: "direct",
+              OriginatingChannel: "slack",
+              OriginatingTo: "user:U1",
+            },
+            sessionCtx: {
+              Body: "2",
+              BodyStripped: "2",
+              Provider: "slack",
+              Surface: "slack",
+              ChatType: "direct",
+              OriginatingChannel: "slack",
+              OriginatingTo: "user:U1",
+            },
+          }),
+        );
+      } finally {
+        activeRun.complete();
+      }
+
+      const call = requireLastRunReplyAgentCall();
+      expect(call.shouldSteer).toBe(true);
+      expect(call.shouldFollowup).toBe(true);
+      expect(call.isActive).toBe(true);
+      expect(call.isStreaming).toBe(true);
+      expect(call.resolvedQueue).toMatchObject({ mode });
+    },
+  );
+
   it("keeps thread history context on follow-up turns", async () => {
     const result = await runPreparedReply(
       baseParams({

@@ -30,6 +30,10 @@ import type {
 } from "../embedded-agent-runner/run/params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
+export type CliUserInputPromptPayload = {
+  text: string;
+};
+
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
   sessionId: string;
@@ -120,6 +124,7 @@ export type RunCliAgentParams = {
     source?: string;
     firstModelCallStarted?: boolean;
   }) => void;
+  onUserInputPrompt?: (payload: CliUserInputPromptPayload) => void | Promise<void>;
   replyOperation?: ReplyOperation;
   emitCommentaryText?: boolean;
   /**

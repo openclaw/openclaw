@@ -1013,6 +1013,7 @@ export function createFollowupRunner(params: {
                     senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
+                    onUserInputPrompt: opts?.onBlockReply,
                   },
                 });
                 if (droppedCliSessionReplacement) {
