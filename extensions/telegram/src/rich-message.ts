@@ -4,6 +4,15 @@ import type { Bot } from "grammy";
 type TelegramChatId = Parameters<Bot["api"]["sendMessage"]>[0];
 type TelegramApi = Bot["api"];
 type TelegramRichMessageParams = Record<string, unknown>;
+type TelegramSendRichMessagePayload = TelegramRichMessageParams & {
+  chat_id: TelegramChatId;
+  rich_message: InputRichMessage;
+};
+type TelegramSendRichMessageDraftPayload = TelegramRichMessageParams & {
+  chat_id: TelegramChatId;
+  draft_id: number;
+  rich_message: InputRichMessage;
+};
 
 type InputRichMessageOptions = {
   is_rtl?: boolean;
@@ -20,18 +29,9 @@ export type InputRichMessage =
       markdown: string;
     });
 
-type TelegramRichMessageApi = TelegramApi & {
-  sendRichMessage?: (
-    chatId: TelegramChatId,
-    richMessage: InputRichMessage,
-    params?: TelegramRichMessageParams,
-  ) => Promise<unknown>;
-  sendRichMessageDraft?: (
-    chatId: TelegramChatId,
-    draftId: number,
-    richMessage: InputRichMessage,
-    params?: TelegramRichMessageParams,
-  ) => Promise<unknown>;
+type TelegramRichMessageRawApi = {
+  sendRichMessage?: (payload: TelegramSendRichMessagePayload) => Promise<unknown>;
+  sendRichMessageDraft?: (payload: TelegramSendRichMessageDraftPayload) => Promise<unknown>;
 };
 
 export function normalizeInputRichMessage(richMessage: InputRichMessage): InputRichMessage {
@@ -66,17 +66,16 @@ export async function sendTelegramRichMessage(params: {
   richMessage: InputRichMessage;
   methodParams?: TelegramRichMessageParams;
 }): Promise<unknown> {
-  const sendRichMessage = (params.api as TelegramRichMessageApi).sendRichMessage;
+  const sendRichMessage = (params.api.raw as TelegramRichMessageRawApi).sendRichMessage;
   if (typeof sendRichMessage !== "function") {
     throw new Error("Telegram Bot API client does not expose sendRichMessage.");
   }
 
-  return await sendRichMessage.call(
-    params.api,
-    params.chatId,
-    normalizeInputRichMessage(params.richMessage),
-    params.methodParams,
-  );
+  return await sendRichMessage.call(params.api.raw, {
+    ...params.methodParams,
+    chat_id: params.chatId,
+    rich_message: normalizeInputRichMessage(params.richMessage),
+  });
 }
 
 export async function sendTelegramRichMessageDraft(params: {
@@ -86,16 +85,15 @@ export async function sendTelegramRichMessageDraft(params: {
   richMessage: InputRichMessage;
   methodParams?: TelegramRichMessageParams;
 }): Promise<unknown> {
-  const sendRichMessageDraft = (params.api as TelegramRichMessageApi).sendRichMessageDraft;
+  const sendRichMessageDraft = (params.api.raw as TelegramRichMessageRawApi).sendRichMessageDraft;
   if (typeof sendRichMessageDraft !== "function") {
     throw new Error("Telegram Bot API client does not expose sendRichMessageDraft.");
   }
 
-  return await sendRichMessageDraft.call(
-    params.api,
-    params.chatId,
-    params.draftId,
-    normalizeInputRichMessage(params.richMessage),
-    params.methodParams,
-  );
+  return await sendRichMessageDraft.call(params.api.raw, {
+    ...params.methodParams,
+    chat_id: params.chatId,
+    draft_id: params.draftId,
+    rich_message: normalizeInputRichMessage(params.richMessage),
+  });
 }

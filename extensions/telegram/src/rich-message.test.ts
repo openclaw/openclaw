@@ -12,7 +12,7 @@ describe("Telegram rich message helpers", () => {
 
     await expect(
       sendTelegramRichMessage({
-        api: { sendRichMessage } as never,
+        api: { raw: { sendRichMessage } } as never,
         chatId: 123,
         richMessage: {
           html: "<b>Hello</b>",
@@ -23,15 +23,15 @@ describe("Telegram rich message helpers", () => {
       }),
     ).resolves.toEqual({ message_id: 11 });
 
-    expect(sendRichMessage).toHaveBeenCalledWith(
-      123,
-      {
+    expect(sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: {
         html: "<b>Hello</b>",
         is_rtl: true,
         skip_entity_detection: false,
       },
-      methodParams,
-    );
+      ...methodParams,
+    });
   });
 
   it("sends rich markdown drafts with caller-provided thread params", async () => {
@@ -40,7 +40,7 @@ describe("Telegram rich message helpers", () => {
 
     await expect(
       sendTelegramRichMessageDraft({
-        api: { sendRichMessageDraft } as never,
+        api: { raw: { sendRichMessageDraft } } as never,
         chatId: "123",
         draftId: 17,
         richMessage: {
@@ -51,15 +51,34 @@ describe("Telegram rich message helpers", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(sendRichMessageDraft).toHaveBeenCalledWith(
-      "123",
-      17,
-      {
+    expect(sendRichMessageDraft).toHaveBeenCalledWith({
+      chat_id: "123",
+      draft_id: 17,
+      rich_message: {
         markdown: "**Hello**",
         skip_entity_detection: true,
       },
-      methodParams,
-    );
+      ...methodParams,
+    });
+  });
+
+  it("keeps required rich message payload fields owned by the helper", async () => {
+    const sendRichMessage = vi.fn().mockResolvedValue({ message_id: 11 });
+
+    await sendTelegramRichMessage({
+      api: { raw: { sendRichMessage } } as never,
+      chatId: 123,
+      richMessage: { html: "<b>Hello</b>" },
+      methodParams: {
+        chat_id: 999,
+        rich_message: { markdown: "**override**" },
+      },
+    });
+
+    expect(sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: { html: "<b>Hello</b>" },
+    });
   });
 
   it.each([{ html: "" }, { html: "   " }, { markdown: "" }, { markdown: "\n\t" }])(
@@ -69,7 +88,7 @@ describe("Telegram rich message helpers", () => {
 
       await expect(
         sendTelegramRichMessage({
-          api: { sendRichMessage } as never,
+          api: { raw: { sendRichMessage } } as never,
           chatId: 123,
           richMessage: richMessage as never,
         }),
@@ -83,7 +102,7 @@ describe("Telegram rich message helpers", () => {
 
     await expect(
       sendTelegramRichMessageDraft({
-        api: { sendRichMessageDraft } as never,
+        api: { raw: { sendRichMessageDraft } } as never,
         chatId: 123,
         draftId: 17,
         richMessage: {
