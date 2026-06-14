@@ -11,6 +11,7 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import path from "node:path";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   readMemoryFile,
@@ -65,6 +66,7 @@ import {
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
+import { cleanupOrphanedTempFiles } from "./manager-atomic-reindex.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -387,6 +389,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     this.sources = new Set(effectiveSettings.sources);
     this.db = this.openDatabase();
+    // Fire-and-forget cleanup of orphaned temp files from prior hard restarts.
+    void cleanupOrphanedTempFiles(path.dirname(this.settings.store.path), log).catch(
+      (err: unknown) => {
+        log.warn(`memory: orphaned temp file cleanup failed: ${String(err)}`);
+      },
+    );
     this.providerKey = this.computeProviderKey();
     this.cache = {
       enabled: effectiveSettings.cache.enabled,

@@ -1,6 +1,7 @@
 // Memory Core plugin module implements manager atomic reindex behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 type MemoryIndexFileOps = {
@@ -84,10 +85,10 @@ export async function moveMemoryIndexFiles(
   }
 }
 
-async function rmWithRetry(path: string, options: ResolvedMemoryIndexFileOptions): Promise<void> {
+async function rmWithRetry(filePath: string, options: ResolvedMemoryIndexFileOptions): Promise<void> {
   for (let attempt = 1; attempt <= options.maxRemoveAttempts; attempt++) {
     try {
-      await options.fileOps.rm(path, { force: true });
+      await options.fileOps.rm(filePath, { force: true });
       return;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -241,5 +242,91 @@ export async function runMemoryAtomicReindex<T>(params: {
       throw aggregateErr;
     }
     throw err;
+  }
+}
+
+export const MEMORY_TEMP_STALE_AGE_MS = 30_000;
+const TEMP_FILE_PATTERN = /\.sqlite\.tmp-[0-9a-f-]+$/;
+
+type CleanupLogger = {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+};
+
+export async function cleanupOrphanedTempFiles(
+  storeDir: string,
+  logger?: CleanupLogger,
+): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(storeDir);
+  } catch (err) {
+    logger?.warn(`memory: failed to read store directory for temp cleanup: ${String(err)}`);
+    return;
+  }
+
+  // Group files by base name (stripping -wal/-shm suffixes) so we can
+  // collect all sidecars that belong to the same temp file.
+  const tempCandidates = new Map<string, string[]>();
+  for (const entry of entries) {
+    const baseName = entry.replace(/-(wal|shm)$/, "");
+    if (TEMP_FILE_PATTERN.test(baseName)) {
+      const group = tempCandidates.get(baseName) ?? [];
+      group.push(entry);
+      tempCandidates.set(baseName, group);
+    }
+  }
+
+  if (tempCandidates.size === 0) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  const staleGroups: string[][] = [];
+  const freshBaseNames: string[] = [];
+  let cleanedCount = 0;
+
+  for (const [baseName, files] of tempCandidates) {
+    const fullPath = path.join(storeDir, baseName);
+    let stat;
+    try {
+      stat = await fs.stat(fullPath);
+    } catch {
+      // Base temp file may have been deleted already; skip the group.
+      freshBaseNames.push(baseName);
+      continue;
+    }
+
+    if (stat.mtimeMs < nowMs - MEMORY_TEMP_STALE_AGE_MS) {
+      staleGroups.push(files);
+    } else {
+      freshBaseNames.push(baseName);
+    }
+  }
+
+  if (freshBaseNames.length > 0) {
+    logger?.info(
+      `memory: skipped ${freshBaseNames.length} active temp file(s) during startup cleanup`,
+      { freshCandidates: freshBaseNames },
+    );
+  }
+
+  for (const files of staleGroups) {
+    for (const file of files) {
+      try {
+        if (file === files[0]) {
+          // The base file: use removeMemoryIndexFiles which handles all sidecars
+          await removeMemoryIndexFiles(path.join(storeDir, file.replace(/-(wal|shm)$/, "")));
+        }
+      } catch (err) {
+        logger?.warn(`memory: failed to remove stale temp file "${file}": ${String(err)}`);
+      }
+    }
+    cleanedCount += files.length;
+  }
+
+  if (cleanedCount > 0) {
+    logger?.info(`memory: cleaned up ${cleanedCount} orphaned temp file(s) on startup`);
   }
 }
