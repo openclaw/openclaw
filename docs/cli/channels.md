@@ -26,6 +26,7 @@ openclaw channels capabilities --channel discord --target channel:123
 openclaw channels capabilities --channel discord --target channel:<voice-channel-id>
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
+openclaw channels restart --channel whatsapp --account default
 ```
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account. Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Auth providers (OAuth + API keys) and model-provider usage/quota snapshots are no longer printed here; use `openclaw models auth list` for provider auth profiles and `openclaw status` or `openclaw models list` for usage.
@@ -36,6 +37,9 @@ openclaw channels logs --channel all
 - `channels capabilities`: `--channel <name>`, `--account <id>` (only with `--channel`), `--target <dest>`, `--timeout <ms>`, `--json`
 - `channels resolve`: `<entries...>`, `--channel <name>`, `--account <id>`, `--kind <auto|user|group>`, `--json`
 - `channels logs`: `--channel <name|all>`, `--lines <n>`, `--json`
+- `channels start`: `--channel <name>`, `--account <id>`
+- `channels stop`: `--channel <name>`, `--account <id>`
+- `channels restart`: `--channel <name>`, `--account <id>`
 
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
 `probeAccount` and optional `auditAccount` checks, so output can include transport
@@ -48,6 +52,23 @@ Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
 stored conversation rows, not provider runtime state. After a Discord provider
 restart, a connected but quiet account may be healthy while no Discord session
 row appears until the next inbound or outbound conversation event.
+
+## Runtime lifecycle
+
+Use `channels start`, `channels stop`, and `channels restart` to control an
+already configured runtime-backed channel account through the running Gateway
+without rerunning interactive login:
+
+```bash
+openclaw channels start --channel whatsapp --account default
+openclaw channels stop --channel whatsapp --account default
+openclaw channels restart --channel whatsapp --account default
+```
+
+`restart` calls the Gateway stop path for the selected account before starting
+it again. These commands do not remove local auth state, clear channel config,
+or start a QR/login flow; use `channels login` or `channels logout` when you
+need to create or clear provider credentials.
 
 ## Add / remove accounts
 

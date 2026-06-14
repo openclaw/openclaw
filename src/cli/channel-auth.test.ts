@@ -1,6 +1,6 @@
 // Channel auth CLI tests cover channel auth command routing and credential prompts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
+import { runChannelLogin, runChannelLogout, runChannelRuntimeCommand } from "./channel-auth.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
@@ -558,6 +558,119 @@ describe("channel-auth", () => {
     expect(mocks.resolveAccount).not.toHaveBeenCalled();
     expect(mocks.logoutAccount).not.toHaveBeenCalled();
     expect(mocks.setVerbose).not.toHaveBeenCalled();
+  });
+
+  it("starts a linked channel runtime through the live gateway without running auth login", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ started: true });
+
+    await runChannelRuntimeCommand({ channel: "whatsapp", account: " acct-2 " }, "start", runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      config: { channels: { whatsapp: {} } },
+      method: "channels.start",
+      params: {
+        channel: "whatsapp",
+        accountId: "acct-2",
+      },
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+    expect(mocks.login).not.toHaveBeenCalled();
+    expect(mocks.logoutAccount).not.toHaveBeenCalled();
+    expect(readFirstLogMessage(runtime)).toContain("Channel start completed for whatsapp/acct-2.");
+  });
+
+  it("stops a linked channel runtime through the live gateway without clearing auth", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ stopped: true });
+
+    await runChannelRuntimeCommand({ channel: "whatsapp", account: "acct-2" }, "stop", runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      config: { channels: { whatsapp: {} } },
+      method: "channels.stop",
+      params: {
+        channel: "whatsapp",
+        accountId: "acct-2",
+      },
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+    expect(mocks.logoutAccount).not.toHaveBeenCalled();
+    expect(readFirstLogMessage(runtime)).toContain("Channel stop completed for whatsapp/acct-2.");
+  });
+
+  it("restarts a linked channel runtime by stopping before starting the resolved account", async () => {
+    mocks.callGateway
+      .mockResolvedValueOnce({ stopped: true })
+      .mockResolvedValueOnce({ started: true });
+
+    await runChannelRuntimeCommand({ channel: "whatsapp" }, "restart", runtime);
+
+    expect(mocks.resolveChannelDefaultAccountId).toHaveBeenCalledWith({
+      plugin,
+      cfg: { channels: { whatsapp: {} } },
+    });
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
+      config: { channels: { whatsapp: {} } },
+      method: "channels.stop",
+      params: {
+        channel: "whatsapp",
+        accountId: "default-account",
+      },
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(2, {
+      config: { channels: { whatsapp: {} } },
+      method: "channels.start",
+      params: {
+        channel: "whatsapp",
+        accountId: "default-account",
+      },
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+    expect(readFirstLogMessage(runtime)).toContain(
+      "Channel restart completed for whatsapp/default-account.",
+    );
+  });
+
+  it("throws when channel does not support runtime start", async () => {
+    mocks.getChannelPlugin.mockReturnValueOnce({
+      id: "whatsapp",
+      auth: { login: mocks.login },
+      gateway: { logoutAccount: mocks.logoutAccount },
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: mocks.resolveAccount,
+      },
+    });
+    mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValueOnce({
+      channels: [
+        {
+          plugin: {
+            id: "whatsapp",
+            auth: { login: mocks.login },
+            gateway: { logoutAccount: mocks.logoutAccount },
+            config: {
+              listAccountIds: vi.fn().mockReturnValue(["default"]),
+              resolveAccount: mocks.resolveAccount,
+            },
+          },
+        },
+      ],
+      channelSetups: [],
+    });
+
+    await expect(
+      runChannelRuntimeCommand({ channel: "whatsapp" }, "start", runtime),
+    ).rejects.toThrow(
+      'Channel "whatsapp" does not support start. Run `openclaw channels status --channel whatsapp` to inspect supported actions.',
+    );
   });
 
   it("falls back to local auth cleanup when a local gateway logout is unreachable", async () => {

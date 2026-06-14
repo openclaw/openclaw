@@ -20,7 +20,7 @@ import { formatCliCommand } from "./command-format.js";
 import { formatUnsupportedChannelActionMessage } from "./error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
-type ChannelAuthOptions = {
+type ChannelRuntimeOptions = {
   channel?: string;
   account?: string;
   verbose?: boolean;
@@ -28,9 +28,20 @@ type ChannelAuthOptions = {
 
 type ChannelPlugin = NonNullable<ReturnType<typeof getChannelPlugin>>;
 type ChannelAuthMode = "login" | "logout";
+type ChannelRuntimeMode = "start" | "stop" | "restart";
+type ChannelActionMode = ChannelAuthMode | ChannelRuntimeMode;
 
-function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): boolean {
-  return mode === "login" ? Boolean(plugin.auth?.login) : Boolean(plugin.gateway?.logoutAccount);
+function supportsChannelActionMode(plugin: ChannelPlugin, mode: ChannelActionMode): boolean {
+  if (mode === "login") {
+    return Boolean(plugin.auth?.login);
+  }
+  if (mode === "logout") {
+    return Boolean(plugin.gateway?.logoutAccount);
+  }
+  if (mode === "stop") {
+    return Boolean(plugin.gateway?.startAccount || plugin.gateway?.logoutAccount);
+  }
+  return Boolean(plugin.gateway?.startAccount);
 }
 
 function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boolean {
@@ -67,9 +78,9 @@ function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boo
   return false;
 }
 
-function resolveConfiguredAuthChannelInput(cfg: OpenClawConfig, mode: ChannelAuthMode): string {
+function resolveConfiguredAuthChannelInput(cfg: OpenClawConfig, mode: ChannelActionMode): string {
   const configured = listChannelPlugins()
-    .filter((plugin): plugin is ChannelPlugin => supportsChannelAuthMode(plugin, mode))
+    .filter((plugin): plugin is ChannelPlugin => supportsChannelActionMode(plugin, mode))
     .filter((plugin) => isConfiguredAuthPlugin(plugin, cfg))
     .map((plugin) => plugin.id);
 
@@ -88,8 +99,8 @@ function resolveConfiguredAuthChannelInput(cfg: OpenClawConfig, mode: ChannelAut
 }
 
 async function resolveChannelPluginForMode(
-  opts: ChannelAuthOptions,
-  mode: ChannelAuthMode,
+  opts: ChannelRuntimeOptions,
+  mode: ChannelActionMode,
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<{
@@ -108,8 +119,8 @@ async function resolveChannelPluginForMode(
     runtime,
     rawChannel: channelInput,
     ...(normalizedChannelId ? { channelId: normalizedChannelId } : {}),
-    allowInstall: true,
-    supports: (candidate) => supportsChannelAuthMode(candidate, mode),
+    allowInstall: mode === "login" || mode === "logout",
+    supports: (candidate) => supportsChannelActionMode(candidate, mode),
   });
   const channelId = resolved.channelId ?? normalizedChannelId;
   if (!channelId) {
@@ -118,7 +129,7 @@ async function resolveChannelPluginForMode(
     );
   }
   const plugin = resolved.plugin;
-  if (!plugin || !supportsChannelAuthMode(plugin, mode)) {
+  if (!plugin || !supportsChannelActionMode(plugin, mode)) {
     throw new Error(
       formatUnsupportedChannelActionMessage({
         channel: channelId,
@@ -138,7 +149,7 @@ async function resolveChannelPluginForMode(
 
 function resolveAccountContext(
   plugin: ChannelPlugin,
-  opts: ChannelAuthOptions,
+  opts: ChannelRuntimeOptions,
   cfg: OpenClawConfig,
 ) {
   const accountId =
@@ -212,8 +223,77 @@ async function logoutViaGatewayRuntime(params: {
   }
 }
 
+async function callChannelRuntimeGateway(params: {
+  cfg: OpenClawConfig;
+  method: "channels.start" | "channels.stop";
+  channelId: string;
+  accountId: string;
+}) {
+  return await callGateway({
+    config: params.cfg,
+    method: params.method,
+    params: {
+      channel: params.channelId,
+      accountId: params.accountId,
+    },
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    deviceIdentity: null,
+  });
+}
+
+function formatChannelRuntimeResult(params: {
+  action: ChannelRuntimeMode;
+  channelId: string;
+  accountId: string;
+  payload: unknown;
+}): string {
+  const payload = params.payload && typeof params.payload === "object" ? params.payload : {};
+  const actionFlag =
+    params.action === "start" ? "started" : params.action === "stop" ? "stopped" : "started";
+  const succeeded = (payload as Record<string, unknown>)[actionFlag] === true;
+  const state = succeeded ? "completed" : "requested";
+  return `Channel ${params.action} ${state} for ${params.channelId}/${params.accountId}.`;
+}
+
+export async function runChannelRuntimeCommand(
+  opts: ChannelRuntimeOptions,
+  action: ChannelRuntimeMode,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
+  const autoEnabled = applyPluginAutoEnable({
+    config: getRuntimeConfig(),
+    env: process.env,
+  });
+  const loadedCfg = autoEnabled.config;
+  const resolvedChannel = await resolveChannelPluginForMode(opts, action, loadedCfg, runtime);
+  const { accountId } = resolveAccountContext(resolvedChannel.plugin, opts, resolvedChannel.cfg);
+  if (action === "restart") {
+    await callChannelRuntimeGateway({
+      cfg: resolvedChannel.cfg,
+      method: "channels.stop",
+      channelId: resolvedChannel.plugin.id,
+      accountId,
+    });
+  }
+  const result = await callChannelRuntimeGateway({
+    cfg: resolvedChannel.cfg,
+    method: action === "stop" ? "channels.stop" : "channels.start",
+    channelId: resolvedChannel.plugin.id,
+    accountId,
+  });
+  runtime.log(
+    formatChannelRuntimeResult({
+      action,
+      channelId: resolvedChannel.plugin.id,
+      accountId,
+      payload: result,
+    }),
+  );
+}
+
 export async function runChannelLogin(
-  opts: ChannelAuthOptions,
+  opts: ChannelRuntimeOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
@@ -262,7 +342,7 @@ export async function runChannelLogin(
 }
 
 export async function runChannelLogout(
-  opts: ChannelAuthOptions,
+  opts: ChannelRuntimeOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
