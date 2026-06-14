@@ -86,6 +86,7 @@ function withTarball(
     for (const [relativePath, target] of Object.entries(options.packageSymlinks ?? {})) {
       const filePath = join(packageRoot, relativePath);
       mkdirSync(dirname(filePath), { recursive: true });
+      rmSync(filePath, { recursive: true, force: true });
       symlinkSync(target, filePath);
     }
     for (const [relativePath, mode] of Object.entries(options.packageModes ?? {})) {
@@ -267,6 +268,42 @@ describe("check-openclaw-package-tarball", () => {
         },
         version,
         { includeContentInventory: false },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked package metadata used for legacy compatibility",
+    () => {
+      const legacyVersion = "2026.5.21";
+      withTarball(
+        ["dist/index.js"],
+        { "dist/index.js": "export {};\n" },
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain("unsafe package metadata tar entry package.json");
+          expect(result.stderr).toContain("unsafe package metadata tar entry npm-shrinkwrap.json");
+          expect(result.stderr).toContain("missing dist/postinstall-content-inventory.json");
+        },
+        "2026.6.7",
+        {
+          extraRootFiles: {
+            "legacy-package.json": JSON.stringify({ name: "openclaw", version: legacyVersion }),
+            "legacy-shrinkwrap.json": JSON.stringify({
+              name: "openclaw",
+              version: legacyVersion,
+              lockfileVersion: 3,
+              packages: { "": { name: "openclaw", version: legacyVersion } },
+            }),
+          },
+          includeContentInventory: false,
+          packageSymlinks: {
+            "package.json": "../legacy-package.json",
+            "npm-shrinkwrap.json": "../legacy-shrinkwrap.json",
+          },
+        },
       );
     },
   );

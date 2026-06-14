@@ -212,6 +212,10 @@ function hasUnsafeExtractedAncestor(candidate, root) {
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     return true;
   }
+  const rootStats = fs.lstatSync(resolvedRoot);
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+    return true;
+  }
   let current = resolvedRoot;
   for (const part of relativePath.split(path.sep).slice(0, -1)) {
     current = path.join(current, part);
@@ -273,20 +277,34 @@ function readPackageTarEntry(entryPath) {
   return "";
 }
 
-function readPackageTarEntryBuffer(entryPath) {
+function readPackageTarEntryBuffer(
+  entryPath,
+  unsafeEntryLabel = "unsafe content inventory tar entry",
+) {
   const candidate = resolveExtractedTarEntry(entryPath, true);
   const root = path.join(extractDir, "package");
   if (candidate && fs.existsSync(candidate)) {
     if (hasUnsafeExtractedAncestor(candidate, root)) {
-      return { error: `unsafe content inventory tar entry ${entryPath}` };
+      return { error: `${unsafeEntryLabel} ${entryPath}` };
     }
     const stats = fs.lstatSync(candidate);
     if (!stats.isFile() || stats.isSymbolicLink()) {
-      return { error: `unsafe content inventory tar entry ${entryPath}` };
+      return { error: `${unsafeEntryLabel} ${entryPath}` };
     }
     return { content: fs.readFileSync(candidate), mode: stats.mode };
   }
   return { content: null };
+}
+
+function readPackageMetadataTarEntry(entryPath) {
+  const { content, error } = readPackageTarEntryBuffer(
+    entryPath,
+    "unsafe package metadata tar entry",
+  );
+  if (error) {
+    throw new Error(error);
+  }
+  return content?.toString("utf8") ?? "";
 }
 
 function sha256Hex(content) {
@@ -353,10 +371,13 @@ for (const requiredPrefix of REQUIRED_TARBALL_ENTRY_PREFIXES) {
 let packageVersion = "";
 if (packageEntrySet.has("package.json")) {
   try {
-    const packageJson = JSON.parse(readPackageTarEntry("package.json"));
+    const packageJson = JSON.parse(readPackageMetadataTarEntry("package.json"));
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
-  } catch {
+  } catch (error) {
     packageVersion = "";
+    errors.push(
+      `unreadable package.json: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 const expectedPackageDistInventoryEntries = [
@@ -373,7 +394,7 @@ if (!packageEntrySet.has("npm-shrinkwrap.json")) {
   }
 } else {
   try {
-    const shrinkwrap = JSON.parse(readPackageTarEntry("npm-shrinkwrap.json"));
+    const shrinkwrap = JSON.parse(readPackageMetadataTarEntry("npm-shrinkwrap.json"));
     const rootPackage = shrinkwrap.packages?.[""];
     if (shrinkwrap.name !== "openclaw") {
       errors.push("npm-shrinkwrap.json root name must be openclaw");
