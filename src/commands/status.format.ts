@@ -5,14 +5,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+import { formatTokenCount } from "../utils/usage-format.js";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
-// Sub-1000 counts render as plain integers (matching formatTokenCount); the "k"
-// suffix only kicks in at >=1000 so e.g. 999 stays "999" instead of rounding up
-// across the boundary to a misleading "1.0k".
-export const formatKTokens = (value: number) =>
-  value < 1000 ? String(Math.round(value)) : `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+export const formatKTokens = formatTokenCount;
 
 /** Formats a duration or returns `unknown` for missing/non-finite values. */
 export const formatDuration = (ms: number | null | undefined) => {

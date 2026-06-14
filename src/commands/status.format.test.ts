@@ -45,6 +45,7 @@ describe("status cache formatting", () => {
     expect(formatKTokens(999)).toBe("999");
     expect(formatKTokens(1_000)).toBe("1.0k");
     expect(formatKTokens(12_000)).toBe("12k");
+    expect(formatKTokens(999_500)).toBe("1.0m");
   });
 
   it("keeps small sessions and cache writes readable in status output", () => {
