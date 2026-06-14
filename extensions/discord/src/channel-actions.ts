@@ -206,8 +206,8 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     trustedRequesterGuildAdminActions.has(action),
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
-    if (action === "sendMessage") {
-      return extractToolSend(args, "sendMessage");
+    if (action === "send" || action === "sendMessage") {
+      return extractToolSend(args, action);
     }
     if (action === "threadReply") {
       const channelId = normalizeOptionalString(args.channelId) ?? "";
