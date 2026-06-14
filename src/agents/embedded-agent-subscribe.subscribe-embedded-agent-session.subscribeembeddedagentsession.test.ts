@@ -61,12 +61,12 @@ describe("subscribeEmbeddedAgentSession", () => {
     // Default trusted media tools to built-ins so tests that opt into custom
     // builtin sets get matching local media trust behavior.
     const { session, emit } = createStubSessionHarness();
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       ...options,
       trustedLocalMediaToolNames: options.trustedLocalMediaToolNames ?? options.builtinToolNames,
     });
-    return { emit };
+    return { emit, subscription };
   }
 
   function emitAssistantTextDelta(
@@ -501,7 +501,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
-    const { emit } = createSubscribedHarness({
+    const { emit, subscription } = createSubscribedHarness({
       runId: "run",
       onToolResult,
       onBlockReply,
@@ -574,6 +574,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       .map(([payload]) => payload)
       .filter((payload) => payload.mediaUrls?.includes("/tmp/generated.png"));
     expect(mediaPayloads).toHaveLength(1);
+    expect(subscription.hasToolMediaBlockReply()).toBe(true);
   });
 
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
@@ -776,6 +777,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       audioAsVoice: true,
     });
     expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.hasToolMediaBlockReply()).toBe(true);
     expect(subscription.getVisibleBlockReplyCount()).toBe(1);
   });
 

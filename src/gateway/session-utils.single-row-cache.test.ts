@@ -72,7 +72,11 @@ const subagentRegistryReadMock = vi.hoisted(() => {
 
 vi.mock("../agents/subagent-registry-read.js", () => subagentRegistryReadMock);
 
-import { loadGatewaySessionRow } from "./session-utils.js";
+import {
+  listSessionsFromStore,
+  listSessionsFromStoreAsync,
+  loadGatewaySessionRow,
+} from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
 const TEST_MODEL = "openai/gpt-5.4";
@@ -234,6 +238,58 @@ describe("single gateway session row child-session cache", () => {
 
         setSubagentControllerRun(fixture.child, fixture.newParent, now + 25);
         expectChildMovedToNewParent(fixture, now);
+      },
+    );
+  });
+
+  test("builds shared subagent metadata context for single-row session lists", async () => {
+    await withSingleRowCacheStore(
+      "openclaw-single-row-list-context-",
+      "/tmp/openclaw-single-row-list-context",
+      async ({ now, storePath }) => {
+        const store: Record<string, SessionEntry> = {
+          "agent:main:discord:channel:parent": parentSession("parent", now),
+        };
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: MAIN_AGENT_ID,
+                default: true,
+                workspace: "/tmp/openclaw-single-row-list-context",
+              },
+            ],
+            defaults: { model: { primary: TEST_MODEL } },
+          },
+        } as OpenClawConfig;
+
+        const syncListed = listSessionsFromStore({
+          cfg,
+          storePath,
+          store,
+          opts: { agentId: MAIN_AGENT_ID, limit: 1 },
+        });
+
+        expect(syncListed.sessions).toHaveLength(1);
+        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(1);
+        expect(
+          subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
+        ).not.toHaveBeenCalled();
+
+        vi.clearAllMocks();
+
+        const asyncListed = await listSessionsFromStoreAsync({
+          cfg,
+          storePath,
+          store,
+          opts: { agentId: MAIN_AGENT_ID, limit: 1 },
+        });
+
+        expect(asyncListed.sessions).toHaveLength(1);
+        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(1);
+        expect(
+          subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
+        ).not.toHaveBeenCalled();
       },
     );
   });

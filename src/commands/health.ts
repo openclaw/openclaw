@@ -280,12 +280,14 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
   return { defaultAgentId, ordered };
 };
 
-const buildSessionSummary = async (storePath: string) => {
-  const { loadSessionStore } = await import("../config/sessions/store.js");
-  const store = loadSessionStore(storePath, { clone: false });
-  const sessions = Object.entries(store)
-    .filter(([key]) => key !== "global" && key !== "unknown")
-    .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
+const buildSessionSummary = async (storePath: string, agentId?: string) => {
+  const { listSessionEntries } = await import("../config/sessions/session-accessor.js");
+  const sessions = listSessionEntries({
+    ...(agentId ? { agentId } : {}),
+    storePath,
+  })
+    .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
+    .map(({ sessionKey, entry }) => ({ key: sessionKey, updatedAt: entry?.updatedAt ?? 0 }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt);
   const recent = sessions.slice(0, 5).map((s) => ({
     key: s.key,
@@ -471,8 +473,10 @@ export async function getHealthSnapshot(params?: {
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath));
-    sessionCache.set(storePath, sessions);
+    const sessionCacheKey = `${storePath}\0${entry.id}`;
+    const sessions =
+      sessionCache.get(sessionCacheKey) ?? (await buildSessionSummary(storePath, entry.id));
+    sessionCache.set(sessionCacheKey, sessions);
     agents.push({
       agentId: entry.id,
       name: entry.name,
@@ -487,7 +491,10 @@ export async function getHealthSnapshot(params?: {
     : 0;
   const sessions =
     defaultAgent?.sessions ??
-    (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
+    (await buildSessionSummary(
+      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
+      defaultAgentId,
+    ));
 
   const start = Date.now();
   const cappedTimeout = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 50);
@@ -767,7 +774,7 @@ export async function healthCommand(
                 name: entry.name,
                 isDefault: entry.id === localAgents.defaultAgentId,
                 heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-                sessions: await buildSessionSummary(storePath),
+                sessions: await buildSessionSummary(storePath, entry.id),
               } satisfies AgentHealthSummary;
             }),
           );

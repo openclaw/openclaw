@@ -688,6 +688,53 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("Threaded reply", cfg, "1111111111.111111");
   });
 
+  it("auto-injects threadTs for matching DM user targets", async () => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "user:U123",
+        content: "Threaded DM reply",
+      },
+      cfg,
+      {
+        currentChannelId: "slack:U123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "all",
+      },
+    );
+    expectSlackSendCall(0, "user:U123", "Threaded DM reply", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: "1111111111.111111",
+      blocks: undefined,
+    });
+  });
+
+  it("auto-injects threadTs for routable DM targets while retaining the native channel", async () => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "user:U123",
+        content: "Threaded DM reply",
+      },
+      cfg,
+      {
+        currentChannelId: "D123",
+        currentMessagingTarget: "user:U123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "all",
+      },
+    );
+    expectSlackSendCall(0, "user:U123", "Threaded DM reply", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: "1111111111.111111",
+      blocks: undefined,
+    });
+  });
+
   it.each([
     { name: "topLevel true", patch: { topLevel: true } },
     { name: "threadTs null", patch: { threadTs: null } },
@@ -758,6 +805,42 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("Explicit", cfg, "9999999999.999999");
     expect(hasRepliedRef.value).toBe(true);
     await sendSecondMessageAndExpectNoThread({ cfg, context });
+  });
+
+  it("replyToMode=first consumes a routable DM target with a native channel context", async () => {
+    const cfg = slackConfig();
+    const hasRepliedRef = { value: false };
+    const context = {
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode: "first" as const,
+      hasRepliedRef,
+    };
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "user:U123",
+        content: "Explicit",
+        threadTs: "9999999999.999999",
+      },
+      cfg,
+      context,
+    );
+
+    expect(hasRepliedRef.value).toBe(true);
+    await handleSlackAction(
+      { action: "sendMessage", to: "user:U123", content: "Second" },
+      cfg,
+      context,
+    );
+    expectSlackSendCall(1, "user:U123", "Second", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: undefined,
+    });
   });
 
   it("replyToMode=first without hasRepliedRef does not thread", async () => {

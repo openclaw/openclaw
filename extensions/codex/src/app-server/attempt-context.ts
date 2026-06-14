@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import type { CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -584,17 +585,12 @@ export function prependCodexOpenClawPromptContext(
   return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
 }
 
-const CODEX_DELIVERY_HINT_LINES = [
-  "Delivery: to send a message, use the `message` tool.",
-  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-] as const;
-
 function splitLeadingCodexDeliveryHint(prompt: string): {
   deliveryHint?: string;
   prompt: string;
 } {
   const trimmedStart = prompt.trimStart();
-  const matchedHint = CODEX_DELIVERY_HINT_LINES.find((hint) => trimmedStart.startsWith(hint));
+  const matchedHint = MESSAGE_TOOL_DELIVERY_HINTS.find((hint) => trimmedStart.startsWith(hint));
   if (!matchedHint) {
     return { prompt };
   }

@@ -478,7 +478,8 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("sessionId", "session-1");
     expect(toolOptions).toHaveProperty("modelProvider", "openai");
     expect(toolOptions).toHaveProperty("modelId", "gpt-5.5");
-    expect(toolOptions).toHaveProperty("messageProvider", "discord-voice");
+    expect(toolOptions).toHaveProperty("messageProvider", "discord");
+    expect(toolOptions).toHaveProperty("toolPolicyMessageProvider", "discord-voice");
     expect(toolOptions).toHaveProperty("currentChannelId", "voice-room");
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });

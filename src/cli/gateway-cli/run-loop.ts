@@ -800,13 +800,30 @@ export async function runGatewayLoop(params: {
       // deferral timers and reloads the task registry from durable state so
       // cancelled/completed work is not kept alive by old in-memory maps.
       const {
+        abortActiveCronTaskRuns,
+        advanceCronActiveJobGeneration,
         reloadTaskRegistryFromStore,
+        retireActiveCronTaskRunTracking,
+        resetCronActiveJobs,
         resetAllLanes,
         resetGatewayRestartStateForInProcessRestart,
         rotateAgentEventLifecycleGeneration,
+        waitForActiveCronJobs,
+        waitForActiveCronTaskRuns,
       } = await loadGatewayLifecycleRuntimeModule();
       // Rotate ownership before reset pumps preserved queue entries.
       rotateAgentEventLifecycleGeneration();
+      advanceCronActiveJobGeneration();
+      abortActiveCronTaskRuns("Gateway restarting.");
+      const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
+      const cronDrain = await waitForActiveCronJobs(1_000);
+      if (!cronTaskDrain.drained || !cronDrain.drained) {
+        gatewayLog.warn(
+          `cron run drain timed out during restart lifecycle reset after retiring old cron admission; ${cronTaskDrain.active} task handle(s) and ${cronDrain.active} active marker(s) remain after aborting old cron runs`,
+        );
+      }
+      retireActiveCronTaskRunTracking();
+      resetCronActiveJobs();
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();

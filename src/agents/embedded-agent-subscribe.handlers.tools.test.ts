@@ -6,6 +6,8 @@ import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -381,6 +383,35 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.successfulCronAdds).toBe(0);
     expect(ctx.state.itemCompletedCount).toBe(1);
     expect(ctx.state.itemActiveIds.size).toBe(0);
+  });
+});
+
+describe("handleToolExecutionEnd private result observer", () => {
+  it("reports the sanitized original tool result", async () => {
+    const { ctx } = createTestContext();
+    const onAgentToolResult = vi.fn();
+    ctx.params.onAgentToolResult = onAgentToolResult;
+    const result = {
+      content: [{ type: "text", text: '{"results":[{"text":"ramen"}]}' }],
+      details: { results: [{ text: "ramen" }] },
+    };
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "memory_search",
+        toolCallId: "tool-memory-search",
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "memory_search",
+      result,
+      isError: false,
+    });
   });
 });
 
@@ -931,7 +962,9 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
+    const onAgentToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
+    ctx.params.onAgentToolResult = onAgentToolResult;
 
     await handleToolExecutionEnd(
       ctx as never,
@@ -961,6 +994,13 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Host:");
     expect(text).not.toContain("CWD:");
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "exec",
+      result: expect.objectContaining({
+        details: expect.objectContaining({ status: "approval-unavailable" }),
+      }),
+      isError: true,
+    });
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
@@ -1477,6 +1517,136 @@ describe("handleToolExecutionEnd derived tool events", () => {
 });
 
 describe("messaging tool media URL tracking", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  it("uses the current provider and thread for implicit message sends", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            threading: {
+              resolveAutoThreadId: ({
+                to,
+                toolContext,
+              }: {
+                to: string;
+                toolContext?: {
+                  currentChannelId?: string;
+                  currentMessagingTarget?: string;
+                  currentThreadTs?: string;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                };
+              }) =>
+                toolContext?.replyToMode === "all" &&
+                (to === toolContext.currentMessagingTarget || to === toolContext.currentChannelId)
+                  ? toolContext.currentThreadTs
+                  : undefined,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    ctx.params.messageChannel = "slack";
+    ctx.params.currentChannelId = "D1";
+    ctx.params.currentMessagingTarget = "user:u1";
+    ctx.params.currentThreadId = "171.222";
+    ctx.params.replyToMode = "all";
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-threaded-message",
+      args: {
+        action: "send",
+        to: "user:U1",
+        content: "hi",
+      },
+    });
+
+    expect(ctx.state.pendingMessagingTargets.get("tool-threaded-message")).toMatchObject({
+      provider: "slack",
+      to: "user:u1",
+      threadId: "171.222",
+      threadImplicit: true,
+    });
+  });
+
+  it("reconciles unresolved send targets from successful provider results", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "mattermost",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "mattermost" }),
+            actions: {
+              extractToolSend: ({ args }: { args: Record<string, unknown> }) =>
+                args.action === "send" && typeof args.to === "string"
+                  ? { to: args.to, threadImplicit: true }
+                  : null,
+              extractToolSendResult: ({ result }: { result: unknown }) => {
+                const providerResult = result as {
+                  status?: string;
+                  details?: { redacted?: boolean; toolSend?: unknown };
+                };
+                if (providerResult.status !== "sent" || providerResult.details?.redacted !== true) {
+                  return null;
+                }
+                const details = providerResult.details;
+                return (details?.toolSend as { to: string; threadId?: string } | undefined) ?? null;
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        toolSend: {
+          to: "channel:resolved-id",
+          threadId: "root-1",
+        },
+      },
+    });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-mattermost-name",
+      args: {
+        action: "send",
+        provider: "mattermost",
+        to: "town-square",
+        content: "hi",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-mattermost-name",
+      isError: false,
+      result: {
+        status: "sent",
+        details: { redacted: true },
+      },
+    });
+
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      provider: "mattermost",
+      to: "channel:resolved-id",
+      threadId: "root-1",
+      text: "hi",
+    });
+  });
+
   it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();
 

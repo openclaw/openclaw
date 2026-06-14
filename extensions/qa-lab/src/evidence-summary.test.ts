@@ -133,7 +133,6 @@ describe("evidence summary", () => {
       artifactPaths: [
         { kind: "summary", path: QA_EVIDENCE_FILENAME },
         { kind: "report", path: "telegram-qa-report.md" },
-        { kind: "transport-observations", path: "telegram-qa-observed-messages.json" },
       ],
       env: {
         OPENCLAW_QA_RUNNER: "crabbox",
@@ -144,7 +143,7 @@ describe("evidence summary", () => {
       checks: [
         {
           id: "telegram-canary",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           title: "Telegram canary",
           status: "fail",
           details: "timed out waiting for SUT reply",
@@ -173,7 +172,7 @@ describe("evidence summary", () => {
             },
             {
               id: "channels.telegram.canary",
-              role: "live-transport-standard",
+              role: "live-transport-coverage",
               surfaceIds: ["channels.telegram"],
               categoryIds: ["channels.telegram.live"],
             },
@@ -206,11 +205,6 @@ describe("evidence summary", () => {
               path: "telegram-qa-report.md",
               source: "telegram-live-transport",
             },
-            {
-              kind: "transport-observations",
-              path: "telegram-qa-observed-messages.json",
-              source: "telegram-live-transport",
-            },
           ],
         }),
         result: {
@@ -224,6 +218,45 @@ describe("evidence summary", () => {
         },
       }),
     ]);
+  });
+
+  it("preserves aggregate live transport timing", () => {
+    const evidence = buildLiveTransportEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
+      generatedAt: "2026-06-07T12:05:00.000Z",
+      primaryModel: "openai/gpt-5.5",
+      providerMode: "live-frontier",
+      checks: [
+        {
+          id: "telegram-mentioned-message-reply",
+          coverageIds: ["channels.telegram.mention-gating"],
+          title: "Telegram mentioned message gets a reply",
+          status: "pass",
+          details: "5 samples collected.",
+          rttMs: 2000,
+          timing: {
+            rttMs: 1200,
+            avgMs: 1300,
+            p50Ms: 1200,
+            p95Ms: 1800,
+            maxMs: 2200,
+            samples: 5,
+            failedSamples: 1,
+          },
+        },
+      ],
+      transportId: "telegram",
+    });
+
+    expect(evidence.entries[0]?.result.timing).toEqual({
+      rttMs: 1200,
+      avgMs: 1300,
+      p50Ms: 1200,
+      p95Ms: 1800,
+      maxMs: 2200,
+      samples: 5,
+      failedSamples: 1,
+    });
   });
 
   it("builds Vitest runner evidence entries", () => {
@@ -485,7 +518,7 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
           details: "Canary passed.",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           status: "pass",
         },
       ],
@@ -515,7 +548,7 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
           details: "Canary passed.",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           status: "pass",
         },
       ],
@@ -543,7 +576,7 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
           details: "Canary passed.",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           status: "pass",
         },
       ],

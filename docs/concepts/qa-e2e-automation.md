@@ -318,17 +318,17 @@ Matrix has a [dedicated page](/concepts/qa-matrix) because of its scenario count
 
 These lanes register through `extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts` and accept the same flags:
 
-| Flag                                  | Default                                            | Description                                                                                                           |
-| ------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `--scenario <id>`                     | -                                                  | Run only this scenario. Repeatable.                                                                                   |
-| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports/summary/observed messages and the output log are written. Relative paths resolve against `--repo-root`. |
-| `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                     |
-| `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                    |
-| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                  |
-| `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                         |
-| `--fast`                              | off                                                | Provider fast mode where supported.                                                                                   |
-| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                |
-| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                          |
+| Flag                                  | Default                                            | Description                                                                                                                                     |
+| ------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--scenario <id>`                     | -                                                  | Run only this scenario. Repeatable.                                                                                                             |
+| `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
+| `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
+| `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
+| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                                            |
+| `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
+| `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
+| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                                          |
+| `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes artifacts without setting a failing exit code.
 
@@ -345,10 +345,6 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_TELEGRAM_GROUP_ID` - numeric chat id (string).
 - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
 - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
-
-Optional:
-
-- `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts (default redacts).
 
 Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts`):
 
@@ -375,26 +371,26 @@ Output artifacts:
 
 - `telegram-qa-report.md`
 - `qa-evidence.json` - evidence entries for the live transport checks, including profile, coverage, provider, channel, artifacts, result, and RTT fields.
-- `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
 
-Package RTT comparison uses the same Telegram credential contract while keeping
-its RTT sample controls on the RTT harness path:
+Package Telegram runs use the same Telegram credential contract. Repeated RTT
+measurement is part of the normal package Telegram live lane; the RTT
+distribution is folded into `qa-evidence.json` under `result.timing` for the
+selected RTT check.
 
 ```bash
-pnpm rtt openclaw@beta \
-  --credential-source convex \
-  --credential-role maintainer \
-  --samples 20 \
-  --sample-timeout-ms 30000
+OPENCLAW_QA_CREDENTIAL_SOURCE=convex \
+pnpm test:docker:npm-telegram-live
 ```
 
-When `--credential-source convex` is set, the RTT Docker wrapper leases a
-`kind: "telegram"` credential, exports the leased group/driver/SUT bot env into
-the installed-package run, heartbeats the lease, and releases it on shutdown.
-`--samples` and `--sample-timeout-ms` still feed
-`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES` and
-`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, so `result.json` remains comparable
-across env-backed and Convex-backed RTT runs.
+When `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` is set, the package live wrapper
+leases a `kind: "telegram"` credential, exports the leased group/driver/SUT bot
+env into the installed-package run, heartbeats the lease, and releases it on
+shutdown. The package wrapper defaults to 20 RTT checks of
+`telegram-mentioned-message-reply`, a 30s RTT timeout, and Convex role
+`maintainer` outside CI when Convex is selected. Override
+`OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`, `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`,
+or `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune RTT measurement without
+creating a separate RTT command or Telegram-specific summary format.
 
 ### Discord QA
 

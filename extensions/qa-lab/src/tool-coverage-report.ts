@@ -11,6 +11,7 @@ import {
   type RuntimeParityResult,
 } from "./runtime-parity.js";
 import {
+  readRuntimeToolCoverageConfig,
   readScenarioRuntimeToolCoverageMetadata,
   type QaRuntimeCapabilityLayer,
   type QaRuntimeToolBucket,
@@ -100,17 +101,13 @@ function cellStatus(cell: RuntimeParityCell | undefined): QaToolCoverageStatus {
 }
 
 function toolIdsForScenario(scenario: QaSeedScenarioWithSource): string[] {
-  const coverageIds = [
-    ...(scenario.coverage?.primary ?? []),
-    ...(scenario.coverage?.secondary ?? []),
-  ];
-  return [
-    ...new Set(
-      coverageIds
-        .filter((coverageId) => coverageId.startsWith("tools."))
-        .map((coverageId) => coverageId.slice("tools.".length)),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
+  const toolCoverage = readRuntimeToolCoverageConfig(scenario.execution.config);
+  const family =
+    readString(toolCoverage?.family) ??
+    readString(toolCoverage?.tool) ??
+    readString(toolCoverage?.actualTool) ??
+    readString(scenario.execution.config?.toolName);
+  return family ? [family] : [];
 }
 
 function groupToolFixtures(scenarios: readonly QaSeedScenarioWithSource[]): ToolFixtureGroup[] {

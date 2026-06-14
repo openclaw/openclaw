@@ -26,6 +26,7 @@ import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -654,6 +655,7 @@ export async function startGatewayServer(
       getTotalQueueSize() +
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
+      getActiveCronJobCount() +
       getActiveTaskCount(),
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing

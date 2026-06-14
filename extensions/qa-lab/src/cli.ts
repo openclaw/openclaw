@@ -444,7 +444,7 @@ export function registerQaLabCli(program: Command) {
     .option("--summary <path>", "Runtime qa-suite-summary.json to overlay on --tools coverage")
     .option(
       "--match <query>",
-      "Search scenario metadata and print matching qa suite targets (repeatable)",
+      "Search scenario metadata and print matching scenario refs (repeatable)",
       collectString,
       [],
     )

@@ -111,12 +111,12 @@ describe("qa scenario catalog", () => {
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
   });
 
-  it("loads Playwright execution scenarios from markdown", () => {
+  it("loads native test execution scenarios from markdown", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
 
     expect(scenario.execution.kind).toBe("playwright");
     if (scenario.execution.kind !== "playwright") {
-      throw new Error("expected Playwright scenario execution");
+      throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
     expect(scenario.execution.path).toBe("ui/src/ui/e2e/chat-flow.e2e.test.ts");
     expect(scenario.execution.flow).toBeUndefined();
@@ -257,7 +257,7 @@ describe("qa scenario catalog", () => {
 
     expect(scenario.sourcePath).toBe("qa/scenarios/runtime/qa-bus-tool-trace-visibility.md");
     expect(scenario.coverage?.primary).toContain("harness.tool-trace-visibility");
-    expect(scenario.coverage?.secondary).toContain("runtime.qa-bus");
+    expect(scenario.coverage?.secondary ?? []).toStrictEqual(["runtime.qa-bus", "tools.trace"]);
     expect(config?.expectedToolName).toBe("exec");
     expect(config?.expectedRedaction).toBe("[redacted]");
     expect(config?.searchQuery).toBe("exec");

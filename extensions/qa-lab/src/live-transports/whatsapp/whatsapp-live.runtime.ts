@@ -3218,7 +3218,10 @@ export async function runWhatsAppQaLive(params: {
       { kind: "report", path: path.basename(reportPath) },
       { kind: "transport-observations", path: path.basename(observedMessagesPath) },
     ],
-    checks: publishedScenarioResults,
+    checks: publishedScenarioResults.map(({ standardId, ...check }) => ({
+      ...check,
+      coverageIds: standardId ? [`channels.whatsapp.${standardId}`] : undefined,
+    })),
     env: process.env,
     generatedAt: finishedAt,
     primaryModel,

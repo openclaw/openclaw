@@ -46,6 +46,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   /** Attempt-owned delivery proof for message-tool-only source replies. */
   hasDeliveredMessageToolOnlySourceReply?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   onReasoningStream?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -94,6 +95,18 @@ export type SubscribeEmbeddedAgentSessionParams = {
   silentExpected?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Current transport channel resolved for this run. */
+  currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
+  /** Current transport thread resolved for this run. */
+  currentThreadId?: string;
+  /** Current inbound message id used to distinguish child replies from explicit roots. */
+  currentMessageId?: string | number;
+  /** Reply mode used by transport auto-threading. */
+  replyToMode?: "off" | "first" | "all" | "batched";
+  /** Shared one-shot reply state used by first/batched modes. */
+  hasRepliedRef?: { value: boolean };
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */

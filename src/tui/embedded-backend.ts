@@ -449,6 +449,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             mode: "recent",
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+            allowResetArchiveFallback: true,
           })
         : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({

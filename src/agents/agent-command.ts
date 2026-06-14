@@ -819,6 +819,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     manifestMetadataSnapshot,
     modelManifestContext,
     runId,
+    isSubagentLane,
     acpManager,
     acpResolution,
   };
@@ -859,6 +860,7 @@ async function agentCommandInternal(
     cwd,
     agentDir,
     runId,
+    isSubagentLane,
     acpManager,
     acpResolution,
     pluginsEnabled,
@@ -1597,7 +1599,11 @@ async function agentCommandInternal(
       })
     ) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
-      if (explicitThink) {
+      const isSubagentSpawnRun = isSubagentLane && isSubagentSessionKey(sessionKey);
+      // Spawn-lane subagents are fire-and-forget; the orchestrator already got
+      // an "accepted" ack, so throwing here strands the run and half-fails fan-outs.
+      // Clamp like the embedded runner; interactive --thinking keeps the throw.
+      if (explicitThink && !isSubagentSpawnRun) {
         throw new Error(
           `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
         );

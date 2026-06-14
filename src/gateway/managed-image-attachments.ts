@@ -28,7 +28,11 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { loadSessionEntry, readSessionMessagesAsync } from "./session-utils.js";
+import {
+  loadSessionEntry,
+  readSessionMessagesWithSourceAsync,
+  resolveSessionHistoryTranscriptPathAsync,
+} from "./session-utils.js";
 
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
@@ -99,6 +103,10 @@ type SessionManagedOutgoingAttachmentIndexCacheEntry = {
   size: number;
   index: SessionManagedOutgoingAttachmentIndex;
 };
+type SessionManagedOutgoingAttachmentTranscriptStat = Omit<
+  SessionManagedOutgoingAttachmentIndexCacheEntry,
+  "index"
+>;
 
 const sessionManagedOutgoingAttachmentIndexCache = new Map<
   string,
@@ -638,7 +646,7 @@ function getCachedSessionManagedOutgoingAttachmentIndex(
 function setCachedSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   agentId: string | undefined,
-  stat: { transcriptPath: string; mtimeMs: number; size: number },
+  stat: SessionManagedOutgoingAttachmentTranscriptStat,
   index: SessionManagedOutgoingAttachmentIndex,
 ) {
   sessionManagedOutgoingAttachmentIndexCache.set(
@@ -662,6 +670,17 @@ function setCachedSessionManagedOutgoingAttachmentIndex(
   }
 }
 
+function sameManagedOutgoingAttachmentTranscriptStat(
+  left: SessionManagedOutgoingAttachmentTranscriptStat | null,
+  right: SessionManagedOutgoingAttachmentTranscriptStat | null,
+): boolean {
+  return (
+    left?.transcriptPath === right?.transcriptPath &&
+    left?.mtimeMs === right?.mtimeMs &&
+    left?.size === right?.size
+  );
+}
+
 async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
@@ -681,13 +700,18 @@ async function getSessionManagedOutgoingAttachmentIndex(
     return null;
   }
 
-  let transcriptStat: { transcriptPath: string; mtimeMs: number; size: number } | null = null;
-  const transcriptPath = typeof entry?.sessionFile === "string" ? entry.sessionFile.trim() : "";
-  if (transcriptPath) {
+  let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
+  const resolvedTranscriptPath = await resolveSessionHistoryTranscriptPathAsync(
+    sessionId,
+    storePath,
+    entry.sessionFile,
+    { allowResetArchiveFallback: true },
+  );
+  if (resolvedTranscriptPath) {
     try {
-      const stat = await fs.stat(transcriptPath);
+      const stat = await fs.stat(resolvedTranscriptPath);
       transcriptStat = {
-        transcriptPath,
+        transcriptPath: resolvedTranscriptPath,
         mtimeMs: stat.mtimeMs,
         size: stat.size,
       };
@@ -703,12 +727,42 @@ async function getSessionManagedOutgoingAttachmentIndex(
     } catch {
       sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
     }
+  } else {
+    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
   }
 
-  const messages = await readSessionMessagesAsync(sessionId, storePath, entry.sessionFile, {
-    mode: "full",
-    reason: "managed outgoing attachment index",
-  });
+  const readResult = await readSessionMessagesWithSourceAsync(
+    sessionId,
+    storePath,
+    entry.sessionFile,
+    {
+      mode: "full",
+      reason: "managed outgoing attachment index",
+      allowResetArchiveFallback: true,
+    },
+  );
+  const messages = readResult.messages;
+  const preReadTranscriptStat = transcriptStat;
+  if (readResult.transcriptPath) {
+    try {
+      const stat = await fs.stat(readResult.transcriptPath);
+      const postReadTranscriptStat = {
+        transcriptPath: readResult.transcriptPath,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+      };
+      transcriptStat = sameManagedOutgoingAttachmentTranscriptStat(
+        preReadTranscriptStat,
+        postReadTranscriptStat,
+      )
+        ? postReadTranscriptStat
+        : null;
+    } catch {
+      transcriptStat = null;
+    }
+  } else {
+    transcriptStat = null;
+  }
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
     const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];

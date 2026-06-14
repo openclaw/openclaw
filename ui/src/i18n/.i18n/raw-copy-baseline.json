@@ -4027,7 +4027,7 @@
       "text": "Sanitized rich-text preview for quick reading."
     },
     {
-      "count": 3,
+      "count": 4,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/markdown-sidebar.ts",

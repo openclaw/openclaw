@@ -111,6 +111,8 @@ export function createOpenClawTools(
     pluginToolDenylist?: string[];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
+    /** Routable target for the current conversation when it differs from the native channel ID. */
+    currentMessagingTarget?: string;
     /** Current thread timestamp for auto-threading. */
     currentThreadTs?: string;
     /** Current inbound message id for action fallbacks. */
@@ -343,6 +345,7 @@ export function createOpenClawTools(
         sessionId: options?.sessionId,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
+        currentMessagingTarget: options?.currentMessagingTarget,
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
         currentInboundAudio: options?.currentInboundAudio,

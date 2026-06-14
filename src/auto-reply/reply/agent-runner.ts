@@ -120,7 +120,11 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  replyRunRegistry,
+  runAfterReplyOperationClear,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { recordReplyUsageState } from "./reply-usage-state.js";
@@ -1290,7 +1294,7 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(
+    const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
       resolvedQueue,
@@ -1298,6 +1302,10 @@ export async function runReplyAgent(params: {
       queuedRunFollowupTurn,
       false,
     );
+    if (!enqueued) {
+      typing.cleanup();
+      return undefined;
+    }
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
     const queuedBehindActiveRun = isRunActive?.() === true;
@@ -1436,8 +1444,18 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  const drainQueuedFollowupsAfterClear = () => {
-    scheduleFollowupDrain(queueKey, runFollowupTurn);
+  const drainQueuedFollowupsAfterClear = (admissionSessionId: string) => {
+    const completedSessionId = replyOperation.sessionId;
+    const runFollowupAfterClear =
+      admissionSessionId === completedSessionId
+        ? runFollowupTurn
+        : (queued: FollowupRun) =>
+            runFollowupTurn(
+              queued.run.sessionId === completedSessionId
+                ? { ...queued, admissionSessionId }
+                : queued,
+            );
+    scheduleFollowupDrain(queueKey, runFollowupAfterClear);
   };
   const restartRecoveryDeliveryRunId = crypto.randomUUID();
   let trackedRestartRecoveryDeliveryContext = false;
@@ -1559,6 +1577,7 @@ export async function runReplyAgent(params: {
     if (visibleMemoryFlushErrorPayloads.length > 0) {
       const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
       const payloadResult = await buildReplyPayloads({
+        config: cfg,
         payloads: visibleMemoryFlushErrorPayloads,
         isHeartbeat,
         didLogHeartbeatStrip: false,
@@ -1571,10 +1590,12 @@ export async function runReplyAgent(params: {
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         messageProvider: followupRun.run.messageProvider,
         originatingChannel: sessionCtx.OriginatingChannel,
+        originatingChatType: sessionCtx.ChatType,
         originatingTo: resolveOriginMessageTo({
           originatingTo: sessionCtx.OriginatingTo,
           to: sessionCtx.To,
         }),
+        originatingThreadId: replyRouteThreadId,
         accountId: sessionCtx.AccountId,
         normalizeMediaPaths: replyMediaContext.normalizePayload,
       });
@@ -2034,6 +2055,7 @@ export async function runReplyAgent(params: {
 
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
+      config: cfg,
       payloads:
         fallbackNoticePayloads.length > 0
           ? [...fallbackNoticePayloads, ...payloadArray]
@@ -2054,10 +2076,12 @@ export async function runReplyAgent(params: {
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       originatingChannel: sessionCtx.OriginatingChannel,
+      originatingChatType: sessionCtx.ChatType,
       originatingTo: resolveOriginMessageTo({
         originatingTo: sessionCtx.OriginatingTo,
         to: sessionCtx.To,
       }),
+      originatingThreadId: replyRouteThreadId,
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
@@ -2558,8 +2582,12 @@ export async function runReplyAgent(params: {
       );
     }
     if (shouldDrainQueuedFollowupsAfterClear) {
-      replyOperation.completeThen(drainQueuedFollowupsAfterClear);
-    } else {
+      if (providedReplyOperation) {
+        runAfterReplyOperationClear(replyOperation, drainQueuedFollowupsAfterClear);
+      } else {
+        replyOperation.completeThen(() => drainQueuedFollowupsAfterClear(replyOperation.sessionId));
+      }
+    } else if (!providedReplyOperation) {
       replyOperation.complete();
     }
     blockReplyPipeline?.stop();
