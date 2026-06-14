@@ -1007,6 +1007,8 @@ const HOT_RELOAD_HINT = "Change will apply without restarting the gateway.";
 const NO_RELOAD_HINT = "No gateway restart needed.";
 
 function isPluginEntryConfigPath(path: string): boolean {
+  // CLI hints are operator guidance. Keep plugin entry writes conservative
+  // because the CLI cannot prove every plugin's reload metadata is loaded.
   return path === "plugins.entries" || path.startsWith("plugins.entries.");
 }
 
