@@ -1301,6 +1301,7 @@ export async function runMemoryFlushIfNeeded(params: {
           model,
           runId: flushRunId,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+          isFallback: runOptions?.isFallback,
         });
         const result = await memoryDeps.runEmbeddedAgent({
           ...embeddedContext,

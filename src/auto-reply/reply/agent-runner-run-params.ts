@@ -63,6 +63,7 @@ export function buildEmbeddedRunBaseParams(params: {
   promptCacheKey?: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
+  isFallback?: boolean;
   isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
@@ -108,5 +109,6 @@ export function buildEmbeddedRunBaseParams(params: {
     runId: params.runId,
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    isFallback: params.isFallback,
   };
 }
