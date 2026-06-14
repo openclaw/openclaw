@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 // Memory Core tests cover index plugin behavior.
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, utimesSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
   listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
@@ -2132,6 +2134,57 @@ describe("memory index", () => {
       expect(results[0]?.snippet).toContain("ORBIT-10");
     } finally {
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("removes orphaned temp reindex files older than 60 seconds on manager startup", async () => {
+    const dbPath = path.join(workspaceDir, "index-orphan-sweep.sqlite");
+
+    // Seed the live database
+    const seed = new DatabaseSync(dbPath);
+    seed.exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)");
+    seed.exec("INSERT INTO meta (key, value) VALUES ('test', 'value')");
+    seed.close();
+    const liveMtime = fs.stat(dbPath).then((s) => s.mtimeMs);
+
+    // Create orphaned temp files (old — 120 seconds ago)
+    const oldId = randomUUID();
+    const oldTemp = `${dbPath}.tmp-${oldId}`;
+    await fs.writeFile(oldTemp, "orphaned main");
+    await fs.writeFile(`${oldTemp}-wal`, "orphaned wal");
+    await fs.writeFile(`${oldTemp}-shm`, "orphaned shm");
+    const oldTime = new Date(Date.now() - 120_000);
+    await fs.utimes(oldTemp, oldTime, oldTime);
+    await fs.utimes(`${oldTemp}-wal`, oldTime, oldTime);
+    await fs.utimes(`${oldTemp}-shm`, oldTime, oldTime);
+
+    // Create a young temp file (still within the 60s grace period)
+    const youngId = randomUUID();
+    const youngTemp = `${dbPath}.tmp-${youngId}`;
+    await fs.writeFile(youngTemp, "young temp");
+
+    // Create the manager — triggers the startup sweep
+    const cfg = createCfg({ storePath: dbPath });
+    const manager = await getFreshManager(cfg);
+    try {
+      // Old orphaned temp files must be removed
+      await expect(fs.access(oldTemp)).rejects.toThrow("ENOENT");
+      await expect(fs.access(`${oldTemp}-wal`)).rejects.toThrow("ENOENT");
+      await expect(fs.access(`${oldTemp}-shm`)).rejects.toThrow("ENOENT");
+
+      // Young temp file must survive (within grace window)
+      await expect(fs.access(youngTemp)).resolves.toBeUndefined();
+
+      // Live database is untouched
+      const live = new DatabaseSync(dbPath);
+      const row = live.prepare("SELECT value FROM meta WHERE key = ?").get("test") as
+        | { value: string }
+        | undefined;
+      expect(row?.value).toBe("value");
+      live.close();
+    } finally {
+      await fs.rm(youngTemp, { force: true }).catch(() => {});
+      await manager.close?.();
     }
   });
 });

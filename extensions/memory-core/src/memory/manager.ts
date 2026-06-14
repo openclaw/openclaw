@@ -1,4 +1,6 @@
 // Memory Core plugin module implements manager behavior.
+import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -8,6 +10,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
+  resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -386,6 +389,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.applyProviderResult(params.providerResult);
     }
     this.sources = new Set(effectiveSettings.sources);
+    this.removeOrphanedTempIndexFiles();
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
     this.cache = {
@@ -425,6 +429,56 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.batch = this.resolveBatchConfig();
     if (!transient) {
       this.ensureSessionStartupCatchup();
+    }
+  }
+
+  /** Sweep the store directory for orphaned `.tmp-<uuid>` reindex files
+   *  left behind by a hard-killed process and remove them. A grace window
+   *  avoids racing a concurrent reindex in a multi-process deployment. */
+  private removeOrphanedTempIndexFiles(): void {
+    try {
+      const dbPath = resolveUserPath(this.settings.store.path);
+      const dir = path.dirname(dbPath);
+      const baseName = path.basename(dbPath);
+      const prefix = `${baseName}.tmp-`;
+      const nowMs = Date.now();
+      const GRACE_PERIOD_MS = 60_000;
+      const found = new Set<string>();
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(dir);
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (!entry.startsWith(prefix)) continue;
+        // Strip -wal/-shm to get the base temp path
+        const base = entry.endsWith("-wal")
+          ? entry.slice(0, -4)
+          : entry.endsWith("-shm")
+            ? entry.slice(0, -4)
+            : entry;
+        found.add(base);
+      }
+      for (const tempBase of found) {
+        const fullPath = path.join(dir, tempBase);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (nowMs - stat.mtimeMs < GRACE_PERIOD_MS) continue;
+          fs.rmSync(fullPath, { force: true });
+          for (const s of ["-wal", "-shm"] as const) {
+            try {
+              fs.rmSync(fullPath + s, { force: true });
+            } catch {
+              /* best effort */
+            }
+          }
+        } catch {
+          /* best effort */
+        }
+      }
+    } catch {
+      /* best effort */
     }
   }
 
