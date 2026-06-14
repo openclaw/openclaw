@@ -1440,6 +1440,55 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("fires text-direct for non-yield DM completion when announce call returns no messaging-tool evidence", async () => {
+    const callGateway = createGatewayMock({ result: { payloads: [] } });
+    const sendMessage = createSendMessageMock();
+    const origin = { channel: "discord", to: "dm:U123", accountId: "acct-1" };
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({ sessionId: "sess-normal", isActive: false }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:discord:dm:U123",
+      targetRequesterSessionKey: "agent:main:discord:dm:U123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: origin,
+      requesterSessionOrigin: origin,
+      completionDirectOrigin: origin,
+      directOrigin: origin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-normal-dm",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "normal dm completion",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child output for fallback",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "child output for fallback",
+        idempotencyKey: "announce-normal-dm:text-direct",
+      }),
+    );
+  });
+
   it("uses in-process agent dispatch for dormant completion requesters", async () => {
     const callGateway = createGatewayMock();
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
