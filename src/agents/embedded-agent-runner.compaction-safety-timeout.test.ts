@@ -5,6 +5,7 @@ import {
   compactContextEngineWithSafetyTimeout,
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
+  isCompactionTimeoutResultAccepted,
   resolveCompactionTimeoutMs,
 } from "./embedded-agent-runner/compaction-safety-timeout.js";
 
@@ -64,6 +65,33 @@ describe("compactWithSafetyTimeout", () => {
 
     await vi.advanceTimersByTimeAsync(30);
     await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("expires timeout-result acceptance after the safety wrapper rejects", async () => {
+    vi.useFakeTimers();
+    let timeoutReason: unknown;
+    const compactPromise = compactWithSafetyTimeout(
+      (signal) =>
+        new Promise<string>((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              timeoutReason = signal.reason;
+              setTimeout(() => resolve("late partial summary"), 1);
+            },
+            { once: true },
+          );
+        }),
+      30,
+    );
+    const assertion = expect(compactPromise).rejects.toThrow("Compaction timed out");
+
+    await vi.advanceTimersByTimeAsync(30);
+    await assertion;
+    expect(isCompactionTimeoutResultAccepted(timeoutReason)).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 
