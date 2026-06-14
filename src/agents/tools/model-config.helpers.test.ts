@@ -9,6 +9,10 @@ import {
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
 
+vi.mock("../auth-profiles/external-cli-sync.js", () => ({
+  resolveExternalCliAuthProfiles: () => [],
+}));
+
 describe("hasProviderAuthForTool", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

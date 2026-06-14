@@ -217,6 +217,35 @@ vi.mock("../auth-profiles.js", () => ({
       .map(([profileId]) => profileId),
 }));
 
+vi.mock("../auth-profiles/external-cli-sync.js", () => ({
+  resolveExternalCliAuthProfiles: (
+    _store: unknown,
+    options?: { providerIds?: Iterable<string> },
+  ) => {
+    const providerIds = new Set(
+      Array.from(options?.providerIds ?? []).map((providerId) => providerId.toLowerCase()),
+    );
+    if (
+      process.env.OPENCLAW_TEST_CODEX_CLI_OAUTH !== "1" ||
+      (!providerIds.has("openai") && !providerIds.has("codex"))
+    ) {
+      return [];
+    }
+    return [
+      {
+        profileId: "openai:default",
+        credential: {
+          provider: "openai",
+          type: "oauth",
+          access: "oauth-test",
+          refresh: "refresh-test",
+          expires: Date.now() + 60_000,
+        },
+      },
+    ];
+  },
+}));
+
 vi.mock("../model-auth.js", () => ({
   resolveProviderEntryApiKeyProfileReference: (params: {
     cfg?: OpenClawConfig;
@@ -1168,6 +1197,55 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "codex/gpt-5.5",
       });
+    });
+  });
+
+  it("lets external CLI Codex OAuth survive a supplied scoped auth store", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
+      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      };
+
+      expect(
+        resolveImageModelConfigForTool({
+          cfg,
+          agentDir,
+          authStore: { version: 1, profiles: {} },
+        }),
+      ).toEqual({
+        primary: "codex/gpt-5.5",
+      });
+    });
+  });
+
+  it("does not re-import persisted OpenAI OAuth when a scoped auth store is supplied", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:chatgpt": {
+            provider: "openai",
+            type: "oauth",
+            access: "oauth-test",
+            refresh: "refresh-test",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      };
+
+      expect(
+        resolveImageModelConfigForTool({
+          cfg,
+          agentDir,
+          authStore: { version: 1, profiles: {} },
+        }),
+      ).toBeNull();
     });
   });
 

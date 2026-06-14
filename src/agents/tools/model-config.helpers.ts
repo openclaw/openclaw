@@ -18,6 +18,8 @@ import {
   hasAnyAuthProfileStoreSource,
   listProfilesForProvider,
 } from "../auth-profiles.js";
+import { resolveExternalCliAuthProfiles } from "../auth-profiles/external-cli-sync.js";
+import { overlayRuntimeExternalOAuthProfiles } from "../auth-profiles/oauth-shared.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
@@ -155,6 +157,31 @@ function loadAuthStoreForProvider(params: {
       });
 }
 
+function overlayExternalCliAuthStoreForProvider(params: {
+  provider: string;
+  authStore: AuthProfileStore;
+}): AuthProfileStore {
+  const profiles = resolveExternalCliAuthProfiles(params.authStore, {
+    allowKeychainPrompt: false,
+    providerIds: [params.provider],
+  });
+  if (profiles.length === 0) {
+    return params.authStore;
+  }
+  return overlayRuntimeExternalOAuthProfiles(params.authStore, profiles);
+}
+
+function hasAuthProfileTypeInStore(params: {
+  provider: string;
+  store: AuthProfileStore;
+  type: AuthProfileCredential["type"] | readonly AuthProfileCredential["type"][];
+}): boolean {
+  const types = Array.isArray(params.type) ? params.type : [params.type];
+  return listProfilesForProvider(params.store, params.provider).some((profileId) =>
+    types.includes(params.store.profiles[profileId]?.type as AuthProfileCredential["type"]),
+  );
+}
+
 function hasAuthProfileTypeForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -164,13 +191,20 @@ function hasAuthProfileTypeForProvider(params: {
   type: AuthProfileCredential["type"] | readonly AuthProfileCredential["type"][];
 }): boolean {
   const store = loadAuthStoreForProvider(params);
-  if (!store) {
-    return false;
+  if (store && hasAuthProfileTypeInStore({ ...params, store })) {
+    return true;
   }
-  const types = Array.isArray(params.type) ? params.type : [params.type];
-  return listProfilesForProvider(store, params.provider).some((profileId) =>
-    types.includes(store.profiles[profileId]?.type as AuthProfileCredential["type"]),
-  );
+  // Codex-harness tool construction can pass a scoped store with external CLI
+  // profiles stripped. Keep that store authoritative, but still honor explicit
+  // includeExternalCli lookups so Codex OAuth-only image routing remains visible.
+  if (params.includeExternalCli && params.authStore) {
+    const externalStore = overlayExternalCliAuthStoreForProvider({
+      provider: params.provider,
+      authStore: params.authStore,
+    });
+    return hasAuthProfileTypeInStore({ ...params, store: externalStore });
+  }
+  return false;
 }
 
 /** Returns whether a provider has direct API-key-capable auth for model-backed tools. */
@@ -227,6 +261,21 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): boolean | undefined {
+  const resolveFromStore = (store: AuthProfileStore): boolean | undefined => {
+    const reference = resolveProviderEntryApiKeyProfileReference({
+      cfg: params.cfg,
+      provider: params.provider,
+      store,
+    });
+    if (reference.kind === "profile") {
+      return reference.credential.type === "api_key";
+    }
+    if (reference.kind === "profile-incompatible") {
+      return false;
+    }
+    return undefined;
+  };
+
   const store = loadAuthStoreForProvider({
     provider: params.provider,
     cfg: params.cfg,
@@ -234,19 +283,16 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
     authStore: params.authStore,
     includeExternalCli: true,
   });
-  if (!store) {
-    return undefined;
+  const storeResult = store ? resolveFromStore(store) : undefined;
+  if (storeResult !== undefined) {
+    return storeResult;
   }
-  const reference = resolveProviderEntryApiKeyProfileReference({
-    cfg: params.cfg,
-    provider: params.provider,
-    store,
-  });
-  if (reference.kind === "profile") {
-    return reference.credential.type === "api_key";
-  }
-  if (reference.kind === "profile-incompatible") {
-    return false;
+  if (params.authStore) {
+    const externalStore = overlayExternalCliAuthStoreForProvider({
+      provider: params.provider,
+      authStore: params.authStore,
+    });
+    return resolveFromStore(externalStore);
   }
   return undefined;
 }
