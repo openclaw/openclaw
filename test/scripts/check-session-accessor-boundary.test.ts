@@ -5,10 +5,15 @@ import {
 } from "../../scripts/check-session-accessor-boundary.mjs";
 
 describe("session accessor boundary guard", () => {
-  it("ratchets only the files migrated by the session accessor gateway slice", () => {
+  it("ratchets only the files migrated by the session accessor gateway and runtime slices", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
+        "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
+        "src/agents/embedded-agent-runner/tool-result-truncation.ts",
+        "src/agents/embedded-agent-runner/transcript-rewrite.ts",
+        "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
         "src/config/sessions/combined-store-gateway.ts",
+        "src/gateway/session-compaction-checkpoints.ts",
         "src/gateway/session-utils.ts",
         "src/gateway/sessions-resolve.ts",
         "src/gateway/server-methods/sessions.ts",

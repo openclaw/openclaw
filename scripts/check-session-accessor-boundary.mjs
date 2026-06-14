@@ -14,7 +14,12 @@ import {
 const legacyReaderNames = new Set(["loadSessionStore", "readSessionEntries"]);
 
 export const migratedSessionAccessorFiles = new Set([
+  "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
+  "src/agents/embedded-agent-runner/tool-result-truncation.ts",
+  "src/agents/embedded-agent-runner/transcript-rewrite.ts",
+  "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
   "src/config/sessions/combined-store-gateway.ts",
+  "src/gateway/session-compaction-checkpoints.ts",
   "src/gateway/session-utils.ts",
   "src/gateway/sessions-resolve.ts",
   "src/gateway/server-methods/sessions.ts",
@@ -119,7 +124,11 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
 
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
-  const sourceRoots = resolveSourceRoots(repoRoot, ["src/config/sessions", "src/gateway"]);
+  const sourceRoots = resolveSourceRoots(repoRoot, [
+    "src/agents/embedded-agent-runner",
+    "src/config/sessions",
+    "src/gateway",
+  ]);
   const violations = await collectFileViolations({
     repoRoot,
     sourceRoots,
