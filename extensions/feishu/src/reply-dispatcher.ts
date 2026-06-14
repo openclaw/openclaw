@@ -117,7 +117,7 @@ type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
   runtime: RuntimeEnv;
-  channel: ReturnType<typeof getFeishuRuntime>["channel"];
+  channel: Pick<ReturnType<typeof getFeishuRuntime>["channel"], "text" | "reply">;
   chatId: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
@@ -137,7 +137,7 @@ type CreateFeishuReplyDispatcherParams = {
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
-  const core = { channel: params.channel } as ReturnType<typeof getFeishuRuntime>;
+  const core = { channel: params.channel } as unknown as ReturnType<typeof getFeishuRuntime>;
   const {
     cfg,
     agentId,
