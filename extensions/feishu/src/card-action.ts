@@ -134,8 +134,10 @@ function buildSyntheticMessageEvent(
   event: FeishuCardActionEvent,
   content: string,
   chatType: "p2p" | "group",
+  botOpenId?: string,
 ): FeishuMessageEvent {
   const replyTargetMessageId = event.context.open_message_id ?? event.open_message_id;
+  const normalizedBotOpenId = chatType === "group" ? botOpenId?.trim() : undefined;
   return {
     sender: {
       sender_id: {
@@ -153,6 +155,17 @@ function buildSyntheticMessageEvent(
       chat_type: chatType,
       message_type: "text",
       content: JSON.stringify({ text: content }),
+      ...(normalizedBotOpenId
+        ? {
+            mentions: [
+              {
+                key: "mention_bot",
+                id: { open_id: normalizedBotOpenId },
+                name: "bot",
+              },
+            ],
+          }
+        : {}),
     },
   };
 }
@@ -184,7 +197,12 @@ async function dispatchSyntheticCommand(params: {
   });
   await handleFeishuMessage({
     cfg: params.cfg,
-    event: buildSyntheticMessageEvent(params.event, params.command, resolvedChatType),
+    event: buildSyntheticMessageEvent(
+      params.event,
+      params.command,
+      resolvedChatType,
+      params.botOpenId,
+    ),
     botOpenId: params.botOpenId,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
