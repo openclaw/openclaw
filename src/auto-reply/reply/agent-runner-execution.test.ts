@@ -5916,6 +5916,7 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
       expect(result.payload.text).toContain("Agent failed before reply");
       expect(result.payload.text).toContain("incomplete terminal response");
     }
@@ -6506,6 +6507,7 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
       expect(result.payload.text).toContain("Agent failed before reply");
       expect(result.payload.text).toContain("INVALID_ARGUMENT: some other failure");
       expect(result.payload.text).toContain("Logs: openclaw logs --follow");
