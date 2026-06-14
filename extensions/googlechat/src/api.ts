@@ -265,6 +265,19 @@ export async function uploadGoogleChatAttachment(params: {
   };
 }
 
+/**
+ * Google Chat app authentication (service account, `chat.bot` scope) cannot
+ * upload media attachments — the upload API requires user authentication
+ * (domain-wide delegation). Such uploads fail with HTTP 403 `PERMISSION_DENIED`
+ * ("Request had insufficient authentication scopes."). Callers use this at the
+ * upload site to degrade gracefully to a text link instead of failing the whole
+ * outbound message.
+ */
+export function isGoogleChatAttachmentUploadUnauthorized(err: unknown): boolean {
+  const message = String((err as { message?: unknown })?.message ?? err);
+  return /\b403\b|PERMISSION_DENIED|insufficient authentication scopes/i.test(message);
+}
+
 export async function downloadGoogleChatMedia(params: {
   account: ResolvedGoogleChatAccount;
   resourceName: string;
