@@ -627,6 +627,9 @@ function buildParams(
         ? "24h"
         : undefined,
   };
+  const mapReasoningEffort = (effort: string) =>
+    model.thinkingLevelMap?.[effort] ?? compat.reasoningEffortMap?.[effort] ?? effort;
+  const mappedOffReasoningEffort = model.thinkingLevelMap?.off ?? compat.reasoningEffortMap?.off;
 
   if (compat.supportsUsageInStreaming) {
     params.stream_options = { include_usage: true };
@@ -683,18 +686,17 @@ function buildParams(
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
     params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
     if (options?.reasoningEffort) {
-      params.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+      params.reasoning_effort = mapReasoningEffort(options.reasoningEffort);
     }
   } else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
     // OpenRouter normalizes reasoning across providers via a nested reasoning object.
     const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
     if (options?.reasoningEffort) {
       openRouterParams.reasoning = {
-        effort: model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort,
+        effort: mapReasoningEffort(options.reasoningEffort),
       };
-    } else if (model.thinkingLevelMap?.off !== null) {
-      openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
+    } else if (model.thinkingLevelMap?.off !== null && compat.reasoningEffortMap?.off !== null) {
+      openRouterParams.reasoning = { effort: mappedOffReasoningEffort ?? "none" };
     }
   } else if (compat.thinkingFormat === "together" && model.reasoning) {
     const togetherParams = params as Omit<typeof params, "reasoning_effort"> & {
@@ -703,17 +705,14 @@ function buildParams(
     };
     togetherParams.reasoning = { enabled: Boolean(options?.reasoningEffort) };
     if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-      togetherParams.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+      togetherParams.reasoning_effort = mapReasoningEffort(options.reasoningEffort);
     }
   } else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
     // OpenAI-style reasoning_effort
-    params.reasoning_effort =
-      model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    params.reasoning_effort = mapReasoningEffort(options.reasoningEffort);
   } else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-    const offValue = model.thinkingLevelMap?.off;
-    if (typeof offValue === "string") {
-      params.reasoning_effort = offValue;
+    if (typeof mappedOffReasoningEffort === "string") {
+      params.reasoning_effort = mappedOffReasoningEffort;
     }
   }
 
@@ -1283,6 +1282,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     supportsDeveloperRole: !isNonStandard,
     supportsReasoningEffort:
       !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway,
+    reasoningEffortMap: {},
     supportsUsageInStreaming: true,
     maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
     requiresToolResultName: false,
@@ -1326,6 +1326,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
     supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
     supportsReasoningEffort:
       model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
+    reasoningEffortMap: model.compat.reasoningEffortMap ?? detected.reasoningEffortMap,
     supportsUsageInStreaming:
       model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
     maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,

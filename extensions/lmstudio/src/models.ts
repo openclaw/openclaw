@@ -113,11 +113,23 @@ function resolveLmstudioEnabledTransportReasoningOption(
 
 function buildLmstudioReasoningEffortMap(
   supportedReasoningEfforts: readonly string[],
+  nativeBinaryOptions?: { disabled?: string; enabled?: string },
 ): Record<string, string> | undefined {
-  const disabled = supportedReasoningEfforts.includes("none") ? "none" : undefined;
-  const max = resolveLmstudioEnabledTransportReasoningOption(supportedReasoningEfforts);
+  const disabled =
+    nativeBinaryOptions?.disabled ??
+    (supportedReasoningEfforts.includes("none") ? "none" : undefined);
+  const max =
+    nativeBinaryOptions?.enabled ??
+    resolveLmstudioEnabledTransportReasoningOption(supportedReasoningEfforts);
   const map = {
     ...(disabled ? { off: disabled, none: disabled } : {}),
+    ...(nativeBinaryOptions?.enabled
+      ? Object.fromEntries(
+          LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS.filter((effort) =>
+            supportedReasoningEfforts.includes(effort),
+          ).map((effort) => [effort, nativeBinaryOptions.enabled]),
+        )
+      : {}),
     ...(max ? { adaptive: max, max } : {}),
   };
   return Object.keys(map).length > 0 ? map : undefined;
@@ -136,7 +148,12 @@ function buildLmstudioReasoningCompat(
   return {
     supportsReasoningEffort: true,
     supportedReasoningEfforts,
-    reasoningEffortMap: buildLmstudioReasoningEffortMap(supportedReasoningEfforts),
+    reasoningEffortMap: buildLmstudioReasoningEffortMap(
+      supportedReasoningEfforts,
+      isLmstudioBinaryReasoningOptions(allowedOptions)
+        ? { disabled: allowedOptions.includes("off") ? "off" : undefined, enabled: "on" }
+        : undefined,
+    ),
   };
 }
 
@@ -163,7 +180,14 @@ function normalizeLmstudioTransportReasoningCompat(
   return {
     ...compat,
     supportedReasoningEfforts: normalizedSupportedReasoningEfforts,
-    reasoningEffortMap: buildLmstudioReasoningEffortMap(normalizedSupportedReasoningEfforts),
+    reasoningEffortMap: buildLmstudioReasoningEffortMap(normalizedSupportedReasoningEfforts, {
+      disabled: hasDisabled
+        ? Object.values(map ?? {}).some((value) => value === "off")
+          ? "off"
+          : "none"
+        : undefined,
+      enabled: "on",
+    }),
   };
 }
 

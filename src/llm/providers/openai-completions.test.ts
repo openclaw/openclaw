@@ -152,6 +152,77 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedStop).toEqual(["STOP"]);
   });
 
+  it("uses compat reasoning effort maps on the legacy completions path", async () => {
+    let capturedReasoningEffort: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...reasoningModel,
+        provider: "lmstudio",
+        baseUrl: "http://localhost:1234/v1",
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+          reasoningEffortMap: {
+            off: "off",
+            none: "off",
+            minimal: "on",
+            low: "on",
+            medium: "on",
+            high: "on",
+            xhigh: "on",
+          },
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "high",
+        onPayload(payload) {
+          capturedReasoningEffort = (payload as { reasoning_effort?: unknown }).reasoning_effort;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedReasoningEffort).toBe("on");
+  });
+
+  it("uses compat off mappings when completions reasoning is disabled", async () => {
+    let capturedReasoningEffort: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...reasoningModel,
+        provider: "lmstudio",
+        baseUrl: "http://localhost:1234/v1",
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+          reasoningEffortMap: {
+            off: "off",
+            none: "off",
+            high: "on",
+          },
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedReasoningEffort = (payload as { reasoning_effort?: unknown }).reasoning_effort;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedReasoningEffort).toBe("off");
+  });
+
   it("keeps prompt cache keys when long retention is disabled", async () => {
     let capturedCacheKey: unknown;
     let capturedRetention: unknown;
