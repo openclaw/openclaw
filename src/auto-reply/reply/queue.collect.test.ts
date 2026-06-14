@@ -97,6 +97,50 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
 
+  it("preserves the latest queued message id on collected followups", async () => {
+    const key = `test-collect-message-id-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "platform-msg-1",
+        originatingChannel: "feishu",
+        originatingTo: "chat:123",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        messageId: "platform-msg-2",
+        originatingChannel: "feishu",
+        originatingTo: "chat:123",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.messageId).toBe("platform-msg-2");
+  });
+
   it("collects compatible items after one cross-channel drain", async () => {
     const key = `test-collect-after-cross-${Date.now()}`;
     const calls: FollowupRun[] = [];
