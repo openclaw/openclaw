@@ -109,6 +109,12 @@ type DispatchCronDeliveryParams = {
   timeoutMs: number;
   resolvedDelivery: DeliveryTargetResolution;
   deliveryRequested: boolean;
+  /**
+   * Whether the job named a concrete delivery target (channel != "last", to,
+   * threadId, or accountId). Implicit announce-to-`last` jobs with no resolvable
+   * channel are downgraded to a silent ok instead of failing the run.
+   */
+  deliveryTargetExplicit: boolean;
   skipHeartbeatDelivery: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   deliveryBestEffort: boolean;
@@ -1218,7 +1224,18 @@ export async function dispatchCronDelivery(
 
   if (params.deliveryRequested && !params.skipHeartbeatDelivery && !sourceDeliverySatisfied) {
     if (!params.resolvedDelivery.ok) {
-      if (!params.deliveryBestEffort) {
+      // Hard-fail when the job named a concrete delivery target, OR when a channel
+      // resolved but its remembered/configured route is stale/invalid (real delivery
+      // failures that must stay visible, with retry/alert — #56078 P1). Only the
+      // implicit no-channel case (announce-to-`last` with no previous channel)
+      // downgrades to silent-ok: it never had a sendable target (#56078), so
+      // hard-erroring would mark a successful agent turn as failed and drop its
+      // output. Best-effort delivery always downgrades, as before.
+      const targetResolvedButFailed = params.resolvedDelivery.channel != null;
+      if (
+        !params.deliveryBestEffort &&
+        (params.deliveryTargetExplicit || targetResolvedButFailed)
+      ) {
         return {
           result: failDeliveryTarget(params.resolvedDelivery.error.message),
           delivered,
