@@ -51,6 +51,7 @@ import {
   resetToolsEffectiveState,
   refreshVisibleToolsEffectiveForCurrentSession,
   saveAgentsConfig,
+  setDefaultAgent,
 } from "./controllers/agents.ts";
 import { setAssistantAvatarOverride } from "./controllers/assistant-identity.ts";
 import { loadChannels } from "./controllers/channels.ts";
@@ -64,7 +65,6 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
-  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigRawValue,
   updateConfigFormValue,
@@ -3245,7 +3245,7 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, basePathResult, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
-                  stageDefaultAgentConfigEntry(state, agentId);
+                  void setDefaultAgent(state, agentId);
                 },
               }),
             )
