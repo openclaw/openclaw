@@ -43,6 +43,7 @@ import {
 } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
   createDegradedMemoryProviderLifecycle,
@@ -562,6 +563,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  private static FTS_ONLY_PROVIDER_KEY: string | undefined;
+
+  private static getFtsOnlyProviderKey(): string {
+    if (!MemoryIndexManager.FTS_ONLY_PROVIDER_KEY) {
+      MemoryIndexManager.FTS_ONLY_PROVIDER_KEY = hashText(
+        JSON.stringify({ provider: "none", model: "fts-only" }),
+      );
+    }
+    return MemoryIndexManager.FTS_ONLY_PROVIDER_KEY;
+  }
+
   private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
     const provider =
       this.settings.provider === "none"
@@ -575,6 +587,31 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
     });
+    if (
+      state.status === "mismatched" &&
+      state.reason === "index provider settings changed" &&
+      this.providerInitialized &&
+      this.providerKey
+    ) {
+      const meta = this.readMeta();
+      if (
+        meta &&
+        meta.providerKey === MemoryIndexManager.getFtsOnlyProviderKey() &&
+        meta.providerKey !== this.providerKey
+      ) {
+        meta.providerKey = this.providerKey;
+        this.writeMeta(meta);
+        const repaired = this.resolveCurrentIndexIdentityState({
+          ...(provider !== undefined ? { provider } : {}),
+          providerKeyKnown: params?.providerKeyKnown,
+        });
+        this.indexIdentityState = repaired;
+        this.indexIdentityDirty =
+          repaired.status === "mismatched" ||
+          (repaired.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
+        return repaired;
+      }
+    }
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||
