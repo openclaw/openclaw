@@ -1,4 +1,4 @@
-import { projectRuntimeToolInputSchema } from "./tool-schema-projection.js";
+import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 type AnthropicToolDescriptor = {
   readonly name: string;
