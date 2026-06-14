@@ -197,6 +197,8 @@ class GatewaySession(
 
   private var job: Job? = null
 
+  @Volatile private var connectingConnection: Connection? = null
+
   @Volatile private var currentConnection: Connection? = null
 
   // One reconnect can retry a shared-token mismatch by pairing the shared token with the stored device token.
@@ -216,34 +218,34 @@ class GatewaySession(
     options: GatewayConnectOptions,
     tls: GatewayTlsParams? = null,
   ) {
-    val connectionToClose: Connection?
+    val connectionsToClose: List<Connection>
     synchronized(lifecycleLock) {
       desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls)
       pendingDeviceTokenRetry = false
       deviceTokenRetryBudgetUsed = false
       reconnectPausedForAuthFailure = false
-      connectionToClose = currentConnection
+      connectionsToClose = activeConnections()
       if (job?.isActive != true) {
         job = scope.launch(Dispatchers.IO) { runLoop() }
       }
     }
-    connectionToClose?.closeQuietly()
+    connectionsToClose.forEach { it.closeQuietly() }
   }
 
   /** Clears desired connection state, closes the socket, and stops reconnect attempts. */
   fun disconnect() {
     val jobToCancel: Job?
-    val connectionToClose: Connection?
+    val connectionsToClose: List<Connection>
     synchronized(lifecycleLock) {
       desired = null
       pendingDeviceTokenRetry = false
       deviceTokenRetryBudgetUsed = false
       reconnectPausedForAuthFailure = false
-      connectionToClose = currentConnection
+      connectionsToClose = activeConnections()
       jobToCancel = job
       job = null
     }
-    connectionToClose?.closeQuietly()
+    connectionsToClose.forEach { it.closeQuietly() }
     scope.launch(Dispatchers.IO) {
       jobToCancel?.cancelAndJoin()
       if (desired == null) {
@@ -257,8 +259,11 @@ class GatewaySession(
   /** Forces the current socket closed so the loop reconnects to the current desired endpoint. */
   fun reconnect() {
     reconnectPausedForAuthFailure = false
-    currentConnection?.closeQuietly()
+    activeConnections().forEach { it.closeQuietly() }
   }
+
+  private fun activeConnections(): List<Connection> =
+    listOfNotNull(connectingConnection, currentConnection).distinct()
 
   fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
 
@@ -409,7 +414,18 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
+  private fun promoteConnectedConnection(conn: Connection): Boolean =
+    synchronized(lifecycleLock) {
+      if (desired !== conn.desiredTarget || connectingConnection !== conn) {
+        return@synchronized false
+      }
+      currentConnection = conn
+      connectingConnection = null
+      true
+    }
+
   private inner class Connection(
+    val desiredTarget: DesiredConnection,
     val endpoint: GatewayEndpoint,
     private val token: String?,
     private val bootstrapToken: String?,
@@ -767,20 +783,27 @@ class GatewaySession(
           normalizeCanvasHostUrl(value.asStringOrNull(), endpoint, isTlsConnection = tls != null)
             ?.let { normalized -> surface to normalized }
         } ?: emptyList()
-      pluginSurfaceUrls = normalizedPluginSurfaceUrls.toMap()
+      val nextPluginSurfaceUrls = normalizedPluginSurfaceUrls.toMap()
       val snapshot = obj["snapshot"].asObjectOrNull()
       val sessionDefaults =
         snapshot
           ?.get("sessionDefaults")
           .asObjectOrNull()
-      mainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
+      val nextMainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
+      val updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull())
+      // Publish after connect succeeds, but before callbacks that may flush queued node events.
+      if (!promoteConnectedConnection(this@Connection)) {
+        throw IllegalStateException("connection no longer desired")
+      }
+      pluginSurfaceUrls = nextPluginSurfaceUrls
+      mainSessionKey = nextMainSessionKey
       onConnected(
         GatewayHelloSummary(
           serverName = serverName,
           remoteAddress = remoteAddress,
           serverVersion = serverVersion,
-          mainSessionKey = mainSessionKey,
-          updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+          mainSessionKey = nextMainSessionKey,
+          updateAvailable = updateAvailable,
         ),
       )
     }
@@ -1055,7 +1078,8 @@ class GatewaySession(
     while (scope.isActive) {
       val target = desired
       if (target == null) {
-        currentConnection?.closeQuietly()
+        activeConnections().forEach { it.closeQuietly() }
+        connectingConnection = null
         currentConnection = null
         delay(250)
         continue
@@ -1093,18 +1117,37 @@ class GatewaySession(
     withContext(Dispatchers.IO) {
       val conn =
         Connection(
-          target.endpoint,
-          target.token,
-          target.bootstrapToken,
-          target.password,
-          target.options,
-          target.tls,
+          desiredTarget = target,
+          endpoint = target.endpoint,
+          token = target.token,
+          bootstrapToken = target.bootstrapToken,
+          password = target.password,
+          options = target.options,
+          tls = target.tls,
         )
-      currentConnection = conn
+      val shouldConnect =
+        synchronized(lifecycleLock) {
+          if (desired === target) {
+            connectingConnection = conn
+            true
+          } else {
+            false
+          }
+        }
+      if (!shouldConnect) {
+        conn.closeQuietly()
+        return@withContext
+      }
       try {
         conn.connect()
+        if (connectingConnection === conn) {
+          connectingConnection = null
+        }
         conn.awaitClose()
       } finally {
+        if (connectingConnection === conn) {
+          connectingConnection = null
+        }
         if (currentConnection === conn) {
           currentConnection = null
           pluginSurfaceUrls = emptyMap()
