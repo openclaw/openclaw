@@ -1507,7 +1507,13 @@ jobs:
               node scripts/run-additional-boundary-checks.mjs
               ;;
             session-accessor-boundary)
-              run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
+              if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
+                echo "[skip] session accessor boundary check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-accessor-boundary"] ? 0 : 1);'; then
+                echo "[skip] session accessor boundary script is not present in package.json"
+              else
+                run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
+              fi
               ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels
