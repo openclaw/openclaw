@@ -49,7 +49,7 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
 }
 
 function buildToolSchemaStats(
-  parameters: AgentTool["parameters"],
+  parameters: AgentTool["parameters"] | undefined,
 ): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
     return { schemaChars: 0, schemaHash: sha256(""), propertiesCount: null };
@@ -83,19 +83,52 @@ function buildToolSchemaStats(
 }
 
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
-  return tools.map((tool) => {
+  return tools.map((tool, index) => {
     const cached = toolReportEntryCache.get(tool);
     if (cached) {
       return cached;
     }
-    const name = tool.name;
-    const summary = tool.description?.trim() || tool.label?.trim() || "";
+    const name = readToolReportName(tool, index);
+    const summary = readToolReportSummary(tool);
     const summaryChars = summary.length;
-    const schemaStats = buildToolSchemaStats(tool.parameters);
+    const schemaStats = buildToolSchemaStats(readToolReportParameters(tool));
     const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
     toolReportEntryCache.set(tool, entry);
     return entry;
   });
+}
+
+function readToolReportName(tool: AgentTool, index: number): string {
+  try {
+    const name = tool.name.trim();
+    return name || `tool[${index}]`;
+  } catch {
+    return `tool[${index}]`;
+  }
+}
+
+function readToolReportSummary(tool: AgentTool): string {
+  try {
+    const description = tool.description?.trim();
+    if (description) {
+      return description;
+    }
+  } catch {
+    return "";
+  }
+  try {
+    return tool.label?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+function readToolReportParameters(tool: AgentTool): AgentTool["parameters"] | undefined {
+  try {
+    return tool.parameters;
+  } catch {
+    return undefined;
+  }
 }
 
 function measureRenderedProjectContextChars(systemPrompt: string): number {
