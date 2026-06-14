@@ -232,19 +232,20 @@ export const discordOutbound: ChannelOutboundAdapter = {
       const formattingOptions = resolveDiscordFormattingOptions({ formatting });
       if (audioAsVoice && mediaUrl) {
         const sendVoice =
-          resolveOutboundSendDep<DiscordVoiceSendFn>(deps, "discordVoice") ??
-          (await loadDiscordSendRuntime()).sendVoiceMessageDiscord;
-        return await withDiscordDeliveryRetry({
-          cfg,
-          accountId,
-          fn: async () =>
-            await sendVoice(target, mediaUrl, {
-              cfg,
-              replyTo: replyToId ?? undefined,
-              accountId: accountId ?? undefined,
-              silent: silent ?? undefined,
-            }),
-        });
+          resolveOutboundSendDep<DiscordVoiceSendFn>(deps, "discordVoice");
+        if (sendVoice) {
+          return await withDiscordDeliveryRetry({
+            cfg,
+            accountId,
+            fn: async () =>
+              await sendVoice(target, mediaUrl, {
+                cfg,
+                replyTo: replyToId ?? undefined,
+                accountId: accountId ?? undefined,
+                silent: silent ?? undefined,
+              }),
+          });
+        }
       }
       if (text.trim() && mediaUrl && isLikelyDiscordVideoMedia(mediaUrl)) {
         await withDiscordDeliveryRetry({
