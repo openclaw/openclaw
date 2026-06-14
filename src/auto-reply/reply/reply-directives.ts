@@ -1,4 +1,5 @@
 /** Parses inline reply directives such as media, reply targets, audio, and silence. */
+import { logWarn } from "../../logger.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -82,6 +83,12 @@ export function parseReplyDirectives(
   const split = splitMediaFromOutput(raw, {
     extractMarkdownImages: options.extractMarkdownImages,
     extractMediaDirectives: options.extractMediaDirectives,
+    onFencedMediaTokenSkipped: () => {
+      logWarn(
+        `media: MEDIA: token skipped — it is inside a fenced code block and will not be delivered. ` +
+          `Remove the surrounding backticks/fence to send this as media.`,
+      );
+    },
   });
   let text = split.text ?? "";
 
