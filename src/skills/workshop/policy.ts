@@ -65,8 +65,8 @@ export function resolveSkillWorkshopToolApproval(params: {
     requireApproval: {
       ...text,
       allowedDecisions: ["allow-once", "deny"],
-      // Intentionally omit `unavailableBehavior: "allow"`. ClawSweeper P1
-      // pushback on #89590: apply/reject/quarantine all mutate the live skill
+      // Intentionally omit `unavailableBehavior: "allow"`:
+      // apply/reject/quarantine all mutate the live skill
       // set, so falling back to ALLOW_ONCE when the gateway reports no
       // approval route would bypass the operator-intended pending-approval
       // default for live workspace skill changes. The default (block with a
