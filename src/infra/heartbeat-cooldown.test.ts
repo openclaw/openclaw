@@ -6,6 +6,7 @@ import {
   recordRunStart,
   shouldDeferWake,
 } from "./heartbeat-cooldown.js";
+import { HEARTBEAT_SKIP_MIN_SPACING } from "./heartbeat-wake.js";
 
 describe("shouldDeferWake", () => {
   type Input = Parameters<typeof shouldDeferWake>[0];
@@ -212,11 +213,23 @@ describe("shouldDeferWake", () => {
   });
 
   describe("event-driven wakes after a prior run (regression for #75436)", () => {
-    it("defers exec-event wakes when now < nextDueMs", () => {
+    it("does NOT defer exec-event wakes by nextDueMs (skips interval cooldown); min-spacing still applies", () => {
       expect(decide({ ...afterRun, source: "exec-event", reason: "exec-event" })).toEqual({
         defer: true,
-        reason: "not-due",
+        reason: HEARTBEAT_SKIP_MIN_SPACING,
       });
+    });
+
+    it("runs exec-event wakes even when nextDueMs is still in the future if min-spacing has elapsed", () => {
+      expect(
+        decide({
+          source: "exec-event",
+          now: 200_000,
+          nextDueMs: 300_000,
+          lastRunStartedAtMs: 150_000,
+          reason: "exec-event",
+        }),
+      ).toEqual({ defer: false });
     });
 
     it("defers cron wakes when now < nextDueMs", () => {
@@ -240,8 +253,8 @@ describe("shouldDeferWake", () => {
       });
     });
 
-    it("defers unknown wake reasons when now < nextDueMs", () => {
-      expect(decide({ ...afterRun, source: "other", reason: "something-new" })).toEqual({
+    it("defers unknown wake reasons when now < nextDueMs (no source discriminator)", () => {
+      expect(decide({ ...afterRun, reason: "something-new" })).toEqual({
         defer: true,
         reason: "not-due",
       });
@@ -280,7 +293,7 @@ describe("shouldDeferWake", () => {
           lastRunStartedAtMs: 200_000 - DEFAULT_MIN_WAKE_SPACING_MS + 100,
           reason: "exec-event",
         }),
-      ).toEqual({ defer: true, reason: "min-spacing" });
+      ).toEqual({ defer: true, reason: HEARTBEAT_SKIP_MIN_SPACING });
     });
 
     it("does not defer when last run is older than min-spacing", () => {
@@ -305,7 +318,7 @@ describe("shouldDeferWake", () => {
           minSpacingMs: 1_000,
           reason: "exec-event",
         }),
-      ).toEqual({ defer: true, reason: "min-spacing" });
+      ).toEqual({ defer: true, reason: HEARTBEAT_SKIP_MIN_SPACING });
     });
 
     it("does not gate manual wakes on min-spacing", () => {

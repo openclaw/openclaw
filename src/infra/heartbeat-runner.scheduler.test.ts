@@ -670,7 +670,7 @@ describe("startHeartbeatRunner", () => {
   // `reason === "interval"`, and the targeted branch has no cooldown gate at
   // all. Observed in production: heartbeat configured `every: 30m` fires every
   // ~10s, pegging the gateway event loop with eventLoopDelayMaxMs >6s spikes.
-  it("does not bypass interval cooldown for repeated exec-event wakes within nextDueMs", async () => {
+  it("debounces exec-event wakes by min-spacing, not by interval cooldown", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
 
@@ -692,11 +692,12 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Simulate the runaway: 4 more exec-event wakes from backgrounded process
-    // exits, fired well within the configured 30m interval. These should be
-    // debounced by the cooldown — the agent just ran, nothing has changed.
+    // 4 more exec-event wakes at 10s intervals, well within the 30m interval.
+    // Exec-event wakes skip the interval cooldown (nextDueMs) but still
+    // respect min-spacing (30s). The first three should be deferred; the
+    // fourth (at T+40s, past min-spacing) should run.
     for (let i = 0; i < 4; i++) {
-      await vi.advanceTimersByTimeAsync(10_000); // 10s between background exits
+      await vi.advanceTimersByTimeAsync(10_000);
       requestHeartbeat({
         source: "exec-event",
         intent: "event",
@@ -707,9 +708,9 @@ describe("startHeartbeatRunner", () => {
       await vi.advanceTimersByTimeAsync(1);
     }
 
-    // Total elapsed: ~40s. Configured `every` is 30m. Subsequent exec-events
-    // should NOT trigger fresh runs within the cooldown window.
-    expect(runSpy).toHaveBeenCalledTimes(1);
+    // First exec-event ran at T+0. Min-spacing (30s) expires after the 3rd
+    // extra wake, so the 4th (at T+40s) triggers a fresh run = 2 total.
+    expect(runSpy).toHaveBeenCalledTimes(2);
 
     runner.stop();
   });
@@ -890,6 +891,49 @@ describe("startHeartbeatRunner", () => {
       status: "ran",
       durationMs: 1,
     });
+
+    runner.stop();
+  });
+
+  it("preserves nextDueMs advancement after non-exec event wakes (acp-spawn)", async () => {
+    // All wake sources advance nextDueMs after running (exec-event, acp-spawn,
+    // hook, notifications, etc.). Non-exec event wakes still check nextDueMs
+    // in shouldDeferWake, so their cooldown must be properly advanced. This
+    // test verifies that after an acp-spawn wake runs, nextDueMs is pushed
+    // forward and a subsequent acp-spawn wake is deferred by "not-due".
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    // First acp-spawn wake: agent just received a spawn stream update.
+    // This should run and advance nextDueMs forward.
+    requestHeartbeat({
+      source: "acp-spawn",
+      intent: "event",
+      reason: "acp:spawn:stream",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Second acp-spawn wake immediately after: nextDueMs was advanced by the
+    // first run (non-exec wakes preserve advancement), so this should be
+    // deferred by "not-due" — the acp-spawn event path checks nextDueMs.
+    requestHeartbeat({
+      source: "acp-spawn",
+      intent: "event",
+      reason: "acp:spawn:stream",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    // Same check: still only 1 run — second wake was properly deferred.
+    expect(runSpy).toHaveBeenCalledTimes(1);
 
     runner.stop();
   });
