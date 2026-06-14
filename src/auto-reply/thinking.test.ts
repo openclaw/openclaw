@@ -282,6 +282,40 @@ describe("listThinkingLevels", () => {
     ).toBe("low");
   });
 
+  it("passes catalog API into provider thinking profiles", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
+      context.api === "anthropic-messages"
+        ? {
+            levels: [{ id: "off" }, { id: "adaptive" }, { id: "max" }],
+            defaultLevel: "adaptive",
+          }
+        : undefined,
+    );
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-opus-4-6",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-opus-4-6", catalog)).toEqual([
+      "off",
+      "adaptive",
+      "max",
+    ]);
+    expect(providerRuntimeMocks.resolveProviderThinkingProfile).toHaveBeenCalledWith({
+      provider: "jdcloud-anthropic",
+      context: expect.objectContaining({
+        api: "anthropic-messages",
+        modelId: "claude-opus-4-6",
+        provider: "jdcloud-anthropic",
+        reasoning: true,
+      }),
+    });
+  });
+
   it("uses canonical Fable params when no provider thinking profile exists", () => {
     const catalog = [
       {

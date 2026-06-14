@@ -207,6 +207,150 @@ describe("provider public artifacts", () => {
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
+  it("resolves bundled policy artifacts through manifest model catalog API refs", async () => {
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "anthropic") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: ({ api }: { api?: string }) => ({
+          levels: [{ id: api }],
+        }),
+      };
+    });
+
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-api-ref");
+
+    const surface = resolvePolicySurface("jdcloud-anthropic", {
+      providerRefs: ["anthropic-messages"],
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "anthropic",
+            channels: [],
+            cliBackends: [],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/anthropic/openclaw.plugin.json",
+            providers: ["anthropic"],
+            modelCatalog: {
+              providers: {
+                anthropic: {
+                  api: "anthropic-messages",
+                  models: [],
+                },
+              },
+            },
+            rootDir: "/tmp/anthropic",
+            skills: [],
+            source: "/tmp/anthropic/index.js",
+          },
+        ],
+      },
+    });
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "jdcloud-anthropic",
+        api: "anthropic-messages",
+        modelId: "claude-opus-4-6",
+      })?.levels,
+    ).toEqual([{ id: "anthropic-messages" }]);
+    expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "anthropic",
+      artifactBasename: "provider-policy-api.js",
+    });
+  });
+
+  it("returns every bundled owner for shared provider API refs", async () => {
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (!["anthropic", "github-copilot", "openai"].includes(dirName)) {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+      };
+    });
+
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurfaces: resolvePolicySurfaces } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=shared-provider-api-ref");
+    const plugin = (id: string, provider: string, api: string, modelApis: string[] = []) => ({
+      id,
+      channels: [],
+      cliBackends: [],
+      hooks: [],
+      origin: "bundled" as const,
+      manifestPath: `/tmp/${id}/openclaw.plugin.json`,
+      providers: [provider],
+      modelCatalog: {
+        providers: {
+          [provider]: {
+            api,
+            models: modelApis.map((modelApi) => ({
+              id: `${modelApi}-model`,
+              api: modelApi,
+            })),
+          },
+        },
+      },
+      rootDir: `/tmp/${id}`,
+      skills: [],
+      source: `/tmp/${id}/index.js`,
+    });
+    const manifestRegistry = {
+      plugins: [
+        plugin("github-copilot", "github-copilot", "anthropic-messages", ["openai-responses"]),
+        plugin("anthropic", "anthropic", "anthropic-messages"),
+        plugin("openai", "openai", "openai-responses"),
+      ],
+    };
+    const surfaceIds = (
+      surfaces: ReturnType<typeof resolvePolicySurfaces>,
+      api: string,
+      modelId: string,
+    ) =>
+      surfaces.map(
+        (surface) =>
+          surface.resolveThinkingProfile?.({
+            provider: "custom",
+            api,
+            modelId,
+          })?.levels[0]?.id,
+      );
+
+    expect(
+      surfaceIds(
+        resolvePolicySurfaces("custom-anthropic", {
+          providerRefs: ["anthropic-messages"],
+          manifestRegistry,
+        }),
+        "anthropic-messages",
+        "claude-opus-4-6",
+      ),
+    ).toEqual(["anthropic", "github-copilot"]);
+    expect(
+      surfaceIds(
+        resolvePolicySurfaces("custom-openai", {
+          providerRefs: ["openai-responses"],
+          manifestRegistry,
+        }),
+        "openai-responses",
+        "gpt-5.5",
+      ),
+    ).toEqual(["github-copilot", "openai"]);
+  });
+
   it("does not cache manifest-owned provider policy aliases across bundled metadata changes", async () => {
     const bundledPluginsDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-provider-policy-refresh-"),

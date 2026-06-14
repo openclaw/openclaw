@@ -38,7 +38,10 @@ import {
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  resolveBundledProviderPolicySurface,
+  resolveBundledProviderPolicySurfaces,
+} from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import {
@@ -123,6 +126,19 @@ function resolveProviderHookRefs(
     refs.push(apiRef);
   }
   return uniqueStrings(refs);
+}
+
+function resolveProviderConfigModelApi(
+  providerConfig: ModelProviderConfig | undefined,
+  modelId: string,
+): string | undefined {
+  const normalizedModelId = normalizeOptionalString(modelId)?.toLowerCase();
+  if (!normalizedModelId) {
+    return undefined;
+  }
+  return providerConfig?.models.find(
+    (model) => normalizeOptionalString(model.id)?.toLowerCase() === normalizedModelId,
+  )?.api;
 }
 
 function matchesAnyProviderPluginRef(provider: ProviderPlugin, providerRefs: readonly string[]) {
@@ -797,11 +813,41 @@ export function resolveProviderThinkingProfile(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderDefaultThinkingPolicyContext;
 }): ProviderThinkingProfile | null | undefined {
-  const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
-  if (bundledSurface?.resolveThinkingProfile) {
-    return bundledSurface.resolveThinkingProfile(params.context) ?? undefined;
+  const providerConfig = findNormalizedProviderValue(
+    params.config?.models?.providers,
+    params.provider,
+  );
+  const modelApi = resolveProviderConfigModelApi(providerConfig, params.context.modelId);
+  const api = params.context.api ?? modelApi ?? providerConfig?.api;
+  const policyContext = {
+    ...params.context,
+    ...(api ? { api } : {}),
+  };
+  const directSurface = resolveBundledProviderPolicySurface(params.provider);
+  if (directSurface?.resolveThinkingProfile) {
+    const bundledProfile = directSurface.resolveThinkingProfile(policyContext);
+    if (bundledProfile !== null && bundledProfile !== undefined) {
+      return bundledProfile;
+    }
   }
-  return resolveProviderRuntimePlugin(params)?.resolveThinkingProfile?.(params.context);
+  const runtimeProfile =
+    resolveProviderRuntimePlugin(params)?.resolveThinkingProfile?.(policyContext);
+  if (runtimeProfile !== null && runtimeProfile !== undefined) {
+    return runtimeProfile;
+  }
+  const providerRefs = resolveProviderHookRefs(params.provider, providerConfig, api);
+  for (const apiFallbackSurface of resolveBundledProviderPolicySurfaces(params.provider, {
+    providerRefs,
+  })) {
+    if (apiFallbackSurface === directSurface || !apiFallbackSurface.resolveThinkingProfile) {
+      continue;
+    }
+    const bundledProfile = apiFallbackSurface.resolveThinkingProfile(policyContext);
+    if (bundledProfile !== null && bundledProfile !== undefined) {
+      return bundledProfile;
+    }
+  }
+  return undefined;
 }
 
 export function resolveProviderDefaultThinkingLevel(params: {

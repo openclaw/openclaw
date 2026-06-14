@@ -73,19 +73,20 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
-function resolveBundledProviderPolicyPluginId(
+function resolveBundledProviderPolicyPluginIds(
   providerId: string,
   options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
-): string | null {
+): string[] {
   const normalizedProviderId = normalizeProviderId(providerId);
   if (!normalizedProviderId) {
-    return null;
+    return [];
   }
   const bundledPluginsDir = resolveBundledPluginsDir();
   if (!bundledPluginsDir) {
-    return null;
+    return [];
   }
 
+  const pluginIds: string[] = [];
   const registry = options.manifestRegistry ?? loadPluginManifestRegistry();
   for (const plugin of registry.plugins.toSorted((left, right) =>
     left.id.localeCompare(right.id),
@@ -94,11 +95,25 @@ function resolveBundledProviderPolicyPluginId(
       continue;
     }
     if (pluginOwnsProviderPolicyRef(plugin, normalizedProviderId)) {
-      return plugin.id;
+      pluginIds.push(plugin.id);
     }
   }
 
-  return null;
+  return pluginIds;
+}
+
+function normalizeProviderPolicyRefs(
+  providerId: string,
+  providerRefs?: readonly string[],
+): string[] {
+  const refs: string[] = [];
+  for (const rawRef of [providerId, ...(providerRefs ?? [])]) {
+    const ref = normalizeProviderId(rawRef);
+    if (ref && !refs.includes(ref)) {
+      refs.push(ref);
+    }
+  }
+  return refs;
 }
 
 function pluginOwnsProviderPolicyRef(
@@ -106,7 +121,9 @@ function pluginOwnsProviderPolicyRef(
   normalizedProviderId: string,
 ): boolean {
   const ownedProviders = new Set(
-    plugin.providers.map((provider) => normalizeProviderId(provider)).filter(Boolean),
+    [...plugin.providers, ...plugin.cliBackends]
+      .map((provider) => normalizeProviderId(provider))
+      .filter(Boolean),
   );
   if (ownedProviders.has(normalizedProviderId)) {
     return true;
@@ -120,25 +137,80 @@ function pluginOwnsProviderPolicyRef(
     }
   }
 
+  for (const [rawProvider, catalogProvider] of Object.entries(
+    plugin.modelCatalog?.providers ?? {},
+  )) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider || !ownedProviders.has(provider)) {
+      continue;
+    }
+    const providerApi = catalogProvider.api ? normalizeProviderId(catalogProvider.api) : "";
+    if (providerApi === normalizedProviderId) {
+      return true;
+    }
+    if (
+      catalogProvider.models.some(
+        (model) => (model.api ? normalizeProviderId(model.api) : "") === normalizedProviderId,
+      )
+    ) {
+      return true;
+    }
+  }
+
   return false;
+}
+
+/** Resolves provider policy hooks for a bundled provider or its owning plugin. */
+export function resolveBundledProviderPolicySurfaces(
+  providerId: string,
+  options: {
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+    providerRefs?: readonly string[];
+  } = {},
+): BundledProviderPolicySurface[] {
+  const surfaces: BundledProviderPolicySurface[] = [];
+  const visitedPluginIds = new Set<string>();
+  const loadSurface = (pluginId: string) => {
+    if (visitedPluginIds.has(pluginId)) {
+      return;
+    }
+    visitedPluginIds.add(pluginId);
+    const surface = tryLoadBundledProviderPolicySurface(pluginId);
+    if (surface) {
+      surfaces.push(surface);
+    }
+  };
+
+  for (const providerRef of normalizeProviderPolicyRefs(providerId, options.providerRefs)) {
+    loadSurface(providerRef);
+    for (const ownerPluginId of resolveBundledProviderPolicyPluginIds(providerRef, options)) {
+      loadSurface(ownerPluginId);
+    }
+  }
+  return surfaces;
 }
 
 /** Resolves provider policy hooks for a bundled provider or its owning plugin. */
 export function resolveBundledProviderPolicySurface(
   providerId: string,
-  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
+  options: {
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+    providerRefs?: readonly string[];
+  } = {},
 ): BundledProviderPolicySurface | null {
-  const normalizedProviderId = normalizeProviderId(providerId);
-  if (!normalizedProviderId) {
-    return null;
+  for (const providerRef of normalizeProviderPolicyRefs(providerId, options.providerRefs)) {
+    const directSurface = tryLoadBundledProviderPolicySurface(providerRef);
+    if (directSurface) {
+      return directSurface;
+    }
+    const ownerPluginId = resolveBundledProviderPolicyPluginIds(providerRef, options)[0];
+    if (!ownerPluginId) {
+      continue;
+    }
+    const ownerSurface = tryLoadBundledProviderPolicySurface(ownerPluginId);
+    if (ownerSurface) {
+      return ownerSurface;
+    }
   }
-  const directSurface = tryLoadBundledProviderPolicySurface(normalizedProviderId);
-  if (directSurface) {
-    return directSurface;
-  }
-  const ownerPluginId = resolveBundledProviderPolicyPluginId(normalizedProviderId, options);
-  if (!ownerPluginId || ownerPluginId === normalizedProviderId) {
-    return null;
-  }
-  return tryLoadBundledProviderPolicySurface(ownerPluginId);
+  return null;
 }

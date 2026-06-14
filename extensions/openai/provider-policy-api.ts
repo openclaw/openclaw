@@ -6,11 +6,19 @@ export function normalizeConfig(params: { provider: string; providerConfig: Mode
   return params.providerConfig;
 }
 
-export function resolveThinkingProfile(params: { provider: string; modelId: string }) {
+export function resolveThinkingProfile(params: {
+  provider: string;
+  api?: string;
+  modelId: string;
+}) {
+  const api = params.api?.trim().toLowerCase();
   switch (params.provider.trim().toLowerCase()) {
     case "openai":
       return resolveUnifiedOpenAIThinkingProfile(params.modelId);
     default:
+      if (api === "openai-responses") {
+        return resolveUnifiedOpenAIThinkingProfile(params.modelId);
+      }
       return null;
   }
 }
