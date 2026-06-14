@@ -19,9 +19,12 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
 import type { AgentToolResult } from "../runtime/index.js";
-import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
+import type { ExtensionFactory, ModelRegistry, SessionManager } from "../sessions/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
+import { log } from "./logger.js";
+import { resolveModelWithRegistry } from "./model.js";
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -144,6 +147,50 @@ function buildContextPruningFactory(params: {
   return contextPruningExtension;
 }
 
+function hasCompactionModelOverride(cfg?: OpenClawConfig): boolean {
+  return Boolean(cfg?.agents?.defaults?.compaction?.model?.trim());
+}
+
+export function resolveSafeguardRuntimeTarget(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel | undefined;
+  modelRegistry?: ModelRegistry;
+  agentDir?: string;
+  workspaceDir?: string;
+}): { provider: string; modelId: string; model: ProviderRuntimeModel | undefined } {
+  const resolved = resolveEmbeddedCompactionTarget({
+    config: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+  const provider = resolved.provider ?? params.provider;
+  const modelId = resolved.model ?? params.modelId;
+  if (
+    !hasCompactionModelOverride(params.cfg) ||
+    (provider === params.provider && modelId === params.modelId)
+  ) {
+    return { provider, modelId, model: params.model };
+  }
+
+  const model = params.modelRegistry
+    ? resolveModelWithRegistry({
+        provider,
+        modelId,
+        modelRegistry: params.modelRegistry,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      })
+    : undefined;
+  if (!model) {
+    log.warn(
+      `Configured safeguard compaction model "${provider}/${modelId}" could not be resolved against the model registry; using the session model when available, otherwise compaction will be skipped.`,
+    );
+  }
+  return { provider, modelId, model };
+}
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -151,17 +198,20 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  modelRegistry?: ModelRegistry;
+  agentDir?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
+    const runtimeTarget = resolveSafeguardRuntimeTarget(params);
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      modelContextTokens: params.model?.contextTokens,
-      modelContextWindow: params.model?.contextWindow,
+      provider: runtimeTarget.provider,
+      modelId: runtimeTarget.modelId,
+      modelContextTokens: runtimeTarget.model?.contextTokens,
+      modelContextWindow: runtimeTarget.model?.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
@@ -172,7 +222,7 @@ export function buildEmbeddedExtensionFactories(params: {
       customInstructions: compactionCfg?.customInstructions,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
-      model: params.model,
+      model: runtimeTarget.model,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       workspaceDir: params.workspaceDir,
       postCompactionSections: compactionCfg?.postCompactionSections,
