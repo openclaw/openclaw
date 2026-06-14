@@ -65,7 +65,6 @@ import type { RuntimeId } from "./runtime-parity.js";
 import {
   QA_RUNTIME_PARITY_TIERS,
   readQaScenarioPack,
-  type QaSeedScenarioWithSource,
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
@@ -648,30 +647,23 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     throw new Error(`qa run --profile ${profile} did not resolve any executable QA scenarios.`);
   }
 
-  const scenarioGroups = groupQaProfileScenariosByExecutionKind(scenarios);
   const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
   process.stdout.write(
     `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
   );
   await withTemporaryQaProfileEnv(profile, async () => {
-    for (const group of scenarioGroups) {
-      await runQaSuiteCommand({
-        repoRoot,
-        outputDir: resolveQaProfileGroupOutputDir(
-          opts.outputDir,
-          group.executionKind,
-          scenarioGroups.length,
-        ),
-        transportId: opts.transportId,
-        providerMode,
-        primaryModel: opts.primaryModel,
-        alternateModel: opts.alternateModel,
-        fastMode: opts.fastMode,
-        scenarioIds: group.scenarioIds,
-        concurrency: opts.concurrency,
-        allowFailures: opts.allowFailures,
-      });
-    }
+    await runQaSuiteCommand({
+      repoRoot,
+      outputDir: opts.outputDir,
+      transportId: opts.transportId,
+      providerMode,
+      primaryModel: opts.primaryModel,
+      alternateModel: opts.alternateModel,
+      fastMode: opts.fastMode,
+      scenarioIds: scenarios.map((scenario) => scenario.id),
+      concurrency: opts.concurrency,
+      allowFailures: opts.allowFailures,
+    });
   });
 }
 
@@ -707,35 +699,6 @@ function qaScorecardCategoryMatchesRunProfile(
     return false;
   }
   return true;
-}
-
-function groupQaProfileScenariosByExecutionKind(scenarios: readonly QaSeedScenarioWithSource[]) {
-  const groups = new Map<QaSeedScenarioWithSource["execution"]["kind"], string[]>();
-  for (const scenario of scenarios) {
-    const scenarioIds = groups.get(scenario.execution.kind) ?? [];
-    scenarioIds.push(scenario.id);
-    groups.set(scenario.execution.kind, scenarioIds);
-  }
-  const executionOrder: readonly QaSeedScenarioWithSource["execution"]["kind"][] = [
-    "flow",
-    "vitest",
-    "playwright",
-  ];
-  return executionOrder.flatMap((executionKind) => {
-    const scenarioIds = groups.get(executionKind);
-    return scenarioIds && scenarioIds.length > 0 ? [{ executionKind, scenarioIds }] : [];
-  });
-}
-
-function resolveQaProfileGroupOutputDir(
-  outputDir: string | undefined,
-  executionKind: string,
-  groupCount: number,
-) {
-  if (!outputDir || groupCount === 1) {
-    return outputDir;
-  }
-  return `${outputDir}-${executionKind}`;
 }
 
 function formatQaRunProfileNoMatchMessage(
@@ -873,12 +836,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     }),
   );
   switch (runtimeResult.executionKind) {
-    case "vitest":
-    case "playwright": {
+    case "suite": {
       const result = runtimeResult.result;
       process.stdout.write(`QA suite report: ${result.reportPath}\n`);
       process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-      if (!allowFailures && result.results.some((scenario) => scenario.status !== "pass")) {
+      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+      if (!allowFailures && result.scenarios.some((scenario) => scenario.status !== "pass")) {
         process.exitCode = 1;
       }
       return;

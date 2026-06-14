@@ -140,21 +140,22 @@ function flowSuiteRuntimeResult(params: {
   };
 }
 
-function testFileSuiteRuntimeResult(params: {
+function unifiedSuiteRuntimeResult(params: {
   evidencePath: string;
-  executionKind?: "vitest" | "playwright";
   outputDir: string;
   reportPath: string;
-  results?: unknown[];
+  summaryPath: string;
+  scenarios?: unknown[];
 }) {
   return {
-    executionKind: params.executionKind ?? "playwright",
+    executionKind: "suite",
     result: {
       outputDir: params.outputDir,
-      executionKind: params.executionKind ?? "playwright",
       reportPath: params.reportPath,
       evidencePath: params.evidencePath,
-      results: params.results ?? [{ status: "pass" }],
+      summaryPath: params.summaryPath,
+      report: "# QA Suite Report\n",
+      scenarios: params.scenarios ?? [],
     },
   };
 }
@@ -302,9 +303,10 @@ describe("qa cli runtime", () => {
     const evidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
     await fs.writeFile(evidencePath, JSON.stringify({ entries: [] }), "utf8");
     runQaSuite.mockResolvedValueOnce(
-      testFileSuiteRuntimeResult({
+      unifiedSuiteRuntimeResult({
         outputDir: suiteArtifactsDir,
         reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
         evidencePath,
       }),
     );
@@ -326,6 +328,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["control-ui-chat-flow-playwright"],
     });
     expectWriteContains(stdoutWrite, `QA suite evidence: ${evidencePath}`);
+    expectWriteContains(stdoutWrite, `QA suite summary: ${suiteSummaryPath}`);
   });
 
   it("rejects host-only resource options for Playwright scenarios", async () => {

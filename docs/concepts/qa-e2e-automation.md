@@ -936,7 +936,12 @@ The report should answer:
 For the inventory of available scenarios - useful when sizing follow-up work or wiring a new transport - run `pnpm openclaw qa coverage` (add `--json` for machine-readable output).
 When choosing focused proof for a touched behavior or file path, run `pnpm openclaw qa coverage --match <query>`.
 The match report searches scenario metadata, docs refs, code refs, coverage IDs, plugins, and provider requirements, then prints matching `qa suite --scenario ...` targets.
-Every `qa suite` scenario execution writes a `qa-evidence.json` artifact. Flow scenarios also write `qa-suite-summary.json` for existing suite/report tooling; scenarios that declare `execution.kind: vitest` or `execution.kind: playwright` run the matching test path and write `qa-vitest-report.md` or `qa-playwright-report.md` plus per-scenario logs.
+Every `qa suite` run writes top-level `qa-evidence.json`,
+`qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected
+scenario set. Scenarios that declare `execution.kind: vitest` or
+`execution.kind: playwright` run the matching test path and also write
+runner-specific subreports, such as `qa-vitest-report.md` or
+`qa-playwright-report.md`, plus per-scenario logs.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model
