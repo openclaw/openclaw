@@ -14,6 +14,7 @@ import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { renderWikiMarkdown, type WikiPageSummary } from "./markdown.js";
+import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 
 type MemoryWikiLintIssue = {
   severity: "error" | "warning";
@@ -51,8 +52,16 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
-function isUnmanagedRawSourcePage(page: WikiPageSummary): boolean {
-  return page.kind === "source" && !page.hasFrontmatter && !page.importedSourceBody;
+function isUnmanagedRawSourcePage(
+  page: WikiPageSummary,
+  managedImportedSourcePagePaths: Set<string>,
+): boolean {
+  return (
+    page.kind === "source" &&
+    !page.hasFrontmatter &&
+    !page.importedSourceBody &&
+    !managedImportedSourcePagePaths.has(page.relativePath)
+  );
 }
 
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
@@ -81,13 +90,19 @@ function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[
   return issues;
 }
 
-function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
+function collectPageIssues(
+  pages: WikiPageSummary[],
+  managedImportedSourcePagePaths: Set<string>,
+): MemoryWikiLintIssue[] {
   const issues: MemoryWikiLintIssue[] = [];
   const pagesById = new Map<string, WikiPageSummary[]>();
   const claimHealth = collectWikiClaimHealth(pages);
 
   for (const page of pages) {
-    const requiresStructuredPageMetadata = !isUnmanagedRawSourcePage(page);
+    const requiresStructuredPageMetadata = !isUnmanagedRawSourcePage(
+      page,
+      managedImportedSourcePagePaths,
+    );
 
     if (!page.id) {
       if (requiresStructuredPageMetadata) {
@@ -364,7 +379,11 @@ export async function lintMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
 ): Promise<LintMemoryWikiResult> {
   const compileResult = await compileMemoryWikiVault(config);
-  const issues = collectPageIssues(compileResult.pages);
+  const sourceSyncState = await readMemoryWikiSourceSyncState(config.vault.path);
+  const managedImportedSourcePagePaths = new Set(
+    Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
+  );
+  const issues = collectPageIssues(compileResult.pages, managedImportedSourcePagePaths);
   const issuesByCategory = buildIssuesByCategory(issues);
   const reportPath = await writeLintReport(config.vault.path, issues);
 

@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { lintMemoryWikiVault } from "./lint.js";
-import { renderWikiMarkdown } from "./markdown.js";
+import {
+  renderWikiMarkdown,
+  WIKI_RELATED_END_MARKER,
+  WIKI_RELATED_START_MARKER,
+} from "./markdown.js";
+import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -122,6 +127,65 @@ describe("lintMemoryWikiVault", () => {
       expect.arrayContaining(["missing-id", "missing-page-type"]),
     );
     expect(issueCodesForPath(result, "sources/unsafe-alpha.md")).toEqual(
+      expect.arrayContaining(["missing-id", "missing-page-type"]),
+    );
+  });
+
+  it("keeps fully truncated tracked imported source pages visible to structure lint", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-tracked-truncated-imports-",
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "bridge-truncated.md"),
+      [
+        "## Related",
+        WIKI_RELATED_START_MARKER,
+        "- No related pages yet.",
+        WIKI_RELATED_END_MARKER,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "unsafe-truncated.md"),
+      [
+        "## Related",
+        WIKI_RELATED_START_MARKER,
+        "- No related pages yet.",
+        WIKI_RELATED_END_MARKER,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeMemoryWikiSourceSyncState(config.vault.path, {
+      version: 1,
+      entries: {
+        bridge: {
+          group: "bridge",
+          pagePath: "sources/bridge-truncated.md",
+          sourcePath: "/tmp/MEMORY.md",
+          sourceUpdatedAtMs: 1,
+          sourceSize: 2,
+          renderFingerprint: "bridge-fingerprint",
+        },
+        unsafe: {
+          group: "unsafe-local",
+          pagePath: "sources/unsafe-truncated.md",
+          sourcePath: "/tmp/private/alpha.md",
+          sourceUpdatedAtMs: 3,
+          sourceSize: 4,
+          renderFingerprint: "unsafe-fingerprint",
+        },
+      },
+    });
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(issueCodesForPath(result, "sources/bridge-truncated.md")).toEqual(
+      expect.arrayContaining(["missing-id", "missing-page-type"]),
+    );
+    expect(issueCodesForPath(result, "sources/unsafe-truncated.md")).toEqual(
       expect.arrayContaining(["missing-id", "missing-page-type"]),
     );
   });
