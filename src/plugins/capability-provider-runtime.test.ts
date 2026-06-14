@@ -452,6 +452,78 @@ describe("resolvePluginCapabilityProviders", () => {
     expectInitialRuntimeRegistryLookup();
   });
 
+  it("skips malformed active capability provider rows during direct lookup", () => {
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push(
+      {
+        pluginId: "bad",
+        pluginName: "Bad",
+        source: "test",
+        provider: {
+          get id() {
+            throw new Error("poison provider id");
+          },
+          label: "Bad",
+        },
+      } as never,
+      {
+        pluginId: "healthy",
+        pluginName: "Healthy",
+        source: "test",
+        provider: {
+          id: "healthy",
+          label: "Healthy",
+          isConfigured: () => true,
+          synthesize: async () => ({
+            audioBuffer: Buffer.from("x"),
+            outputFormat: "mp3",
+            voiceCompatible: false,
+            fileExtension: ".mp3",
+          }),
+        },
+      } as never,
+    );
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+
+    expect(
+      resolvePluginCapabilityProvider({
+        key: "speechProviders",
+        providerId: "healthy",
+      })?.id,
+    ).toBe("healthy");
+  });
+
+  it("keeps direct capability provider lookup when aliases are unreadable", () => {
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push({
+      pluginId: "healthy",
+      pluginName: "Healthy",
+      source: "test",
+      provider: {
+        id: "healthy",
+        label: "Healthy",
+        get aliases() {
+          throw new Error("poison aliases");
+        },
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: Buffer.from("x"),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        }),
+      },
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+
+    expect(
+      resolvePluginCapabilityProvider({
+        key: "speechProviders",
+        providerId: "healthy",
+      })?.id,
+    ).toBe("healthy");
+  });
+
   it("targets enabled external capability plugins without bundled fallback capture", () => {
     const loaded = createEmptyPluginRegistry();
     loaded.imageGenerationProviders.push({
