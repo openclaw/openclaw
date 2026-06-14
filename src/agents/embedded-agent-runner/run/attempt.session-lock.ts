@@ -67,6 +67,20 @@ type SessionFileFenceSnapshot = {
   text?: string;
 };
 
+function compactFenceSnapshotForRetainedLock(
+  snapshot: SessionFileFenceSnapshot | undefined,
+): SessionFileFenceSnapshot | undefined {
+  if (!snapshot?.fingerprint.exists || snapshot.text === undefined) {
+    return snapshot;
+  }
+  return {
+    fingerprint: snapshot.fingerprint,
+    // Keep a stable content check while dropping large transcript text from
+    // long-lived lock-controller closures after prompt lock reacquisition.
+    digest: createHash("sha256").update(snapshot.text).digest("hex"),
+  };
+}
+
 function sameSessionFileFingerprint(
   left: SessionFileFingerprint | undefined,
   right: SessionFileFingerprint,
@@ -797,6 +811,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
     const current = await readSessionFileFingerprint(params.lockOptions.sessionFile);
     if (sameSessionFileFingerprint(fenceFingerprint, current)) {
+      fenceSnapshot = compactFenceSnapshotForRetainedLock(fenceSnapshot) ?? {
+        fingerprint: current,
+      };
       return;
     }
 
@@ -822,6 +839,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
       fenceFingerprint = fenceSnapshot.fingerprint;
       fenceGeneration = recordTrustedSessionFileState(sessionFileFenceKey, current);
+      fenceSnapshot = compactFenceSnapshotForRetainedLock(fenceSnapshot) ?? fenceSnapshot;
       return;
     }
 
@@ -840,6 +858,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
       fenceFingerprint = fenceSnapshot.fingerprint;
       fenceGeneration = trustSessionFileState(sessionFileFenceKey, current) ?? fenceGeneration;
+      fenceSnapshot = compactFenceSnapshotForRetainedLock(fenceSnapshot) ?? fenceSnapshot;
       return;
     }
 
@@ -871,7 +890,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const snapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
     if (!sameSessionFileFingerprint(beforeWrite, snapshot.fingerprint) && fenceActive) {
       fenceFingerprint = snapshot.fingerprint;
-      fenceSnapshot = snapshot;
+      fenceSnapshot = compactFenceSnapshotForRetainedLock(snapshot) ?? snapshot;
     }
   }
 
@@ -882,7 +901,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const ownedWrite = await publishOwnedSessionFileWriteIfChanged(beforeWrite);
     if (ownedWrite && fenceActive) {
       fenceFingerprint = ownedWrite.fingerprint;
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      fenceSnapshot = compactFenceSnapshotForRetainedLock(
+        await readSessionFileFenceSnapshot(params.lockOptions.sessionFile),
+      );
       fenceGeneration = ownedWrite.generation;
     }
   }
@@ -1160,6 +1181,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     async dispose(): Promise<void> {
       await disposeHeldLockAfterRetainedIdle();
+      fenceSnapshot = undefined;
+      fenceFingerprint = undefined;
     },
   };
 }
