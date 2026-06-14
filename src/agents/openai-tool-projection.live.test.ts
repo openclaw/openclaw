@@ -2,11 +2,13 @@ import OpenAI from "openai";
 import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions.js";
 import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
+import { createCodexNativeWebSearchWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import type { Context, Model } from "../llm/types.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import {
   buildOpenAICompletionsParams,
   buildOpenAIResponsesParams,
+  createOpenAIResponsesTransportStreamFn,
 } from "./openai-transport-stream.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -129,6 +131,97 @@ describeLive("OpenAI tool projection live", () => {
     });
     expect(JSON.parse(toolCall.function.arguments)).toEqual({
       value: "OPENAI_PROJECTION_OK",
+    });
+  }, 45_000);
+
+  it("keeps code-mode tools after a payload hook adds an unreadable sibling", async () => {
+    const model = {
+      id: modelId,
+      name: modelId,
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 256,
+    } satisfies Model<"openai-responses">;
+    const codeModeContext = {
+      systemPrompt: "Call the requested function exactly once.",
+      messages: [
+        {
+          role: "user",
+          content: "Call exec with value exactly OPENAI_POST_HOOK_OK.",
+          timestamp: 1,
+        },
+      ],
+      tools: [
+        {
+          name: "exec",
+          description: "Return the requested probe value.",
+          parameters: {
+            type: "object",
+            properties: { value: { type: "string" } },
+            required: ["value"],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: "wait",
+          description: "Wait without doing work.",
+          parameters: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+        },
+      ],
+    } satisfies Context;
+    const streamFn = createCodexNativeWebSearchWrapper(createOpenAIResponsesTransportStreamFn(), {
+      codeModeToolSurfaceEnabled: true,
+    });
+    const streamOptions = {
+      apiKey: OPENAI_KEY,
+      maxTokens: 128,
+      reasoning: "low",
+      toolChoice: { type: "function", name: "exec" },
+      openclawCodeModeToolSurface: true,
+      onPayload(payload: unknown) {
+        const record = payload as Record<string, unknown>;
+        const tools = record.tools;
+        if (!Array.isArray(tools) || tools.length !== 2) {
+          throw new Error("Expected projected exec and wait tools");
+        }
+        record.tools = [
+          tools[0],
+          {
+            type: "function",
+            get function(): { name: string } {
+              throw new Error("live unreadable post-hook function getter");
+            },
+          },
+          tools[1],
+        ];
+        return record;
+      },
+    } satisfies Parameters<typeof streamFn>[2] & {
+      reasoning: "low";
+      toolChoice: { type: "function"; name: string };
+      openclawCodeModeToolSurface: true;
+    };
+    const stream = await Promise.resolve(streamFn(model, codeModeContext, streamOptions));
+
+    const result = await stream.result();
+    const toolCall = result.content.find(
+      (block) => block.type === "toolCall" && block.name === "exec",
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+      arguments: { value: "OPENAI_POST_HOOK_OK" },
     });
   }, 45_000);
 });

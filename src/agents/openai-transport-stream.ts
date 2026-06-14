@@ -350,19 +350,32 @@ function responseInputRoles(input: unknown): string {
   return [...roles].toSorted().join(",");
 }
 
+function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
+  try {
+    return record[field];
+  } catch {
+    return undefined;
+  }
+}
+
 function readResponsesToolDisplayName(tool: unknown): string {
   if (!tool || typeof tool !== "object") {
     return "";
   }
   const record = tool as Record<string, unknown>;
-  if (typeof record.name === "string") {
-    return record.name;
+  const name = readToolPayloadField(record, "name");
+  if (typeof name === "string") {
+    return name;
   }
-  const fn = record.function;
-  if (fn && typeof fn === "object" && typeof (fn as Record<string, unknown>).name === "string") {
-    return (fn as Record<string, unknown>).name as string;
+  const fn = readToolPayloadField(record, "function");
+  if (fn && typeof fn === "object") {
+    const fnName = readToolPayloadField(fn as Record<string, unknown>, "name");
+    if (typeof fnName === "string") {
+      return fnName;
+    }
   }
-  return typeof record.type === "string" ? record.type : "";
+  const type = readToolPayloadField(record, "type");
+  return typeof type === "string" && type !== "function" ? type : "";
 }
 
 function summarizeResponsesTools(tools: unknown): string {
@@ -381,11 +394,16 @@ function responsesPayloadToolName(tool: unknown): string | undefined {
   if (!isRecord(tool)) {
     return undefined;
   }
-  if (typeof tool.name === "string") {
-    return tool.name;
+  const name = readToolPayloadField(tool, "name");
+  if (typeof name === "string") {
+    return name;
   }
-  const fn = tool.function;
-  return isRecord(fn) && typeof fn.name === "string" ? fn.name : undefined;
+  const fn = readToolPayloadField(tool, "function");
+  if (!isRecord(fn)) {
+    return undefined;
+  }
+  const fnName = readToolPayloadField(fn, "name");
+  return typeof fnName === "string" ? fnName : undefined;
 }
 
 function enforceCodeModeResponsesToolSurface(payload: unknown): void {
