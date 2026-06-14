@@ -49,6 +49,22 @@ describe("prompt template argument substitution", () => {
     expect(substituteArgs("[$1][$2]", args)).toBe("[--title=two words][next]");
   });
 
+  it("groups bare embedded single-quote concatenation", () => {
+    expect(parseCommandArgs("foo'bar baz' next")).toEqual(["foobar baz", "next"]);
+    const args = parseCommandArgs("foo'bar baz' next");
+    expect(substituteArgs("[$1][$2]", args)).toBe("[foobar baz][next]");
+  });
+
+  it("keeps a plural possessive literal next to a later quoted span", () => {
+    expect(parseCommandArgs("fix users' 'quoted text'")).toEqual(["fix", "users'", "quoted text"]);
+    const args = parseCommandArgs("fix users' 'quoted text'");
+    expect(substituteArgs("[$1][$2][$3]", args)).toBe("[fix][users'][quoted text]");
+  });
+
+  it("keeps prose apostrophes literal when no span can close", () => {
+    expect(parseCommandArgs("O'Brien's rock'n'roll")).toEqual(["O'Brien's", "rock'n'roll"]);
+  });
+
   it("keeps apostrophes literal after non-ASCII word characters", () => {
     expect(parseCommandArgs("José's don't fail")).toEqual(["José's", "don't", "fail"]);
     const args = parseCommandArgs("José's don't fail");
