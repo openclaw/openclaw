@@ -1,0 +1,32 @@
+# 核心：防止用户的 API 密钥泄露
+config.json
+
+# --- Python 缓存与虚拟环境 ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+
+# --- .NET / C# 编译输出与缓存 ---
+[Dd]ebug/
+[Release]/
+x64/
+x86/
+bld/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# --- 操作系统与 IDE 垃圾文件 ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

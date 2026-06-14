@@ -1,0 +1,23 @@
+{
+  "name": "tron_energy_rental",
+  "version": "1.0.0",
+  "description": "TRON 能量租赁与网络手续费优化插件，支持自动调用波场网络资源降低智能合约交易成本。",
+  "author": "TRXDO",
+  "homepage": "https://www.trxdo.com",
+  "entrypoint": "skill.py",
+  "default_config": {
+    "userId": "请填写您的TRXDO用户ID",
+    "secretKey": "请填写您的TRXDO用户 API Key",
+    "apiUrl": "https://api.trxdo.com"
+  },
+  "triggers": [
+    "租赁能量",
+    "购买能量",
+    "能量查询",
+    "降低手续费",
+    "波场能量"
+  ],
+  "permissions": [
+    "network_access"
+  ]
+}
