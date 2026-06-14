@@ -37,7 +37,7 @@ import type {
   TranscriptMessageAppendResult,
   TranscriptUpdatePayload,
 } from "./session-accessor.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
+import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
@@ -53,6 +53,7 @@ type SessionSqliteDatabase = Pick<
   | "transcript_events"
 >;
 type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_entries"]>;
+type ResolvedSessionEntryRow = { entry: SessionEntry; row: SessionEntryRow };
 
 type ResolvedSqliteScope = {
   agentId: string;
@@ -625,14 +626,38 @@ function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
 function readSessionEntryRow(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-): { entry: SessionEntry; row: SessionEntryRow } | undefined {
-  return readExactSessionEntryRow(database, normalizeSqliteSessionKey(sessionKey));
+): ResolvedSessionEntryRow | undefined {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_entries").selectAll().orderBy("session_key", "asc"),
+  ).rows;
+  const entries = new Map<string, ResolvedSessionEntryRow>();
+  const store: Record<string, SessionEntry> = {};
+  for (const row of rows) {
+    const entry = parseSessionEntryRow(row);
+    if (!entry) {
+      continue;
+    }
+    store[row.session_key] = entry;
+    entries.set(row.session_key, { entry, row });
+  }
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  if (!resolved.existing) {
+    return undefined;
+  }
+  for (const value of entries.values()) {
+    if (value.entry === resolved.existing) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function readExactSessionEntryRow(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-): { entry: SessionEntry; row: SessionEntryRow } | undefined {
+): ResolvedSessionEntryRow | undefined {
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -935,7 +960,7 @@ function ensureTranscriptSessionRoot(
         }),
       ),
   );
-  writeSessionRoute(database, {
+  writeTranscriptSessionRoute(database, {
     sessionId: scope.sessionId,
     sessionKey: scope.sessionKey,
     updatedAt,
@@ -993,6 +1018,26 @@ function writeSessionRoute(
         }),
       ),
   );
+}
+
+function writeTranscriptSessionRoute(
+  database: OpenClawAgentDatabase,
+  params: { sessionId: string; sessionKey: string; updatedAt: number },
+): void {
+  const db = getSessionKysely(database.db);
+  const existing = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_routes")
+      .select("session_id")
+      .where("session_key", "=", params.sessionKey),
+  );
+  // Transcript-only appends may arrive late from an old run. They can create
+  // missing routes, but must not move a current session key back to a stale id.
+  if (existing && existing.session_id !== params.sessionId) {
+    return;
+  }
+  writeSessionRoute(database, params);
 }
 
 function resolveSqliteSessionScope(

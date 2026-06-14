@@ -901,6 +901,78 @@ describe("sqlite session normalization", () => {
     });
   });
 
+  it("does not move current routes back to stale transcript session ids", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scope = {
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:main",
+      storePath: paths.sqlitePath,
+    };
+    await upsertSqliteSessionEntry(scope, {
+      sessionId: "current-session",
+      updatedAt: 20,
+    });
+    await appendSqliteTranscriptEvent(
+      {
+        ...scope,
+        sessionId: "stale-session",
+      },
+      {
+        id: "stale-event",
+        timestamp: new Date(10).toISOString(),
+        type: "metadata",
+      },
+    );
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env,
+      path: paths.sqlitePath,
+    });
+    const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+    const route = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_routes")
+        .select("session_id")
+        .where("session_key", "=", "agent:main:main"),
+    );
+    expect(route).toEqual({ session_id: "current-session" });
+  });
+
+  it("resolves confirmed lowercased legacy SQLite session aliases", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
+    const legacyKey = canonicalKey.toLowerCase();
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env,
+        sessionKey: legacyKey,
+        storePath: paths.sqlitePath,
+      },
+      {
+        deliveryContext: {
+          accountId: "acct-1",
+          channel: "matrix",
+          to: "!MixedCase:example.org",
+        },
+        sessionId: "legacy-alias-session",
+        updatedAt: 10,
+      },
+    );
+
+    expect(
+      loadSqliteSessionEntry({
+        agentId: "main",
+        env,
+        sessionKey: canonicalKey,
+        storePath: paths.sqlitePath,
+      }),
+    ).toMatchObject({ sessionId: "legacy-alias-session" });
+  });
+
   it("normalizes missing entry updatedAt before writing root and entry rows", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     await replaceSqliteSessionEntry(
