@@ -2,7 +2,7 @@
 // stored agent auth profiles for reusable media tools.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   hasDirectProviderApiKeyAuthForTool,
   hasProviderAuthForTool,
@@ -13,11 +13,73 @@ vi.mock("../auth-profiles/external-cli-sync.js", () => ({
   resolveExternalCliAuthProfiles: () => [],
 }));
 
-describe("hasProviderAuthForTool", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
+const AGENT_DIR = "/tmp/openclaw-model-config-helper";
+const MODEL = "gpt-5.5";
+
+type Decision = ReturnType<typeof resolveOpenAiImageMediaCandidate>;
+type Profiles = AuthProfileStore["profiles"];
+
+const codexSubstitute = {
+  kind: "substitute",
+  provider: "codex",
+  ref: `codex/${MODEL}`,
+} satisfies Decision;
+const openAiKeep = { kind: "keep", ref: `openai/${MODEL}` } satisfies Decision;
+const drop = { kind: "drop" } satisfies Decision;
+
+const openAiRefCfg: OpenClawConfig = {
+  models: { providers: { openai: { apiKey: "openai:default" } } },
+};
+
+const store = (profiles: Profiles): AuthProfileStore => ({ version: 1, profiles });
+
+const oauth = (provider: string): AuthProfileCredential => ({
+  provider,
+  type: "oauth",
+  access: "oauth-test",
+  refresh: "refresh-test",
+  expires: Date.now() + 60_000,
+});
+
+const token = (provider: string): AuthProfileCredential => ({
+  provider,
+  type: "token",
+  token: "token-test",
+});
+
+const apiKey = (provider: string, key = "direct-openai-key"): AuthProfileCredential => ({
+  provider,
+  type: "api_key",
+  key,
+});
+
+const resolveMedia = (
+  overrides: Partial<Parameters<typeof resolveOpenAiImageMediaCandidate>[0]> = {},
+) =>
+  resolveOpenAiImageMediaCandidate({
+    agentDir: AGENT_DIR,
+    authStore: store({}),
+    openAiModel: MODEL,
+    codexModel: MODEL,
+    ...overrides,
   });
 
+const hasDirectOpenAiKey = (
+  overrides: Partial<Parameters<typeof hasDirectProviderApiKeyAuthForTool>[0]> = {},
+) =>
+  hasDirectProviderApiKeyAuthForTool({
+    provider: "openai",
+    agentDir: AGENT_DIR,
+    authStore: store({}),
+    modelApi: "openai-responses",
+    ...overrides,
+  });
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("hasProviderAuthForTool", () => {
   it("accepts config-backed custom provider auth", () => {
     const cfg = {
       models: {
@@ -37,21 +99,15 @@ describe("hasProviderAuthForTool", () => {
   it("keeps auth-store profiles as valid tool auth", () => {
     // Tool-specific model selection should honor the same stored profile shape
     // used by agent sessions, not only process env/config keys.
-    expect(
-      hasProviderAuthForTool({
+    const authStore = store({
+      "hatchery:default": {
         provider: "hatchery",
-        authStore: {
-          version: 1,
-          profiles: {
-            "hatchery:default": {
-              provider: "hatchery",
-              type: "api_key",
-              key: "sk-profile", // pragma: allowlist secret
-            },
-          },
-        },
-      }),
-    ).toBe(true);
+        type: "api_key",
+        key: "sk-profile", // pragma: allowlist secret
+      },
+    });
+
+    expect(hasProviderAuthForTool({ provider: "hatchery", authStore })).toBe(true);
   });
 
   it("rejects providers without config, env, or profile auth", () => {
@@ -60,214 +116,52 @@ describe("hasProviderAuthForTool", () => {
 });
 
 describe("resolveOpenAiImageMediaCandidate", () => {
-  const agentDir = "/tmp/openclaw-model-config-helper";
+  const cases: Array<[string, AuthProfileStore, Decision]> = [
+    [
+      "canonical OpenAI OAuth-only media auth",
+      store({ "openai:chatgpt": oauth("openai") }),
+      codexSubstitute,
+    ],
+    [
+      "canonical OpenAI token-only media auth",
+      store({ "openai:token": token("openai") }),
+      codexSubstitute,
+    ],
+    [
+      "legacy openai-codex OAuth profiles",
+      store({ "openai-codex:default": oauth("openai-codex") }),
+      drop,
+    ],
+    [
+      "legacy openai-codex token profiles",
+      store({ "openai-codex:token": token("openai-codex") }),
+      drop,
+    ],
+    ["no direct auth or verified Codex route", store({}), drop],
+  ];
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("substitutes Codex for canonical OpenAI OAuth-only media auth", () => {
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:chatgpt": {
-          provider: "openai",
-          type: "oauth",
-          access: "oauth-test",
-          refresh: "refresh-test",
-          expires: Date.now() + 60_000,
-        },
-      },
-    };
-
-    expect(
-      resolveOpenAiImageMediaCandidate({
-        agentDir,
-        authStore,
-        openAiModel: "gpt-5.5",
-        codexModel: "gpt-5.5",
-      }),
-    ).toEqual({ kind: "substitute", provider: "codex", ref: "codex/gpt-5.5" });
-  });
-
-  it("substitutes Codex for canonical OpenAI token-only media auth", () => {
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:token": {
-          provider: "openai",
-          type: "token",
-          token: "token-test",
-        },
-      },
-    };
-
-    expect(
-      resolveOpenAiImageMediaCandidate({
-        agentDir,
-        authStore,
-        openAiModel: "gpt-5.5",
-        codexModel: "gpt-5.5",
-      }),
-    ).toEqual({ kind: "substitute", provider: "codex", ref: "codex/gpt-5.5" });
+  it.each(cases)("resolves %s", (_label, authStore, expected) => {
+    expect(resolveMedia({ authStore })).toEqual(expected);
   });
 
   it("keeps OpenAI media when a direct API key profile exists", () => {
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:api-key": {
-          provider: "openai",
-          type: "api_key",
-          key: "direct-openai-key",
-        },
-      },
-    };
+    const authStore = store({ "openai:api-key": apiKey("openai") });
 
-    expect(
-      hasDirectProviderApiKeyAuthForTool({
-        provider: "openai",
-        agentDir,
-        authStore,
-        modelApi: "openai-responses",
-      }),
-    ).toBe(true);
-    expect(
-      resolveOpenAiImageMediaCandidate({
-        agentDir,
-        authStore,
-        openAiModel: "gpt-5.5",
-        codexModel: "gpt-5.5",
-      }),
-    ).toEqual({ kind: "keep", ref: "openai/gpt-5.5" });
+    expect(hasDirectOpenAiKey({ authStore })).toBe(true);
+    expect(resolveMedia({ authStore })).toEqual(openAiKeep);
   });
 
   it("does not treat provider apiKey OAuth profile references as direct OpenAI media auth", () => {
-    const cfg: OpenClawConfig = {
-      models: { providers: { openai: { apiKey: "openai:default" } } },
-    };
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          provider: "openai",
-          type: "oauth",
-          access: "oauth-test",
-          refresh: "refresh-test",
-          expires: Date.now() + 60_000,
-        },
-      },
-    };
+    const authStore = store({ "openai:default": oauth("openai") });
 
-    expect(
-      hasDirectProviderApiKeyAuthForTool({
-        provider: "openai",
-        cfg,
-        agentDir,
-        authStore,
-        modelApi: "openai-responses",
-      }),
-    ).toBe(false);
-    expect(
-      resolveOpenAiImageMediaCandidate({
-        cfg,
-        agentDir,
-        authStore,
-        openAiModel: "gpt-5.5",
-        codexModel: "gpt-5.5",
-      }),
-    ).toEqual({ kind: "substitute", provider: "codex", ref: "codex/gpt-5.5" });
+    expect(hasDirectOpenAiKey({ cfg: openAiRefCfg, authStore })).toBe(false);
+    expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(codexSubstitute);
   });
 
   it("treats provider apiKey API-key profile references as direct OpenAI media auth", () => {
-    const cfg: OpenClawConfig = {
-      models: { providers: { openai: { apiKey: "openai:default" } } },
-    };
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          provider: "openai",
-          type: "api_key",
-          key: "direct-openai-key",
-        },
-      },
-    };
+    const authStore = store({ "openai:default": apiKey("openai") });
 
-    expect(
-      hasDirectProviderApiKeyAuthForTool({
-        provider: "openai",
-        cfg,
-        agentDir,
-        authStore,
-        modelApi: "openai-responses",
-      }),
-    ).toBe(true);
-    expect(
-      resolveOpenAiImageMediaCandidate({
-        cfg,
-        agentDir,
-        authStore,
-        openAiModel: "gpt-5.5",
-        codexModel: "gpt-5.5",
-      }),
-    ).toEqual({ kind: "keep", ref: "openai/gpt-5.5" });
-  });
-
-  it("does not treat legacy openai-codex profiles as canonical Codex OAuth", () => {
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai-codex:default": {
-          provider: "openai-codex",
-          type: "oauth",
-          access: "oauth-test",
-          refresh: "refresh-test",
-          expires: Date.now() + 60_000,
-        },
-      },
-    };
-
-    expect(
-      resolveOpenAiImageMediaCandidate({
-        agentDir,
-        authStore,
-        openAiModel: "gpt-5.5",
-        codexModel: "gpt-5.5",
-      }),
-    ).toEqual({ kind: "drop" });
-  });
-
-  it("does not treat legacy openai-codex token profiles as canonical Codex auth", () => {
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai-codex:token": {
-          provider: "openai-codex",
-          type: "token",
-          token: "token-test",
-        },
-      },
-    };
-
-    expect(
-      resolveOpenAiImageMediaCandidate({
-        agentDir,
-        authStore,
-        openAiModel: "gpt-5.5",
-        codexModel: "gpt-5.5",
-      }),
-    ).toEqual({ kind: "drop" });
-  });
-
-  it("drops OpenAI media when neither direct auth nor verified Codex route is available", () => {
-    expect(
-      resolveOpenAiImageMediaCandidate({
-        agentDir,
-        authStore: { version: 1, profiles: {} },
-        openAiModel: "gpt-5.5",
-        codexModel: "gpt-5.5",
-      }),
-    ).toEqual({ kind: "drop" });
+    expect(hasDirectOpenAiKey({ cfg: openAiRefCfg, authStore })).toBe(true);
+    expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(openAiKeep);
   });
 });
