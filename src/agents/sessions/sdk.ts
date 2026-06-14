@@ -123,6 +123,18 @@ export interface CreateAgentSessionOptions {
   sessionStartEvent?: SessionStartEvent;
   /** Optional lock used before session-file writes or write-capable extension hooks. */
   withSessionWriteLock?: AgentSessionWriteLockRunner;
+  /**
+   * Path to the session store file (sessions.json) for syncing model overrides.
+   * When provided together with sessionKey, AgentSession can read pending live
+   * model switches from the store entry at prompt time.
+   */
+  storePath?: string;
+  /**
+   * Session key in the session store for model override sync.
+   * When provided together with storePath, AgentSession can resolve the store
+   * entry and apply pending overrides before the model validation block.
+   */
+  sessionKey?: string;
 }
 
 /** Result from createAgentSession */
@@ -500,6 +512,8 @@ export async function createAgentSession(
     extensionRunnerRef,
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteLock: options.withSessionWriteLock,
+    storePath: options.storePath,
+    sessionKey: options.sessionKey,
   });
   const extensionsResult = resourceLoader.getExtensions();
 

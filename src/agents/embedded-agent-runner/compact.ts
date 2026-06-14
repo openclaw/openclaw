@@ -1268,6 +1268,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
             sessionManager,
             settingsManager,
             resourceLoader,
+            storePath: params.sessionFile,
+            sessionKey: params.sessionKey,
           });
           session = createdSession.session;
           session.setActiveToolsByName(sessionToolAllowlist);

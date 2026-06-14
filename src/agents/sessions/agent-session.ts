@@ -15,6 +15,9 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readSessionEntry } from "../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   clampThinkingLevel,
@@ -226,6 +229,16 @@ export interface AgentSessionConfig {
   sessionStartEvent?: SessionStartEvent;
   /** Optional lock used by embedded runs before session-file writes or write-capable hooks. */
   withSessionWriteLock?: AgentSessionWriteLockRunner;
+  /**
+   * Path to the session store file (sessions.json).
+   * Used to sync model override from store entry when a live model switch is pending.
+   */
+  storePath?: string;
+  /**
+   * Session key in the session store.
+   * Used together with storePath to locate the session entry for model override sync.
+   */
+  sessionKey?: string;
 }
 
 export interface ExtensionBindings {
@@ -366,6 +379,10 @@ export class AgentSession {
   // Model registry for API key resolution
   private sessionModelRegistry: ModelRegistry;
 
+  // Session store path and key for syncing model overrides
+  private readonly storePath?: string;
+  private readonly sessionKey?: string;
+
   // Tool registry for extension getTools/setTools
   private toolRegistry: Map<string, AgentTool> = new Map();
   private toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
@@ -396,6 +413,8 @@ export class AgentSession {
       reason: "startup",
     };
     this.withExternalSessionWriteLock = config.withSessionWriteLock;
+    this.storePath = config.storePath;
+    this.sessionKey = config.sessionKey;
 
     // Always subscribe to agent events for internal handling
     // (session persistence, extensions, auto-compaction, retry logic)
@@ -1093,6 +1112,7 @@ export class AgentSession {
    * - Expands file-based prompt templates by default
    * - During streaming, queues via steer() or followUp() based on streamingBehavior option
    * - Validates model and API key before sending (when not streaming)
+   * - May update the current model from session store overrides if a live model switch is pending
    * @throws Error if streaming and no streamingBehavior specified
    * @throws Error if no model selected or no API key available (when not streaming)
    */
@@ -1157,6 +1177,9 @@ export class AgentSession {
 
       // Flush any pending bash messages before the new prompt
       this.flushPendingBashMessages();
+
+      // Sync model from session store if there's a pending live model switch
+      this.syncModelFromStoreEntry();
 
       // Validate model
       if (!this.model) {
@@ -2242,6 +2265,61 @@ export class AgentSession {
     this.extensionErrorUnsubscriber = this.extensionErrorListener
       ? runner.onError(this.extensionErrorListener)
       : undefined;
+  }
+
+  /**
+   * Sync the current model from the session store entry if a live model switch
+   * is pending.  Reads `liveModelSwitchPending`, `providerOverride`, and
+   * `modelOverride` from the store entry and resolves the model through the
+   * registry, then assigns it to `agent.state.model` and appends a transcript
+   * model_change entry.
+   *
+   * This is called at the start of `prompt()` so the stale snapshot is
+   * replaced before the model-validation block runs.
+   */
+  private syncModelFromStoreEntry(): void {
+    if (!this.storePath || !this.sessionKey) {
+      return;
+    }
+
+    let entry: SessionEntry | undefined;
+    try {
+      const raw = readSessionEntry(this.storePath, this.sessionKey, {
+        hydrateSkillPromptRefs: false,
+      });
+      entry = raw as SessionEntry | undefined;
+    } catch {
+      return;
+    }
+
+    if (!entry?.liveModelSwitchPending) {
+      return;
+    }
+
+    const provider = normalizeOptionalString(entry.providerOverride);
+    const modelId = normalizeOptionalString(entry.modelOverride);
+    if (!provider || !modelId) {
+      return;
+    }
+
+    // Skip if the model is already up-to-date (handles repeated prompt() calls
+    // before shouldSwitchToLiveModel clears the file flag).
+    if (this.model?.provider === provider && this.model?.id === modelId) {
+      return;
+    }
+
+    const resolvedModel = this.sessionModelRegistry.find(provider, modelId);
+    if (!resolvedModel) {
+      return;
+    }
+
+    if (!this.sessionModelRegistry.hasConfiguredAuth(resolvedModel)) {
+      return;
+    }
+
+    this.agent.state.model = resolvedModel;
+    this.sessionManager.appendModelChange(resolvedModel.provider, resolvedModel.id);
+    this.setThinkingLevel(this.getThinkingLevelForModelSwitch());
   }
 
   private refreshCurrentModelFromRegistry(): void {
