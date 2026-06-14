@@ -33,6 +33,7 @@ import {
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
+import { buildNodeShellFallbackCommands } from "../infra/node-shell.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -260,7 +261,38 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-async function runCommand(
+export async function runCommand(
+  argv: string[],
+  cwd: string | undefined,
+  env: Record<string, string> | undefined,
+  timeoutMs: number | undefined,
+): Promise<RunResult> {
+  const attempts = [argv, ...buildNodeShellFallbackCommands(argv)];
+  const errors: string[] = [];
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index] ?? argv;
+    const result = await runCommandAttempt(attempt, cwd, env, timeoutMs);
+    const spawnMissing =
+      result.exitCode === undefined &&
+      result.error?.includes("ENOENT") === true &&
+      attempt[0] !== "sh";
+    if (!spawnMissing || index === attempts.length - 1) {
+      if (errors.length > 0 && result.error) {
+        return {
+          ...result,
+          error: [...errors, result.error].join("; "),
+        };
+      }
+      return result;
+    }
+    if (result.error) {
+      errors.push(result.error);
+    }
+  }
+  return await runCommandAttempt(argv, cwd, env, timeoutMs);
+}
+
+async function runCommandAttempt(
   argv: string[],
   cwd: string | undefined,
   env: Record<string, string> | undefined,
