@@ -31,6 +31,7 @@ function withTarball(
     includeShrinkwrap?: boolean;
     extraRootFiles?: Record<string, string>;
     extraPackEntries?: string[];
+    packageModes?: Record<string, number>;
     packageSymlinks?: Record<string, string>;
   } = {},
 ) {
@@ -86,6 +87,9 @@ function withTarball(
       const filePath = join(packageRoot, relativePath);
       mkdirSync(dirname(filePath), { recursive: true });
       symlinkSync(target, filePath);
+    }
+    for (const [relativePath, mode] of Object.entries(options.packageModes ?? {})) {
+      chmodSync(join(packageRoot, relativePath), mode);
     }
     for (const [relativePath, body] of Object.entries(options.extraRootFiles ?? {})) {
       const filePath = join(root, relativePath);
@@ -369,6 +373,23 @@ describe("check-openclaw-package-tarball", () => {
       },
       "2026.5.21",
       { includeContentInventory: false },
+    );
+  });
+
+  it.runIf(process.platform !== "win32")("rejects content inventory executable mismatches", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "content inventory executable mode mismatch for dist/index.js",
+        );
+      },
+      "2026.5.21",
+      { packageModes: { "dist/index.js": 0o755 } },
     );
   });
 

@@ -284,7 +284,7 @@ function readPackageTarEntryBuffer(entryPath) {
     if (!stats.isFile() || stats.isSymbolicLink()) {
       return { error: `unsafe content inventory tar entry ${entryPath}` };
     }
-    return { content: fs.readFileSync(candidate) };
+    return { content: fs.readFileSync(candidate), mode: stats.mode };
   }
   return { content: null };
 }
@@ -548,7 +548,7 @@ if (packageEntrySet.has("dist/postinstall-content-inventory.json")) {
           errors.push(`content inventory references missing tar entry ${contentEntry.path}`);
           continue;
         }
-        const { content, error } = readPackageTarEntryBuffer(contentEntry.path);
+        const { content, error, mode } = readPackageTarEntryBuffer(contentEntry.path);
         if (error) {
           errors.push(error);
           continue;
@@ -563,6 +563,12 @@ if (packageEntrySet.has("dist/postinstall-content-inventory.json")) {
         }
         if (content.length !== contentEntry.size) {
           errors.push(`content inventory size mismatch for ${contentEntry.path}`);
+        }
+        if (
+          process.platform !== "win32" &&
+          Boolean(mode & 0o111) !== Boolean(contentEntry.mode & 0o111)
+        ) {
+          errors.push(`content inventory executable mode mismatch for ${contentEntry.path}`);
         }
       }
     }
