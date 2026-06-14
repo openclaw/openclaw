@@ -965,6 +965,71 @@ describe("grouped chat rendering", () => {
     expect(sender?.textContent).toBe("Forwarded from main");
   });
 
+  it("falls back to resolved name when senderLabel is an empty string (#92327)", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "empty-label-group",
+      role: "user",
+      // Empty string after trim — must fall back to resolved name, not render blank.
+      senderLabel: "",
+      messages: [
+        {
+          key: "empty-label-message",
+          message: { role: "user", content: "inter-session message", timestamp: 1000 },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        userName: "Buns",
+        userAvatar: null,
+      }),
+      container,
+    );
+
+    const sender = container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
+    // Empty senderLabel must fall back to the configured user name.
+    expect(sender?.textContent).toBe("Buns");
+  });
+
+  it("falls back to assistant name when senderLabel is whitespace only (#92327)", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "whitespace-label-group",
+      role: "assistant",
+      // Whitespace-only after trim — must fall back to assistantName.
+      senderLabel: "   ",
+      messages: [
+        {
+          key: "blank-label-message",
+          message: { role: "assistant", content: "forwarded", timestamp: 1000 },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+      }),
+      container,
+    );
+
+    const sender = container.querySelector<HTMLElement>(".chat-group.assistant .chat-sender-name");
+    expect(sender?.textContent).toBe("OpenClaw");
+  });
+
   it("collapses consecutive tool results into an activity group", () => {
     const container = document.createElement("div");
     const group: MessageGroup = {
