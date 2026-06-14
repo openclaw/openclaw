@@ -84,9 +84,9 @@ const SkillWorkshopToolSchema = Type.Object(
     ),
     description: Type.Optional(
       Type.String({
-        maxLength: 160,
+        maxLength: 500,
         description:
-          "Skill description for action=create, action=update, or action=revise. Keep it concise; max 160 bytes.",
+          "Skill description for action=create, action=update, or action=revise. Keep it concise; max 500 bytes.",
       }),
     ),
     skill_name: Type.Optional(
