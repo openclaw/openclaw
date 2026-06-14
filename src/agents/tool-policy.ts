@@ -193,6 +193,7 @@ export function analyzeAllowlistByToolType(
   policy: ToolPolicyLike | undefined,
   groups: PluginToolGroups,
   coreTools: Set<string>,
+  knownPluginIds: Set<string> = new Set(),
 ): AllowlistResolution {
   if (!policy?.allow || policy.allow.length === 0) {
     return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
@@ -201,7 +202,7 @@ export function analyzeAllowlistByToolType(
   if (normalized.length === 0) {
     return { policy, unknownAllowlist: [], pluginOnlyAllowlist: false };
   }
-  const pluginIds = new Set(groups.byPlugin.keys());
+  const pluginIds = new Set([...groups.byPlugin.keys(), ...knownPluginIds]);
   const pluginTools = new Set(groups.all);
   const unknownAllowlist: string[] = [];
   let hasOnlyPluginEntries = true;

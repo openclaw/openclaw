@@ -50,6 +50,18 @@ describe("analyzeAllowlistByToolType", () => {
     expect(policy.unknownAllowlist).toStrictEqual([]);
   });
 
+  it("preserves allowlist with known enabled plugin ids before tools are registered", () => {
+    const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
+    const policy = analyzeAllowlistByToolType(
+      { allow: ["llm-task"] },
+      emptyPlugins,
+      coreTools,
+      new Set(["llm-task"]),
+    );
+    expect(policy.pluginOnlyAllowlist).toBe(true);
+    expect(policy.unknownAllowlist).toStrictEqual([]);
+  });
+
   it("preserves allowlist with unknown entries when no core tools match", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
     const policy = analyzeAllowlistByToolType({ allow: ["lobster"] }, emptyPlugins, coreTools);

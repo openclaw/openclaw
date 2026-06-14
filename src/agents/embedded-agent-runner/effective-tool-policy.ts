@@ -23,6 +23,37 @@ import {
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
+function collectEnabledPluginIds(config: OpenClawConfig | undefined): string[] {
+  const plugins = config?.plugins;
+  if (!plugins || plugins.enabled === false) {
+    return [];
+  }
+  const deny = new Set(plugins.deny ?? []);
+  const allow = new Set(plugins.allow ?? []);
+  const entries = plugins.entries ?? {};
+  const isEffectivelyEnabled = (pluginId: string): boolean => {
+    if (deny.has(pluginId)) {
+      return false;
+    }
+    if (entries[pluginId]?.enabled === false) {
+      return false;
+    }
+    return allow.size === 0 || allow.has(pluginId);
+  };
+  const ids = new Set<string>();
+  for (const pluginId of allow) {
+    if (isEffectivelyEnabled(pluginId)) {
+      ids.add(pluginId);
+    }
+  }
+  for (const [pluginId, entry] of Object.entries(entries)) {
+    if (entry?.enabled === true && isEffectivelyEnabled(pluginId)) {
+      ids.add(pluginId);
+    }
+  }
+  return [...ids];
+}
+
 /**
  * Identity inputs used by `resolveGroupToolPolicy` to look up channel/group
  * tool policy. These fields are an authorization signal (they can widen
@@ -177,6 +208,7 @@ export function applyFinalEffectiveToolPolicy(
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: params.warn,
     steps: pipelineSteps,
+    knownPluginIds: collectEnabledPluginIds(params.config),
     auditLogLevel: params.toolPolicyAuditLogLevel,
   });
 }
