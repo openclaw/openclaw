@@ -13,6 +13,7 @@ type CollectEmptyAllowlistPolicyWarningsParams = {
   parent?: DoctorAccountRecord;
   prefix: string;
   shouldSkipDefaultEmptyGroupAllowlistWarning?: typeof shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning;
+  skipGroupAllowFromWarning?: boolean;
 };
 
 function usesSenderBasedGroupAllowlist(channelName?: string): boolean {
@@ -82,6 +83,12 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
       prefix: params.prefix,
     })
   ) {
+    return warnings;
+  }
+
+  // Skip the groupAllowFrom warning if the caller determined that every
+  // enabled account already covers the policy (e.g. per-account allowlists).
+  if (params.skipGroupAllowFromWarning) {
     return warnings;
   }
 
