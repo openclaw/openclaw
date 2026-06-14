@@ -13,7 +13,15 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "spawn",
   // Shell command execution — immediate RCE surface
   "shell",
-  // Arbitrary file mutation on the host
+  // Canonical workspace write tool — arbitrary file mutation on the host;
+  // opt-in via BOTH `gateway.tools.allow: ["write"]` AND
+  // `gateway.tools.directInvoke.hostFsWrite: true`.
+  "write",
+  // Canonical workspace edit tool — arbitrary file mutation on the host;
+  // opt-in via BOTH `gateway.tools.allow: ["edit"]` AND
+  // `gateway.tools.directInvoke.hostFsWrite: true`.
+  "edit",
+  // Arbitrary file mutation on the host (legacy/alternate name)
   "fs_write",
   // Arbitrary file deletion on the host
   "fs_delete",
@@ -31,6 +39,12 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "gateway",
   // Node command relay can reach system.run on paired hosts
   "nodes",
+  // Host filesystem read — opt-in via BOTH `gateway.tools.allow: ["read"]` AND
+  // `gateway.tools.directInvoke.hostFsRead: true`. The default-deny prevents
+  // an upgrade-time compatibility break where pre-existing `allow: ["read"]`
+  // entries (kept around for non-direct-invoke surfaces) would silently grant
+  // host-FS read here. See `tool-resolution.ts` dual-key gating.
+  "read",
 ] as const;
 
 /**

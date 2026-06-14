@@ -1,5 +1,8 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
+
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { createOpenClawCodingToolsRaw } from "../agents/agent-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -192,8 +195,94 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolDenylist,
   });
 
+  // Wire the `read` coding tool into the gateway direct-invoke surfaces so it
+  // is reachable for deterministic automation (CI/preflight checks, lint,
+  // browser capture flows) without a full LLM round-trip. Narrow first landing
+  // of the broader direct-invoke umbrella tracked in #37131.
+  //
+  // **Dual-key gating** (addresses ClawSweeper [P1] on PR #85664):
+  // - `surface === "http"` — the **direct-invoke marker** set by
+  //   `tools-invoke-shared.ts` for BOTH HTTP `POST /tools/invoke` AND SDK-facing
+  //   JSON-RPC `tools.invoke` (they share the resolver). MCP loopback uses
+  //   `surface === "loopback"` and is unaffected.
+  // - `gateway.tools.directInvoke.hostFsRead: true` — the NEW distinct opt-in.
+  //   Without this, the read tool is NOT materialized into the candidate set,
+  //   so existing configs that have `gateway.tools.allow: ["read"]` for
+  //   unrelated reasons (e.g. an MCP/agent surface where `read` is already
+  //   available) stay inert. This prevents an upgrade-time compatibility
+  //   break.
+  // - `gateway.tools.allow: ["read"]` — separately required, lifts `"read"`
+  //   from `DEFAULT_GATEWAY_HTTP_TOOL_DENY` so the policy pipeline (line 186)
+  //   doesn't filter it out. This second key keeps the explicit operator
+  //   acceptance step visible in the standard policy surface.
+  //
+  // Only `read` is materialized — write/edit/exec/process are NOT exposed by
+  // this PR. Maintainer approval for opt-in mutating coding primitives is
+  // deferred to a follow-up PR.
+  //
+  // Uses `createOpenClawCodingToolsRaw` (unwrapped) — `handleToolsInvokeHttp`
+  // already calls `runBeforeToolCallHook` itself before dispatch, so the
+  // tools must arrive unwrapped to avoid double-firing the hook and leaking
+  // adjusted-params state.
+  //
+  // Construction plan limits the factory to just the base coding tool family
+  // (read/write/edit/apply_patch) — no shell (exec/process), no channel,
+  // OpenClaw, or plugin tools. Then we filter to `read`.
+  // Materialize coding tools (read + optionally write/edit/apply_patch) into
+  // the candidate set when the per-category direct-invoke opt-in is set.
+  // Each tool's opt-in is independent; the policy filter (gateway.tools.allow
+  // + DEFAULT_GATEWAY_HTTP_TOOL_DENY) gates which specific tools survive.
+  //
+  // `exec`/`process`/`spawn`/`shell` are intentionally NOT materialized here.
+  // They are RCE-class and require owner/admin enforcement, deferred to a
+  // separate PR.
+  const allowHostFsReadOverDirectInvoke =
+    surface === "http" && params.cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
+  const allowHostFsWriteOverDirectInvoke =
+    surface === "http" && params.cfg.gateway?.tools?.directInvoke?.hostFsWrite === true;
+  const anyCodingToolOptInActive =
+    allowHostFsReadOverDirectInvoke || allowHostFsWriteOverDirectInvoke;
+  const directInvokeCodingToolNames = new Set<string>();
+  if (allowHostFsReadOverDirectInvoke) {
+    directInvokeCodingToolNames.add("read");
+  }
+  if (allowHostFsWriteOverDirectInvoke) {
+    // `write` + `edit` are produced by the base coding tool factory. `apply_patch`
+    // is currently a host-tool name that lives only in DEFAULT_GATEWAY_HTTP_TOOL_DENY
+    // (no factory entry yet) so adding it here would be a no-op for now; deferred
+    // until upstream adds the factory entry.
+    directInvokeCodingToolNames.add("write");
+    directInvokeCodingToolNames.add("edit");
+  }
+  const codingTools = anyCodingToolOptInActive
+    ? createOpenClawCodingToolsRaw({
+        agentId: agentId ?? resolveDefaultAgentId(params.cfg),
+        sessionKey: params.sessionKey,
+        workspaceDir,
+        agentDir: resolveAgentDir(params.cfg, agentId ?? resolveDefaultAgentId(params.cfg)),
+        config: params.cfg,
+        toolConstructionPlan: {
+          includeBaseCodingTools: true,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      }).filter((tool) => directInvokeCodingToolNames.has(tool.name))
+    : [];
+
+  // Coding built-ins take precedence on name collision when a class opt-in is
+  // active, ensuring `read`/`write`/`edit` resolves to the built-in filesystem
+  // tool rather than a same-named plugin. When no class opt-in is active,
+  // `codingTools` is empty so `allTools` is returned unchanged.
+  const codingToolNames = new Set(codingTools.map((t) => t.name));
+  const allToolsWithCoding = [
+    ...codingTools,
+    ...allTools.filter((t) => !codingToolNames.has(t.name)),
+  ];
+
   const policyFiltered = applyToolPolicyPipeline({
-    tools: allTools,
+    tools: allToolsWithCoding,
     toolMeta: (tool: AnyAgentTool) => getPluginToolMeta(tool),
     warn: logWarn,
     steps: [

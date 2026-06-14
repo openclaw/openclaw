@@ -459,6 +459,64 @@ export type GatewayToolsConfig = {
   deny?: string[];
   /** Tools to explicitly allow (removes from default deny list). */
   allow?: string[];
+  /**
+   * Distinct, surface-specific opt-ins for tools that expand the security
+   * boundary beyond the regular allow/deny policy. Each opt-in must be set
+   * EXPLICITLY in addition to including the tool in `allow`; old configs that
+   * only have `allow: ["read"]` for unrelated reasons stay inert here.
+   *
+   * Addresses ClawSweeper [P1] on PR #85664: distinct opt-in prevents an
+   * upgrade-time compatibility break where existing `allow: ["read"]` entries
+   * would silently grant host-FS read over the direct-invoke surface.
+   */
+  directInvoke?: GatewayDirectInvokeOptIns;
+};
+
+/**
+ * Direct-invoke surface-specific opt-ins. Currently only `hostFsRead` is
+ * defined (gates the `read` tool). Future opt-ins for write/exec/process
+ * primitives will follow the same dual-key gating pattern.
+ */
+export type GatewayDirectInvokeOptIns = {
+  /**
+   * Allow the `read` coding tool to be materialized for the gateway
+   * direct-invoke surfaces (HTTP `POST /tools/invoke` AND SDK RPC
+   * `tools.invoke`, which share the resolver). Defaults to `false`.
+   *
+   * Even when set to `true`, the operator MUST also include `"read"` in
+   * `gateway.tools.allow` for the tool to actually be reachable; this
+   * dual-key gating is intentional, see GatewayToolsConfig.directInvoke
+   * docs.
+   *
+   * Exposes host filesystem reads outside the workspace unless
+   * `tools.fs.workspaceOnly` is also enabled.
+   */
+  hostFsRead?: boolean;
+  /**
+   * Allow the host-filesystem write coding tools (`write`, `edit`) to be
+   * materialized for the gateway direct-invoke surfaces. Defaults to `false`.
+   *
+   * Even when set to `true`, the operator MUST also include the specific
+   * write tool name(s) in `gateway.tools.allow` (e.g. `["write", "edit"]`)
+   * for each one to actually be reachable. Operators can enable any subset
+   * of write tools by including only those names in `allow`.
+   *
+   * Exposes host filesystem writes outside the workspace unless
+   * `tools.fs.workspaceOnly` is also enabled. STRONGLY recommend
+   * `tools.fs.workspaceOnly: true` whenever this opt-in is set.
+   *
+   * `apply_patch` is in `DEFAULT_GATEWAY_HTTP_TOOL_DENY` for future-proofing
+   * but is intentionally NOT included in the materialized set yet — the
+   * coding tool factory does not produce an `apply_patch` entry for the
+   * direct-invoke surface. Operators including `"apply_patch"` in `allow`
+   * see no effect on the direct-invoke surface until a follow-up PR wires
+   * the factory entry.
+   *
+   * `exec`/`process`/`spawn`/`shell` (RCE-class) are intentionally NOT
+   * controlled by this flag — they need a separate owner/admin enforcement
+   * model and are deferred to a follow-up PR.
+   */
+  hostFsWrite?: boolean;
 };
 
 export type GatewayConfig = {
