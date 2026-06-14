@@ -10,6 +10,7 @@ import {
   type SessionHeader,
 } from "../../agents/sessions/session-manager.js";
 import { pathExists } from "../../infra/fs-safe.js";
+import { copyArrayEntries, isRecord as isSafeRecord } from "../../shared/safe-record.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -30,6 +31,11 @@ interface SessionData {
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
 }
 
+type ExportSessionTool = NonNullable<SessionData["tools"]>[number];
+
+type ExportToolField = { readable: true; value: unknown } | { readable: false };
+type SerializableExportValue = { serializable: true; value: unknown } | { serializable: false };
+
 type SessionExportJsonlWarning = {
   code: "invalid-session-json" | "invalid-session-row";
   row: number;
@@ -43,6 +49,64 @@ type SessionExportWarningSummary = {
 
 async function loadTemplate(fileName: string): Promise<string> {
   return await fsp.readFile(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
+}
+
+function readExportToolField(tool: unknown, field: string): ExportToolField {
+  if (!isSafeRecord(tool)) {
+    return { readable: false };
+  }
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
+}
+
+function cloneSerializableExportValue(value: unknown): SerializableExportValue {
+  let encoded: string | undefined;
+  try {
+    encoded = JSON.stringify(value);
+  } catch {
+    return { serializable: false };
+  }
+  if (encoded === undefined) {
+    return { serializable: false };
+  }
+  return { serializable: true, value: JSON.parse(encoded) as unknown };
+}
+
+function projectExportSessionTool(tool: unknown): ExportSessionTool | undefined {
+  const name = readExportToolField(tool, "name");
+  if (!name.readable || typeof name.value !== "string" || !name.value.trim()) {
+    return undefined;
+  }
+
+  const parameters = readExportToolField(tool, "parameters");
+  if (!parameters.readable) {
+    return undefined;
+  }
+
+  const projected: ExportSessionTool = { name: name.value };
+  const description = readExportToolField(tool, "description");
+  if (description.readable && typeof description.value === "string") {
+    projected.description = description.value;
+  }
+
+  if (parameters.value !== undefined) {
+    const serializableParameters = cloneSerializableExportValue(parameters.value);
+    if (!serializableParameters.serializable) {
+      return undefined;
+    }
+    projected.parameters = serializableParameters.value;
+  }
+  return projected;
+}
+
+function projectExportSessionTools(tools: unknown): ExportSessionTool[] {
+  return copyArrayEntries(tools).flatMap((tool) => {
+    const projected = projectExportSessionTool(tool);
+    return projected ? [projected] : [];
+  });
 }
 
 function replaceHtmlPlaceholder(template: string, name: string, value: string): string {
@@ -281,6 +345,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     ...params,
     sessionEntry: entry as HandleCommandsParams["sessionEntry"],
   });
+  const exportedTools = projectExportSessionTools(tools);
 
   // 4. Prepare session data
   const sessionData: SessionData = {
@@ -288,11 +353,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     entries,
     leafId,
     systemPrompt,
-    tools: tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters,
-    })),
+    tools: exportedTools,
   };
 
   // 5. Generate HTML
@@ -331,7 +392,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
       `📊 Entries: ${entries.length}`,
       ...warnings.map(formatSessionExportWarning),
       `🧠 System prompt: ${systemPrompt.length.toLocaleString()} chars`,
-      `🔧 Tools: ${tools.length}`,
+      `🔧 Tools: ${exportedTools.length}`,
     ].join("\n"),
   };
 }
