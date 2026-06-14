@@ -130,6 +130,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 }
 ```
 
+- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for WhatsApp DMs and groups. Use an E.164 direct number or WhatsApp group JID in `match.peer.id`. Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
+
 <Accordion title="Multi-account WhatsApp">
 
 ```json5

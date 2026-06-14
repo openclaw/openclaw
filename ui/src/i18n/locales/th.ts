@@ -492,6 +492,21 @@ export const th: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Workboard ถูกปิดใช้งาน เปิดใช้งาน",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -610,6 +625,7 @@ export const th: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "ค้นหาการ์ด",
     allPriorities: "ทุกลำดับความสำคัญ",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "วางงานที่นี่",
     lifecycleUnlinked: "ไม่มีเซสชัน",
     lifecycleUnlinkedDetail: "เริ่มหรือเชื่อมโยงเซสชัน",
@@ -1313,6 +1329,17 @@ export const th: TranslationMap = {
     },
     toolCards: {
       toolError: "ข้อผิดพลาดของเครื่องมือ",
+    },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
     },
   },
   languages: {

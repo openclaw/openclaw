@@ -165,6 +165,11 @@ export function createOpenClawTools(
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
     /**
+     * Explicit one-shot local CLI runs should not keep plugin-owned process
+     * resources alive after emitting their result.
+     */
+    oneShotCliRun?: boolean;
+    /**
      * Workspace directory to pass to spawned subagents for inheritance.
      * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
      * session itself is running in a copied-workspace sandbox (`ro` or `none`) so
