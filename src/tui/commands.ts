@@ -33,6 +33,17 @@ const COMMAND_ALIASES: Record<string, string> = {
   gwstatus: "gateway-status",
 };
 
+const LOCAL_SHARED_COMMAND_DISCOVERY_KEYS = new Set([
+  "btw",
+  "elevated",
+  "goal",
+  "reasoning",
+  "stop",
+  "status",
+  "think",
+  "verbose",
+]);
+
 function createLevelCompletion(
   levels: string[],
 ): NonNullable<SlashCommand["getArgumentCompletions"]> {
@@ -64,11 +75,16 @@ function appendSlashCommand(
 }
 
 export function parseCommand(input: string): ParsedCommand {
-  const trimmed = input.replace(/^\//, "").trim();
+  const inputTrimmed = input.trim();
+  const isSlashInput = inputTrimmed.startsWith("/");
+  const trimmed = isSlashInput ? inputTrimmed.slice(1).trim() : inputTrimmed;
   if (!trimmed) {
     return { name: "", args: "" };
   }
-  const [name, ...rest] = trimmed.split(/\s+/);
+  const commandParts = isSlashInput ? trimmed.match(/^([^\s:]+)(?:(?::\s*|\s+)([\s\S]*))?$/) : null;
+  const [name, ...rest] = commandParts
+    ? [commandParts[1], commandParts[2] ?? ""]
+    : trimmed.split(/\s+/);
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return {
     name: COMMAND_ALIASES[normalized] ?? normalized,
@@ -161,6 +177,9 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const seen = new Set(commands.map((command) => command.name));
   const gatewayCommands = options.cfg ? listChatCommandsForConfig(options.cfg) : listChatCommands();
   for (const command of gatewayCommands) {
+    if (options.local && !LOCAL_SHARED_COMMAND_DISCOVERY_KEYS.has(command.key)) {
+      continue;
+    }
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
       appendSlashCommand(commands, seen, alias, command.description);
@@ -182,7 +201,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
   return [
     "Slash commands:",
     "/help",
-    "/commands",
+    ...(options.local ? [] : ["/commands"]),
     "/status",
     "/gateway-status",
     "/gwstatus",
