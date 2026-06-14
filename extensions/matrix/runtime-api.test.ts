@@ -8,6 +8,11 @@ describe("chunkTextForOutbound", () => {
     expect(chunkTextForOutbound("hello world   ", 8)).toEqual(["hello", "world"]);
   });
 
+  it("trims trailing whitespace from under-limit text", () => {
+    expect(chunkTextForOutbound("hello   ", 20)).toEqual(["hello"]);
+    expect(chunkTextForOutbound("abc  ", 100)).toEqual(["abc"]);
+  });
+
   it("handles empty text", () => {
     expect(chunkTextForOutbound("", 10)).toEqual([""]);
   });
