@@ -4,7 +4,7 @@ import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-
 
 describe("normalizeAgentToolResultMiddlewareRuntimes", () => {
   it("defaults omitted runtimes to every supported runtime", () => {
-    expect(normalizeAgentToolResultMiddlewareRuntimes()).toEqual(["openclaw", "codex"]);
+    expect(normalizeAgentToolResultMiddlewareRuntimes()).toEqual(["openclaw", "codex", "claude"]);
   });
 
   it("preserves an explicit empty runtime list", () => {

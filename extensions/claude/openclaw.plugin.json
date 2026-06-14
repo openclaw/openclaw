@@ -1,0 +1,88 @@
+{
+  "id": "claude",
+  "name": "Claude",
+  "description": "Claude app-server harness. Delegates Anthropic-provider turns to a local @zeroaltitude/openclaw-claude-bridge process, mirroring the codex-app-server pattern. Exposes OpenClaw dynamic tools to Claude inside the turn.",
+  "activation": {
+    "onStartup": false,
+    "onAgentHarnesses": ["claude-bridge"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "appServer": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Executable for the openclaw-claude-bridge binary. When unset, the gateway runs the bundled (managed) @zeroaltitude/openclaw-claude-bridge resolved from the plugin's node_modules — not a PATH lookup. Set this (or OPENCLAW_CLAUDE_APP_SERVER_BIN) to override with a specific binary path or PATH name."
+          },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Extra CLI args for the server."
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Extra env vars injected into the server process."
+          },
+          "approvalPolicy": {
+            "type": "string",
+            "enum": ["never", "untrusted", "on-failure", "on-request"],
+            "default": "never",
+            "description": "Codex-shaped approval policy. 'never' bypasses approval gates (the default and equivalent to the legacy bypassPermissions setting)."
+          },
+          "sandbox": {
+            "type": "string",
+            "enum": ["read-only", "workspace-write", "danger-full-access"],
+            "default": "danger-full-access",
+            "description": "Sandbox mode echoed to the server at thread/start."
+          },
+          "turnTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Hard per-turn timeout in ms. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS) so there is one source of truth; omit here to avoid the manifest default shadowing it."
+          },
+          "turnIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Idle watchdog: fail the turn if no notification arrives for this many ms. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS) for a single source of truth."
+          },
+          "progressIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Progress watchdog: fail the turn if no REAL activity (excluding keepalive heartbeats) arrives for this many ms while no turn items are in flight. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_PROGRESS_IDLE_TIMEOUT_MS); omit here to avoid the manifest default shadowing it."
+          }
+        }
+      },
+      "dynamicTools": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "exclude": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "OpenClaw dynamic tool names to omit when projecting into Claude turns."
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "appServer.approvalPolicy": {
+      "label": "Approval Policy",
+      "help": "'never' is the openclaw-default unattended posture. Switch to 'untrusted' or 'on-request' to wire the codex approval-request protocol; command and file approval requests are routed through openclaw's BeforeToolCall hook chain. Promotion from 'never' to 'untrusted' fires automatically when any BeforeToolCall policy is registered, so destructive actions go through the hook chain even at the unattended default."
+    },
+    "appServer.sandbox": {
+      "label": "Sandbox",
+      "help": "Sandbox mode echoed to the server (the server doesn't enforce this; it's informational at this layer)."
+    },
+    "dynamicTools.exclude": {
+      "label": "Dynamic Tool Excludes",
+      "advanced": true
+    }
+  }
+}

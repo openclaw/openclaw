@@ -1,0 +1,37 @@
+{
+  "name": "@openclaw/claude",
+  "version": "2026.5.20",
+  "description": "OpenClaw Claude harness plugin — delegates Anthropic turns to a local @zeroaltitude/openclaw-claude-bridge process via codex-shaped JSON-RPC over stdio.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "@zeroaltitude/openclaw-claude-bridge": "0.2.15",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/claude",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.1-beta.1"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.19"
+    },
+    "build": {
+      "openclawVersion": "2026.5.19"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

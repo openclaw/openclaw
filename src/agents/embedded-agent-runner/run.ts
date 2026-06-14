@@ -3101,6 +3101,7 @@ async function runEmbeddedAgentInternal(
             runAborted: aborted,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
+            preserveDraftPreviewOnFinalReply: attempt.preserveDraftPreviewOnFinalReply,
           });
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
             payloads,

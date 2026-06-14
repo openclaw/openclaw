@@ -36,9 +36,9 @@ export function resolvePluginMetadataControlPlaneFingerprint(
 }
 
 export function isReusableCurrentPluginMetadataSnapshot(
-  _snapshot: PluginMetadataSnapshot,
+  snapshot: PluginMetadataSnapshot,
 ): boolean {
-  return true;
+  return snapshot.registrySource !== "derived";
 }
 
 // Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;

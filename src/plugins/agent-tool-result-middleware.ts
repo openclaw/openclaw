@@ -9,6 +9,7 @@ import { getActivePluginRegistry } from "./runtime.js";
 export const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
   "openclaw",
   "codex",
+  "claude",
 ] as const satisfies AgentToolResultMiddlewareRuntime[];
 
 const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET = new Set<string>(
