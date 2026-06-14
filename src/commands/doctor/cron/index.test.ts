@@ -578,6 +578,27 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Cron run logs migrated to SQLite", "Doctor changes");
   });
 
+  it("does not claim legacy store detected when only non-legacy issues exist (#92683)", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "notify-job",
+        name: "Notify job",
+        notify: true,
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expectNoNoteContaining("Legacy cron job storage detected", "Cron");
+    expectNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining("1 job still uses legacy", "Cron");
+  });
+
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [

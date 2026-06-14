@@ -13,6 +13,7 @@ const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
 const ensureRuntimePluginsLoadedMock = vi.fn();
+const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
@@ -104,6 +105,10 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../agents/runtime-plugins.js", () => ({
   ensureRuntimePluginsLoaded: (...args: unknown[]) => ensureRuntimePluginsLoadedMock(...args),
+}));
+
+vi.mock("../agents/context.js", () => ({
+  ensureContextWindowCacheLoaded: () => ensureContextWindowCacheLoadedMock(),
 }));
 
 vi.mock("../agents/defaults.js", () => ({
@@ -244,6 +249,8 @@ describe("EmbeddedTuiBackend", () => {
       tokensUsed: 0,
     }));
     ensureRuntimePluginsLoadedMock.mockReset();
+    ensureContextWindowCacheLoadedMock.mockReset();
+    ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();

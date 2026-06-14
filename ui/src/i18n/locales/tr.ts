@@ -497,6 +497,21 @@ export const tr: TranslationMap = {
       minutes: "{minutes} dk {seconds} sn",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Workboard devre dışı. Etkinleştirin",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

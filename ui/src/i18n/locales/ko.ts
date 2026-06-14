@@ -493,6 +493,21 @@ export const ko: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Workboard가 비활성화되어 있습니다. 활성화하려면",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
