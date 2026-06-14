@@ -25,6 +25,18 @@ vi.mock("../model-selection.js", () => ({
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
+vi.mock("../cli-backends.js", () => ({
+  resolveCliRuntimeCanonicalProvider: (params: { runtime?: string; config?: OpenClawConfig }) => {
+    const backends = params.config?.agents?.defaults?.cliBackends ?? {};
+    const entry = backends[params.runtime ?? ""];
+    if (typeof entry === "object" && entry !== null && "provider" in entry) {
+      const provider = (entry as { provider?: unknown }).provider;
+      return typeof provider === "string" ? provider : undefined;
+    }
+    return undefined;
+  },
+}));
+
 type MockCost = {
   input?: number;
   output?: number;
@@ -275,6 +287,49 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]?.agentHarnessId).toBe("codex");
       expect(loadSessionStore(storePath)[sessionKey]?.agentHarnessId).toBe("codex");
+    });
+  });
+
+  it("canonicalizes CLI runtime-id provider before persisting modelProvider", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { provider: "anthropic" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-canonical-provider";
+      const sessionId = "test-canonical-provider-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: { sessionId, updatedAt: 1 },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-sonnet-4-6",
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
+      expect(sessionStore[sessionKey]?.model).toBe("claude-sonnet-4-6");
     });
   });
 
