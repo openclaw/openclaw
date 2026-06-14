@@ -32,6 +32,11 @@ type ReloadRule = {
   actions?: ReloadAction[];
 };
 
+type ReloadPrefixKey = "configPrefixes" | "noopPrefixes" | "restartPrefixes" | "hotPrefixes";
+type ReloadDescriptor = Partial<Record<ReloadPrefixKey, unknown>>;
+type ReloadPrefixGroups = Partial<Record<ReloadPrefixKey, string[]>>;
+type ReadPropertyResult<T> = { ok: true; value: T | null } | { ok: false };
+
 export type ConfigReloadMetadata = {
   kind: ReloadRule["kind"];
 };
@@ -145,6 +150,49 @@ let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let cachedActiveRegistryVersion = -1;
 let cachedChannelRegistryVersion = -1;
 
+function readOptionalProperty<T extends object, K extends keyof T>(
+  target: T,
+  key: K,
+): ReadPropertyResult<NonNullable<T[K]>> {
+  try {
+    return { ok: true, value: target[key] ?? null };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readReloadPrefixGroups(
+  reload: ReloadDescriptor | null,
+  keys: readonly ReloadPrefixKey[],
+): ReloadPrefixGroups | null {
+  if (!reload) {
+    return {};
+  }
+  const groups: ReloadPrefixGroups = {};
+  try {
+    for (const key of keys) {
+      const prefixes = reload[key];
+      groups[key] = Array.isArray(prefixes)
+        ? prefixes.filter(
+            (prefix): prefix is string => typeof prefix === "string" && prefix.length > 0,
+          )
+        : [];
+    }
+    return groups;
+  } catch {
+    return null;
+  }
+}
+
+function listPluginReloadFailureRules(pluginId: string): ReloadRule[] {
+  return ["plugins.enabled", "plugins.allow", "plugins.deny", `plugins.entries.${pluginId}`].map(
+    (prefix): ReloadRule => ({
+      prefix,
+      kind: "restart",
+    }),
+  );
+}
+
 function listReloadRules(): ReloadRule[] {
   const registry = getActivePluginRegistry();
   const activeRegistryVersion = getActivePluginRegistryVersion();
@@ -165,8 +213,16 @@ function listReloadRules(): ReloadRule[] {
     return cachedReloadRules;
   }
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
-  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) =>
-    (plugin.reload?.configPrefixes ?? [])
+  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => {
+    const reload = readOptionalProperty(plugin, "reload");
+    if (!reload.ok) {
+      return [];
+    }
+    const prefixes = readReloadPrefixGroups(reload.value, ["configPrefixes", "noopPrefixes"]);
+    if (!prefixes) {
+      return [];
+    }
+    return (prefixes.configPrefixes ?? [])
       .map(
         (prefix): ReloadRule => ({
           prefix,
@@ -175,14 +231,14 @@ function listReloadRules(): ReloadRule[] {
         }),
       )
       .concat(
-        (plugin.reload?.noopPrefixes ?? []).map(
+        (prefixes.noopPrefixes ?? []).map(
           (prefix): ReloadRule => ({
             prefix,
             kind: "none",
           }),
         ),
-      ),
-  );
+      );
+  });
   const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
     {
       prefix: `plugins.entries.${plugin.id}`,
@@ -194,8 +250,20 @@ function listReloadRules(): ReloadRule[] {
       ],
     },
   ]);
-  const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
-    (entry.registration.restartPrefixes ?? [])
+  const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) => {
+    const registration = readOptionalProperty(entry, "registration");
+    if (!registration.ok || !registration.value) {
+      return listPluginReloadFailureRules(entry.pluginId);
+    }
+    const prefixes = readReloadPrefixGroups(registration.value, [
+      "restartPrefixes",
+      "hotPrefixes",
+      "noopPrefixes",
+    ]);
+    if (!prefixes) {
+      return listPluginReloadFailureRules(entry.pluginId);
+    }
+    return (prefixes.restartPrefixes ?? [])
       .map(
         (prefix): ReloadRule => ({
           prefix,
@@ -203,20 +271,20 @@ function listReloadRules(): ReloadRule[] {
         }),
       )
       .concat(
-        (entry.registration.hotPrefixes ?? []).map(
+        (prefixes.hotPrefixes ?? []).map(
           (prefix): ReloadRule => ({
             prefix,
             kind: "hot",
           }),
         ),
-        (entry.registration.noopPrefixes ?? []).map(
+        (prefixes.noopPrefixes ?? []).map(
           (prefix): ReloadRule => ({
             prefix,
             kind: "none",
           }),
         ),
-      ),
-  );
+      );
+  });
   const rules = [
     ...BASE_RELOAD_RULES,
     ...pluginReloadRules,
