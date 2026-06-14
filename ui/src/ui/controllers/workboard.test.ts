@@ -191,6 +191,7 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ id: sampleCard.id, taskId: sampleTask.taskId });
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
     expect(state.lifecycleTaskRefreshFailed).toBe(true);
+    expect(state.lifecycleTaskRefreshError).toBe("task ledger unavailable");
     expect(state.lastRefreshError).toBe("task ledger unavailable");
   });
 
@@ -504,6 +505,79 @@ describe("workboard controller", () => {
     expect(state.error).toBe("move denied");
     expect(state.lastRefreshError).toBeNull();
     expect(state.lastRefreshAt).toEqual(expect.any(Number));
+  });
+
+  it("clears a recovered load error during successful passive poll refreshes", async () => {
+    const host = {};
+    let cardsAvailable = false;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        if (!cardsAvailable) {
+          throw new Error("cards unavailable");
+        }
+        return { cards: [sampleCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    const state = getWorkboardState(host);
+    expect(state.loaded).toBe(false);
+    expect(state.error).toBe("cards unavailable");
+
+    stopWorkboardLifecycleRefresh(host);
+    expect(state.loadAttempted).toBe(false);
+
+    cardsAvailable = true;
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+
+    expect(state.loaded).toBe(true);
+    expect(state.cards).toEqual([sampleCard]);
+    expect(state.error).toBeNull();
+    expect(state.lastRefreshError).toBeNull();
+    expect(state.lastRefreshAt).toEqual(expect.any(Number));
+  });
+
+  it("preserves newer mutation errors while recovering failed loads", async () => {
+    const host = {};
+    let cardsAvailable = false;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        if (!cardsAvailable) {
+          throw new Error("cards unavailable");
+        }
+        return { cards: [sampleCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    const state = getWorkboardState(host);
+    state.error = "move denied";
+    cardsAvailable = true;
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+    });
+
+    expect(state.loaded).toBe(true);
+    expect(state.cards).toEqual([sampleCard]);
+    expect(state.error).toBe("move denied");
+    expect(state.lastRefreshError).toBeNull();
   });
 
   it("records passive poll failures without replacing mutation errors", async () => {

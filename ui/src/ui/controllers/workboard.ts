@@ -428,6 +428,7 @@ type WorkboardLoadToken = {
 const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
 const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
 const workboardLoadTokens = new WeakMap<WorkboardHost, WorkboardLoadToken>();
+const workboardLoadErrors = new WeakMap<WorkboardHost, string>();
 const workboardLifecycleTaskRefreshPromises = new WeakMap<WorkboardHost, Promise<number | null>>();
 const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
 const workboardLifecycleReconciliationEpochs = new WeakMap<WorkboardHost, number>();
@@ -1996,6 +1997,7 @@ async function loadWorkboardInternal(
   state.loadAttempted = true;
   state.loading = true;
   if (!params.preserveError) {
+    workboardLoadErrors.delete(params.host);
     state.error = null;
   }
   if (params.taskRefresh !== "linked" || !state.lifecycleTaskRefreshFailed) {
@@ -2150,6 +2152,7 @@ async function loadWorkboardInternal(
         }
       }
       if (nextTaskRefreshError) {
+        state.lifecycleTaskRefreshError = nextTaskRefreshError;
         state.lastRefreshError = nextTaskRefreshError;
       }
       setWorkboardLifecycleTasksPrepared(
@@ -2160,14 +2163,21 @@ async function loadWorkboardInternal(
           }),
         { host: params.host, requestUpdate: params.requestUpdate },
       );
+      const recoveredLoadError = workboardLoadErrors.get(params.host);
+      if (recoveredLoadError !== undefined && state.error === recoveredLoadError) {
+        state.error = null;
+      }
+      workboardLoadErrors.delete(params.host);
       state.loaded = true;
       return true;
     } catch (error) {
       if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+        const formattedError = formatError(error);
         if (params.preserveError) {
-          state.lastRefreshError = formatError(error);
+          state.lastRefreshError = formattedError;
         } else {
-          state.error = formatError(error);
+          workboardLoadErrors.set(params.host, formattedError);
+          state.error = formattedError;
         }
       }
       return false;
