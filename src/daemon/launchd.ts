@@ -19,6 +19,7 @@ import {
 import { execFileUtf8 } from "./exec-file.js";
 import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
+  LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
@@ -187,8 +188,11 @@ function isLaunchAgentEnvironmentWrapperArgs(params: {
   wrapperPath: string;
 }): boolean {
   return (
-    params.programArguments[0] === params.wrapperPath &&
-    params.programArguments[1] === params.envFilePath
+    (params.programArguments[0] === params.wrapperPath &&
+      params.programArguments[1] === params.envFilePath) ||
+    (params.programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
+      params.programArguments[1] === params.wrapperPath &&
+      params.programArguments[2] === params.envFilePath)
   );
 }
 
@@ -231,7 +235,12 @@ async function prepareLaunchAgentProgramArguments(params: {
   }
 
   return {
-    programArguments: [wrapperPath, envFilePath, ...params.programArguments],
+    programArguments: [
+      LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+      wrapperPath,
+      envFilePath,
+      ...params.programArguments,
+    ],
   };
 }
 
