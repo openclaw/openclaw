@@ -160,7 +160,7 @@ export async function handleFeishuCommentEvent(
         }),
         log: (message) => log(message),
       });
-      if (dynamicResult.created) {
+      if (dynamicResult.created || dynamicResult.updatedCfg !== params.cfg) {
         effectiveCfg = dynamicResult.updatedCfg;
         route = core.channel.routing.resolveAgentRoute({
           cfg: dynamicResult.updatedCfg,
@@ -171,9 +171,11 @@ export async function handleFeishuCommentEvent(
             id: turn.senderId,
           },
         });
-        log(
-          `feishu[${account.accountId}]: dynamic agent created for comment flow, route=${route.sessionKey}`,
-        );
+        if (dynamicResult.created) {
+          log(
+            `feishu[${account.accountId}]: dynamic agent created for comment flow, route=${route.sessionKey}`,
+          );
+        }
       }
     }
   }

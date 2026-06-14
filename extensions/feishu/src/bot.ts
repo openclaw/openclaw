@@ -852,22 +852,7 @@ export async function handleFeishuMessage(params: {
           }),
           log: (msg) => log(msg),
         });
-        if (result.created) {
-          effectiveCfg = result.updatedCfg;
-          // Re-resolve route with updated config
-          route = core.channel.routing.resolveAgentRoute({
-            cfg: result.updatedCfg,
-            channel: "feishu",
-            accountId: account.accountId,
-            peer: { kind: "direct", id: ctx.senderOpenId },
-          });
-          log(
-            `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
-          );
-        } else if (result.updatedCfg && result.updatedCfg !== cfg) {
-          // Binding already exists but in-memory cfg may be stale.
-          // Re-resolve with the runtime's current config to pick up
-          // the existing binding.
+        if (result.created || result.updatedCfg !== cfg) {
           effectiveCfg = result.updatedCfg;
           route = core.channel.routing.resolveAgentRoute({
             cfg: result.updatedCfg,
@@ -875,6 +860,11 @@ export async function handleFeishuMessage(params: {
             accountId: account.accountId,
             peer: { kind: "direct", id: ctx.senderOpenId },
           });
+          if (result.created) {
+            log(
+              `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
+            );
+          }
         }
       }
     }

@@ -200,7 +200,10 @@ describe("handleFeishuCommentEvent", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    maybeCreateDynamicAgentMock.mockResolvedValue({ created: false });
+    maybeCreateDynamicAgentMock.mockImplementation(async ({ cfg }) => ({
+      created: false,
+      updatedCfg: cfg,
+    }));
     resolveDriveCommentEventTurnMock.mockResolvedValue({
       eventId: "evt_1",
       messageId: "drive-comment:evt_1",

@@ -11,6 +11,20 @@ type MaybeCreateDynamicAgentResult = {
   agentId?: string;
 };
 
+type DynamicAgentMutationResult = {
+  created: boolean;
+  agentId?: string;
+};
+
+function hasDirectBinding(cfg: OpenClawConfig, senderOpenId: string): boolean {
+  return (cfg.bindings ?? []).some(
+    (binding) =>
+      binding.match?.channel === "feishu" &&
+      binding.match?.peer?.kind === "direct" &&
+      binding.match?.peer?.id === senderOpenId,
+  );
+}
+
 /**
  * Check if a dynamic agent should be created for a DM user and create it if needed.
  * This creates a unique agent instance with its own workspace for each DM user.
@@ -30,83 +44,30 @@ export async function maybeCreateDynamicAgent(params: {
     return { created: false, updatedCfg: cfg };
   }
 
-  // Check if there's already a binding for this user
-  // Check both the in-memory cfg (fast path) and the runtime's current config
-  // (which may have been hot-reloaded after a previous config write).
-  const existingBindings = cfg.bindings ?? [];
-  const hasBindingInCfg = existingBindings.some(
-    (b) =>
-      b.match?.channel === "feishu" &&
-      b.match?.peer?.kind === "direct" &&
-      b.match?.peer?.id === senderOpenId,
-  );
-
-  if (hasBindingInCfg) {
+  if (hasDirectBinding(cfg, senderOpenId)) {
     return { created: false, updatedCfg: cfg };
   }
 
-  // Check runtime's current config — it may have the binding from a previous
-  // config write that hot-reloaded after the in-memory cfg was snapshotted.
   const currentCfg = runtime.config.current() as OpenClawConfig;
-  const currentBindings = currentCfg.bindings ?? [];
-  const hasBindingInCurrentCfg = currentBindings.some(
-    (b) =>
-      b.match?.channel === "feishu" &&
-      b.match?.peer?.kind === "direct" &&
-      b.match?.peer?.id === senderOpenId,
-  );
-
-  if (hasBindingInCurrentCfg) {
+  if (hasDirectBinding(currentCfg, senderOpenId)) {
     return { created: false, updatedCfg: currentCfg };
   }
 
-  // Check maxAgents limit if configured
   if (dynamicCfg.maxAgents !== undefined) {
-    const feishuAgentCount = (cfg.agents?.list ?? []).filter((a) =>
+    const feishuAgentCount = (currentCfg.agents?.list ?? []).filter((a) =>
       a.id.startsWith("feishu-"),
     ).length;
     if (feishuAgentCount >= dynamicCfg.maxAgents) {
       log(
         `feishu: maxAgents limit (${dynamicCfg.maxAgents}) reached, not creating agent for ${senderOpenId}`,
       );
-      return { created: false, updatedCfg: cfg };
+      return { created: false, updatedCfg: currentCfg };
     }
   }
 
-  // Use full OpenID as agent ID suffix (OpenID format: ou_xxx is already filesystem-safe)
   const agentId = `feishu-${senderOpenId}`;
-
-  // Check if agent already exists (but binding was missing)
-  const existingAgent = (cfg.agents?.list ?? []).find((a) => a.id === agentId);
-  if (existingAgent) {
-    // Agent exists but binding doesn't - just add the binding
-    log(`feishu: agent "${agentId}" exists, adding missing binding for ${senderOpenId}`);
-
-    const updatedCfg: OpenClawConfig = {
-      ...cfg,
-      bindings: [
-        ...existingBindings,
-        {
-          agentId,
-          match: {
-            channel: "feishu",
-            peer: { kind: "direct", id: senderOpenId },
-          },
-        },
-      ],
-    };
-
-    await runtime.config.replaceConfigFile({
-      nextConfig: updatedCfg,
-      afterWrite: { mode: "auto" },
-    });
-    return { created: true, updatedCfg, agentId };
-  }
-
-  // Resolve path templates with substitutions
   const workspaceTemplate = dynamicCfg.workspaceTemplate ?? "~/.openclaw/workspace-{agentId}";
   const agentDirTemplate = dynamicCfg.agentDirTemplate ?? "~/.openclaw/agents/{agentId}/agent";
-
   const workspace = resolveUserPath(
     workspaceTemplate.replace("{userId}", senderOpenId).replace("{agentId}", agentId),
   );
@@ -114,40 +75,61 @@ export async function maybeCreateDynamicAgent(params: {
     agentDirTemplate.replace("{userId}", senderOpenId).replace("{agentId}", agentId),
   );
 
-  log(`feishu: creating dynamic agent "${agentId}" for user ${senderOpenId}`);
-  log(`  workspace: ${workspace}`);
-  log(`  agentDir: ${agentDir}`);
-
-  // Create directories
-  await fs.promises.mkdir(workspace, { recursive: true });
-  await fs.promises.mkdir(agentDir, { recursive: true });
-
-  // Update configuration with new agent and binding
-  const updatedCfg: OpenClawConfig = {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      list: [...(cfg.agents?.list ?? []), { id: agentId, workspace, agentDir }],
-    },
-    bindings: [
-      ...existingBindings,
-      {
-        agentId,
-        match: {
-          channel: "feishu",
-          peer: { kind: "direct", id: senderOpenId },
-        },
-      },
-    ],
-  };
-
-  // Write updated config using PluginRuntime API
-  await runtime.config.replaceConfigFile({
-    nextConfig: updatedCfg,
+  // The config mutation lock owns the final duplicate/limit checks. This keeps
+  // simultaneous DM creations from replacing each other's agents or bindings.
+  const committed = await runtime.config.mutateConfigFile<DynamicAgentMutationResult>({
+    base: "runtime",
     afterWrite: { mode: "auto" },
+    mutate: async (draft) => {
+      if (hasDirectBinding(draft, senderOpenId)) {
+        return { created: false };
+      }
+
+      if (dynamicCfg.maxAgents !== undefined) {
+        const feishuAgentCount = (draft.agents?.list ?? []).filter((agent) =>
+          agent.id.startsWith("feishu-"),
+        ).length;
+        if (feishuAgentCount >= dynamicCfg.maxAgents) {
+          log(
+            `feishu: maxAgents limit (${dynamicCfg.maxAgents}) reached, not creating agent for ${senderOpenId}`,
+          );
+          return { created: false };
+        }
+      }
+
+      if (!(draft.agents?.list ?? []).some((agent) => agent.id === agentId)) {
+        log(`feishu: creating dynamic agent "${agentId}" for user ${senderOpenId}`);
+        log(`  workspace: ${workspace}`);
+        log(`  agentDir: ${agentDir}`);
+        await fs.promises.mkdir(workspace, { recursive: true });
+        await fs.promises.mkdir(agentDir, { recursive: true });
+        draft.agents = {
+          ...draft.agents,
+          list: [...(draft.agents?.list ?? []), { id: agentId, workspace, agentDir }],
+        };
+      } else {
+        log(`feishu: agent "${agentId}" exists, adding missing binding for ${senderOpenId}`);
+      }
+
+      draft.bindings = [
+        ...(draft.bindings ?? []),
+        {
+          agentId,
+          match: {
+            channel: "feishu",
+            peer: { kind: "direct", id: senderOpenId },
+          },
+        },
+      ];
+      return { created: true, agentId };
+    },
   });
 
-  return { created: true, updatedCfg, agentId };
+  return {
+    created: committed.result?.created ?? false,
+    updatedCfg: committed.nextConfig,
+    agentId: committed.result?.agentId,
+  };
 }
 
 /**

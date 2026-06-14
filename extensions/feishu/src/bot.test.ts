@@ -455,7 +455,10 @@ describe("handleFeishuMessage ACP routing", () => {
     mockTouchBinding.mockReset();
     mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
-    mockMaybeCreateDynamicAgent.mockReset().mockResolvedValue({ created: false });
+    mockMaybeCreateDynamicAgent.mockReset().mockImplementation(async ({ cfg }) => ({
+      created: false,
+      updatedCfg: cfg,
+    }));
     mockResolveAgentRoute.mockReset().mockReturnValue({
       ...buildDefaultResolveRoute(),
       sessionKey: "agent:main:feishu:direct:ou_sender_1",
@@ -1009,7 +1012,10 @@ describe("handleFeishuMessage command authorization", () => {
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
-    mockMaybeCreateDynamicAgent.mockReset().mockResolvedValue({ created: false });
+    mockMaybeCreateDynamicAgent.mockReset().mockImplementation(async ({ cfg }) => ({
+      created: false,
+      updatedCfg: cfg,
+    }));
     mockResolveAgentRoute.mockReturnValue(buildDefaultResolveRoute());
     mockCreateFeishuClient.mockReturnValue({
       contact: {
