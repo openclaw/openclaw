@@ -174,7 +174,7 @@ const ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE =
 const ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE =
   /^\s*(?:(?:hey|hi|hello)\b[\s,!:-]*)?please\s+(?!(?:(?:be|wait|say|reply|respond|answer|acknowledg(?:e|ement)|confirm|keep|remember|note|consider|advise|recommend|help|let|do\s+not|don['’]t|not|never|avoid|refrain)\b|take\s+care\b|have\s+(?:a\s+)?(?:good|great|nice|wonderful)\b))[a-z][a-z'-]*\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
-  /\b(?:(?:can|could|would|will)\s+you(?:\s+please)?|help\s+me(?:\s+please)?)\s+(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|delete|create|move|rename|copy|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|review|commit|upload|build|explain|summari(?:s|z)e|analy(?:s|z)e|tell|show|restart|deploy|ship|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
+  /\b(?:(?:can|could|would|will)\s+you(?:\s+please)?|help\s+me(?:\s+please)?)\b/i;
 const ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE =
   /\b(?:i|we)\s+(?:need|want|would like)\s+you(?:\s+to)?\b/i;
 const NON_AUTHORIZING_NEGATED_ACTION_REQUEST_RE =
@@ -311,7 +311,7 @@ const EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE =
 const EXPLICIT_PLAN_CREATION_REQUEST_RE =
   /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:make|create|prepare|draft|write|send|provide|generate|produce|develop|formulate|design|build|suggest|put\s+together|come\s+up\s+with)\s+(?:me\s+)?(?:(?:a|an|the)\s+)?(?:plan|approach|outline|strategy)\b/i;
 const EXPLICIT_DIRECT_PLANNING_REQUEST_RE =
-  /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:plan\b(?![\s,;:-]+(?:and|then)\b)|outline\s+(?:a\s+)?plan\b)/i;
+  /^(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:help\s+me\s+)?(?:plan\b(?![\s,;:-]+(?:and|then)\b)|outline\s+(?:a\s+)?plan\b|decide\s+whether\b)/i;
 const EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE =
   /\b(?:plan|approach|outline|steps|strategy)\b[^.!?\n]{0,200}(?:[,;]\s*(?:(?:and(?:\s+then)?|then)\s+)?|\s+(?:and(?:\s+then)?|then)\s+)(?:execute|implement|apply|perform|run|fix|update|change|edit|write|add|remove|delete|create|move|rename|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|start|launch|send|deploy|ship|migrate)\b/i;
 const NON_ACTIONABLE_CONTEXT_UPDATE_RE =
@@ -1181,7 +1181,8 @@ function isLikelyActionableUserPrompt(text: string): boolean {
     ACTIONABLE_PROMPT_DIRECTIVE_RE.test(actionableText) ||
     ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE.test(actionableText) ||
     ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE.test(actionableText) ||
-    ACTIONABLE_PROMPT_REQUEST_RE.test(actionableText) ||
+    (ACTIONABLE_PROMPT_REQUEST_RE.test(actionableText) &&
+      PLANNING_ONLY_ACTION_VERB_RE.test(actionableText)) ||
     (ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE.test(actionableText) &&
       PLANNING_ONLY_ACTION_VERB_RE.test(actionableText)) ||
     ACTIONABLE_PROMPT_TERSE_REQUEST_RE.test(actionableText)

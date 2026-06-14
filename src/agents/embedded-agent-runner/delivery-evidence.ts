@@ -263,6 +263,9 @@ function hasInternalSourceReplyEvidence(details: Record<string, unknown>): boole
   if (details.sourceReplySink !== "internal-ui") {
     return false;
   }
+  if (hasExplicitNonDeliveryEvidenceAtDepth(details.sourceReply, 0)) {
+    return false;
+  }
   return hasVisibleReplyShape(details.sourceReply) || hasVisibleReplyShape(details);
 }
 

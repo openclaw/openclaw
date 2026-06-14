@@ -6042,6 +6042,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
     expect(
       hasCommittedMessagingToolResultDetails({
+        status: "ok",
+        sourceReplySink: "internal-ui",
+        sourceReply: {
+          text: "not delivered",
+          status: "failed",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasCommittedMessagingToolResultDetails({
         deliveryStatus: "sent",
         payloadOutcomes: [
           {
@@ -7204,6 +7214,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "endpoint results now",
     "channel proof after the restart",
     "When you have a moment, can you check the scheduler?",
+    "Can you take a screenshot?",
+    "Could you capture the current page?",
+    "Would you report the result?",
+    "Will you answer the question?",
+    "Can you share the findings?",
     `The log says "Can you delete the file?" Please inspect the log.`,
     `The log says "Please ensure you never restart production." Please inspect the log.`,
     `The ticket says "What's your plan for deleting old backups?" Please inspect the ticket and report.`,
