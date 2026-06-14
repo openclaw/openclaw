@@ -46,12 +46,12 @@ const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
  * only the emoji sequences are returned. If no emojis are found, returns undefined.
  */
 export function extractEmojiOnly(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
+  if (!raw) { return undefined; }
   // Match Unicode emoji sequences (single code points + keycap/flag/ZWJ sequences)
   const emojiRegex =
     /(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\u20E3|\uFE0F)?(?:\u200D(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\u20E3|\uFE0F)?)*/gu;
   const matches = raw.match(emojiRegex);
-  if (!matches || matches.length === 0) return undefined;
+  if (!matches || matches.length === 0) { return undefined; }
   const joined = matches.join(" ").trim();
   return joined || undefined;
 }
