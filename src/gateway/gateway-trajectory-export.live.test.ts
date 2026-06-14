@@ -19,6 +19,8 @@ import { extractPayloadText } from "./test-helpers.agent-results.js";
 const LIVE = isLiveTestEnabled();
 const CODEX_HARNESS_LIVE = process.env.OPENCLAW_LIVE_CODEX_HARNESS === "1";
 const CODEX_HARNESS_DEBUG = process.env.OPENCLAW_LIVE_CODEX_HARNESS_DEBUG === "1";
+const CODEX_HARNESS_AUTH_MODE =
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "api-key" : "codex-auth";
 const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
 const LIVE_TIMEOUT_MS = 420_000;
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
@@ -199,8 +201,14 @@ describeLive("gateway live trajectory export", () => {
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_AGENT_RUNTIME = "codex";
-      delete process.env.OPENAI_BASE_URL;
-      delete process.env.OPENAI_API_KEY;
+      // API-key CI lanes intentionally pass OPENAI_API_KEY through to the Codex
+      // app-server harness; only stored Codex-auth runs should clear OpenAI env.
+      if (CODEX_HARNESS_AUTH_MODE !== "api-key") {
+        delete process.env.OPENAI_BASE_URL;
+        delete process.env.OPENAI_API_KEY;
+      } else if (!process.env.OPENAI_BASE_URL?.trim()) {
+        delete process.env.OPENAI_BASE_URL;
+      }
       process.env.OPENCLAW_CONFIG_PATH = configPath;
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
