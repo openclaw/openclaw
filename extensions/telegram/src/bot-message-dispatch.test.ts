@@ -2663,6 +2663,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 
+  it("clears progress drafts before durable verbose tool output", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        replyOptions?.onVerboseProgressVisibility?.(() => true);
+        await dispatcherOptions.deliver({ text: "Tool output visible to Telegram" }, { kind: "tool" });
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`");
+    expectDeliveredReply(0, { text: "Tool output visible to Telegram" });
+    expectDeliveredReply(0, { text: "Final answer" }, 1);
+    expect(answerDraftStream.clear.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverReplies.mock.invocationCallOrder[0],
+    );
+  });
+
   it("does not stream text-only tool results into progress drafts", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(

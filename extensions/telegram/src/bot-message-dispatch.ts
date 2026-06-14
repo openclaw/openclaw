@@ -2118,8 +2118,9 @@ export const dispatchTelegramMessage = async ({
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
                         if (verboseProgressActive()) {
-                          // Durable lane owns tool payloads: send standalone instead
-                          // of diverting into the draft, which is discarded at final.
+                          if (streamMode === "progress") {
+                            await rotateAnswerLaneAfterToolProgress();
+                          }
                           if (
                             await sendPayload(
                               applyTextToPayload(effectivePayload, segment.update.text),
