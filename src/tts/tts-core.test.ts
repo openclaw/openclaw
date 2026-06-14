@@ -107,8 +107,15 @@ describe("TTS core", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       },
+    } as ResolvedTtsConfig;
+    const testUsage: Usage = {
+      input: 10,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 30,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     };
-    const testUsage = { promptTokens: 10, completionTokens: 20, totalTokens: 30 };
     const auth = { kind: "api-key" as const, apiKey: "test-key" };
     const assistant = {
       role: "assistant" as const,
