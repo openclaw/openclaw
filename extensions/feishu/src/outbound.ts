@@ -40,6 +40,22 @@ import {
 
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
 
+/**
+ * Extract only emoji characters from a string.
+ * If the input contains descriptive text alongside emojis (e.g. "根据心情切换 😊😄"),
+ * only the emoji sequences are returned. If no emojis are found, returns undefined.
+ */
+export function extractEmojiOnly(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  // Match Unicode emoji sequences (single code points + keycap/flag/ZWJ sequences)
+  const emojiRegex =
+    /(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\u20E3|\uFE0F)?(?:\u200D(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F)(?:\u20E3|\uFE0F)?)*/gu;
+  const matches = raw.match(emojiRegex);
+  if (!matches || matches.length === 0) return undefined;
+  const joined = matches.join(" ").trim();
+  return joined || undefined;
+}
+
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
   if (!raw) {
@@ -292,9 +308,12 @@ function buildFeishuPayloadCard(params: {
         },
       ];
 
+  const emojiOnly = params.identity
+    ? extractEmojiOnly(params.identity.emoji)
+    : undefined;
   const identityTitle = params.identity
-    ? params.identity.emoji
-      ? `${params.identity.emoji} ${params.identity.name ?? ""}`.trim()
+    ? emojiOnly
+      ? `${emojiOnly} ${params.identity.name ?? ""}`.trim()
       : (params.identity.name ?? "")
     : "";
   const title = presentation?.title ?? identityTitle;
@@ -614,10 +633,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       const renderMode = account.config?.renderMode ?? "auto";
       const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
       if (useCard) {
+        const emojiOnly = identity ? extractEmojiOnly(identity.emoji) : undefined;
         const header = identity
           ? {
-              title: identity.emoji
-                ? `${identity.emoji} ${identity.name ?? ""}`.trim()
+              title: emojiOnly
+                ? `${emojiOnly} ${identity.name ?? ""}`.trim()
                 : (identity.name ?? ""),
               template: "blue" as const,
             }

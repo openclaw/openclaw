@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { extractEmojiOnly } from "./outbound.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import {
@@ -85,7 +86,7 @@ function resolveCardHeader(
   identity: OutboundIdentity | undefined,
 ): CardHeaderConfig | undefined {
   const name = identity?.name?.trim() || (agentId === "main" ? "" : agentId);
-  const emoji = identity?.emoji?.trim();
+  const emoji = extractEmojiOnly(identity?.emoji);
   const title = (emoji ? `${emoji} ${name}` : name).trim();
   if (!title) {
     return undefined;
