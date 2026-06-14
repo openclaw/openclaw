@@ -12,6 +12,12 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { writePackageDistInventory } from "../infra/package-dist-inventory.js";
 import { isBetaTag } from "../infra/update-channels.js";
+import {
+  createDeferredConfiguredPluginRepairDoctorResult,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  writeUpdatePostInstallDoctorResult,
+} from "../infra/update-doctor-result.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
@@ -2633,6 +2639,9 @@ describe("update-cli", () => {
     );
     await fs.writeFile(entryPath, "export {};\n", "utf-8");
     await writePackageDistInventory(pkgRoot);
+    readPackageVersion.mockImplementation(async (packageRoot: string) =>
+      packageRoot === pkgRoot ? "2026.4.21" : "1.0.0",
+    );
     pathExists.mockImplementation(async (candidate: string) => {
       try {
         await fs.access(candidate);
@@ -2670,6 +2679,165 @@ describe("update-cli", () => {
     expect(
       (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_UPDATE_IN_PROGRESS,
     ).toBe("1");
+  });
+
+  it("continues package post-core work for explicit post-update doctor advisories", async () => {
+    const tempDir = await createTrackedTempDir("openclaw-update-package-doctor-warning-");
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const entryPath = path.join(pkgRoot, "dist", "index.js");
+    mockPackageInstallStatus(pkgRoot);
+    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(entryPath, "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (Array.isArray(argv) && argv[1] === entryPath && argv[2] === "doctor") {
+        const env = options && typeof options !== "number" ? options.env : undefined;
+        const resultPath = env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        if (!resultPath) {
+          throw new Error("missing doctor result path");
+        }
+        await writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: createDeferredConfiguredPluginRepairDoctorResult([
+            "deferred configured plugin repair",
+          ]),
+        });
+        return {
+          stdout: "",
+          stderr: "doctor deferred configured plugin repair",
+          code: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true, restart: false, json: true });
+
+    const doctorCall = doctorCommandCall();
+    expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
+    const postCoreCall = spawnCall();
+    expect(postCoreCall?.[0]).toMatch(/node/);
+    expect(postCoreCall?.[1]).toEqual([entryPath, "update", "--json", "--no-restart", "--yes"]);
+    expect(postCoreCall?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE).toBe("1");
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
+    const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
+    expect(jsonOutput?.status).toBe("ok");
+    expect(doctorStep?.exitCode).toBe(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE);
+    expect(doctorStep?.advisory).toEqual({
+      kind: "package-post-install-doctor",
+      message: expect.stringContaining("recoverable update-time repair warning"),
+    });
+    expect(doctorStep?.advisory?.message).not.toContain("gateway restart");
+    expect(doctorStep?.stderrTail).toContain("doctor deferred configured plugin repair");
+    expect(doctorStep?.stderrTail).toContain("deferred configured plugin repair");
+  });
+
+  it("fails package updates when the post-update doctor is killed after verification", async () => {
+    const tempDir = await createTrackedTempDir("openclaw-update-package-doctor-timeout-");
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const entryPath = path.join(pkgRoot, "dist", "index.js");
+    mockPackageInstallStatus(pkgRoot);
+    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(entryPath, "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (Array.isArray(argv) && argv[1] === entryPath && argv[2] === "doctor") {
+        return {
+          stdout: "",
+          stderr: "doctor timed out",
+          code: 124,
+          signal: null,
+          killed: true,
+          termination: "timeout",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true, restart: false, json: true });
+
+    const doctorCall = doctorCommandCall();
+    expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
+    const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
+    expect(doctorStep?.exitCode).toBe(124);
+    expect(doctorStep?.advisory).toBeUndefined();
+    expect(doctorStep?.termination).toBe("timeout");
+    expect(
+      vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).not.toContain("Post-install doctor failed after the package install was verified");
   });
 
   it("runs package post-update doctor from the verified package root after a staged swap", async () => {

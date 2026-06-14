@@ -52,7 +52,10 @@ import {
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
-import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import {
+  markPackagePostInstallDoctorAdvisory,
+  runGlobalPackageUpdateSteps,
+} from "../../infra/package-update-steps.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -75,6 +78,11 @@ import {
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
+import {
+  consumeUpdatePostInstallDoctorResult,
+  createUpdatePostInstallDoctorResultPath,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+} from "../../infra/update-doctor-result.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -1558,15 +1566,24 @@ async function runPackageInstallUpdate(params: {
       if (entryPath) {
         await createUpdateConfigSnapshot();
         const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
-        return await runUpdateStep({
+        const doctorResultPath = createUpdatePostInstallDoctorResultPath();
+        const doctorArgv = [
+          params.nodeRunner ?? resolveNodeRunner(),
+          entryPath,
+          "doctor",
+          "--non-interactive",
+          "--fix",
+        ];
+        const doctorProgressInfo = {
           name: `${CLI_NAME} doctor`,
-          argv: [
-            params.nodeRunner ?? resolveNodeRunner(),
-            entryPath,
-            "doctor",
-            "--non-interactive",
-            "--fix",
-          ],
+          command: doctorArgv.join(" "),
+          index: 0,
+          total: 0,
+        };
+        params.progress?.onStepStart?.(doctorProgressInfo);
+        const doctorStep = await runUpdateStep({
+          name: `${CLI_NAME} doctor`,
+          argv: doctorArgv,
           cwd: verifiedPackageRoot,
           env: {
             ...resolvePostInstallDoctorEnv({
@@ -1576,13 +1593,26 @@ async function runPackageInstallUpdate(params: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+            [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
             ...(candidateHostVersion === null
               ? {}
               : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),
           },
           timeoutMs: params.timeoutMs,
-          progress: params.progress,
         });
+        const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+        const completedDoctorStep = markPackagePostInstallDoctorAdvisory(doctorStep, doctorResult);
+        params.progress?.onStepComplete?.({
+          ...doctorProgressInfo,
+          durationMs: completedDoctorStep.durationMs,
+          exitCode: completedDoctorStep.exitCode,
+          stderrTail: completedDoctorStep.stderrTail,
+          signal: completedDoctorStep.signal,
+          killed: completedDoctorStep.killed,
+          termination: completedDoctorStep.termination,
+          advisory: completedDoctorStep.advisory,
+        });
+        return completedDoctorStep;
       }
       return null;
     },

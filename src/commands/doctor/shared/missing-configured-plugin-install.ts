@@ -1190,6 +1190,8 @@ export type RepairMissingPluginInstallsResult = {
   changes: string[];
   /** User-facing warnings for failed or skipped plugin install repairs. */
   warnings: string[];
+  /** User-facing details for repairs explicitly deferred until post-core convergence. */
+  deferredRepairDetails?: string[];
   /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
   failedPluginIds?: string[];
   /**
@@ -1337,6 +1339,7 @@ async function repairMissingPluginInstalls(params: {
   const officialReplacementPluginIds = new Set(officialReplacementInstallCandidates.keys());
   const changes: string[] = [];
   const warnings: string[] = [];
+  const deferredRepairDetails: string[] = [];
   const failedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
@@ -1369,9 +1372,9 @@ async function repairMissingPluginInstalls(params: {
       if (!record || !isInstalledRecordMissingOnDisk(record, env)) {
         continue;
       }
-      changes.push(
-        `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`,
-      );
+      const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
+      changes.push(detail);
+      deferredRepairDetails.push(detail);
     }
   }
 
@@ -1546,6 +1549,7 @@ async function repairMissingPluginInstalls(params: {
   return {
     changes,
     warnings,
+    ...(deferredRepairDetails.length > 0 ? { deferredRepairDetails } : {}),
     ...(failedPluginIds.size > 0
       ? {
           failedPluginIds: [...failedPluginIds].toSorted((left, right) =>
