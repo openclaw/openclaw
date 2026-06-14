@@ -1963,7 +1963,7 @@ export async function runReplyAgent(params: {
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
-    const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
+    const sourceReplyWasDelivered = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
       directlySentBlockKeys,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
@@ -2147,7 +2147,9 @@ export async function runReplyAgent(params: {
       blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
     );
     const canDeliverStandaloneFallbackNotice =
-      fallbackSuppressingSideEffectDelivery && !hasDeliveredBlockStream;
+      fallbackSuppressingSideEffectDelivery &&
+      !successfulDirectSourceReplyDelivery &&
+      !hasDeliveredBlockStream;
     if (
       replyPayloads.length === 0 ||
       (!hasReplyPayloadBeyondFallbackNotice && !canDeliverStandaloneFallbackNotice)
@@ -2527,7 +2529,7 @@ export async function runReplyAgent(params: {
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery,
+          successfulSourceReplyDelivery: sourceReplyWasDelivered,
           finalText: assistantFinalText,
         })
       ) {

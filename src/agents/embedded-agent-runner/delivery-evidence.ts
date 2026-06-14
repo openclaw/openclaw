@@ -356,6 +356,7 @@ export function getMessagingToolResultContentDeliveryState(
     return "unknown";
   }
   let sawCommittedReceipt = false;
+  let sawNonDeliveryReceipt = false;
   for (const block of record.content) {
     const content = readRecord(block);
     if (content?.type !== "text" || typeof content.text !== "string") {
@@ -385,13 +386,13 @@ export function getMessagingToolResultContentDeliveryState(
         continue;
       }
       if (hasExplicitNonDeliveryEvidenceAtDepth(receipt, 0)) {
-        return "non_delivery";
+        sawNonDeliveryReceipt = true;
       }
     } catch {
       // Ignore non-JSON text blocks.
     }
   }
-  return sawCommittedReceipt ? "committed" : "unknown";
+  return sawCommittedReceipt ? "committed" : sawNonDeliveryReceipt ? "non_delivery" : "unknown";
 }
 
 export function hasCommittedMessagingToolResultContent(result: unknown): boolean {

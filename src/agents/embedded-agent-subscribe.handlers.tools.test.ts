@@ -2136,6 +2136,44 @@ describe("messaging tool media URL tracking", () => {
   });
 
   it.each([
+    ["committed receipt is first", [{ ok: true, messageId: "message-1" }, { ok: false }]],
+    ["failed receipt is first", [{ ok: false }, { ok: true, messageId: "message-1" }]],
+  ])("commits mixed content receipts with a known send when the %s", async (_order, receipts) => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-plugin-mixed-content-receipts",
+      args: {
+        action: "send",
+        to: "channel:mattermost",
+        content: "partially sent through plugin",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-plugin-mixed-content-receipts",
+      isError: false,
+      result: {
+        content: receipts.map((receipt) => ({
+          type: "text",
+          text: JSON.stringify(receipt),
+        })),
+        details: undefined,
+      },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["partially sent through plugin"]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:mattermost",
+      text: "partially sent through plugin",
+    });
+  });
+
+  it.each([
     ["ordinary text", "sent through plugin"],
     [
       "agent tool result",

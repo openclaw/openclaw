@@ -1625,7 +1625,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       name: "interactive source reply",
       delivery: {
         messagingToolSourceReplyPayloads: [
-          { interactive: { blocks: [{ type: "button", label: "Open", value: "open" }] } },
+          {
+            interactive: {
+              blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+            },
+          },
         ],
       },
     },
@@ -1833,7 +1837,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
         tool: "message",
         provider: "discord",
         to: "channel:C1",
-        interactive: { blocks: [{ type: "button", label: "Open", value: "open" }] },
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
       },
     },
     {
