@@ -634,7 +634,7 @@ async function resolveTelegramCommandAuth(params: {
     senderUsername,
     resolveGroupPolicy,
     enforcePolicy: useAccessGroups,
-    useTopicAndGroupOverrides: false,
+    useTopicAndGroupOverrides: true,
     enforceAllowlistAuthorization: requireAuth && !commandsAllowFromConfigured,
     allowEmptyAllowlistEntries: true,
     requireSenderForAllowlistAuthorization: true,
@@ -666,8 +666,11 @@ async function resolveTelegramCommandAuth(params: {
     storeAllowFrom: isGroup ? [] : storeAllowFrom,
     dmPolicy: effectiveDmPolicy,
   });
+  const groupCommandAuthorizedByPolicy = isGroup && policyAccess.groupPolicy === "open";
   const commandAuthorized = commandsAllowFromConfigured
     ? Boolean(commandsAllowFromAccess?.isAuthorizedSender)
+    : groupCommandAuthorizedByPolicy
+      ? true
     : (
         await resolveTelegramCommandIngressAuthorization({
           accountId,
