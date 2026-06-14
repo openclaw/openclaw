@@ -308,6 +308,7 @@ describe("codex media understanding provider", () => {
       provider: "codex",
       model: "gpt-5.4",
       timeoutMs: 30_000,
+      cfg: {},
       authStore,
       agentDir: "/tmp/openclaw-agent",
     });
