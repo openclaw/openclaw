@@ -229,10 +229,24 @@ function getTrajectoryExportApprovalCommands(entry: TrajectoryExportApprovalEntr
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
+function hasTrajectoryExportArgv(argv: string[] | undefined): boolean {
+  if (!argv) {
+    return false;
+  }
+  return argv.some((arg, index) => arg === "sessions" && argv[index + 1] === "export-trajectory");
+}
+
 function isTrajectoryExportApproval(entry: TrajectoryExportApprovalEntry): boolean {
-  return getTrajectoryExportApprovalCommands(entry).some((command) =>
-    command.includes("sessions export-trajectory"),
-  );
+  if (
+    hasTrajectoryExportArgv(entry.request?.commandArgv) ||
+    hasTrajectoryExportArgv(entry.commandArgv)
+  ) {
+    return true;
+  }
+  return getTrajectoryExportApprovalCommands(entry).some((command) => {
+    const normalized = command.replaceAll(/['"]/gu, "");
+    return normalized.includes("sessions export-trajectory");
+  });
 }
 
 function summarizeTrajectoryExportApproval(
@@ -401,9 +415,7 @@ async function approveTrajectoryExport(
       `expected trajectory export approval id; approvals=${JSON.stringify(lastApprovalSummaries)}`,
     );
   }
-  expect(getTrajectoryExportApprovalCommands(approval).join("\n")).toContain(
-    "sessions export-trajectory",
-  );
+  expect(isTrajectoryExportApproval(approval)).toBe(true);
   await client.request(
     "exec.approval.resolve",
     { id: approval.id, decision: "allow-once" },
