@@ -89,12 +89,15 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
 }
 
 function resolvePreservedPromptSkillPathRoots(): string[] {
-  const managedSkillsDir = path.resolve(resolveConfigDir(), "skills");
-  const realManagedSkillsDir = tryRealpath(managedSkillsDir);
-  return uniqueStrings([
-    managedSkillsDir,
-    ...(realManagedSkillsDir ? [realManagedSkillsDir] : []),
-  ]);
+  const configDir = resolveConfigDir();
+  const promptSkillDirs = [
+    path.resolve(configDir, "skills"),
+    path.resolve(configDir, "plugin-skills"),
+  ];
+  const realPromptSkillDirs = promptSkillDirs
+    .map((dir) => tryRealpath(dir))
+    .filter((dir): dir is string => Boolean(dir));
+  return uniqueStrings([...promptSkillDirs, ...realPromptSkillDirs]);
 }
 
 function resolvePromptTildeRoots(): string[] {

@@ -79,6 +79,29 @@ describe("compactSkillPaths", () => {
     expect(prompt).not.toContain("~/.openclaw/skills/world-cup-soccer-openclaw-skill/SKILL.md");
   });
 
+  it("does not compact AlphaClaw state-root plugin skill paths to OS-home tilde paths", () => {
+    const root = path.parse(os.homedir()).root;
+    const osHome = path.join(root, "data");
+    const stateDir = path.join(osHome, ".openclaw");
+    const skillDir = path.join(stateDir, "plugin-skills", "calendar-plugin-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
+
+    vi.stubEnv("HOME", osHome);
+    vi.stubEnv("OPENCLAW_HOME", osHome);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: path.join(root, "workspace"),
+      skillDir,
+      name: "calendar-plugin-skill",
+      description: "Calendar plugin skill",
+    });
+
+    expect(prompt).toContain(`<location>${skillFile}</location>`);
+    expect(prompt).not.toContain("~/.openclaw/plugin-skills/calendar-plugin-skill/SKILL.md");
+  });
+
   it("compacts managed skill paths when OS-home tilde reaches the same path", () => {
     const home = os.homedir();
     const stateDir = path.join(home, ".openclaw");
