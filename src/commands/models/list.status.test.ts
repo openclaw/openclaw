@@ -149,6 +149,26 @@ const mocks = vi.hoisted(() => {
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
     resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
+    externalCliDiscoveryForConfigStatus: vi.fn(({ cfg }: { cfg: Record<string, unknown> }) => {
+      const auth = cfg.auth as { profiles?: Record<string, { provider?: string }> } | undefined;
+      const agents = cfg.agents as { defaults?: { model?: { primary?: string } } } | undefined;
+      const models = cfg.models as { providers?: Record<string, unknown> } | undefined;
+      const profileIds = Object.keys(auth?.profiles ?? {});
+      const providerIds = [
+        ...Object.keys(models?.providers ?? {}),
+        ...profileIds
+          .map((profileId) => auth?.profiles?.[profileId]?.provider)
+          .filter((provider): provider is string => Boolean(provider)),
+        agents?.defaults?.model?.primary?.split("/")[0],
+      ].filter((provider): provider is string => Boolean(provider));
+      return {
+        mode: "scoped",
+        allowKeychainPrompt: false,
+        config: cfg,
+        providerIds: [...new Set(providerIds)].toSorted(),
+        profileIds,
+      };
+    }),
   };
 });
 
@@ -182,6 +202,9 @@ vi.mock("../../agents/auth-profiles/store.js", () => ({
 }));
 vi.mock("../../agents/auth-profiles/usage.js", () => ({
   resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
+}));
+vi.mock("../../agents/auth-profiles/external-cli-discovery.js", () => ({
+  externalCliDiscoveryForConfigStatus: mocks.externalCliDiscoveryForConfigStatus,
 }));
 vi.mock("../../agents/auth-health.js", () => ({
   DEFAULT_OAUTH_WARN_MS: 86_400_000,
@@ -436,12 +459,21 @@ describe("modelsStatusCommand auth overview", () => {
   it("honors OPENCLAW_AGENT_DIR when no --agent override is provided", async () => {
     const localRuntime = createRuntime();
     mocks.resolveAgentDir.mockClear();
+    mocks.ensureAuthProfileStore.mockClear();
     await withEnvAsync({ OPENCLAW_AGENT_DIR: "/tmp/openclaw-isolated-agent" }, async () => {
       await modelsStatusCommand({ json: true }, localRuntime as never);
     });
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/openclaw-isolated-agent",
+      expect.objectContaining({
+        externalCli: expect.objectContaining({
+          allowKeychainPrompt: false,
+          mode: "scoped",
+        }),
+      }),
+    );
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
     expect(payload.auth.storePath).toBe("/tmp/openclaw-isolated-agent/auth-profiles.json");
@@ -461,9 +493,57 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-legacy-agent");
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/openclaw-legacy-agent",
+      expect.objectContaining({
+        externalCli: expect.objectContaining({
+          allowKeychainPrompt: false,
+          mode: "scoped",
+        }),
+      }),
+    );
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-legacy-agent");
+  });
+
+  it("loads auth status with config-derived external CLI scope", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    mocks.ensureAuthProfileStore.mockClear();
+    mocks.loadConfig.mockReturnValue({
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.4", fallbacks: [] },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+
+      expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+        "/tmp/openclaw-agent",
+        expect.objectContaining({
+          externalCli: expect.objectContaining({
+            allowKeychainPrompt: false,
+            config: expect.any(Object),
+            providerIds: expect.arrayContaining(["openai-codex"]),
+            profileIds: ["openai-codex:default"],
+          }),
+        }),
+      );
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
   });
 
   it("uses agent overrides and reports sources", async () => {

@@ -15,12 +15,13 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import { evaluateStoredCredentialEligibility } from "../../agents/auth-profiles/credential-state.js";
+import { externalCliDiscoveryForConfigStatus } from "../../agents/auth-profiles/external-cli-discovery.js";
 import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles/order.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import {
@@ -329,7 +330,9 @@ export async function modelsStatusCommand(
     }, {});
     const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
-    const store = ensureAuthProfileStore(agentDir);
+    const store = ensureAuthProfileStore(agentDir, {
+      externalCli: externalCliDiscoveryForConfigStatus({ cfg: resolvedConfig }),
+    });
     const modelsPath = path.join(agentDir, "models.json");
 
     const providersFromStore = new Set(
