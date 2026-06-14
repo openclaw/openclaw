@@ -1,0 +1,393 @@
+name: CI Fix Agent
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] PR-only CI repair after failure; job gates repository, event, conclusion, actor, and PR lookup before checkout
+    workflows:
+      - CI
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to fix (manual trigger)"
+        required: true
+        type: number
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ci-fix-agent-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  fix-ci:
+    # Only run on CI failure for PRs (not main pushes), skip bot actors
+    if: >
+      github.repository == 'openclaw/openclaw' &&
+      (github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion == 'failure' &&
+          github.event.workflow_run.event == 'pull_request' &&
+          !endsWith(github.event.workflow_run.actor.login, '[bot]')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Resolve PR number and head ref
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_PR: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${MANUAL_PR:-}" ]; then
+            pr_number="$MANUAL_PR"
+          else
+            # workflow_run.pull_requests can be empty for fork PRs; fall back to search
+            pr_number="$(
+              gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
+                --jq '.[0].number // empty' 2>/dev/null || true
+            )"
+          fi
+
+          if [ -z "$pr_number" ]; then
+            echo "Could not resolve PR number for SHA ${HEAD_SHA}; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}")"
+          head_ref="$(jq -r '.head.ref' <<< "$pr_json")"
+          head_repo="$(jq -r '.head.repo.full_name' <<< "$pr_json")"
+          base_repo="$(jq -r '.base.repo.full_name' <<< "$pr_json")"
+          is_fork="$([ "$head_repo" != "$base_repo" ] && echo true || echo false)"
+
+          {
+            echo "skip=false"
+            echo "pr_number=${pr_number}"
+            echo "head_ref=${head_ref}"
+            echo "head_repo=${head_repo}"
+            echo "is_fork=${is_fork}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Gate daily cadence per PR
+        if: steps.pr.outputs.skip != 'true'
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          six_hours_ago="$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+          runs_json="$RUNNER_TEMP/ci-fix-runs.json"
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci-fix-agent.yml/runs" \
+            -f per_page=50 > "$runs_json"
+
+          prior_runs="$(
+            jq -r \
+              --argjson current_run_id "$GITHUB_RUN_ID" \
+              --arg six_hours_ago "$six_hours_ago" \
+              '.workflow_runs[]
+                | select(.database_id != $current_run_id)
+                | select(.created_at >= $six_hours_ago)
+                | select(.status != "cancelled")
+                | select((.conclusion // "") != "skipped")
+                | [.database_id, .status, (.conclusion // ""), .created_at]
+                | @tsv' "$runs_json"
+          )"
+
+          # Allow max 3 fix attempts per 6 hours to avoid infinite fix loops
+          run_count="$(printf '%s' "$prior_runs" | grep -c '.' || true)"
+          if [ "$run_count" -ge 3 ]; then
+            echo "CI fix agent already ran ${run_count} times in the last 6 hours; skipping to avoid loops."
+            echo "run_agent=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "run_agent=true" >> "$GITHUB_OUTPUT"
+
+      - name: Collect failed checks
+        if: steps.pr.outputs.skip != 'true' && steps.gate.outputs.run_agent == 'true'
+        id: checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          # Get head SHA if not from workflow_run (manual dispatch)
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          fi
+
+          # Fetch all failed check runs for this SHA
+          failed_checks="$(
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
+              --paginate \
+              --jq '.check_runs[] | select(.conclusion == "failure") | {name: .name, id: .id}' \
+            | jq -s '.'
+          )"
+
+          check_count="$(jq 'length' <<< "$failed_checks")"
+          echo "Found ${check_count} failed checks."
+
+          if [ "$check_count" -eq 0 ]; then
+            echo "No failed checks found; skipping."
+            echo "has_failures=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Collect log excerpts for up to 5 failed checks (to stay within limits)
+          failed_with_logs="$(
+            jq -r '.[0:5][] | [.name, .id] | @tsv' <<< "$failed_checks" \
+            | while IFS=$'\t' read -r name check_id; do
+                log="$(
+                  gh api "repos/${GITHUB_REPOSITORY}/check-runs/${check_id}/annotations" \
+                    --jq '[.[] | select(.annotation_level == "failure") | .message] | join("\n")' \
+                    2>/dev/null \
+                  | head -c 2000 || true
+                )"
+                jq -nc --arg name "$name" --arg log "$log" \
+                  '{name: $name, log_excerpt: $log}'
+              done \
+            | jq -s '.'
+          )"
+
+          # Write to file for Codex to read
+          echo "$failed_with_logs" > "$RUNNER_TEMP/failed-checks.json"
+          echo "has_failures=true" >> "$GITHUB_OUTPUT"
+          echo "check_count=${check_count}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch CI failure to ClawSweeper
+        if: steps.pr.outputs.skip != 'true' && steps.gate.outputs.run_agent == 'true' && steps.checks.outputs.has_failures == 'true'
+        env:
+          HAS_CLAWSWEEPER_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
+          CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          CHECK_COUNT: ${{ steps.checks.outputs.check_count }}
+          IS_FORK: ${{ steps.pr.outputs.is_fork }}
+        run: |
+          set -euo pipefail
+
+          if [ "$HAS_CLAWSWEEPER_KEY" != "true" ]; then
+            echo "::notice::Skipping ClawSweeper dispatch — no app key configured."
+            exit 0
+          fi
+
+          # Create app token for ClawSweeper dispatch
+          # (reuses the same token creation pattern from clawsweeper-dispatch.yml)
+          echo "::notice::Dispatching CI failure event for PR #${PR_NUMBER} (${CHECK_COUNT} failed checks) to ClawSweeper."
+
+          failed_names="$(jq -r '[.[].name] | join(", ")' "$RUNNER_TEMP/failed-checks.json")"
+
+          # Dispatch via gh api using the existing GITHUB_TOKEN
+          # ClawSweeper will receive this and can take further action
+          payload="$(jq -nc \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg head_sha "${HEAD_SHA:-unknown}" \
+            --argjson check_count "$CHECK_COUNT" \
+            --arg failed_names "$failed_names" \
+            --arg is_fork "$IS_FORK" \
+            '{
+              event_type: "clawsweeper_ci_fix",
+              client_payload: {
+                target_repo: env.GITHUB_REPOSITORY,
+                pr_number: $pr_number,
+                head_sha: $head_sha,
+                failed_check_count: $check_count,
+                failed_check_names: $failed_names,
+                is_fork: ($is_fork == "true"),
+                source: "ci-fix-agent"
+              }
+            }')"
+
+          # Attempt dispatch with GITHUB_TOKEN (works for same-org repos)
+          if gh api repos/openclaw/clawsweeper/dispatches \
+            --method POST \
+            --input - <<< "$payload" 2>/dev/null; then
+            echo "Dispatched CI failure to ClawSweeper."
+          else
+            echo "::warning::Could not dispatch to ClawSweeper; continuing with Codex fix attempt."
+          fi
+
+      # --- Codex auto-fix (same-repo PRs only) ---
+      # Security model: only same-repo PRs (is_fork != true), cadence-limited,
+      # Codex runs in sandbox. Node setup uses pinned external actions (not local
+      # composite action) to avoid executing untrusted code from the PR branch.
+
+      - name: Checkout PR branch
+        if: > # zizmor: ignore[dangerous-triggers] same-repo gate + pinned actions only; no local composite action from PR branch
+          steps.pr.outputs.skip != 'true' &&
+          steps.gate.outputs.run_agent == 'true' &&
+          steps.checks.outputs.has_failures == 'true' &&
+          steps.pr.outputs.is_fork != 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        if: >
+          steps.pr.outputs.skip != 'true' &&
+          steps.gate.outputs.run_agent == 'true' &&
+          steps.checks.outputs.has_failures == 'true' &&
+          steps.pr.outputs.is_fork != 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+
+      - name: Setup pnpm
+        if: >
+          steps.pr.outputs.skip != 'true' &&
+          steps.gate.outputs.run_agent == 'true' &&
+          steps.checks.outputs.has_failures == 'true' &&
+          steps.pr.outputs.is_fork != 'true'
+        run: |
+          corepack enable
+          pnpm --version
+
+      - name: Install dependencies
+        if: >
+          steps.pr.outputs.skip != 'true' &&
+          steps.gate.outputs.run_agent == 'true' &&
+          steps.checks.outputs.has_failures == 'true' &&
+          steps.pr.outputs.is_fork != 'true'
+        run: pnpm install --frozen-lockfile
+        continue-on-error: true
+
+      - name: Ensure CI fix agent key exists
+        if: >
+          steps.pr.outputs.skip != 'true' &&
+          steps.gate.outputs.run_agent == 'true' &&
+          steps.checks.outputs.has_failures == 'true' &&
+          steps.pr.outputs.is_fork != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_CI_FIX_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "Missing OPENCLAW_CI_FIX_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Run Codex CI fix agent
+        if: >
+          steps.pr.outputs.skip != 'true' &&
+          steps.gate.outputs.run_agent == 'true' &&
+          steps.checks.outputs.has_failures == 'true' &&
+          steps.pr.outputs.is_fork != 'true'
+        uses: openai/codex-action@5c3f4ccdb2b8790f73d6b21751ac00e602aa0c02
+        env:
+          CI_FIX_FAILED_CHECKS: ${{ runner.temp }}/failed-checks.json
+          CI_FIX_PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_CI_FIX_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/ci-fix-agent.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: high
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--full-auto"]'
+
+      - name: Enforce fix-only patch
+        if: >
+          steps.pr.outputs.skip != 'true' &&
+          steps.gate.outputs.run_agent == 'true' &&
+          steps.checks.outputs.has_failures == 'true' &&
+          steps.pr.outputs.is_fork != 'true'
+        id: patch
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "Codex made no changes; skipping commit."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push fix
+        if: >
+          steps.pr.outputs.skip != 'true' &&
+          steps.gate.outputs.run_agent == 'true' &&
+          steps.checks.outputs.has_failures == 'true' &&
+          steps.pr.outputs.is_fork != 'true' &&
+          steps.patch.outputs.has_changes == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          CHECK_COUNT: ${{ steps.checks.outputs.check_count }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "openclaw-ci-fix-agent[bot]"
+          git config user.email "openclaw-ci-fix-agent[bot]@users.noreply.github.com"
+          git add -A
+          git commit --no-verify -m "ci: auto-fix ${CHECK_COUNT} failing check(s) on PR #${PR_NUMBER}"
+
+          for attempt in 1 2 3 4 5; do
+            if git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${HEAD_REF}"; then
+              echo "Pushed CI fix to ${HEAD_REF}."
+              exit 0
+            fi
+            echo "Push attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push CI fix after retries." >&2
+          exit 1
+
+      # --- Fork PR fallback: post comment with diagnosis ---
+
+      - name: Post fix guidance for fork PRs
+        if: >
+          steps.pr.outputs.skip != 'true' &&
+          steps.gate.outputs.run_agent == 'true' &&
+          steps.checks.outputs.has_failures == 'true' &&
+          steps.pr.outputs.is_fork == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          CHECK_COUNT: ${{ steps.checks.outputs.check_count }}
+        run: |
+          set -euo pipefail
+
+          failed_summary="$(jq -r '.[] | "- **\(.name)**: \(.log_excerpt[0:200])"' "$RUNNER_TEMP/failed-checks.json")"
+
+          body="$(cat <<COMMENT
+          <!-- ci-fix-agent-diagnosis -->
+          ## 🔧 CI Fix Agent — ${CHECK_COUNT} check(s) failed
+
+          This is a fork PR, so I can't push fixes directly. Here's what I found:
+
+          ${failed_summary}
+
+          Please check the failing logs and push a fix. Run \`gh pr checks ${PR_NUMBER} --repo ${GITHUB_REPOSITORY}\` for full details.
+          COMMENT
+          )"
+
+          # Avoid duplicate comments
+          existing="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '[.[] | select(.body | contains("ci-fix-agent-diagnosis"))] | length')"
+          if [ "$existing" -gt 0 ]; then
+            echo "CI fix agent diagnosis already posted; skipping duplicate."
+            exit 0
+          fi
+
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --method POST \
+            -f body="$body"
+          echo "Posted CI fix diagnosis on PR #${PR_NUMBER}."
