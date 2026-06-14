@@ -1,5 +1,6 @@
 // Session store loading normalizes persisted records, migrations, maintenance, and caches.
 import fs from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -11,6 +12,7 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { isSessionStoreTempArtifactName } from "./artifacts.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
@@ -373,6 +375,54 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
   return changed;
 }
 
+/**
+ * Delete orphaned `<store>.<pid>.<uuid>.tmp` temp files left behind when
+ * `replaceFileAtomic` crashes between write and rename (#89520).
+ * Only files older than 5 minutes are removed to avoid racing live writers.
+ */
+export function sweepOrphanSessionStoreTemps(storePath: string): void {
+  const storeDir = path.dirname(storePath);
+  const storeBasename = path.basename(storePath);
+  let dir: fs.Dir | undefined;
+  try {
+    dir = fs.opendirSync(storeDir);
+  } catch {
+    // Store directory may not exist yet (first launch) — nothing to sweep.
+    return;
+  }
+  try {
+    const cutoffMs = Date.now() - 5 * 60 * 1000;
+    let deleted = 0;
+    for (let entry = dir.readSync(); entry; entry = dir.readSync()) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!isSessionStoreTempArtifactName(entry.name, storeBasename)) {
+        continue;
+      }
+      const fullPath = path.join(storeDir, entry.name);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.mtimeMs > cutoffMs) {
+          continue;
+        }
+        fs.unlinkSync(fullPath);
+        deleted += 1;
+      } catch {
+        // racing writer or concurrent sweep — skip
+      }
+    }
+    if (deleted > 0) {
+      log.info("deleted orphaned session store temp files", {
+        storePath,
+        count: deleted,
+      });
+    }
+  } finally {
+    dir?.closeSync();
+  }
+}
+
 export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
@@ -391,6 +441,9 @@ export function loadSessionStore(
       return cached;
     }
   }
+
+  // Sweep orphaned .tmp files left by crashed atomic writes before touching the store.
+  sweepOrphanSessionStoreTemps(storePath);
 
   // Retry a few times on Windows because readers can briefly observe empty or
   // transiently invalid content while another process is swapping the file.
