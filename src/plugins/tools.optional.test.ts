@@ -670,6 +670,7 @@ describe("resolvePluginTools optional tools", () => {
 
     class AccessorTool {
       #name = "class_tool";
+      #description = "class backed tool";
       #parameters = { type: "object", properties: {} };
 
       get name() {
@@ -677,7 +678,7 @@ describe("resolvePluginTools optional tools", () => {
       }
 
       get description() {
-        return "class backed tool";
+        return this.#description;
       }
 
       get parameters() {
@@ -713,6 +714,7 @@ describe("resolvePluginTools optional tools", () => {
 
     const [tool] = resolvePluginTools(createResolveToolsParams({ context }));
     expect(tool?.name).toBe("class_tool");
+    expect(tool?.description).toBe("class backed tool");
     expect(Object.getPrototypeOf(tool)).toBe(AccessorTool.prototype);
     await tool?.execute("call-class", tool.prepareArguments?.({}) ?? {}, undefined);
 
@@ -1939,6 +1941,113 @@ describe("resolvePluginTools optional tools", () => {
     );
   });
 
+  it("stabilizes plugin tool schema metadata after validation", () => {
+    let schemaReads = 0;
+    const schema = { type: "object", properties: {} };
+    setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["volatile_tool", "valid_tool"],
+        factory: () => [
+          {
+            name: "volatile_tool",
+            description: "volatile tool",
+            get parameters() {
+              schemaReads += 1;
+              if (schemaReads > 1) {
+                throw new Error("schema getter should not be reread");
+              }
+              return schema;
+            },
+            async execute() {
+              return { content: [{ type: "text", text: "volatile-ok" }] };
+            },
+          },
+          makeTool("valid_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["volatile_tool", "valid_tool"]);
+    expect(tools[0]?.parameters).toBe(schema);
+    expect(schemaReads).toBe(1);
+  });
+
+  it("stabilizes non-configurable plugin tool schema properties", () => {
+    const schema = { type: "object", properties: {} };
+    setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["sealed_tool"],
+        factory: () => {
+          const tool = {
+            description: "sealed tool",
+            async execute() {
+              return { content: [{ type: "text", text: "sealed-ok" }] };
+            },
+          };
+          Object.defineProperties(tool, {
+            name: { enumerable: true, value: "sealed_tool" },
+            parameters: { enumerable: true, value: schema },
+          });
+          return tool;
+        },
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["sealed_tool"]);
+    expect(Object.getOwnPropertyDescriptor(tools[0], "parameters")?.value).toBe(schema);
+    expect({ ...tools[0] }.parameters).toBe(schema);
+  });
+
+  it("isolates plugin tools with throwing descriptor traps", () => {
+    setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["descriptor_trap_tool", "valid_tool"],
+        factory: () => {
+          let descriptorTrapsArmed = false;
+          const trappedTool = new Proxy(makeTool("descriptor_trap_tool"), {
+            get(target, prop, receiver) {
+              const value = Reflect.get(target, prop, receiver);
+              if (prop === "parameters") {
+                descriptorTrapsArmed = true;
+              }
+              return value;
+            },
+            getOwnPropertyDescriptor(target, prop) {
+              if (descriptorTrapsArmed) {
+                throw new Error("descriptor trap should not abort tool resolution");
+              }
+              return Reflect.getOwnPropertyDescriptor(target, prop);
+            },
+            ownKeys(target) {
+              if (descriptorTrapsArmed) {
+                throw new Error("ownKeys trap should not abort tool resolution");
+              }
+              return Reflect.ownKeys(target);
+            },
+          });
+          return [trappedTool, makeTool("valid_tool")];
+        },
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+  });
+
   it("warns with plugin factory timing details when a factory is slow", () => {
     vi.useFakeTimers({ now: 0 });
     const warnSpy = installConsoleMethodSpy("warn");
@@ -2060,6 +2169,46 @@ describe("resolvePluginTools optional tools", () => {
       content: [{ type: "text", text: "same" }],
     });
     expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("executes cached plugin tools without rereading runtime schemas", async () => {
+    let schemaReads = 0;
+    const schema = { type: "object", properties: {} };
+    const factory = vi.fn(() => ({
+      name: "cached_volatile_tool",
+      description: "cached volatile tool",
+      get parameters() {
+        schemaReads += 1;
+        if (schemaReads > 1) {
+          throw new Error("cached runtime should reuse the descriptor schema");
+        }
+        return schema;
+      },
+      async execute() {
+        return { content: [{ type: "text", text: "cached-volatile-ok" }] };
+      },
+    }));
+    setRegistry([
+      {
+        pluginId: "cache-test",
+        optional: false,
+        source: "/tmp/cache-test.js",
+        names: ["cached_volatile_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(first, ["cached_volatile_tool"]);
+    expectResolvedToolNames(second, ["cached_volatile_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "cached-volatile-ok" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(schemaReads).toBe(1);
   });
 
   it("executes cached healthy tools when a runtime sibling is malformed", async () => {

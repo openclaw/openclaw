@@ -210,6 +210,14 @@ const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
 const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
 const LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT = getPluginCompatRecord("legacy-subagent-spawning-hook");
 
+function readRegisteredToolName(tool: AnyAgentTool): string | undefined {
+  try {
+    return typeof tool.name === "string" && tool.name.trim() ? tool.name.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function formatLegacyDeactivateHookAliasDiagnostic(): string {
   const removeAfter =
     LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.removeAfter ?? "a future breaking release";
@@ -622,8 +630,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const factory: OpenClawPluginToolFactory =
       typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
 
-    if (typeof tool !== "function") {
-      names.push(tool.name);
+    if (typeof tool !== "function" && names.length === 0) {
+      const toolName = readRegisteredToolName(tool);
+      if (!toolName) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: "plugin tool registration missing readable name",
+        });
+        return;
+      }
+      names.push(toolName);
     }
 
     const normalized = normalizePluginToolNames(names);

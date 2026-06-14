@@ -3935,6 +3935,55 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ).toBe(true);
   });
 
+  it("isolates unreadable implicit plugin tool registration names", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "poisoned-tool-owner",
+      filename: "poisoned-tool-owner.cjs",
+      body: `module.exports = {
+        id: "poisoned-tool-owner",
+        register(api) {
+          api.registerTool({
+            get name() {
+              throw new Error("tool name revoked");
+            },
+            description: "Poisoned tool",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "bad" }] }),
+          });
+          api.registerTool({
+            name: "healthy_tool",
+            description: "Healthy tool",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, { contracts: { tools: ["poisoned_tool", "healthy_tool"] } });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["poisoned-tool-owner"],
+        },
+      },
+    });
+
+    expect(registry.tools.flatMap((entry) => entry.names)).toEqual(["healthy_tool"]);
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "poisoned-tool-owner" &&
+          entry.message === "plugin tool registration missing readable name",
+      ),
+    ).toBe(true);
+  });
+
   it("caches non-activating snapshots without restoring global side effects", () => {
     useNoBundledPlugins();
     clearPluginCommands();
