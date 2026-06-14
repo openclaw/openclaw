@@ -1,6 +1,7 @@
 // Discord plugin module implements rest behavior.
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
+import { gunzipSync } from "node:zlib";
 import {
   clampTimerTimeoutMs,
   parseFiniteNumber,
@@ -97,6 +98,17 @@ function coerceResponseBody(raw: string): unknown {
   } catch {
     return raw;
   }
+}
+
+function decodeResponseBody(bytes: ArrayBuffer): string {
+  if (!bytes.byteLength) {
+    return "";
+  }
+  const buffer = Buffer.from(bytes);
+  if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+    return gunzipSync(buffer).toString("utf8");
+  }
+  return buffer.toString("utf8");
 }
 
 function escapeMultipartQuotedValue(value: string): string {
@@ -245,7 +257,7 @@ export class RequestClient {
         body: await normalizeFetchBody(body, headers),
         signal: controller.signal,
       });
-      const text = await response.text();
+      const text = decodeResponseBody(await response.arrayBuffer());
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {
