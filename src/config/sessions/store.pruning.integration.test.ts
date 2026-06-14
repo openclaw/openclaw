@@ -328,6 +328,227 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(freshOrphanTranscript);
   });
 
+  it("sessions cleanup synthetic-only protects main and direct customer sessions", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const stale = now - 30 * DAY_MS;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": makeEntry(stale),
+      "agent:main:telegram:direct:6101296751": makeEntry(stale),
+      "legacy-customer-session": makeEntry(stale),
+      "agent:main:subagent:worker": makeEntry(stale),
+      "agent:main:cron:wilder-mail-router:run:20260612T120000Z": makeEntry(stale),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, syntheticOnly: true, protectMain: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.pruned).toBe(2);
+    expect(preview?.summary.afterCount).toBe(3);
+    expect(preview?.summary.candidateCounts).toEqual({
+      preserve: 3,
+      archive_candidate: 2,
+      blocked: 0,
+      quarantine_review: 0,
+    });
+    expect(preview?.summary.safety).toMatchObject({
+      syntheticOnly: true,
+      protectMain: true,
+      protectedMainCount: 1,
+      protectedDirectCount: 1,
+    });
+    expect(preview?.staleKeys.has("agent:main:subagent:worker")).toBe(true);
+    expect(
+      preview?.staleKeys.has("agent:main:cron:wilder-mail-router:run:20260612T120000Z"),
+    ).toBe(true);
+    expect(preview?.staleKeys.has("agent:main:main")).toBe(false);
+    expect(preview?.staleKeys.has("agent:main:telegram:direct:6101296751")).toBe(false);
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, syntheticOnly: true, protectMain: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.pruned).toBe(2);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted).toHaveProperty("agent:main:main");
+    expect(persisted).toHaveProperty("agent:main:telegram:direct:6101296751");
+    expect(persisted).toHaveProperty("legacy-customer-session");
+    expect(persisted).not.toHaveProperty("agent:main:subagent:worker");
+    expect(persisted).not.toHaveProperty(
+      "agent:main:cron:wilder-mail-router:run:20260612T120000Z",
+    );
+  });
+
+  it("protect-main preserves all agent main and direct customer sessions across cleanup modes", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          maxEntries: 2,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const stale = now - 30 * DAY_MS;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": { sessionId: "main-main", updatedAt: stale },
+      "agent:operations:main": { sessionId: "operations-main", updatedAt: stale },
+      "AGENT:Inbox-Ops:MAIN": { sessionId: "inbox-ops-main", updatedAt: stale },
+      "agent:wilder-mhr:direct:customer-1": {
+        sessionId: "wilder-direct",
+        updatedAt: stale,
+      },
+      "agent:operations:dm:customer-2": {
+        sessionId: "operations-dm",
+        updatedAt: stale,
+      },
+      "agent:inbox-ops:gmail:eric@wildertreecompany.com:direct:customer-3": {
+        sessionId: "inbox-provider-direct",
+        updatedAt: stale,
+      },
+      "agent:operations:google:workspace:mailbox:dm:customer-4": {
+        sessionId: "operations-deep-provider-dm",
+        updatedAt: stale,
+      },
+      "agent:main:subagent:old-worker": {
+        sessionId: "old-worker",
+        updatedAt: stale,
+      },
+      "agent:main:cron:cleanup:run:20260612T120000Z": {
+        sessionId: "old-cron",
+        updatedAt: stale,
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: {
+        store: storePath,
+        dryRun: true,
+        enforce: true,
+        fixMissing: true,
+        protectMain: true,
+      },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.safety.protectedMainAgentIds).toEqual([
+      "inbox-ops",
+      "main",
+      "operations",
+    ]);
+    expect(preview?.summary.safety.protectedDirectCount).toBe(4);
+    expect(preview?.missingKeys.has("agent:main:main")).toBe(false);
+    expect(preview?.missingKeys.has("agent:operations:main")).toBe(false);
+    expect(preview?.missingKeys.has("AGENT:Inbox-Ops:MAIN")).toBe(false);
+    expect(preview?.missingKeys.has("agent:wilder-mhr:direct:customer-1")).toBe(false);
+    expect(preview?.missingKeys.has("agent:operations:dm:customer-2")).toBe(false);
+    expect(
+      preview?.missingKeys.has("agent:inbox-ops:gmail:eric@wildertreecompany.com:direct:customer-3"),
+    ).toBe(false);
+    expect(
+      preview?.missingKeys.has("agent:operations:google:workspace:mailbox:dm:customer-4"),
+    ).toBe(false);
+    expect(preview?.summary.candidateActionCounts).toMatchObject({
+      "prune-missing": 2,
+      "prune-stale": 0,
+      "cap-overflow": 0,
+    });
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true, protectMain: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.missing).toBe(2);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted).toHaveProperty("agent:main:main");
+    expect(persisted).toHaveProperty("agent:operations:main");
+    expect(persisted).toHaveProperty("AGENT:Inbox-Ops:MAIN");
+    expect(persisted).toHaveProperty("agent:wilder-mhr:direct:customer-1");
+    expect(persisted).toHaveProperty("agent:operations:dm:customer-2");
+    expect(persisted).toHaveProperty(
+      "agent:inbox-ops:gmail:eric@wildertreecompany.com:direct:customer-3",
+    );
+    expect(persisted).toHaveProperty("agent:operations:google:workspace:mailbox:dm:customer-4");
+    expect(persisted).not.toHaveProperty("agent:main:subagent:old-worker");
+    expect(persisted).not.toHaveProperty("agent:main:cron:cleanup:run:20260612T120000Z");
+  });
+
+  it("synthetic-only disk-budget cleanup skips unclassified orphan artifacts", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 100,
+          maxDiskBytes: 1000,
+          highWaterBytes: 500,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": { sessionId: "main-session", updatedAt: now },
+    };
+    const oldOrphanTranscript = path.join(testDir, "orphan-session.jsonl");
+    const oldArchivedTranscript = path.join(
+      testDir,
+      `archived-session.jsonl.deleted.${archiveTimestamp(now - 30 * DAY_MS)}`,
+    );
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
+    await fs.writeFile(oldOrphanTranscript, "x".repeat(2000), "utf-8");
+    await fs.writeFile(oldArchivedTranscript, "y".repeat(2000), "utf-8");
+    const oldDate = new Date(now - 30 * DAY_MS);
+    await fs.utimes(oldOrphanTranscript, oldDate, oldDate);
+    await fs.utimes(oldArchivedTranscript, oldDate, oldDate);
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: {
+        store: storePath,
+        dryRun: true,
+        enforce: true,
+        syntheticOnly: true,
+        protectMain: true,
+      },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const diskBudgetPreview = dryRun.previewResults[0]?.summary.diskBudget;
+    expect(diskBudgetPreview?.removedFiles).toBe(0);
+    expect(diskBudgetPreview?.removedEntries).toBe(0);
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(0);
+    await expectPathExists(oldOrphanTranscript);
+    await expectPathExists(oldArchivedTranscript);
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, syntheticOnly: true, protectMain: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.diskBudget?.removedFiles).toBe(0);
+    expect(applied.appliedSummaries[0]?.unreferencedArtifacts.removedFiles).toBe(0);
+    await expectPathExists(oldOrphanTranscript);
+    await expectPathExists(oldArchivedTranscript);
+  });
+
   it("sessions cleanup fix-missing prunes malformed stored session rows", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
