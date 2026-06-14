@@ -47,4 +47,75 @@ export default async function(api) {
     expect(result.extensions).toHaveLength(1);
     expect(result.extensions[0]?.commands.has("sdk-subpath-probe")).toBe(true);
   });
+
+  it("rejects extension tools without a readable non-empty string name", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-tool-name-"));
+    tempDirs.push(dir);
+    const extensionPath = join(dir, "extension.ts");
+    await writeFile(
+      extensionPath,
+      `
+export default async function(api) {
+  api.registerTool({
+    name: 123,
+    label: "Broken",
+    description: "broken",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [], details: {} };
+    },
+  });
+}
+`,
+    );
+
+    const result = await loadExtensions([extensionPath], dir);
+
+    expect(result.extensions).toEqual([]);
+    expect(result.errors).toEqual([
+      {
+        path: extensionPath,
+        error:
+          "Failed to load extension: Extension tool registration requires a non-empty string name; received 123",
+      },
+    ]);
+  });
+
+  it("rejects extension tools whose name accessor throws", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-tool-name-"));
+    tempDirs.push(dir);
+    const extensionPath = join(dir, "extension.ts");
+    await writeFile(
+      extensionPath,
+      `
+export default async function(api) {
+  const tool = {
+    label: "Broken",
+    description: "broken",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [], details: {} };
+    },
+  };
+  Object.defineProperty(tool, "name", {
+    get() {
+      throw new Error("tool name getter exploded");
+    },
+  });
+  api.registerTool(tool);
+}
+`,
+    );
+
+    const result = await loadExtensions([extensionPath], dir);
+
+    expect(result.extensions).toEqual([]);
+    expect(result.errors).toEqual([
+      {
+        path: extensionPath,
+        error:
+          "Failed to load extension: Extension tool registration requires a readable tool name: tool name getter exploded",
+      },
+    ]);
+  });
 });

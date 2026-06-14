@@ -148,6 +148,25 @@ function resolvePath(extPath: string, cwd: string): string {
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
+function readRegisteredToolName(tool: ToolDefinition): string {
+  let name: unknown;
+  try {
+    name = tool.name;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Extension tool registration requires a readable tool name: ${message || "unknown error"}`,
+      { cause: error },
+    );
+  }
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new Error(
+      `Extension tool registration requires a non-empty string name; received ${JSON.stringify(name)}`,
+    );
+  }
+  return name;
+}
+
 /**
  * Create a runtime with throwing stubs for action methods.
  * Runner.bindCore() replaces these with real implementations.
@@ -226,7 +245,8 @@ function createExtensionAPI(
 
     registerTool(tool: ToolDefinition): void {
       runtime.assertActive();
-      extension.tools.set(tool.name, {
+      const name = readRegisteredToolName(tool);
+      extension.tools.set(name, {
         definition: tool,
         sourceInfo: extension.sourceInfo,
       });
