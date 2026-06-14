@@ -3934,6 +3934,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it.each([
     { prompt: "Please be concise.", assistantText: "Okay." },
     { prompt: "Please wait.", assistantText: "Understood." },
+    { prompt: "I want you to know the deployment is delayed.", assistantText: "Got it." },
+    { prompt: "I need you to keep replies short.", assistantText: "Understood." },
   ])(
     "does not classify preference-only polite request $prompt as planning-only",
     ({ prompt, assistantText }) => {
@@ -5995,6 +5997,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
+  it.each([
+    { deliveryStatus: "delivered", messageId: "message-delivered" },
+    {
+      deliveryStatus: "success",
+      receipt: { primaryPlatformMessageId: "message-success" },
+    },
+    { deliveryStatus: "succeeded", resultCount: 1 },
+    { deliveryStatus: "completed", message: { id: "message-completed" } },
+  ])(
+    "treats provider-specific $deliveryStatus status with concrete evidence as committed",
+    (details) => {
+      expect(hasCommittedMessagingToolResultDetails(details)).toBe(true);
+    },
+  );
+
   it("does not treat metadata-only messaging targets as delivery evidence", () => {
     expect(
       hasCommittedMessagingToolDeliveryEvidence({
@@ -7006,6 +7023,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "channel proof after the restart",
     "When you have a moment, can you check the scheduler?",
     "I need you to check the scheduler",
+    "I want you to inspect the scheduler",
+    "We would like you to review the config",
   ])("treats task-shaped prompt %s as actionable for planning-only retry", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",

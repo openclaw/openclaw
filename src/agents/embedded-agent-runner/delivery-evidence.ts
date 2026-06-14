@@ -315,7 +315,11 @@ function hasCommittedMessagingToolResultDetailsAtDepth(details: unknown, depth: 
   const deliveryStatus =
     readLowercaseString(record.deliveryStatus) ?? readLowercaseString(record.delivery_status);
   const status = readLowercaseString(record.status);
-  if (deliveryStatus && deliveryStatus !== "sent" && deliveryStatus !== "partial_failed") {
+  if (
+    deliveryStatus &&
+    deliveryStatus !== "partial_failed" &&
+    isKnownNonSentDeliveryStatus(deliveryStatus)
+  ) {
     return false;
   }
   if (status && status !== "partial_failed" && isKnownNonSentDeliveryStatus(status)) {
