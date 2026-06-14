@@ -2637,6 +2637,43 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.originatingReplyToId).toBe("reply-24680");
   });
 
+  it("captures the effective reply policy for queued Slack runs", async () => {
+    await runPreparedReply(
+      baseParams({
+        cfg: {
+          session: {},
+          channels: { slack: { replyToMode: "off" } },
+          agents: { defaults: {} },
+        },
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          Provider: "slack",
+          OriginatingChannel: undefined,
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ReplyToId: "101.001",
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.originatingReplyToId).toBe("101.001");
+    expect(call?.followupRun.originatingReplyToMode).toBe("off");
+  });
+
   it("uses transport thread metadata for followup originatingThreadId", async () => {
     await runPreparedReply(
       baseParams({

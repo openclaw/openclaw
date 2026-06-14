@@ -372,8 +372,8 @@ describe("followup queue drain restart after idle window", () => {
 
     expect(attempts).toBe(2);
     expect(prompts[1]).toContain("Dropped 3 messages");
-    expect(prompts[1]).toContain("original dropped while busy");
     expect(prompts[1]).toContain("newer dropped while waiting");
+    expect(prompts[1]).not.toContain("original dropped while busy");
   });
 
   it("does not process messages after clearSessionQueues clears the callback", async () => {

@@ -48,6 +48,27 @@ describe("resolveFollowupDeliveryPayloads", () => {
     });
   });
 
+  it("uses the captured reply policy instead of reloading changed config", () => {
+    const [resolved] = resolveFollowupDeliveryPayloads({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "all",
+          },
+        },
+      } as OpenClawConfig,
+      payloads: [{ text: "queued reply" }],
+      originatingChannel: "slack",
+      originatingChatType: "channel",
+      originatingReplyToMode: "off",
+    });
+
+    expect(getReplyPayloadMetadata(resolved ?? {})?.replyDelivery).toEqual({
+      chatType: "channel",
+      replyToMode: "off",
+    });
+  });
+
   it("drops text payloads already sent via messaging tool", () => {
     expect(
       resolveFollowupDeliveryPayloads({

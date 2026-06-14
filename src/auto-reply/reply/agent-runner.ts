@@ -1294,7 +1294,7 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(
+    const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
       resolvedQueue,
@@ -1302,6 +1302,10 @@ export async function runReplyAgent(params: {
       queuedRunFollowupTurn,
       false,
     );
+    if (enqueued === false) {
+      typing.cleanup();
+      return undefined;
+    }
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
     const queuedBehindActiveRun = isRunActive?.() === true;

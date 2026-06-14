@@ -48,7 +48,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type { MsgContext, OriginatingChannelType, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
   formatThinkingLevels,
@@ -97,6 +97,7 @@ import {
   waitForReplyRunEndBySessionId,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
@@ -1250,6 +1251,14 @@ export async function runPreparedReply(
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
         })
       : undefined);
+  const messageProvider = resolveOriginMessageProvider({
+    originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+    // Prefer Provider over Surface for fallback channel identity.
+    // Surface can carry relayed metadata while Provider owns reply routing.
+    provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
+  });
+  const replyPolicyChannel =
+    ctx.OriginatingChannel ?? (messageProvider as OriginatingChannelType | undefined);
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -1271,6 +1280,12 @@ export async function runPreparedReply(
     originatingAccountId: sessionCtx.AccountId,
     originatingThreadId,
     originatingReplyToId: sessionCtx.ReplyToId,
+    originatingReplyToMode: resolveReplyToMode(
+      cfg,
+      replyPolicyChannel,
+      sessionCtx.AccountId,
+      ctx.ChatType,
+    ),
     originatingChatType: ctx.ChatType,
     run: {
       agentId,
@@ -1278,13 +1293,7 @@ export async function runPreparedReply(
       sessionId: preparedSessionState.sessionId,
       sessionKey,
       runtimePolicySessionKey,
-      messageProvider: resolveOriginMessageProvider({
-        originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
-        // Prefer Provider over Surface for fallback channel identity.
-        // Surface can carry relayed metadata (for example "webchat") while Provider
-        // still reflects the active channel that should own tool routing.
-        provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
-      }),
+      messageProvider,
       chatType: normalizeChatType(promptSessionCtx.ChatType),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,

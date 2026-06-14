@@ -1,5 +1,6 @@
 /** Prepares queued follow-up payloads for source-channel delivery. */
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
+import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
@@ -37,6 +38,7 @@ export function resolveFollowupDeliveryPayloads(params: {
   originatingAccountId?: string;
   originatingChannel?: string;
   originatingChatType?: string | null;
+  originatingReplyToMode?: ReplyToMode;
   originatingTo?: string;
   originatingThreadId?: string | number;
   sentMediaUrls?: string[];
@@ -48,12 +50,14 @@ export function resolveFollowupDeliveryPayloads(params: {
     provider: params.messageProvider,
   });
   const replyToChannel = replyMessageProvider as OriginatingChannelType | undefined;
-  const replyToMode = resolveReplyToMode(
-    params.cfg,
-    replyToChannel,
-    params.originatingAccountId,
-    params.originatingChatType,
-  );
+  const replyToMode =
+    params.originatingReplyToMode ??
+    resolveReplyToMode(
+      params.cfg,
+      replyToChannel,
+      params.originatingAccountId,
+      params.originatingChatType,
+    );
   const accountId = resolveOriginAccountId({
     originatingAccountId: params.originatingAccountId,
   });

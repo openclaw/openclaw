@@ -625,6 +625,7 @@ export function createFollowupRunner(params: {
           originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
           originatingChannel: queued.originatingChannel,
           originatingChatType: queued.originatingChatType,
+          originatingReplyToMode: queued.originatingReplyToMode,
           originatingTo: queued.originatingTo,
         });
         if (noticePayloads.length === 0) {
@@ -1257,6 +1258,7 @@ export function createFollowupRunner(params: {
         originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
         originatingChannel: queued.originatingChannel,
         originatingChatType: queued.originatingChatType,
+        originatingReplyToMode: queued.originatingReplyToMode,
         originatingTo: queued.originatingTo,
         originatingThreadId: queued.originatingThreadId,
         sentMediaUrls: runResult.messagingToolSentMediaUrls,

@@ -613,7 +613,7 @@ describe("createFollowupRunner reply-lane admission", () => {
       MediaType: "image/png",
     } as never;
     runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "done" }],
+      payloads: [],
       meta: {},
     });
     const runner = createFollowupRunner({
