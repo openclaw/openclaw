@@ -636,11 +636,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       state.status === "mismatched" ||
       (state.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
     if (refreshedDatabase && hadIndexIdentityDirty && state.status === "valid") {
-      this.dirty = false;
-      this.sessionsDirty = false;
-      this.sessionsDirtyFiles.clear();
-      this.memoryFullRetryDirty = false;
-      this.sessionsFullRetryDirty = false;
+      this.dirty = this.memoryFullRetryDirty || this.pendingWatchPaths.size > 0;
+      this.sessionsDirty = this.sessionsFullRetryDirty || this.sessionsDirtyFiles.size > 0;
     }
     if (refreshedDatabase) {
       this.indexFileRefreshPendingDirtyCleanup = false;
