@@ -2,12 +2,15 @@
 // session write-lock behavior.
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
 }));
 const streamMocks = vi.hoisted(() => ({
-  streamSimple: vi.fn(() => "stream"),
+  streamSimple: vi.fn(
+    (_model: Model, _context: Context, _options?: SimpleStreamOptions) => "stream",
+  ),
 }));
 
 vi.mock("../../auto-reply/thinking.js", () => ({
@@ -16,7 +19,6 @@ vi.mock("../../auto-reply/thinking.js", () => ({
 vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
-import type { Model } from "../../llm/types.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
@@ -85,7 +87,7 @@ function createResourceLoaderWithHandlers(
   };
 }
 
-async function createSessionAndStreamModel(model: Model): Promise<Record<string, unknown>> {
+async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOptions> {
   streamMocks.streamSimple.mockClear();
   const { session } = await createAgentSession({
     model,
@@ -105,7 +107,7 @@ async function createSessionAndStreamModel(model: Model): Promise<Record<string,
     {},
   );
 
-  return streamMocks.streamSimple.mock.calls.at(-1)?.[2] as Record<string, unknown>;
+  return streamMocks.streamSimple.mock.lastCall?.[2] ?? {};
 }
 
 describe("createAgentSession attribution headers", () => {
