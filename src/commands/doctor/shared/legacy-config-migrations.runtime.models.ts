@@ -1007,6 +1007,7 @@ function hasOwnDefinedProperty(record: Record<string, unknown>, key: string): bo
 function collectModelMergeBlockers(params: {
   canonical: Record<string, unknown>;
   legacy: Record<string, unknown>;
+  hasModelsToMerge: boolean;
 }): string[] {
   const blockers: string[] = [];
   for (const key of MODEL_UNSCOPED_PROVIDER_DEFAULT_KEYS) {
@@ -1014,9 +1015,11 @@ function collectModelMergeBlockers(params: {
       blockers.push(`models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.${key}`);
     }
   }
-  for (const key of CANONICAL_PROVIDER_MODEL_LEAK_KEYS) {
-    if (hasOwnDefinedProperty(params.canonical, key)) {
-      blockers.push(`models.providers.${OPENAI_PROVIDER_ID}.${key}`);
+  if (params.hasModelsToMerge) {
+    for (const key of CANONICAL_PROVIDER_MODEL_LEAK_KEYS) {
+      if (hasOwnDefinedProperty(params.canonical, key)) {
+        blockers.push(`models.providers.${OPENAI_PROVIDER_ID}.${key}`);
+      }
     }
   }
   return blockers;
@@ -1083,6 +1086,11 @@ function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boole
     const mergeBlockers = collectModelMergeBlockers({
       canonical: canonicalEntry.value,
       legacy: normalized.value,
+      hasModelsToMerge:
+        getMergeableLegacyOpenAIModels({
+          canonical: canonicalEntry.value,
+          legacy: normalized.value,
+        }).length > 0,
     });
     if (mergeBlockers.length === 0) {
       return true;
@@ -1112,6 +1120,11 @@ export function collectBlockedLegacyOpenAICodexProviderWarnings(raw: unknown): s
     const mergeBlockers = collectModelMergeBlockers({
       canonical: canonicalEntry.value,
       legacy: normalized.value,
+      hasModelsToMerge:
+        getMergeableLegacyOpenAIModels({
+          canonical: canonicalEntry.value,
+          legacy: normalized.value,
+        }).length > 0,
     });
     if (mergeBlockers.length === 0) {
       continue;
@@ -1216,7 +1229,11 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         canonical,
         legacy: normalized.value,
       });
-      const mergeBlockers = collectModelMergeBlockers({ canonical, legacy: normalized.value });
+      const mergeBlockers = collectModelMergeBlockers({
+        canonical,
+        legacy: normalized.value,
+        hasModelsToMerge: modelsToMerge.length > 0,
+      });
       if (mergeBlockers.length > 0) {
         if (normalized.changed) {
           providers[providerId] = normalized.value;

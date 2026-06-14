@@ -614,6 +614,32 @@ describe("legacy memory search config migrate", () => {
     );
   });
 
+  it("removes a redundant legacy codex provider with no own defaults even when canonical openai has provider-level defaults", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            apiKey: "OPENAI_API_KEY",
+            params: { store: true },
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5.5" }],
+          },
+          "openai-codex": {
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            models: [{ id: "gpt-5.5", api: "openai-codex-responses" }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+    expect(res.changes).toContain(
+      "Removed models.providers.openai-codex because models.providers.openai already exists.",
+    );
+  });
+
   it("previews a doctor warning before removing a codex OAuth provider with no mergeable models", () => {
     const raw = {
       models: {
