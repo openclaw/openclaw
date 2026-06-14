@@ -481,6 +481,8 @@ describe("mattermost inbound user posts", () => {
         name: "read",
         phase: "start",
       });
+      params.replyOptions?.onAssistantMessageStart?.();
+      params.replyOptions?.onReasoningEnd?.();
       await params.replyOptions?.onToolStart?.({
         itemId: "tool-exec",
         name: "exec",
