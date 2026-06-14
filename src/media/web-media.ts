@@ -110,12 +110,24 @@ async function resolveHostedPluginMediaUrl(mediaUrl: string): Promise<string | n
     } catch (err) {
       if (shouldLogVerbose()) {
         logVerbose(
-          `Hosted media resolver failed (${entry.pluginId ?? "unknown"}): ${formatErrorMessage(err)}`,
+          `Hosted media resolver failed (${hostedMediaResolverPluginIdForLog(entry)}): ${formatErrorMessage(err)}`,
         );
       }
     }
   }
   return null;
+}
+
+function hostedMediaResolverPluginIdForLog(entry: unknown): string {
+  if (!entry || typeof entry !== "object") {
+    return "unknown";
+  }
+  try {
+    const pluginId = (entry as { pluginId?: unknown }).pluginId;
+    return typeof pluginId === "string" && pluginId.trim() ? pluginId : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 function resolveWebMediaOptions(params: {
