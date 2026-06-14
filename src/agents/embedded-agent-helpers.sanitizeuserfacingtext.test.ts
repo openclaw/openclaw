@@ -270,6 +270,26 @@ describe("sanitizeUserFacingText", () => {
     ).toBe("Text\nMore");
   });
 
+  it("strips bracket truncation sentinel lines (…[truncated] / ...[truncated])", () => {
+    expect(sanitizeUserFacingText("…[truncated]")).toBe("");
+    expect(sanitizeUserFacingText("...[truncated]")).toBe("");
+    expect(sanitizeUserFacingText("...[truncated]...")).toBe("");
+    expect(sanitizeUserFacingText("Before\n…[truncated]\nAfter")).toBe("Before\nAfter");
+    expect(sanitizeUserFacingText("Before\n...[truncated]...\nAfter")).toBe("Before\nAfter");
+  });
+
+  it("strips bare [truncated] bracket lines", () => {
+    expect(sanitizeUserFacingText("[truncated]")).toBe("");
+    expect(sanitizeUserFacingText("Before\n[truncated]\nAfter")).toBe("Before\nAfter");
+  });
+
+  it("strips chars truncated notice lines", () => {
+    expect(sanitizeUserFacingText("[... 500 chars truncated; narrow args]")).toBe("");
+    expect(sanitizeUserFacingText("Before\n[... 500 chars truncated; narrow args]\nAfter")).toBe(
+      "Before\nAfter",
+    );
+  });
+
   it("preserves ordinary inline ellipsis that are not truncation sentinels", () => {
     expect(sanitizeUserFacingText("I think... therefore I am")).toBe("I think... therefore I am");
     expect(sanitizeUserFacingText("The text was truncated by the system")).toBe(
