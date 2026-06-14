@@ -188,13 +188,32 @@ function limitTrajectoryPayloadValue(
   }
   seen.add(value);
   if (Array.isArray(value)) {
-    const limited = value
-      .slice(0, TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS)
-      .map((item) => limitTrajectoryPayloadValue(item, depth + 1, seen));
-    if (value.length > TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS) {
+    let arrayLength: number;
+    try {
+      arrayLength = value.length;
+    } catch {
+      seen.delete(value);
+      return truncatedTrajectoryValue("trajectory-array-unreadable");
+    }
+    const limited: unknown[] = [];
+    for (
+      let index = 0;
+      index < Math.min(arrayLength, TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS);
+      index += 1
+    ) {
+      let item: unknown;
+      try {
+        item = value[index];
+      } catch {
+        limited.push(truncatedTrajectoryValue("trajectory-array-item-unreadable"));
+        continue;
+      }
+      limited.push(limitTrajectoryPayloadValue(item, depth + 1, seen));
+    }
+    if (arrayLength > TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS) {
       limited.push(
         truncatedTrajectoryValue("trajectory-array-size-limit", {
-          originalLength: value.length,
+          originalLength: arrayLength,
           limitItems: TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS,
         }),
       );
@@ -203,10 +222,23 @@ function limitTrajectoryPayloadValue(
     return limited;
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record);
+  let keys: string[];
+  try {
+    keys = Object.keys(record);
+  } catch {
+    seen.delete(value);
+    return truncatedTrajectoryValue("trajectory-object-keys-unreadable");
+  }
   const limited: Record<string, unknown> = {};
   for (const key of keys.slice(0, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS)) {
-    limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen);
+    let childValue: unknown;
+    try {
+      childValue = record[key];
+    } catch {
+      limited[key] = truncatedTrajectoryValue("trajectory-field-unreadable");
+      continue;
+    }
+    limited[key] = limitTrajectoryPayloadValue(childValue, depth + 1, seen);
   }
   if (keys.length > TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS) {
     limited["_truncated"] = truncatedTrajectoryValue("trajectory-object-size-limit", {
@@ -223,6 +255,35 @@ function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string
     string,
     unknown
   >;
+}
+
+function readTrajectoryToolParameters(tool: { parameters?: unknown }): unknown {
+  try {
+    return tool.parameters;
+  } catch {
+    return truncatedTrajectoryValue("trajectory-tool-parameters-unreadable");
+  }
+}
+
+function readTrajectoryToolName(tool: { name?: string }): string | undefined {
+  try {
+    const rawName = tool.name;
+    if (typeof rawName !== "string") {
+      return undefined;
+    }
+    return rawName.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readTrajectoryToolDescription(tool: { description?: string }): string | undefined {
+  try {
+    const description = tool.description;
+    return typeof description === "string" ? description : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function describeTrajectoryWriterFlushState(writer: TrajectoryRuntimeWriter): string | undefined {
@@ -460,15 +521,18 @@ export function toTrajectoryToolDefinitions(
 ): TrajectoryToolDefinition[] {
   return tools
     .flatMap((tool) => {
-      const name = tool.name?.trim();
+      const name = readTrajectoryToolName(tool);
       if (!name) {
         return [];
       }
+      const description = readTrajectoryToolDescription(tool);
       return [
         {
           name,
-          description: tool.description,
-          parameters: sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(tool.parameters)),
+          ...(description ? { description } : {}),
+          parameters: sanitizeDiagnosticPayload(
+            limitTrajectoryPayloadValue(readTrajectoryToolParameters(tool)),
+          ),
         },
       ];
     })

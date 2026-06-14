@@ -106,6 +106,116 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
+  it("keeps trajectory tool definitions when schema accessors throw", () => {
+    let nameReads = 0;
+    const unreadableTool = {
+      name: "unreadable",
+      description: "bad getter",
+    };
+    Object.defineProperty(unreadableTool, "parameters", {
+      get() {
+        throw new Error("parameters getter exploded");
+      },
+    });
+    const nestedSchema = { type: "object" };
+    Object.defineProperty(nestedSchema, "properties", {
+      get() {
+        throw new Error("properties getter exploded");
+      },
+      enumerable: true,
+    });
+    const unreadableNameTool = {
+      description: "bad name",
+      parameters: { type: "object" },
+      get name() {
+        throw new Error("name getter exploded");
+      },
+    };
+    const unreadableDescriptionTool = {
+      name: "descriptionless",
+      parameters: { type: "object" },
+      get description() {
+        throw new Error("description getter exploded");
+      },
+    };
+    const singleReadTool = {
+      description: "single read",
+      parameters: { type: "object" },
+      get name() {
+        nameReads += 1;
+        if (nameReads > 1) {
+          throw new Error("name getter read twice");
+        }
+        return " single_read ";
+      },
+    };
+    const proxySchema = new Proxy(
+      { type: "object" },
+      {
+        ownKeys() {
+          throw new Error("schema keys exploded");
+        },
+      },
+    );
+    const proxyArray = new Proxy([{ ok: true }], {
+      get(target, property, receiver) {
+        if (property === "0") {
+          throw new Error("schema array item exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(
+      toTrajectoryToolDefinitions([
+        unreadableTool,
+        unreadableNameTool,
+        unreadableDescriptionTool,
+        singleReadTool,
+        { name: "nested", description: "nested getter", parameters: nestedSchema },
+        { name: "proxy", parameters: proxySchema },
+        { name: "array", parameters: proxyArray },
+        { name: "healthy", parameters: { type: "object", properties: { value: {} } } },
+      ] as never),
+    ).toEqual([
+      {
+        name: "array",
+        parameters: [{ truncated: true, reason: "trajectory-array-item-unreadable" }],
+      },
+      {
+        name: "descriptionless",
+        parameters: { type: "object" },
+      },
+      {
+        name: "healthy",
+        parameters: { type: "object", properties: { value: {} } },
+      },
+      {
+        name: "nested",
+        description: "nested getter",
+        parameters: {
+          type: "object",
+          properties: { truncated: true, reason: "trajectory-field-unreadable" },
+        },
+      },
+      {
+        name: "proxy",
+        parameters: { truncated: true, reason: "trajectory-object-keys-unreadable" },
+      },
+      {
+        name: "single_read",
+        description: "single read",
+        parameters: { type: "object" },
+      },
+      {
+        name: "unreadable",
+        description: "bad getter",
+        parameters: { truncated: true, reason: "trajectory-tool-parameters-unreadable" },
+      },
+    ]);
+    expect(nameReads).toBe(1);
+  });
+
   it("bounds large runtime event fields before serialization", () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
