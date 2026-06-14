@@ -236,10 +236,19 @@ function resolveChannelPackageStateChecker(params: {
   if (loadError) {
     const detail = formatErrorMessage(loadError);
     log.warn(
-      `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
+      `[channels] failed to load ${params.metadataKey} checker for ${channelPackageStatePluginIdForLog(params.entry)}: ${detail}`,
     );
   }
   return null;
+}
+
+function channelPackageStatePluginIdForLog(entry: PluginChannelCatalogEntry): string {
+  try {
+    const pluginId = entry.pluginId;
+    return typeof pluginId === "string" && pluginId.trim() ? pluginId : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string | undefined {
