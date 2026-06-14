@@ -65,6 +65,11 @@ const channelPluginMocks = vi.hoisted(() => ({
       return undefined;
     }
     return {
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+        defaultAccountId: () => undefined,
+      },
       capabilities: {
         tts: {
           voice: {
