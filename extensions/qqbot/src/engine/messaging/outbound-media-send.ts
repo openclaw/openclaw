@@ -32,7 +32,11 @@ import {
   buildDailyLimitExceededResult,
   buildFileTooLargeResult,
 } from "./outbound-result-helpers.js";
-import type { MediaTargetContext, OutboundResult } from "./outbound-types.js";
+import type {
+  MediaTargetContext,
+  OutboundMediaAccessContext,
+  OutboundResult,
+} from "./outbound-types.js";
 import {
   accountToCreds,
   sendMedia as senderSendMedia,
@@ -55,17 +59,22 @@ export function parseTarget(to: string): { type: "c2c" | "group" | "channel"; id
 // Structured media send helpers shared by gateway delivery and sendText.
 
 /** Build a media target from a normal outbound context. */
-export function buildMediaTarget(ctx: {
-  to: string;
-  account: GatewayAccount;
-  replyToId?: string | null;
-}): MediaTargetContext {
+export function buildMediaTarget(
+  ctx: {
+    to: string;
+    account: GatewayAccount;
+    replyToId?: string | null;
+  } & OutboundMediaAccessContext,
+): MediaTargetContext {
   const target = parseTarget(ctx.to);
+  const mediaLocalRoots = resolveOutboundMediaLocalRoots(ctx);
   return {
     targetType: target.type,
     targetId: target.id,
     account: ctx.account,
     replyToId: ctx.replyToId ?? undefined,
+    ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
+    ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
   };
 }
 
@@ -92,6 +101,22 @@ type ResolveOutboundMediaPathOptions = {
 type SendDocumentOptions = {
   allowQQBotDataDownloads?: boolean;
 };
+
+function resolveOutboundMediaLocalRoots(ctx: OutboundMediaAccessContext): string[] | undefined {
+  return mergeLocalRoots(
+    ctx.mediaAccess?.localRoots,
+    ctx.mediaLocalRoots,
+    ctx.mediaAccess?.workspaceDir ? [ctx.mediaAccess.workspaceDir] : undefined,
+  );
+}
+
+function mergeLocalRoots(...groups: Array<readonly string[] | undefined>): string[] | undefined {
+  const roots = groups
+    .flatMap((group) => group ?? [])
+    .map((root) => root.trim())
+    .filter(Boolean);
+  return roots.length > 0 ? Array.from(new Set(roots)) : undefined;
+}
 
 function isHttpOrDataSource(pathValue: string): boolean {
   return (
@@ -177,7 +202,9 @@ export async function sendPhoto(
   ctx: MediaTargetContext,
   imagePath: string,
 ): Promise<OutboundResult> {
-  const resolvedMediaPath = resolveOutboundMediaPath(imagePath, "image");
+  const resolvedMediaPath = resolveOutboundMediaPath(imagePath, "image", {
+    extraLocalRoots: resolveOutboundMediaLocalRoots(ctx),
+  });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
@@ -309,6 +336,7 @@ export async function sendVoice(
 ): Promise<OutboundResult> {
   const resolvedMediaPath = resolveOutboundMediaPath(voicePath, "voice", {
     allowMissingLocalPath: true,
+    extraLocalRoots: resolveOutboundMediaLocalRoots(ctx),
   });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
@@ -370,7 +398,10 @@ async function sendVoiceFromLocal(
   }
 
   // Re-check containment after the file appears to prevent symlink-race escapes.
-  const safeMediaPath = resolveTrustedOutboundMediaPath(mediaPath);
+  const extraLocalRoots = resolveOutboundMediaLocalRoots(ctx);
+  const safeMediaPath =
+    resolveTrustedOutboundMediaPath(mediaPath) ??
+    (extraLocalRoots ? resolveExistingPathWithinRoots(mediaPath, extraLocalRoots) : null);
   if (!safeMediaPath) {
     debugWarn(`sendVoice: blocked local voice path outside QQ Bot media storage`);
     return { channel: "qqbot", error: "Voice path must be inside QQ Bot media storage" };
@@ -433,7 +464,9 @@ export async function sendVideoMsg(
   ctx: MediaTargetContext,
   videoPath: string,
 ): Promise<OutboundResult> {
-  const resolvedMediaPath = resolveOutboundMediaPath(videoPath, "video");
+  const resolvedMediaPath = resolveOutboundMediaPath(videoPath, "video", {
+    extraLocalRoots: resolveOutboundMediaLocalRoots(ctx),
+  });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
@@ -534,9 +567,10 @@ export async function sendDocument(
   filePath: string,
   options: SendDocumentOptions = {},
 ): Promise<OutboundResult> {
-  const extraLocalRoots = options.allowQQBotDataDownloads
-    ? [getQQBotDataDir("downloads")]
-    : undefined;
+  const extraLocalRoots = mergeLocalRoots(
+    options.allowQQBotDataDownloads ? [getQQBotDataDir("downloads")] : undefined,
+    resolveOutboundMediaLocalRoots(ctx),
+  );
   const resolvedMediaPath = resolveOutboundMediaPath(filePath, "file", {
     extraLocalRoots,
   });
