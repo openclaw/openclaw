@@ -57,6 +57,10 @@ async function persistDiscordModelPickerOverride(params: {
           isDefault: params.isDefault,
         },
         markLiveSwitchPending: true,
+        // The picker only selects a model and never sets an auth profile, so it must
+        // not silently delete an authProfileOverride established by another source
+        // (CLI flag, session-level override). Without this the default branch wipes it.
+        preserveAuthProfileOverride: true,
       }).updated || persisted;
     const runtime = params.runtime?.trim();
     if (runtime && runtime !== "auto" && runtime !== "default") {

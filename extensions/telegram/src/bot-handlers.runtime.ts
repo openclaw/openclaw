@@ -2727,6 +2727,11 @@ export const registerTelegramHandlers = ({
                     model: selection.model,
                     isDefault: isDefaultSelection,
                   },
+                  // The picker only selects a model and never sets an auth profile, so it
+                  // must not silently delete an authProfileOverride established by another
+                  // source (CLI flag, session-level override). Without this the default
+                  // branch wipes it on every model switch.
+                  preserveAuthProfileOverride: true,
                 });
               });
             } catch (err) {
