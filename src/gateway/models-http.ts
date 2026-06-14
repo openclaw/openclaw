@@ -2,6 +2,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { listSpeechProviders } from "../tts/provider-registry.js";
+import { isTtsProviderConfigured, resolveTtsConfig } from "../tts/tts.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -15,6 +17,7 @@ import {
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
+  resolveAgentIdForRequest,
   resolveAgentIdFromModel,
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
@@ -25,6 +28,8 @@ type OpenAiModelsHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  /** When true, list configured TTS providers as `tts/<provider>` models. */
+  audioSpeechEnabled?: boolean;
 };
 
 type OpenAiModelObject = {
@@ -71,6 +76,22 @@ function loadAgentModelIds(): string[] {
   return Array.from(ids);
 }
 
+/** List configured-and-available TTS providers as `tts/<provider>` model ids. */
+function loadTtsModelIds(agentId: string): string[] {
+  const cfg = getRuntimeConfig();
+  // Resolve TTS config against the same request agent context that
+  // `/v1/audio/speech` routes with, so agent-scoped TTS overrides do not make
+  // the two endpoints disagree about which providers are available.
+  const ttsConfig = resolveTtsConfig(cfg, agentId);
+  // Only advertise configured providers that honor the OpenAI speech request
+  // fields, so `/v1/models` never claims a provider is OpenAI-compatible while
+  // it would silently ignore voice/speed/response_format.
+  return listSpeechProviders(cfg)
+    .filter((provider) => provider.openAiSpeechCompatible)
+    .filter((provider) => isTtsProviderConfigured(ttsConfig, provider.id, cfg))
+    .map((provider) => `tts/${provider.id}`);
+}
+
 function resolveRequestPath(req: IncomingMessage): string {
   return new URL(req.url ?? "/", "http://localhost").pathname;
 }
@@ -104,10 +125,13 @@ export async function handleOpenAiModelsHttpRequest(
   }
 
   const ids = loadAgentModelIds();
+  const ttsIds = opts.audioSpeechEnabled
+    ? loadTtsModelIds(resolveAgentIdForRequest({ req, model: undefined }))
+    : [];
   if (requestPath === "/v1/models") {
     sendJson(res, 200, {
       object: "list",
-      data: ids.map(toOpenAiModel),
+      data: [...ids, ...ttsIds].map(toOpenAiModel),
     });
     return true;
   }
@@ -123,6 +147,13 @@ export async function handleOpenAiModelsHttpRequest(
     decodedId = decodeURIComponent(encodedId);
   } catch {
     sendInvalidRequest(res, "Invalid model id encoding.");
+    return true;
+  }
+
+  // TTS providers use their own `tts/<provider>` namespace and bypass the
+  // agent-model validation used for `openclaw/<agentId>` ids.
+  if (ttsIds.includes(decodedId)) {
+    sendJson(res, 200, toOpenAiModel(decodedId));
     return true;
   }
 

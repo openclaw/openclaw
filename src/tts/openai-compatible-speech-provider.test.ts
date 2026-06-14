@@ -78,6 +78,7 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     });
 
     expect(provider.defaultModel).toBe("demo-tts");
+    expect(provider.openAiSpeechCompatible).toBe(true);
     expect(
       provider.resolveConfig?.({
         cfg: {} as never,
@@ -176,6 +177,81 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     expect(result.outputFormat).toBe("opus");
     expect(result.fileExtension).toBe(".opus");
     expect(result.voiceCompatible).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("honors a supported per-request response_format override", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array([7, 8, 9]), { status: 200 }),
+      release,
+    });
+
+    const provider = createOpenAiCompatibleSpeechProvider({
+      id: "demo",
+      label: "Demo",
+      autoSelectOrder: 40,
+      models: ["demo-tts"],
+      voices: ["alloy"],
+      defaultModel: "demo-tts",
+      defaultVoice: "alloy",
+      defaultBaseUrl: "https://example.test/v1",
+      envKey: "DEMO_API_KEY",
+      responseFormats: ["mp3", "opus"],
+      defaultResponseFormat: "mp3",
+      voiceCompatibleResponseFormats: ["opus"],
+    });
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: { apiKey: "sk-test", responseFormat: "mp3" },
+      providerOverrides: { responseFormat: "opus" },
+      target: "audio-file",
+      timeoutMs: 1234,
+    });
+
+    const postRequest = requireFirstMockArg(postJsonRequestMock);
+    expect((postRequest.body as Record<string, unknown>).response_format).toBe("opus");
+    expect(result.outputFormat).toBe("opus");
+    expect(result.fileExtension).toBe(".opus");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("ignores a response_format override the provider does not support", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array([1, 2]), { status: 200 }),
+      release,
+    });
+
+    const provider = createOpenAiCompatibleSpeechProvider({
+      id: "demo",
+      label: "Demo",
+      autoSelectOrder: 40,
+      models: ["demo-tts"],
+      voices: ["alloy"],
+      defaultModel: "demo-tts",
+      defaultVoice: "alloy",
+      defaultBaseUrl: "https://example.test/v1",
+      envKey: "DEMO_API_KEY",
+      responseFormats: ["mp3", "opus"],
+      defaultResponseFormat: "mp3",
+      voiceCompatibleResponseFormats: ["opus"],
+    });
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: { apiKey: "sk-test", responseFormat: "mp3" },
+      providerOverrides: { responseFormat: "wav" },
+      target: "audio-file",
+      timeoutMs: 1234,
+    });
+
+    const postRequest = requireFirstMockArg(postJsonRequestMock);
+    expect((postRequest.body as Record<string, unknown>).response_format).toBe("mp3");
+    expect(result.outputFormat).toBe("mp3");
     expect(release).toHaveBeenCalledOnce();
   });
 
