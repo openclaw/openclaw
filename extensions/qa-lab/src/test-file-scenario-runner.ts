@@ -69,15 +69,12 @@ export type QaTestFileScenarioRunResult = {
   evidencePath: string;
   executionKind: QaTestFileExecutionKind;
   outputDir: string;
-  reportPath: string;
   results: QaTestFileScenarioResult[];
 };
 
 type QaTestFileRunnerDefinition = {
   buildEvidenceSummary: typeof buildVitestEvidenceSummary;
   buildSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[];
-  reportFilename: string;
-  reportTitle: string;
 };
 
 export function isQaTestFileScenario(
@@ -121,14 +118,10 @@ const testFileRunnerDefinitions: Record<QaTestFileExecutionKind, QaTestFileRunne
   vitest: {
     buildEvidenceSummary: buildVitestEvidenceSummary,
     buildSteps: vitestSteps,
-    reportFilename: "qa-vitest-report.md",
-    reportTitle: "QA Vitest Scenario Report",
   },
   playwright: {
     buildEvidenceSummary: buildPlaywrightEvidenceSummary,
     buildSteps: playwrightSteps,
-    reportFilename: "qa-playwright-report.md",
-    reportTitle: "QA Playwright Scenario Report",
   },
 };
 
@@ -288,77 +281,26 @@ function buildTestFileEvidence(params: {
 }
 
 function buildScenarioArtifactPaths(params: {
-  reportPath: string;
   repoRoot: string;
   results: readonly QaTestFileScenarioResult[];
 }) {
-  return [
-    { kind: "report", path: toRepoRelativePath(params.repoRoot, params.reportPath) },
-    ...params.results.map((result) => ({
-      kind: "log",
-      path: toRepoRelativePath(params.repoRoot, result.logPath),
-    })),
-  ];
+  return params.results.map((result) => ({
+    kind: "log",
+    path: toRepoRelativePath(params.repoRoot, result.logPath),
+  }));
 }
 
-function renderTestFileScenarioReport(params: {
-  evidencePath: string;
-  generatedAt: string;
-  repoRoot: string;
-  results: readonly QaTestFileScenarioResult[];
-  title: string;
-}) {
-  const lines = [
-    `# ${params.title}`,
-    "",
-    `Generated at: ${params.generatedAt}`,
-    `Evidence summary: ${toRepoRelativePath(params.repoRoot, params.evidencePath)}`,
-    "",
-    "## Results",
-    "",
-  ];
-  for (const result of params.results) {
-    const logPath = toRepoRelativePath(params.repoRoot, result.logPath);
-    lines.push(
-      `- ${result.scenario.id}: ${result.status}`,
-      `  - kind: ${result.scenario.execution.kind}`,
-      `  - path: ${result.scenario.execution.path}`,
-      `  - durationMs: ${Math.round(result.durationMs)}`,
-      `  - log: ${logPath}`,
-    );
-    if (result.failureMessage) {
-      lines.push(`  - failure: ${result.failureMessage.split("\n")[0]}`);
-    }
-  }
-  return `${lines.join("\n")}\n`;
-}
-
-async function writeTestFileEvidenceFiles(params: {
+async function writeTestFileEvidenceFile(params: {
   evidence: unknown;
-  generatedAt: string;
   outputDir: string;
-  reportFilename: string;
-  reportTitle: string;
-  repoRoot: string;
-  results: readonly QaTestFileScenarioResult[];
-}): Promise<Pick<QaTestFileScenarioRunResult, "evidencePath" | "reportPath">> {
+}): Promise<Pick<QaTestFileScenarioRunResult, "evidencePath">> {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
-  const reportPath = path.join(params.outputDir, params.reportFilename);
   await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
-  const report = renderTestFileScenarioReport({
-    evidencePath,
-    generatedAt: params.generatedAt,
-    repoRoot: params.repoRoot,
-    results: params.results,
-    title: params.reportTitle,
-  });
-  await fs.writeFile(reportPath, report, "utf8");
   await assertQaTestFileArtifactWritten("evidence", evidencePath);
-  await assertQaTestFileArtifactWritten("report", reportPath);
-  return { evidencePath, reportPath };
+  return { evidencePath };
 }
 
-async function assertQaTestFileArtifactWritten(kind: "evidence" | "report", filePath: string) {
+async function assertQaTestFileArtifactWritten(kind: "evidence", filePath: string) {
   try {
     await fs.access(filePath);
   } catch (error) {
@@ -378,7 +320,6 @@ export async function runQaTestFileScenarios(
   if (!kind) {
     throw new Error("qa suite found no Vitest or Playwright scenarios to run.");
   }
-  const definition = testFileRunnerDefinitions[kind];
   await fs.mkdir(params.outputDir, { recursive: true });
   const runCommand = params.runCommand ?? runQaScenarioCommand;
   const env = {
@@ -398,9 +339,7 @@ export async function runQaTestFileScenarios(
     );
   }
   const generatedAt = new Date().toISOString();
-  const reportPath = path.join(params.outputDir, definition.reportFilename);
   const artifactPaths = buildScenarioArtifactPaths({
-    reportPath,
     repoRoot: params.repoRoot,
     results,
   });
@@ -413,14 +352,9 @@ export async function runQaTestFileScenarios(
     providerMode: params.providerMode,
     results,
   });
-  const paths = await writeTestFileEvidenceFiles({
+  const paths = await writeTestFileEvidenceFile({
     evidence,
-    generatedAt,
     outputDir: params.outputDir,
-    reportFilename: definition.reportFilename,
-    reportTitle: definition.reportTitle,
-    repoRoot: params.repoRoot,
-    results,
   });
   return {
     ...paths,
