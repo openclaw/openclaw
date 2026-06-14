@@ -42,7 +42,10 @@ export type PostCompactionDelegateSpawn = (
 ) => Promise<SpawnSubagentResult>;
 
 export type PostCompactionDelegateDeliveryDeps = {
-  enqueueSystemEvent(text: string, options: { sessionKey: string; traceparent?: string }): void;
+  enqueueSystemEvent(
+    text: string,
+    options: { sessionKey: string; traceparent?: string; trusted?: boolean },
+  ): void;
   getRuntimeConfig(): OpenClawConfig;
   loadSessionStore(storePath: string): Record<string, SessionEntry>;
   log(message: string): void;
@@ -67,7 +70,10 @@ export type PostCompactionDelegateDispatchDeps = {
     compactionCount?: number;
     deliveryContext?: SessionDeliveryContext;
   }): Promise<string>;
-  enqueueSystemEvent(text: string, options: { sessionKey: string; traceparent?: string }): void;
+  enqueueSystemEvent(
+    text: string,
+    options: { sessionKey: string; traceparent?: string; trusted?: boolean },
+  ): void;
   log(message: string): void;
   now(): number;
   readPostCompactionContext(
@@ -755,7 +761,15 @@ export async function dispatchPostCompactionDelegates(
     droppedDelegates: droppedCompactionDelegates,
   });
   if (postCompactionContextContent) {
-    deps.enqueueSystemEvent(postCompactionContextContent, { sessionKey: params.sessionKey });
+    // Trusted-internal producer: this is workspace AGENTS.md content read by
+    // `readPostCompactionContext`, which may legitimately contain literal
+    // `System:`/`[System]` strings (critical-rule examples, prompt scaffolding).
+    // Mark it trusted so the inbound anti-spoof sanitizer preserves it verbatim
+    // instead of rewriting those markers and corrupting the refresh context.
+    deps.enqueueSystemEvent(postCompactionContextContent, {
+      sessionKey: params.sessionKey,
+      trusted: true,
+    });
   }
   deps.enqueueSystemEvent(lifecycleEvent, {
     sessionKey: params.sessionKey,
