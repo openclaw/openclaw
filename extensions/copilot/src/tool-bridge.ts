@@ -10,9 +10,11 @@ import {
   buildEmbeddedAttemptToolRunContext,
   getPluginToolMeta,
   isSubagentSessionKey,
+  projectRuntimeToolInputSchema,
   resolveAttemptSpawnWorkspaceDir,
   resolveEmbeddedAttemptToolConstructionPlan,
   resolveModelAuthMode,
+  type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type CreateOpenClawCodingTools =
@@ -183,8 +185,11 @@ export async function createCopilotToolBridge(
     );
   }
 
+  const materializedToolProjection = materializeCopilotSourceTools(sourceTools as AnyAgentTool[]);
+  warnCopilotToolSchemaDiagnostics(materializedToolProjection.diagnostics);
+
   const plannedTools = filterCopilotToolsForConstructionPlan(
-    sourceTools as AnyAgentTool[],
+    materializedToolProjection.tools,
     effectiveToolPlan.codingToolConstructionPlan,
   );
   const filteredTools = filterCopilotToolsForAllowlist(
@@ -492,6 +497,186 @@ export function convertOpenClawToolToSdkTool(
     // (see `extensions/codex/src/app-server/dynamic-tools.ts`).
     skipPermission: true,
   };
+}
+
+type CopilotToolMaterialization =
+  | { ok: true; tool: AnyAgentTool }
+  | { diagnostic: RuntimeToolSchemaDiagnostic; ok: false };
+
+type CopilotToolField =
+  | "description"
+  | "execute"
+  | "executionMode"
+  | "name"
+  | "parameters"
+  | "prepareArguments";
+
+function materializeCopilotSourceTools(sourceTools: readonly AnyAgentTool[]): {
+  diagnostics: RuntimeToolSchemaDiagnostic[];
+  tools: AnyAgentTool[];
+} {
+  const tools: AnyAgentTool[] = [];
+  const diagnostics: RuntimeToolSchemaDiagnostic[] = [];
+  let changed = false;
+  for (const [toolIndex, sourceTool] of sourceTools.entries()) {
+    const materialized = materializeCopilotSourceTool(sourceTool, toolIndex);
+    if (materialized.ok) {
+      tools.push(materialized.tool);
+      changed ||= materialized.tool !== sourceTool;
+    } else {
+      changed = true;
+      diagnostics.push(materialized.diagnostic);
+    }
+  }
+  return { diagnostics, tools: changed ? tools : (sourceTools as AnyAgentTool[]) };
+}
+
+function materializeCopilotSourceTool(
+  sourceTool: AnyAgentTool,
+  toolIndex: number,
+): CopilotToolMaterialization {
+  if (!sourceTool || typeof sourceTool !== "object") {
+    return {
+      ok: false,
+      diagnostic: {
+        toolIndex,
+        toolName: `tool[${toolIndex}]`,
+        violations: [`tool[${toolIndex}] is not an object`],
+      },
+    };
+  }
+
+  const name = readCopilotToolField(sourceTool, "name");
+  const toolName =
+    name.readable && typeof name.value === "string" && name.value.trim()
+      ? name.value
+      : `tool[${toolIndex}]`;
+  if (!name.readable) {
+    return copilotToolDiagnostic(toolIndex, toolName, [`${toolName}.name is unreadable`]);
+  }
+  if (typeof name.value !== "string" || name.value.trim().length === 0) {
+    return copilotToolDiagnostic(toolIndex, toolName, [
+      `${toolName}.name must be a non-empty string`,
+    ]);
+  }
+
+  const execute = readCopilotToolField(sourceTool, "execute");
+  if (!execute.readable || typeof execute.value !== "function") {
+    return copilotToolDiagnostic(toolIndex, toolName, [`${toolName}.execute must be a function`]);
+  }
+
+  const parameters = readCopilotToolField(sourceTool, "parameters");
+  if (!parameters.readable) {
+    return copilotToolDiagnostic(toolIndex, toolName, [`${toolName}.parameters is unreadable`]);
+  }
+  const schemaProjection = projectRuntimeToolInputSchema(
+    parameters.value,
+    `${toolName}.parameters`,
+  );
+  if (schemaProjection.violations.length > 0) {
+    return copilotToolDiagnostic(toolIndex, toolName, [...schemaProjection.violations]);
+  }
+
+  const description = readCopilotToolField(sourceTool, "description");
+  const prepareArguments = readCopilotToolField(sourceTool, "prepareArguments");
+  if (!prepareArguments.readable) {
+    return copilotToolDiagnostic(toolIndex, toolName, [
+      `${toolName}.prepareArguments is unreadable`,
+    ]);
+  }
+  const executionMode = readCopilotToolField(sourceTool, "executionMode");
+  if (!executionMode.readable) {
+    return copilotToolDiagnostic(toolIndex, toolName, [`${toolName}.executionMode is unreadable`]);
+  }
+  const needsMaterializedDescriptor =
+    !description.readable ||
+    hasAccessorDescriptor(sourceTool, "name") ||
+    hasAccessorDescriptor(sourceTool, "parameters") ||
+    hasAccessorDescriptor(sourceTool, "description") ||
+    hasAccessorDescriptor(sourceTool, "execute") ||
+    hasAccessorDescriptor(sourceTool, "prepareArguments") ||
+    hasAccessorDescriptor(sourceTool, "executionMode");
+  if (!needsMaterializedDescriptor) {
+    return { ok: true, tool: sourceTool };
+  }
+
+  const pluginMeta = getPluginToolMeta(sourceTool);
+  return {
+    ok: true,
+    tool: Object.create(Object.getPrototypeOf(sourceTool), {
+      ...Object.getOwnPropertyDescriptors(sourceTool),
+      description: dataDescriptor(description.readable ? description.value : undefined),
+      execute: dataDescriptor(execute.value),
+      executionMode: dataDescriptor(executionMode.readable ? executionMode.value : undefined),
+      name: dataDescriptor(name.value),
+      parameters: dataDescriptor(schemaProjection.schema),
+      prepareArguments: dataDescriptor(prepareArguments.value),
+      ...(pluginMeta ? { pluginId: dataDescriptor(pluginMeta.pluginId) } : {}),
+    }) as AnyAgentTool,
+  };
+}
+
+function copilotToolDiagnostic(
+  toolIndex: number,
+  toolName: string,
+  violations: string[],
+): CopilotToolMaterialization {
+  return { ok: false, diagnostic: { toolIndex, toolName, violations } };
+}
+
+function readCopilotToolField<TField extends CopilotToolField>(
+  tool: AnyAgentTool,
+  field: TField,
+): { readable: true; value: AnyAgentTool[TField] } | { readable: false } {
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
+}
+
+function hasAccessorDescriptor(tool: object, field: PropertyKey): boolean {
+  let target: object | null = tool;
+  while (target) {
+    const descriptor = Object.getOwnPropertyDescriptor(target, field);
+    if (descriptor) {
+      return "get" in descriptor || "set" in descriptor;
+    }
+    target = Object.getPrototypeOf(target);
+  }
+  return false;
+}
+
+function dataDescriptor(value: unknown): PropertyDescriptor {
+  return {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  };
+}
+
+function warnCopilotToolSchemaDiagnostics(
+  diagnostics: readonly RuntimeToolSchemaDiagnostic[],
+): void {
+  for (const diagnostic of diagnostics) {
+    console.warn(
+      `[copilot-tool-bridge] Tool "${formatCopilotDiagnosticText(
+        diagnostic.toolName,
+      )}" has unsupported runtime input schema (${diagnostic.violations
+        .map(formatCopilotDiagnosticText)
+        .join(", ")}) and was skipped before Copilot SDK registration.`,
+    );
+  }
+}
+
+function formatCopilotDiagnosticText(value: string): string {
+  return (
+    value
+      .replace(/\p{C}+/gu, " ")
+      .trim()
+      .slice(0, 240) || "(unknown)"
+  );
 }
 
 function agentToolResultToSdk(result: AgentToolResultLike | undefined): ToolResultObject {

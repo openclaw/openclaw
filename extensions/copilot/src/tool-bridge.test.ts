@@ -161,6 +161,52 @@ describe("createCopilotToolBridge", () => {
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a", "tool-b"]);
   });
 
+  it("quarantines malformed source tool descriptors before SDK registration", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const unreadableNameTool = Object.defineProperty(makeTool({ name: "bad" }), "name", {
+      get() {
+        throw new Error("copilot bridge tool name getter exploded");
+      },
+    });
+    const dynamicSchemaTool = makeTool({
+      name: "dofbot_move_angles",
+      parameters: {
+        properties: {
+          target: { $dynamicRef: "#/$defs/angleTarget" },
+        },
+        type: "object",
+      } as never,
+    });
+    const unreadablePrepareTool = Object.defineProperty(
+      makeTool({ name: "needs_prepare" }),
+      "prepareArguments",
+      {
+        get() {
+          throw new Error("copilot bridge prepareArguments getter exploded");
+        },
+      },
+    );
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      createOpenClawCodingTools: async () => [
+        unreadableNameTool,
+        dynamicSchemaTool,
+        unreadablePrepareTool,
+        makeTool({ name: "read" }),
+      ],
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["read"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["read"]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Tool "dofbot_move_angles" has unsupported runtime input schema'),
+    );
+  });
+
   it("throws when createOpenClawCodingTools returns a non-array", async () => {
     await expect(
       createCopilotToolBridge({
