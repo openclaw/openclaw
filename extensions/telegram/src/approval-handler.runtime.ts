@@ -10,13 +10,20 @@ import {
   buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { ExecApprovalPendingReplyParams } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type {
+  ExecApprovalPendingReplyParams,
+  ExecApprovalReplyDecision,
+} from "openclaw/plugin-sdk/approval-reply-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  registerTelegramApprovalReactionTarget,
+  unregisterTelegramApprovalReactionTarget,
+} from "./approval-reactions.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
@@ -25,9 +32,14 @@ import {
 import { editMessageReplyMarkupTelegram, sendMessageTelegram, sendTypingTelegram } from "./send.js";
 
 const log = createSubsystemLogger("telegram/approvals");
+const TELEGRAM_REACTION_ALLOWED_DECISIONS = [
+  "allow-once",
+  "deny",
+] as const satisfies readonly ExecApprovalReplyDecision[];
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type PendingMessage = {
+  accountId: string;
   chatId: string;
   messageId: string;
 };
@@ -35,6 +47,15 @@ type TelegramPendingDelivery = {
   text: string;
   buttons: ReturnType<typeof resolveTelegramInlineButtons>;
 };
+
+function filterTelegramReactionDecisions(
+  actions: PendingApprovalView["actions"],
+): ExecApprovalReplyDecision[] {
+  const allowed = new Set<ExecApprovalReplyDecision>(TELEGRAM_REACTION_ALLOWED_DECISIONS);
+  return actions
+    .map((action) => action.decision)
+    .filter((decision): decision is ExecApprovalReplyDecision => allowed.has(decision));
+}
 
 export type TelegramExecApprovalHandlerDeps = {
   nowMs?: () => number;
@@ -102,6 +123,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
   TelegramPendingDelivery,
   { chatId: string; messageThreadId?: number },
   PendingMessage,
+  boolean,
   never
 >({
   eventKinds: ["exec", "plugin"],
@@ -168,12 +190,38 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           : {}),
       });
       return {
+        accountId: resolved.accountId,
         chatId: result.chatId,
         messageId: result.messageId,
       };
     },
   },
   interactions: {
+    bindPending: ({ entry, request, view }) =>
+      registerTelegramApprovalReactionTarget({
+        accountId: entry.accountId,
+        chatId: entry.chatId,
+        messageId: entry.messageId,
+        approvalId: request.id,
+        allowedDecisions: filterTelegramReactionDecisions(view.actions),
+        ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
+      })
+        ? true
+        : null,
+    unbindPending: ({ entry }) => {
+      unregisterTelegramApprovalReactionTarget({
+        accountId: entry.accountId,
+        chatId: entry.chatId,
+        messageId: entry.messageId,
+      });
+    },
+    cancelDelivered: ({ entry }) => {
+      unregisterTelegramApprovalReactionTarget({
+        accountId: entry.accountId,
+        chatId: entry.chatId,
+        messageId: entry.messageId,
+      });
+    },
     clearPendingActions: async ({ cfg, accountId, context, entry }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
