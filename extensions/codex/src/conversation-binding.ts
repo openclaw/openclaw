@@ -306,9 +306,6 @@ export async function handleCodexConversationInboundClaim(
 export async function handleCodexConversationBindingResolved(
   event: PluginConversationBindingResolvedEvent,
 ): Promise<void> {
-  if (event.status !== "denied") {
-    return;
-  }
   const data = readCodexConversationBindingDataRecord(event.request.data ?? {});
   if (!data || data.kind !== "codex-app-server-session") {
     return;
