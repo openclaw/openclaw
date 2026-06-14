@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   listAgentEntries: vi.fn((_cfg?: unknown) => [] as Array<Record<string, unknown>>),
   findAgentEntryIndex: vi.fn((_list?: unknown, _agentId?: string) => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
+  setDefaultAgent: vi.fn((cfg: unknown, _agentId?: string) => cfg),
   pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0 })),
   writeConfigFile: vi.fn(async (_nextConfig?: unknown) => {}),
   ensureAgentWorkspace: vi.fn(
@@ -101,6 +102,7 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../commands/agents.config.js", () => ({
   applyAgentConfig: mocks.applyAgentConfig,
+  setDefaultAgent: mocks.setDefaultAgent,
   findAgentEntryIndex: mocks.findAgentEntryIndex,
   listAgentEntries: mocks.listAgentEntries,
   pruneAgentConfig: mocks.pruneAgentConfig,
@@ -1100,6 +1102,62 @@ describe("agents.update", () => {
       relativePath: "IDENTITY.md",
       nonBlockingRead: true,
     });
+  });
+});
+
+describe("agents.setDefault", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "research" }],
+      },
+    };
+    mocks.setDefaultAgent.mockImplementation((cfg: unknown, agentId?: string) => {
+      const list = getAgentList(cfg).slice();
+      for (let index = 0; index < list.length; index += 1) {
+        list[index] = { ...list[index], default: list[index].id === agentId };
+      }
+      return {
+        ...(cfg as Record<string, unknown>),
+        agents: { ...(cfg as { agents?: Record<string, unknown> }).agents, list },
+      };
+    });
+  });
+
+  it("marks the target default, clears others, and returns the new defaultId", async () => {
+    const { respond, promise } = makeCall("agents.setDefault", { agentId: "research" });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, defaultId: "research" });
+    expect(mocks.writeConfigFile).toHaveBeenCalled();
+    const written = getAgentList(mocks.writeConfigFile.mock.calls.at(-1)?.[0]);
+    expect(written.filter((entry) => entry.default)).toEqual([{ id: "research", default: true }]);
+  });
+
+  it("is idempotent when the target is already default", async () => {
+    const { respond, promise } = makeCall("agents.setDefault", { agentId: "main" });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, defaultId: "main" });
+    const written = getAgentList(mocks.writeConfigFile.mock.calls.at(-1)?.[0]);
+    expect(written.filter((entry) => entry.default)).toEqual([{ id: "main", default: true }]);
+  });
+
+  it("rejects an unknown agent without writing config", async () => {
+    const { respond, promise } = makeCall("agents.setDefault", { agentId: "ghost" });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
+    expect(mocks.setDefaultAgent).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid params without writing config", async () => {
+    const { respond, promise } = makeCall("agents.setDefault", {});
+    await promise;
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 });
 

@@ -420,6 +420,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   <Accordion title="Agent and workspace helpers">
     - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
+    - `agents.setDefault` marks one agent as the default, clearing the flag from every other entry, and returns the new `defaultId`.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the Gateway task ledger to SDK and operator clients.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.

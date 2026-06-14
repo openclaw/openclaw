@@ -146,6 +146,23 @@ export const AgentsUpdateResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Marks one agent as the default, clearing the flag from every other entry. */
+export const AgentsSetDefaultParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Result returned after changing the default agent. */
+export const AgentsSetDefaultResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    defaultId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 /** Deletes an agent and optionally its workspace/config files. */
 export const AgentsDeleteParamsSchema = Type.Object(
   {

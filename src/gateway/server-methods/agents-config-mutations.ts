@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 // Agent config mutation helpers wrap retrying config writes for create/update/
 // delete flows and surface typed precondition failures to gateway handlers.
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
@@ -6,6 +7,7 @@ import {
   findAgentEntryIndex,
   listAgentEntries,
   pruneAgentConfig,
+  setDefaultAgent,
 } from "../../commands/agents.config.js";
 import { mutateConfigFileWithRetry } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
@@ -91,6 +93,24 @@ export async function updateAgentConfigEntry(params: {
       Object.assign(draft, latestNextConfig);
     },
   });
+}
+
+/** Marks an agent as the default through the retrying config mutation path. */
+export async function setDefaultAgentConfigEntry(params: {
+  agentId: string;
+}): Promise<{ defaultId: string }> {
+  const committed = await mutateConfigFileWithRetry<string>({
+    afterWrite: { mode: "auto" },
+    mutate: (draft) => {
+      if (!isConfiguredAgent(draft, params.agentId)) {
+        throw new AgentConfigPreconditionError("not-found", params.agentId);
+      }
+      const latestNextConfig = setDefaultAgent(draft, params.agentId);
+      Object.assign(draft, latestNextConfig);
+      return resolveDefaultAgentId(latestNextConfig);
+    },
+  });
+  return { defaultId: committed.result ?? resolveDefaultAgentId(committed.nextConfig) };
 }
 
 /** Removes an agent entry and returns filesystem roots the caller should clean up. */
