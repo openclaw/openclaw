@@ -354,6 +354,6 @@ describe("runReplyAgent runtime config", () => {
     expect(enqueueCall?.[2]).toBe(resolvedQueue);
     expect(enqueueCall?.[3]).toBe("message-id");
     expect(typeof enqueueCall?.[4]).toBe("function");
-    expect(enqueueCall?.[5]).toBe(false);
+    expect(enqueueCall?.[5]).toBe(true);
   });
 });

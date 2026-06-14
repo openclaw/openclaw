@@ -1300,7 +1300,7 @@ export async function runReplyAgent(params: {
       resolvedQueue,
       "message-id",
       queuedRunFollowupTurn,
-      false,
+      true,
     );
     if (!enqueued) {
       typing.cleanup();
