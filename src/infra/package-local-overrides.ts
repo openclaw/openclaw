@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { configureFsSafePython, getFsSafePythonConfig } from "@openclaw/fs-safe/config";
 import { resolveStateDir } from "../config/paths.js";
-import { pathExists } from "../utils.js";
 import { formatErrorMessage } from "./errors.js";
 import { root as openFsRoot } from "./fs-safe.js";
 import {
@@ -281,9 +281,13 @@ function normalizeFileMode(mode: number): number {
   return mode & 0o777;
 }
 
-async function copyFileWithMode(source: string, destination: string, mode?: number): Promise<void> {
+async function writeFileWithMode(
+  content: Buffer,
+  destination: string,
+  mode?: number,
+): Promise<void> {
   await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.copyFile(source, destination);
+  await fs.writeFile(destination, content);
   if (mode !== undefined && process.platform !== "win32") {
     await fs.chmod(destination, mode);
   }
@@ -310,6 +314,26 @@ function createLocalOverrideMutationPath(relativePath: string, label: string): s
     path.posix.dirname(normalized),
     `.openclaw-override-${label}-${randomUUID()}.tmp`,
   );
+}
+
+async function moveLocalOverrideTargetNoReplace(params: {
+  packageFs: LocalOverridePackageRoot;
+  sourcePath: string;
+  relativePath: string;
+}): Promise<void> {
+  if (process.platform === "win32") {
+    await params.packageFs.move(params.sourcePath, params.relativePath, { overwrite: false });
+    return;
+  }
+  // Executable override replay fails closed instead of using fs-safe's path-based
+  // Node fallback for the final no-clobber publish.
+  const previousPythonConfig = getFsSafePythonConfig();
+  configureFsSafePython({ mode: "require" });
+  try {
+    await params.packageFs.move(params.sourcePath, params.relativePath, { overwrite: false });
+  } finally {
+    configureFsSafePython(previousPythonConfig);
+  }
 }
 
 async function writeRollbackBackup(params: {
@@ -340,11 +364,7 @@ async function publishLocalOverrideTarget(params: {
     realPackageRoot: params.packageFs.rootReal,
     relativePath: params.relativePath,
   });
-  const sourceAbsolutePath = resolveSafePackagePath(params.packageFs.rootDir, params.sourcePath);
-  await fs.link(
-    sourceAbsolutePath,
-    resolveSafePackagePath(params.packageFs.rootDir, params.relativePath),
-  );
+  await moveLocalOverrideTargetNoReplace(params);
   params.onPublished?.();
   await assertLocalOverrideMutationTopology({
     packageRoot: params.packageFs.rootDir,
@@ -363,7 +383,6 @@ async function restoreMovedLocalOverrideTarget(params: {
     sourcePath: params.movedPath,
     relativePath: params.relativePath,
   });
-  await params.packageFs.remove(params.movedPath);
 }
 
 async function throwAfterRestoringMovedLocalOverrideTarget(params: {
@@ -552,22 +571,23 @@ async function deleteLocalOverrideTarget(params: {
 }
 
 async function copyOverridePayload(params: {
-  packageRoot: string;
+  packageFs: LocalOverridePackageRoot;
   recoveryDir: string;
   relativePath: string;
 }): Promise<{ savedPath: string; mode: number }> {
-  const source = resolveSafePackagePath(params.packageRoot, params.relativePath);
-  const stats = await fs.lstat(source);
-  if (!stats.isFile() || stats.isSymbolicLink()) {
-    throw new Error(`unsafe local override file: ${params.relativePath}`);
-  }
+  const source = await params.packageFs.read(params.relativePath, {
+    hardlinks: "allow",
+    maxBytes: Number.POSITIVE_INFINITY,
+    symlinks: "reject",
+  });
+  const mode = normalizeFileMode(source.stat.mode);
   const savedPath = path.join(
     params.recoveryDir,
     "files",
     normalizeRelativePath(params.relativePath),
   );
-  await copyFileWithMode(source, savedPath, normalizeFileMode(stats.mode));
-  return { savedPath, mode: normalizeFileMode(stats.mode) };
+  await writeFileWithMode(source.buffer, savedPath, mode);
+  return { savedPath, mode };
 }
 
 const BEST_EFFORT_LOCAL_IMPORT_SPECIFIER_PATTERN =
@@ -597,7 +617,7 @@ function resolveReferencedDistPath(params: {
 }
 
 async function collectReferencedAddedOverridePaths(params: {
-  packageRoot: string;
+  packageFs: LocalOverridePackageRoot;
   changes: LocalPackageOverrideChange[];
   actualSet: Set<string>;
   baselineSet: Set<string>;
@@ -613,7 +633,10 @@ async function collectReferencedAddedOverridePaths(params: {
       .filter((change) => change.kind === "modified" && change.savedPath)
       .map((change) => [change.path, change]),
   );
-  const queue = [
+  const queue: Array<
+    | { path: string; rootPath: string; sourcePath: string }
+    | { path: string; rootPath: string; packageRelativePath: string }
+  > = [
     ...params.changes
       .filter((change) => change.kind === "modified" && change.savedPath)
       .map((change) => ({
@@ -626,7 +649,7 @@ async function collectReferencedAddedOverridePaths(params: {
       .map((relativePath) => ({
         path: relativePath,
         rootPath: relativePath,
-        sourcePath: resolveSafePackagePath(params.packageRoot, relativePath),
+        packageRelativePath: relativePath,
       })),
   ];
 
@@ -642,7 +665,16 @@ async function collectReferencedAddedOverridePaths(params: {
       continue;
     }
     scannedPathsByRoot.add(scanKey);
-    const source = await fs.readFile(current.sourcePath, "utf8").catch(() => "");
+    const source =
+      "packageRelativePath" in current
+        ? await params.packageFs
+            .readText(current.packageRelativePath, {
+              hardlinks: "allow",
+              maxBytes: Number.POSITIVE_INFINITY,
+              symlinks: "reject",
+            })
+            .catch(() => "")
+        : await fs.readFile(current.sourcePath, "utf8").catch(() => "");
     for (const match of source.matchAll(BEST_EFFORT_LOCAL_IMPORT_SPECIFIER_PATTERN)) {
       const specifier = match[1] ?? match[2] ?? match[3] ?? "";
       const referencedPath = resolveReferencedDistPath({
@@ -665,13 +697,19 @@ async function collectReferencedAddedOverridePaths(params: {
       }
       const referencedScanKey = `${current.rootPath}\0${referencedPath}`;
       if (!scannedPathsByRoot.has(referencedScanKey)) {
-        queue.push({
-          path: referencedPath,
-          rootPath: current.rootPath,
-          sourcePath:
-            referencedModifiedChange?.savedPath ??
-            resolveSafePackagePath(params.packageRoot, referencedPath),
-        });
+        queue.push(
+          referencedModifiedChange?.savedPath
+            ? {
+                path: referencedPath,
+                rootPath: current.rootPath,
+                sourcePath: referencedModifiedChange.savedPath,
+              }
+            : {
+                path: referencedPath,
+                rootPath: current.rootPath,
+                packageRelativePath: referencedPath,
+              },
+        );
       }
     }
   }
@@ -703,6 +741,10 @@ export async function captureLocalPackageOverrides(params: {
       `missing package dist content inventory ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}`,
     );
   }
+  const packageFs = await openFsRoot(params.packageRoot, {
+    hardlinks: "reject",
+    symlinks: "reject",
+  });
 
   const actualFiles = await collectPackageDistInventory(params.packageRoot, {
     includeSourceMaps: true,
@@ -723,15 +765,19 @@ export async function captureLocalPackageOverrides(params: {
   try {
     const baselineSet = new Set(baseline.map((entry) => entry.path));
     for (const entry of baseline) {
-      const absolutePath = resolveSafePackagePath(params.packageRoot, entry.path);
-      if (!actualSet.has(entry.path) || !(await pathExists(absolutePath))) {
+      resolveSafePackagePath(params.packageRoot, entry.path);
+      if (!actualSet.has(entry.path)) {
         await ensureRecoveryDir();
         changes.push({ kind: "deleted", path: entry.path, baseline: entry });
         continue;
       }
-      const currentStats = await fs.lstat(absolutePath);
-      const currentMode = normalizeFileMode(currentStats.mode);
-      const currentSha = await hashFileSha256(absolutePath);
+      const current = await packageFs.read(entry.path, {
+        hardlinks: "allow",
+        maxBytes: Number.POSITIVE_INFINITY,
+        symlinks: "reject",
+      });
+      const currentMode = normalizeFileMode(current.stat.mode);
+      const currentSha = createHash("sha256").update(current.buffer).digest("hex");
       if (
         currentSha === entry.sha256 &&
         (process.platform === "win32" || currentMode === normalizeFileMode(entry.mode))
@@ -739,7 +785,7 @@ export async function captureLocalPackageOverrides(params: {
         continue;
       }
       const payload = await copyOverridePayload({
-        packageRoot: params.packageRoot,
+        packageFs,
         recoveryDir: await ensureRecoveryDir(),
         relativePath: entry.path,
       });
@@ -752,7 +798,7 @@ export async function captureLocalPackageOverrides(params: {
       });
     }
     const referencedAdded = await collectReferencedAddedOverridePaths({
-      packageRoot: params.packageRoot,
+      packageFs,
       changes,
       actualSet,
       baselineSet,
@@ -772,7 +818,7 @@ export async function captureLocalPackageOverrides(params: {
       left.localeCompare(right),
     )) {
       const payload = await copyOverridePayload({
-        packageRoot: params.packageRoot,
+        packageFs,
         recoveryDir: await ensureRecoveryDir(),
         relativePath,
       });
