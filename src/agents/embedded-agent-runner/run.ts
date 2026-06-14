@@ -187,6 +187,7 @@ import {
   resolveAckExecutionFastPathInstruction,
   resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
+  isPostToolEmptyAssistantTurn,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
@@ -1332,6 +1333,7 @@ async function runEmbeddedAgentInternal(
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let postToolEmptyContinuationAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
       let beforeAgentFinalizeRevisionAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
@@ -3169,9 +3171,13 @@ async function runEmbeddedAgentInternal(
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
           const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
+          const postToolEmptyAssistantTurn = isPostToolEmptyAssistantTurn(attempt);
+          const terminalAttempt = postToolEmptyAssistantTurn
+            ? { ...attempt, assistantTexts: [] }
+            : attempt;
 
           const payloads = buildEmbeddedRunPayloads({
-            assistantTexts: attempt.assistantTexts,
+            assistantTexts: terminalAttempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
@@ -3349,7 +3355,7 @@ async function runEmbeddedAgentInternal(
             payloadCount,
             aborted,
             timedOut,
-            attempt,
+            attempt: terminalAttempt,
           });
           const nextPlanningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
@@ -3360,7 +3366,7 @@ async function runEmbeddedAgentInternal(
                 prompt: params.prompt,
                 aborted,
                 timedOut,
-                attempt,
+                attempt: terminalAttempt,
               });
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
@@ -3371,20 +3377,41 @@ async function runEmbeddedAgentInternal(
                 executionContract,
                 aborted,
                 timedOut,
-                attempt,
+                attempt: terminalAttempt,
               });
-          const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
-            ? null
-            : resolveEmptyResponseRetryInstruction({
-                provider: activeErrorContext.provider,
-                modelId: activeErrorContext.model,
-                modelApi: effectiveModel.api,
-                executionContract,
-                payloadCount,
-                aborted,
-                timedOut,
-                attempt,
-              });
+          const nextEmptyResponseRetryInstruction =
+            emptyAssistantReplyIsSilent || postToolEmptyAssistantTurn
+              ? null
+              : resolveEmptyResponseRetryInstruction({
+                  provider: activeErrorContext.provider,
+                  modelId: activeErrorContext.model,
+                  modelApi: effectiveModel.api,
+                  executionContract,
+                  payloadCount,
+                  aborted,
+                  timedOut,
+                  attempt: terminalAttempt,
+                });
+          if (
+            postToolEmptyAssistantTurn &&
+            !emptyAssistantReplyIsSilent &&
+            !aborted &&
+            !timedOut &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            !resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects &&
+            postToolEmptyContinuationAttempts < 1
+          ) {
+            postToolEmptyContinuationAttempts += 1;
+            log.warn(
+              `empty post-tool assistant turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                "— continuing once from the completed tool result",
+            );
+            continueFromCurrentTranscript();
+            continue;
+          }
           if (
             nextPlanningOnlyRetryInstruction &&
             planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
@@ -3453,7 +3480,7 @@ async function runEmbeddedAgentInternal(
               aborted,
               promptError,
               timedOut,
-              attempt,
+              attempt: terminalAttempt,
             }) &&
             missingAssistantRetryAttempts < MAX_MISSING_ASSISTANT_RETRIES
           ) {
@@ -3486,7 +3513,7 @@ async function runEmbeddedAgentInternal(
                 aborted,
                 externalAbort,
                 timedOut,
-                attempt,
+                attempt: terminalAttempt,
               });
           if (
             !emptyAssistantReplyIsSilent &&

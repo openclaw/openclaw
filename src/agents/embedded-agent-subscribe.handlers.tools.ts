@@ -1244,6 +1244,7 @@ export async function handleToolExecutionEnd(
   ctx.state.toolMetas.push({
     toolName,
     meta,
+    mutatingAction: callSummary?.mutatingAction,
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =

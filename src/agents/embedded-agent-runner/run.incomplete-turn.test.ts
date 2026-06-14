@@ -26,6 +26,7 @@ import {
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   EMPTY_RESPONSE_RETRY_INSTRUCTION,
   extractPlanningOnlyPlanDetails,
+  isPostToolEmptyAssistantTurn,
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
   REASONING_ONLY_RETRY_INSTRUCTION,
@@ -475,6 +476,163 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         stage: "assistant",
       },
     ]);
+  });
+
+  it("continues once from a read-only tool result when the post-tool assistant is empty", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Looking into it."],
+        toolMetas: [{ toolName: "cron", meta: "status", mutatingAction: false }],
+        messagesSnapshot: [
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [
+              { type: "text", text: "Looking into it." },
+              { type: "toolCall", id: "call_cron", name: "cron", input: { action: "status" } },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "toolResult",
+            toolCallId: "call_cron",
+            content: [{ type: "text", text: '{"jobs":[]}' }],
+            isError: false,
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["No cron jobs are configured."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "No cron jobs are configured." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-post-tool-empty-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).prompt).toContain(
+      "Continue from the current transcript after the latest tool result.",
+    );
+    expect(result.meta.finalAssistantVisibleText).toBe("No cron jobs are configured.");
+    expect(result.meta.finalAssistantVisibleText).not.toBe("Looking into it.");
+    expectWarnMessageWith("empty post-tool assistant turn detected");
+  });
+
+  it("does not continue automatically after a mutating tool result", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Adding it now."],
+        toolMetas: [{ toolName: "cron", meta: "add", mutatingAction: true }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            toolCallId: "call_cron_add",
+            content: [{ type: "text", text: '{"ok":true}' }],
+            isError: false,
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-post-tool-empty-mutating",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    const [payload] = result.payloads ?? [];
+    expect(payload?.text).toContain("couldn't generate a response");
+    expect(payload?.text).toContain("tool actions may have already been executed");
+    expect(payload?.text).not.toContain("Adding it now.");
+  });
+
+  it("bounds empty post-tool continuation to one retry", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const emptyPostToolAttempt = makeAttemptResult({
+      assistantTexts: ["Checking."],
+      toolMetas: [{ toolName: "cron", meta: "status", mutatingAction: false }],
+      messagesSnapshot: [
+        {
+          role: "toolResult",
+          toolCallId: "call_cron",
+          content: [{ type: "text", text: '{"jobs":[]}' }],
+          isError: false,
+        } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+      ],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(emptyPostToolAttempt);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(emptyPostToolAttempt);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-post-tool-empty-bounded",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const [payload] = result.payloads ?? [];
+    expect(payload?.text).toContain("couldn't generate a response");
   });
 
   it("auto-activates strict-agentic for unconfigured GPT-5 openai runs and surfaces the blocked state", async () => {
@@ -2377,6 +2535,87 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         messagingToolSentMediaUrls: [],
       }),
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("uses per-call mutation metadata before the tool-name fallback", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "cron", meta: "status", mutatingAction: false }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "cron", meta: "add", mutatingAction: true }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("detects a trailing empty assistant turn after a tool result structurally", () => {
+    expect(
+      isPostToolEmptyAssistantTurn(
+        makeAttemptResult({
+          assistantTexts: ["Looking into it."],
+          toolMetas: [{ toolName: "cron", mutatingAction: false }],
+          messagesSnapshot: [
+            {
+              role: "toolResult",
+              toolCallId: "call_cron",
+              content: [{ type: "text", text: '{"jobs":[]}' }],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "assistant",
+              stopReason: "stop",
+              provider: "openai",
+              model: "gpt-5.4",
+              content: [],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      ),
+    ).toBe(true);
+
+    expect(
+      isPostToolEmptyAssistantTurn(
+        makeAttemptResult({
+          assistantTexts: ["No cron jobs are configured."],
+          toolMetas: [{ toolName: "cron", mutatingAction: false }],
+          messagesSnapshot: [
+            {
+              role: "toolResult",
+              toolCallId: "call_cron",
+              content: [{ type: "text", text: '{"jobs":[]}' }],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "assistant",
+              stopReason: "stop",
+              provider: "openai",
+              model: "gpt-5.4",
+              content: [{ type: "text", text: "No cron jobs are configured." }],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [{ type: "text", text: "No cron jobs are configured." }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("treats async-started background tools as replay-invalid side effects", () => {

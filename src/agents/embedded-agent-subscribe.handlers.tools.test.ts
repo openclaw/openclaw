@@ -355,6 +355,37 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(1);
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({ toolName: "cron", mutatingAction: true }),
+    );
+  });
+
+  it("retains read-only cron action metadata for replay classification", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-cron-status",
+        args: { action: "status" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-cron-status",
+        isError: false,
+        result: { details: { jobs: [] } },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({ toolName: "cron", mutatingAction: false }),
+    );
   });
 
   it("does not increment successfulCronAdds when cron add fails", async () => {

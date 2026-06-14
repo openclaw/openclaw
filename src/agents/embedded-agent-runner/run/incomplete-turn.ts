@@ -248,7 +248,9 @@ export type PlanningOnlyPlanDetails = {
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
+  const hadMutatingTools = params.toolMetas.some(
+    (toolMeta) => toolMeta.mutatingAction ?? isLikelyMutatingToolName(toolMeta.toolName),
+  );
   const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
     hadMutatingTools ||
@@ -260,6 +262,51 @@ export function buildAttemptReplayMetadata(
     hadPotentialSideEffects,
     replaySafe: !hadPotentialSideEffects,
   };
+}
+
+/** Detects an empty terminal assistant turn after a completed tool result. */
+export function isPostToolEmptyAssistantTurn(
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    | "assistantTexts"
+    | "currentAttemptAssistant"
+    | "lastAssistant"
+    | "messagesSnapshot"
+    | "toolMetas"
+  >,
+): boolean {
+  if (attempt.toolMetas.length === 0) {
+    return false;
+  }
+  if (
+    !isEmptyResponseAssistantTurn({
+      payloadCount: 0,
+      attempt: {
+        assistantTexts: [],
+        currentAttemptAssistant: attempt.currentAttemptAssistant,
+        lastAssistant: attempt.lastAssistant,
+      },
+    })
+  ) {
+    return false;
+  }
+
+  const messages = attempt.messagesSnapshot ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message) {
+      continue;
+    }
+    const role = normalizeLowercaseStringOrEmpty(message.role);
+    if (isToolResultRole(role)) {
+      return true;
+    }
+    if (role === "assistant" && !readMessageTextContent(message)) {
+      continue;
+    }
+    return false;
+  }
+  return false;
 }
 
 /** Falls back to replay-unsafe metadata when older attempt records lack replay details. */
