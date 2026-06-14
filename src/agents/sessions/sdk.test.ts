@@ -129,6 +129,46 @@ describe("createAgentSession tool defaults", () => {
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
   });
 
+  it("skips unreadable custom tool schemas while preserving healthy custom tools", async () => {
+    const badTool = {
+      name: "bad_lookup",
+      label: "Bad Lookup",
+      description: "Bad custom lookup.",
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "bad" }],
+        details: {},
+      }),
+    } as ToolDefinition;
+    Object.defineProperty(badTool, "parameters", {
+      get: () => {
+        throw new Error("revoked schema");
+      },
+    });
+    const healthyTool: ToolDefinition = {
+      name: "custom_lookup",
+      label: "Custom Lookup",
+      description: "Looks up a test value.",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        details: {},
+      }),
+    };
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      customTools: [badTool, healthyTool],
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["custom_lookup"]);
+  });
+
   it("preserves an exact base system prompt when active tools change", async () => {
     const customTool: ToolDefinition = {
       name: "custom_lookup",

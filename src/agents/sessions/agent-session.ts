@@ -93,7 +93,10 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import type { BashOperations } from "./tools/bash-operations.js";
 import { createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
-import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
+import {
+  createToolDefinitionsFromAgentTools,
+  snapshotSessionToolDefinitions,
+} from "./tools/tool-definition-wrapper.js";
 
 function unwrapCoreResult<T>(result: { ok: true; value: T } | { ok: false; error: Error }): T {
   if (result.ok) {
@@ -383,7 +386,7 @@ export class AgentSession {
     this.settingsManager = config.settingsManager;
     this.scopedModelEntries = config.scopedModels ?? [];
     this.sessionResourceLoader = config.resourceLoader;
-    this.customTools = config.customTools ?? [];
+    this.customTools = snapshotSessionToolDefinitions(config.customTools ?? []);
     this.cwd = config.cwd;
     this.sessionModelRegistry = config.modelRegistry;
     this.extensionRunnerRef = config.extensionRunnerRef;
@@ -2485,12 +2488,7 @@ export class AgentSession {
     const shellCommandPrefix = this.settingsManager.getShellCommandPrefix();
     const shellPath = this.settingsManager.getShellPath();
     const baseToolDefinitions = this.baseToolsOverride
-      ? Object.fromEntries(
-          Object.entries(this.baseToolsOverride).map(([name, tool]) => [
-            name,
-            createToolDefinitionFromAgentTool(tool),
-          ]),
-        )
+      ? createToolDefinitionsFromAgentTools(this.baseToolsOverride)
       : createAllToolDefinitions(this.cwd, {
           read: { autoResizeImages },
           bash: { commandPrefix: shellCommandPrefix, shellPath },
@@ -2521,7 +2519,7 @@ export class AgentSession {
     this.applyExtensionBindings(this.currentExtensionRunner);
 
     const defaultActiveToolNames = this.baseToolsOverride
-      ? Object.keys(this.baseToolsOverride)
+      ? Array.from(this.baseToolDefinitions.keys())
       : ["read", "bash", "edit", "write"];
     const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
     this.refreshToolRegistry({

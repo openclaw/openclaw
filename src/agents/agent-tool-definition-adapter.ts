@@ -58,6 +58,30 @@ const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
 const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
+const TOOL_DEFINITION_SCHEMA_MAX_DEPTH = 24;
+const TOOL_DEFINITION_SCHEMA_MAX_NODES = 1_000;
+
+class InvalidToolDefinitionSchemaError extends Error {
+  constructor() {
+    super("parameters schema is not JSON-document-compatible");
+    this.name = "InvalidToolDefinitionSchemaError";
+  }
+}
+
+type ToolDefinitionSchemaCloneState = {
+  seen: WeakSet<object>;
+  nodes: number;
+};
+
+type ToolDefinitionSnapshot = {
+  sourceTool: AnyAgentTool;
+  name: string;
+  normalizedName: string;
+  label: string;
+  description: string;
+  parameters: ToolDefinition["parameters"];
+  beforeHookWrapped: boolean;
+};
 
 export type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
@@ -359,15 +383,21 @@ export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
 ): ToolDefinition[] {
-  return tools.map((tool) => {
-    const name = tool.name || "tool";
-    const normalizedName = normalizeToolName(name);
-    const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
+  return snapshotAgentToolDefinitions(tools).map((toolSnapshot) => {
+    const {
+      sourceTool: tool,
+      name,
+      normalizedName,
+      label,
+      description,
+      parameters,
+      beforeHookWrapped,
+    } = toolSnapshot;
     return {
       name,
-      label: tool.label ?? name,
-      description: tool.description ?? "",
-      parameters: tool.parameters,
+      label,
+      description,
+      parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
@@ -452,6 +482,121 @@ export function toToolDefinitions(
       },
     } satisfies ToolDefinition;
   });
+}
+
+function snapshotAgentToolDefinitions(tools: readonly AnyAgentTool[]): ToolDefinitionSnapshot[] {
+  const snapshots: ToolDefinitionSnapshot[] = [];
+  for (const tool of tools) {
+    const snapshot = snapshotAgentToolDefinition(tool);
+    if (snapshot) {
+      snapshots.push(snapshot);
+    }
+  }
+  return snapshots;
+}
+
+function snapshotAgentToolDefinition(tool: AnyAgentTool): ToolDefinitionSnapshot | undefined {
+  let name = "tool";
+  try {
+    const rawName = tool.name;
+    if (typeof rawName === "string" && rawName.length > 0) {
+      name = rawName;
+    } else if (rawName != null && rawName !== "") {
+      throw new Error(`tool name must be a string`);
+    }
+    const rawLabel = tool.label;
+    const rawDescription = tool.description;
+    const label = typeof rawLabel === "string" && rawLabel.length > 0 ? rawLabel : name;
+    const description = typeof rawDescription === "string" ? rawDescription : "";
+    const parameters = snapshotToolDefinitionSchema(tool.parameters);
+    return {
+      sourceTool: tool,
+      name,
+      normalizedName: normalizeToolName(name),
+      label,
+      description,
+      parameters,
+      beforeHookWrapped: isToolWrappedWithBeforeToolCallHook(tool),
+    };
+  } catch (err) {
+    logError(
+      `[tools] skipped invalid tool definition "${name}": ${describeToolDefinitionError(err)}`,
+    );
+    return undefined;
+  }
+}
+
+function describeToolDefinitionError(err: unknown): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return String(err);
+}
+
+function snapshotToolDefinitionSchema(value: unknown): ToolDefinition["parameters"] {
+  if (value === undefined) {
+    return undefined as unknown as ToolDefinition["parameters"];
+  }
+  return cloneToolDefinitionSchemaValue(
+    value,
+    {
+      seen: new WeakSet<object>(),
+      nodes: 0,
+    },
+    0,
+  ) as ToolDefinition["parameters"];
+}
+
+function cloneToolDefinitionSchemaValue(
+  value: unknown,
+  state: ToolDefinitionSchemaCloneState,
+  depth: number,
+): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new InvalidToolDefinitionSchemaError();
+    }
+    return value;
+  }
+  if (typeof value !== "object") {
+    throw new InvalidToolDefinitionSchemaError();
+  }
+  if (depth > TOOL_DEFINITION_SCHEMA_MAX_DEPTH || state.seen.has(value)) {
+    throw new InvalidToolDefinitionSchemaError();
+  }
+  state.nodes += 1;
+  if (state.nodes > TOOL_DEFINITION_SCHEMA_MAX_NODES) {
+    throw new InvalidToolDefinitionSchemaError();
+  }
+  state.seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((entry) => cloneToolDefinitionSchemaValue(entry, state, depth + 1));
+    }
+    if (!isPlainObject(value)) {
+      throw new InvalidToolDefinitionSchemaError();
+    }
+    const cloned: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) {
+      const clonedValue = cloneToolDefinitionSchemaValue(Reflect.get(value, key), state, depth + 1);
+      if (key === "__proto__") {
+        Object.defineProperty(cloned, key, {
+          value: clonedValue,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      } else {
+        cloned[key] = clonedValue;
+      }
+    }
+    return cloned;
+  } finally {
+    state.seen.delete(value);
+  }
 }
 
 /**

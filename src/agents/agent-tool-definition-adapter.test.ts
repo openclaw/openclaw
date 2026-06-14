@@ -48,6 +48,96 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
+  it("skips unreadable tool parameters while preserving healthy siblings", () => {
+    const badTool = {
+      name: "bad_schema",
+      label: "Bad Schema",
+      description: "throws while reading parameters",
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "bad" }],
+      }),
+    } as AgentTool;
+    Object.defineProperty(badTool, "parameters", {
+      get: () => {
+        throw new Error("revoked schema");
+      },
+    });
+    const healthyTool = {
+      name: "healthy_schema",
+      label: "Healthy Schema",
+      description: "survives a bad sibling",
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+      }),
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([badTool, healthyTool]);
+
+    expect(defs.map((def) => def.name)).toEqual(["healthy_schema"]);
+  });
+
+  it("skips unreadable tool names before normalizing session definitions", () => {
+    const badTool = {
+      label: "Bad Name",
+      description: "throws while reading name",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "bad" }],
+      }),
+    } as AgentTool;
+    Object.defineProperty(badTool, "name", {
+      get: () => {
+        throw new Error("revoked name");
+      },
+    });
+    const healthyTool = {
+      name: "healthy_name",
+      label: "Healthy Name",
+      description: "survives a bad sibling",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+      }),
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([badTool, healthyTool]);
+
+    expect(defs.map((def) => def.name)).toEqual(["healthy_name"]);
+  });
+
+  it("snapshots tool definition schemas before exposing session definitions", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+    };
+    const tool = {
+      name: "search",
+      label: "Search",
+      description: "searches",
+      parameters,
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+      }),
+    } satisfies AgentTool;
+
+    const [definition] = toToolDefinitions([tool]);
+    if (!definition) {
+      throw new Error("missing tool definition");
+    }
+    parameters.properties.query.type = "number";
+
+    expect(definition.parameters).toEqual({
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+    });
+    expect(definition.parameters).not.toBe(parameters);
+  });
+
   it("wraps tool errors into a tool result", async () => {
     const result = await executeThrowingTool("boom", "call1");
 

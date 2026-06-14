@@ -29,6 +29,7 @@ import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
 import * as bundledAgentSessions from "../extension-sdk.js";
 import { createSyntheticSourceInfo } from "../source-info.js";
+import { snapshotSessionToolDefinition } from "../tools/tool-definition-wrapper.js";
 import type {
   Extension,
   ExtensionAPI,
@@ -226,8 +227,12 @@ function createExtensionAPI(
 
     registerTool(tool: ToolDefinition): void {
       runtime.assertActive();
-      extension.tools.set(tool.name, {
-        definition: tool,
+      const definition = snapshotSessionToolDefinition(tool);
+      if (!definition) {
+        return;
+      }
+      extension.tools.set(definition.name, {
+        definition,
         sourceInfo: extension.sourceInfo,
       });
       runtime.refreshTools();

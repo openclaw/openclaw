@@ -47,4 +47,43 @@ export default async function(api) {
     expect(result.extensions).toHaveLength(1);
     expect(result.extensions[0]?.commands.has("sdk-subpath-probe")).toBe(true);
   });
+
+  it("skips invalid registered tool schemas without failing extension load", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-tool-schema-"));
+    tempDirs.push(dir);
+    const extensionPath = join(dir, "extension.ts");
+    await writeFile(
+      extensionPath,
+      `
+export default async function(api) {
+  api.registerTool({
+    name: "bad_lookup",
+    label: "Bad Lookup",
+    description: "bad",
+    get parameters() {
+      throw new Error("revoked schema");
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }], details: {} };
+    },
+  });
+  api.registerTool({
+    name: "healthy_lookup",
+    label: "Healthy Lookup",
+    description: "healthy",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "ok" }], details: {} };
+    },
+  });
+}
+`,
+    );
+
+    const result = await loadExtensions([extensionPath], dir);
+
+    expect(result.errors).toEqual([]);
+    expect(result.extensions).toHaveLength(1);
+    expect(Array.from(result.extensions[0]?.tools.keys() ?? [])).toEqual(["healthy_lookup"]);
+  });
 });
