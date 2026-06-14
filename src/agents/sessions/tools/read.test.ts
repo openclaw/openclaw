@@ -4,13 +4,26 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { withMockedWindowsPlatform } from "../../../test-utils/vitest-spies.js";
 import { createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+const { spawnSyncMock } = vi.hoisted(() => ({
+  spawnSyncMock: vi.fn(),
+}));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawnSync: spawnSyncMock,
+  };
+});
 
 function textContent(
   result: Awaited<ReturnType<ReturnType<typeof createReadToolDefinition>["execute"]>>,
@@ -20,6 +33,11 @@ function textContent(
 }
 
 describe("read tool", () => {
+  beforeEach(() => {
+    spawnSyncMock.mockReset();
+    spawnSyncMock.mockReturnValue({ stdout: "Active code page: 936", stderr: "" });
+  });
+
   it("reads managed inbound media refs as image files", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-"));
     const mediaId = `read-tool-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
@@ -99,5 +117,27 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+  });
+
+  it("decodes GBK text files on Chinese Windows", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => Buffer.from([0xb2, 0xe2, 0xca, 0xd4, 0xa1, 0xab, 0xa3, 0xbb]),
+      },
+    });
+
+    await withMockedWindowsPlatform(async () => {
+      const result = await tool.execute(
+        "call-1",
+        { path: "gbk-notes.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(textContent(result)).toBe("测试～；");
+    });
   });
 });
