@@ -173,6 +173,19 @@ target server during config edits.
 - `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
   One-shot embedded runs request run-end cleanup; this TTL is the backstop for
   long-lived sessions and future callers.
+- `mcp.approvals.enabled`: master switch for the channel-mediated MCP tool
+  approval gate. Defaults to `true`. Gating is only triggered by MCP servers
+  that opt in via the consent envelope (`{ok: false, requires_confirmation:
+true, action_id, summary}`); servers that don't return it are unaffected.
+  Set to `false` to disable gating entirely — the consent envelope is then
+  surfaced to the model verbatim (legacy behavior).
+- `mcp.approvals.defaultTimeoutMs`: fallback wait window (milliseconds) for
+  `/approve` replies when the MCP envelope omits its own
+  `expires_in_seconds`. Defaults to `300000` (5 min), tuned for mobile reply
+  channels (WhatsApp/Telegram/SMS). Clamped at runtime to `[1000, 600000]`;
+  envelope-supplied TTLs are also capped at 10 minutes. See
+  [MCP consent envelope](/tools/mcp-consent-envelope) for the contract MCP
+  servers implement to opt into gating.
 - Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
   The next tool discovery/use recreates them from the new config, so removed
   `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.

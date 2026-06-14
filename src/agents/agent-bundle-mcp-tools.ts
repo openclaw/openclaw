@@ -26,4 +26,5 @@ export {
   buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
+  resolveMcpApprovalsConfig,
 } from "./agent-bundle-mcp-materialize.js";
