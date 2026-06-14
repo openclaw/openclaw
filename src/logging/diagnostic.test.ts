@@ -285,6 +285,104 @@ describe("diagnostic session activity aliases", () => {
       getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" }).activeWorkKind,
     ).toBeUndefined();
   });
+
+  it("evicts orphaned tool/model markers when the last owner ends without clearing run activity", () => {
+    const evicted: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "session.activity.evicted") {
+        evicted.push(event);
+      }
+    });
+    try {
+      markDiagnosticEmbeddedRunStarted({
+        sessionId: "s1",
+        sessionKey: "main",
+        workKey: "reply:main",
+      });
+      // Native tool + model call that never emit completion events.
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        toolName: "bash",
+        toolCallId: "t1",
+      });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.5",
+      });
+
+      // The reply-run wrapper ends and opts out of clearing run activity, but it
+      // is the last owner: the orphaned markers must be evicted, not leaked.
+      markDiagnosticEmbeddedRunEnded({
+        sessionId: "s1",
+        sessionKey: "main",
+        workKey: "reply:main",
+        clearRunActivity: false,
+      });
+
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })
+          .activeWorkKind,
+      ).toBeUndefined();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(evicted).toHaveLength(1);
+    expect(evicted[0]).toMatchObject({
+      type: "session.activity.evicted",
+      sessionKey: "main",
+      reason: "orphaned_no_owner",
+      evictedTools: 1,
+      evictedModelCalls: 1,
+    });
+  });
+
+  it("keeps tool markers when an inner embedded run is still active", () => {
+    const evicted: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "session.activity.evicted") {
+        evicted.push(event);
+      }
+    });
+    try {
+      // Inner embedded run (keyed by sessionId) plus the reply-run wrapper.
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticEmbeddedRunStarted({
+        sessionId: "s1",
+        sessionKey: "main",
+        workKey: "reply:main",
+      });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        toolName: "bash",
+        toolCallId: "t1",
+      });
+
+      // The wrapper ends first while the inner run is still draining; its tool
+      // markers must be preserved as genuinely active work.
+      markDiagnosticEmbeddedRunEnded({
+        sessionId: "s1",
+        sessionKey: "main",
+        workKey: "reply:main",
+        clearRunActivity: false,
+      });
+
+      const snapshot = getDiagnosticSessionActivitySnapshot({
+        sessionId: "s1",
+        sessionKey: "main",
+      });
+      expect(snapshot.activeWorkKind).toBe("tool_call");
+      expect(snapshot.hasActiveEmbeddedRun).toBe(true);
+    } finally {
+      unsubscribe();
+    }
+    expect(evicted).toHaveLength(0);
+  });
 });
 
 describe("logger import side effects", () => {

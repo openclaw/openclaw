@@ -4019,6 +4019,32 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports evicted orphaned activity counter by total markers", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "session.activity.evicted",
+      sessionId: "session-should-not-export",
+      sessionKey: "key-should-not-export",
+      reason: "orphaned_no_owner",
+      evictedTools: 2,
+      evictedModelCalls: 1,
+    });
+    await flushDiagnosticEvents();
+
+    const evictedCall = firstCounterAddCall("openclaw.session.activity.evicted");
+    expect(evictedCall[0]).toBe(3);
+    expect(evictedCall[1]?.["openclaw.reason"]).toBe("orphaned_no_owner");
+    const evictedCalls = JSON.stringify(
+      telemetryState.counters.get("openclaw.session.activity.evicted")?.add.mock.calls,
+    );
+    expect(evictedCalls).not.toContain("session-should-not-export");
+    expect(evictedCalls).not.toContain("key-should-not-export");
+    await service.stop?.(ctx);
+  });
+
   test("does not export model or tool content unless capture is explicitly enabled", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });

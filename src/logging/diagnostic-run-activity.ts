@@ -1,8 +1,11 @@
 // Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
+  emitInternalDiagnosticEvent,
+  getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
+  type DiagnosticSessionActivityEvictedReason,
 } from "../infra/diagnostic-events.js";
 
 type SessionActivity = {
@@ -321,11 +324,87 @@ export function markDiagnosticEmbeddedRunEnded(params: {
     return;
   }
   activity.activeEmbeddedRuns.delete(resolveEmbeddedRunWorkKey(params));
-  if (params.clearRunActivity !== false) {
-    activity.activeTools.clear();
-    activity.activeModelCalls.clear();
+  // clearRunActivity defaults to true: the caller owns the canonical run
+  // teardown and clears tool/model markers outright. A caller opts out only
+  // when an inner embedded run may still be draining under the same session
+  // (the reply-run wrapper). Even then, once NO embedded owner remains we must
+  // evict leftover tool/model markers: a native tool/model record that never
+  // emitted completion would otherwise survive and re-block later turns on the
+  // same sessionKey as blocked_tool_call. A still-active inner run keeps them.
+  const clearAllActivity = params.clearRunActivity !== false;
+  if (clearAllActivity) {
+    clearActiveRunMarkers(activity, undefined);
+  } else if (activity.activeEmbeddedRuns.size === 0) {
+    evictOrphanedActivityMarkers(activity, params);
   }
   touchSessionActivity(activity, "embedded_run:ended");
+}
+
+// Owner-less reply-run teardown: the embedded owner is gone, so any leftover
+// tool/model markers are orphaned and must be evicted. Tool/model start events
+// are async-queued, so a start emitted before this teardown can still drain
+// after it; without a sequence cutoff that late start would re-arm an owner-less
+// marker and restore the blocked_tool_call leak. Fence the session owner refs at
+// the current event sequence (mirrors stuck-session recovery) before clearing.
+function evictOrphanedActivityMarkers(
+  activity: SessionActivity,
+  params: { sessionId?: string; sessionKey?: string },
+): void {
+  rememberRecoveredOwnerStartEventCutoffs(
+    activity,
+    collectOrphanOwnerRefs(activity, params),
+    getInternalDiagnosticEventSequence(),
+  );
+  clearActiveRunMarkers(activity, "orphaned_no_owner");
+}
+
+function collectOrphanOwnerRefs(
+  activity: SessionActivity,
+  params: { sessionId?: string },
+): Set<string> {
+  const refs = new Set<string>();
+  const add = (ref: string | undefined) => {
+    const trimmed = ref?.trim();
+    if (trimmed) {
+      refs.add(trimmed);
+    }
+  };
+  // The session id covers a late start for this run even if no marker has been
+  // recorded yet; marker run/session ids cover starts that key off a run id.
+  add(params.sessionId);
+  add(activity.sessionId);
+  for (const tool of activity.activeTools.values()) {
+    add(tool.runId);
+    add(tool.sessionId);
+  }
+  for (const modelCall of activity.activeModelCalls.values()) {
+    add(modelCall.runId);
+    add(modelCall.sessionId);
+  }
+  return refs;
+}
+
+// Clears all tool/model markers for a session. When an evictReason is given the
+// markers are orphaned (no embedded owner can complete them); emit a structured
+// event so operators can tell recovered stale state from a real active tool.
+function clearActiveRunMarkers(
+  activity: SessionActivity,
+  evictReason: DiagnosticSessionActivityEvictedReason | undefined,
+): void {
+  const evictedTools = activity.activeTools.size;
+  const evictedModelCalls = activity.activeModelCalls.size;
+  activity.activeTools.clear();
+  activity.activeModelCalls.clear();
+  if (evictReason && evictedTools + evictedModelCalls > 0) {
+    emitInternalDiagnosticEvent({
+      type: "session.activity.evicted",
+      sessionId: activity.sessionId,
+      sessionKey: activity.sessionKey,
+      reason: evictReason,
+      evictedTools,
+      evictedModelCalls,
+    });
+  }
 }
 
 function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string }): string {

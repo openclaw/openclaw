@@ -321,6 +321,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       }
       assignReasonCode(record, event.outcomeReason ?? event.reason);
       break;
+    case "session.activity.evicted":
+      record.level = "warning";
+      record.count = event.evictedTools + event.evictedModelCalls;
+      assignReasonCode(record, event.reason);
+      break;
     case "session.turn.created":
       record.source = event.agentId;
       record.channel = event.channel;

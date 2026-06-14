@@ -1432,6 +1432,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Age of sessions selected for recovery",
         },
       );
+      const sessionActivityEvictedCounter = meter.createCounter(
+        "openclaw.session.activity.evicted",
+        {
+          unit: "1",
+          description: "Orphaned tool/model activity markers evicted with no remaining owner",
+        },
+      );
       const talkEventCounter = meter.createCounter("openclaw.talk.event", {
         unit: "1",
         description: "Talk events emitted by type",
@@ -2443,6 +2450,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
       };
 
+      const recordSessionActivityEvicted = (
+        evt: Extract<DiagnosticEventPayload, { type: "session.activity.evicted" }>,
+      ) => {
+        const evicted = evt.evictedTools + evt.evictedModelCalls;
+        if (evicted <= 0) {
+          return;
+        }
+        sessionActivityEvictedCounter.add(evicted, { "openclaw.reason": evt.reason });
+      };
+
       const talkEventAttrs = (evt: TalkDiagnosticEvent): Record<string, string> => ({
         "openclaw.talk.brain": lowCardinalityAttr(evt.brain),
         "openclaw.talk.event_type": lowCardinalityAttr(evt.talkEventType),
@@ -3380,6 +3397,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "session.recovery.completed":
               recordSessionRecoveryCompleted(evt);
+              return;
+            case "session.activity.evicted":
+              recordSessionActivityEvicted(evt);
               return;
             case "run.attempt":
               recordRunAttempt(evt);
