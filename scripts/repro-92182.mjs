@@ -58,7 +58,6 @@ for (const [
   shouldUseDraftStream,
   blockStreamingEnabled,
   expected,
-  desc,
 ] of scenarios) {
   const result = resolveSlackDisableBlockStreaming({
     mode,
@@ -68,9 +67,9 @@ for (const [
   });
   const correct = result === expected ? "✅" : "❌";
   const resultStr = result === undefined ? "undefined" : result;
-  const expectedStr = expected === undefined ? "undefined" : expected;
+  const expStr = expected === undefined ? "undefined" : expected;
   console.log(
-    `│ ${mode.padEnd(7)} │ ${String(blockStreamingEnabled).padEnd(12)} │ ${String(useStreaming).padEnd(20)} │ ${String(resultStr).padEnd(12)} │  ${correct}     │`,
+    `│ ${mode.padEnd(7)} │ ${String(blockStreamingEnabled).padEnd(12)} │ ${String(useStreaming).padEnd(20)} │ ${String(resultStr).padEnd(4)}->${String(expStr).padEnd(4)} │  ${correct}     │`,
   );
 }
 console.log("└─────────┴──────────────┴──────────────────────┴──────────────┴──────────┘\n");
