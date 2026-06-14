@@ -25,6 +25,10 @@ import {
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
+import {
+  formatGatewayStartupOutcomeSummary,
+  type GatewayStartupOutcome,
+} from "./server-startup-outcomes.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
@@ -92,6 +96,12 @@ const loadGatewayRestartSentinelModule = async () => {
 
 export type GatewayPostReadySidecarHandle = {
   stop: () => Awaitable<void>;
+};
+
+export type StartGatewaySidecarsResult = {
+  pluginServices: PluginServicesHandle | null;
+  postReadySidecars: GatewayPostReadySidecarHandle[];
+  startupOutcomes?: readonly GatewayStartupOutcome[];
 };
 
 /** Stop sidecars immediately when shutdown has already started before they are reported. */
@@ -596,6 +606,19 @@ async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   return hasInternalHookListeners("gateway", "startup");
 }
 
+function resolveGmailWatcherStartupOutcome(cfg: OpenClawConfig): GatewayStartupOutcome {
+  if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_GMAIL_WATCHER)) {
+    return { id: "gmail-watcher", status: "skipped", reason: "disabled by environment" };
+  }
+  if (!cfg.hooks?.enabled) {
+    return { id: "gmail-watcher", status: "skipped", reason: "hooks not enabled" };
+  }
+  if (!cfg.hooks.gmail?.account) {
+    return { id: "gmail-watcher", status: "skipped", reason: "no gmail account configured" };
+  }
+  return { id: "gmail-watcher", status: "scheduled" };
+}
+
 async function waitForAcpRuntimeBackendReady(params: {
   backendId?: string;
   timeoutMs?: number;
@@ -751,10 +774,14 @@ export async function startGatewaySidecars(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
-}) {
+}): Promise<StartGatewaySidecarsResult> {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
+  const startupOutcomes: GatewayStartupOutcome[] = [];
 
   const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
+  let internalHooksOutcome: GatewayStartupOutcome = internalHooksConfigured
+    ? { id: "internal-hooks", status: "skipped", reason: "no handlers loaded" }
+    : { id: "internal-hooks", status: "skipped", reason: "not configured" };
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
     try {
       if (internalHooksConfigured) {
@@ -764,6 +791,10 @@ export async function startGatewaySidecars(params: {
         ]);
         setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
         const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
+        internalHooksOutcome =
+          loadedCount > 0
+            ? { id: "internal-hooks", status: "started" }
+            : { id: "internal-hooks", status: "skipped", reason: "no handlers loaded" };
         if (loadedCount > 0) {
           params.logHooks.info(
             `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
@@ -771,9 +802,15 @@ export async function startGatewaySidecars(params: {
         }
       }
     } catch (err) {
+      internalHooksOutcome = {
+        id: "internal-hooks",
+        status: "failed",
+        reason: "see earlier warning",
+      };
       params.logHooks.error(`failed to load hooks: ${String(err)}`);
     }
   });
+  startupOutcomes.push(internalHooksOutcome);
 
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
@@ -789,6 +826,9 @@ export async function startGatewaySidecars(params: {
       );
     }
   });
+  let channelsOutcome: GatewayStartupOutcome = skipChannels
+    ? { id: "channels", status: "skipped", reason: "disabled by environment" }
+    : { id: "channels", status: "started" };
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
@@ -804,7 +844,13 @@ export async function startGatewaySidecars(params: {
         await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
           params.startChannels(),
         );
+        channelsOutcome = { id: "channels", status: "started" };
       } catch (err) {
+        channelsOutcome = {
+          id: "channels",
+          status: "failed",
+          reason: "see earlier warning",
+        };
         params.logChannels.error(`channel startup failed: ${String(err)}`);
       }
     } else {
@@ -815,35 +861,66 @@ export async function startGatewaySidecars(params: {
       );
     }
   });
+  startupOutcomes.push(channelsOutcome);
   await params.onChannelsStarted?.();
 
-  let pluginServices =
-    params.shouldStartPluginServices?.() === false
-      ? null
-      : await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
-          try {
-            const { startPluginServices } = await import("../plugins/services.js");
-            return await startPluginServices({
-              registry: params.pluginRegistry,
-              config: params.cfg,
-              workspaceDir: params.defaultWorkspaceDir,
-              startupTrace: params.startupTrace,
-            });
-          } catch (err) {
-            params.log.warn(`plugin services failed to start: ${String(err)}`);
-            return null;
-          }
-        });
+  let pluginServices: PluginServicesHandle | null = null;
+  let pluginServicesOutcome: GatewayStartupOutcome;
+  const skipPluginServices = params.shouldStartPluginServices?.() === false;
+  if (skipPluginServices) {
+    pluginServicesOutcome = {
+      id: "plugin-services",
+      status: "skipped",
+      reason: "gateway closing",
+    };
+  } else {
+    let pluginServicesFailed = false;
+    pluginServices = await measureStartup(
+      params.startupTrace,
+      "sidecars.plugin-services",
+      async () => {
+        try {
+          const { startPluginServices } = await import("../plugins/services.js");
+          return await startPluginServices({
+            registry: params.pluginRegistry,
+            config: params.cfg,
+            workspaceDir: params.defaultWorkspaceDir,
+            startupTrace: params.startupTrace,
+          });
+        } catch (err) {
+          pluginServicesFailed = true;
+          params.log.warn(`plugin services failed to start: ${String(err)}`);
+          return null;
+        }
+      },
+    );
+    pluginServicesOutcome = pluginServicesFailed
+      ? { id: "plugin-services", status: "failed", reason: "see earlier warning" }
+      : pluginServices
+        ? { id: "plugin-services", status: "started" }
+        : { id: "plugin-services", status: "skipped", reason: "not configured" };
+  }
   if (pluginServices && params.shouldStartPluginServices?.() === false) {
     await pluginServices.stop().catch((err: unknown) => {
       params.log.warn(`plugin services stop after close failed: ${String(err)}`);
     });
     pluginServices = null;
+    pluginServicesOutcome = {
+      id: "plugin-services",
+      status: "skipped",
+      reason: "gateway closing",
+    };
   }
+  startupOutcomes.push(pluginServicesOutcome);
   params.onPluginServices?.(pluginServices);
 
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
+  startupOutcomes.push({
+    id: "internal-startup-hook",
+    status: shouldDispatchGatewayStartupInternalHook ? "scheduled" : "skipped",
+    reason: shouldDispatchGatewayStartupInternalHook ? undefined : "not configured",
+  });
   if (shouldDispatchGatewayStartupInternalHook) {
     // Run startup hooks after sidecar startup has yielded once so gateway bind
     // and channel startup are not delayed by hook handlers.
@@ -858,6 +935,13 @@ export async function startGatewaySidecars(params: {
       });
     }, 250);
   }
+
+  const gatewayStartHooksConfigured = hasGatewayStartHooks(params.pluginRegistry);
+  startupOutcomes.push({
+    id: "gateway-start-hooks",
+    status: gatewayStartHooksConfigured ? "scheduled" : "skipped",
+    reason: gatewayStartHooksConfigured ? undefined : "not configured",
+  });
 
   if (params.cfg.acp?.enabled) {
     void (async () => {
@@ -889,13 +973,20 @@ export async function startGatewaySidecars(params: {
     });
   }
 
+  let memoryOutcome: GatewayStartupOutcome = {
+    id: "memory-qmd",
+    status: "skipped",
+    reason: "not configured",
+  };
   await measureStartup(params.startupTrace, "sidecars.memory", async () => {
     const policy = resolveGatewayMemoryStartupPolicy(params.cfg);
     if (policy.mode === "off") {
       return;
     }
     scheduleGatewayMemoryBackend({ cfg: params.cfg, log: params.log, policy });
+    memoryOutcome = { id: "memory-qmd", status: "scheduled" };
   });
+  startupOutcomes.push(memoryOutcome);
 
   schedulePostReadySidecarTask({
     startupTrace: params.startupTrace,
@@ -955,7 +1046,9 @@ export async function startGatewaySidecars(params: {
     },
   });
 
-  if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
+  const gmailWatcherOutcome = resolveGmailWatcherStartupOutcome(params.cfg);
+  startupOutcomes.push(gmailWatcherOutcome);
+  if (gmailWatcherOutcome.status === "scheduled") {
     postReadySidecars.push(
       schedulePostReadySidecarTask({
         startupTrace: params.startupTrace,
@@ -977,6 +1070,11 @@ export async function startGatewaySidecars(params: {
     );
   }
 
+  startupOutcomes.push({
+    id: "gmail-model",
+    status: params.cfg.hooks?.gmail?.model ? "scheduled" : "skipped",
+    reason: params.cfg.hooks?.gmail?.model ? undefined : "not configured",
+  });
   if (params.cfg.hooks?.gmail?.model) {
     postReadySidecars.push(
       schedulePostReadySidecarTask({
@@ -1031,7 +1129,7 @@ export async function startGatewaySidecars(params: {
     );
   }
 
-  return { pluginServices, postReadySidecars };
+  return { pluginServices, postReadySidecars, startupOutcomes };
 }
 
 type GatewayPostAttachRuntimeDeps = {
@@ -1384,6 +1482,12 @@ export async function startGatewayPostAttachRuntime(
           ],
           ["postReadySidecarCount", postReadySidecars.length + gatewayLifetimeSidecars.length],
         ]);
+        const startupOutcomeSummary = formatGatewayStartupOutcomeSummary(
+          result.startupOutcomes ?? [],
+        );
+        if (startupOutcomeSummary) {
+          params.log.info(startupOutcomeSummary);
+        }
         params.startupTrace?.mark("sidecars.ready");
         if (params.logReadyOnSidecars !== false) {
           params.log.info("gateway ready");
