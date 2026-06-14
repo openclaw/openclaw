@@ -35,6 +35,13 @@ import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
+import {
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  resolveOriginalAnthropicToolName,
+  type AnthropicProjectedToolChoice,
+  type AnthropicToolProjection,
+} from "./anthropic-tool-projection.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -143,8 +150,8 @@ const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
 
 function normalizeAnthropicToolChoice(
   model: AnthropicTransportModel,
-  toolChoice: AnthropicTransportOptions["toolChoice"],
-) {
+  toolChoice: NonNullable<AnthropicTransportOptions["toolChoice"]>,
+): AnthropicProjectedToolChoice {
   if (
     requiresClaudeAdaptiveThinking(model) &&
     (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
@@ -310,19 +317,6 @@ function buildAnthropicBetaHeader(
 
 function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
-}
-
-function fromClaudeCodeName(name: string, tools: Context["tools"] | undefined): string {
-  if (tools && tools.length > 0) {
-    const lowerName = normalizeLowercaseStringOrEmpty(name);
-    const matchedTool = tools.find(
-      (tool) => normalizeLowercaseStringOrEmpty(tool.name) === lowerName,
-    );
-    if (matchedTool) {
-      return matchedTool.name;
-    }
-  }
-  return name;
 }
 
 function convertContentBlocks(
@@ -565,9 +559,9 @@ function ensureNonEmptyAnthropicMessages(messages: Array<Record<string, unknown>
 }
 
 function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
-  if (!tools) {
-    return [];
-  }
+  const projection = projectAnthropicTools(tools ?? [], (name) =>
+    isOAuthToken ? toClaudeCodeName(name) : name,
+  );
   const converted: Array<{
     name: string;
     description?: string;
@@ -577,27 +571,14 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
       required: unknown;
     };
   }> = [];
-  for (const tool of tools) {
-    // Main quarantine happens when plugin tools materialize; this keeps Anthropic
-    // safe for direct/custom tool arrays that bypass the plugin registry.
-    const parameters =
-      tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)
-        ? (tool.parameters as Record<string, unknown>)
-        : undefined;
-    if (!parameters) {
-      continue;
-    }
+  for (const tool of projection.tools) {
     converted.push({
-      name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+      name: tool.wireName,
       description: tool.description,
-      input_schema: {
-        type: "object",
-        properties: parameters.properties || {},
-        required: parameters.required || [],
-      },
+      input_schema: tool.inputSchema,
     });
   }
-  return converted;
+  return { projection, tools: converted };
 }
 
 function parseAnthropicToolCallArguments(inputJson: string): unknown {
@@ -917,7 +898,10 @@ function buildAnthropicParams(
   context: Context,
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
-) {
+): {
+  params: Record<string, unknown>;
+  toolProjection?: AnthropicToolProjection;
+} {
   const fable5 = usesClaudeFable5MessagesContract(model);
   const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
   const maxTokens = resolveAnthropicMessagesMaxTokens({
@@ -980,8 +964,13 @@ function buildAnthropicParams(
   if (options?.stop !== undefined && options.stop.length > 0) {
     params.stop_sequences = options.stop;
   }
+  let toolProjection: AnthropicToolProjection | undefined;
   if (context.tools) {
-    params.tools = convertAnthropicTools(context.tools, isOAuthToken);
+    const convertedTools = convertAnthropicTools(context.tools, isOAuthToken);
+    toolProjection = convertedTools.projection;
+    if (convertedTools.tools.length > 0) {
+      params.tools = convertedTools.tools;
+    }
   }
   if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
     if (fable5 || options?.thinkingEnabled) {
@@ -1007,10 +996,16 @@ function buildAnthropicParams(
     params.metadata = { user_id: options.metadata.user_id };
   }
   if (options?.toolChoice) {
-    params.tool_choice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const normalizedToolChoice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const projectedToolChoice = toolProjection
+      ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
+      : normalizedToolChoice;
+    if (projectedToolChoice) {
+      params.tool_choice = projectedToolChoice;
+    }
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
-  return params;
+  return { params, toolProjection };
 }
 
 function resolveAnthropicTransportOptions(
@@ -1109,7 +1104,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           apiKey,
           options: transportOptions,
         });
-        let params = buildAnthropicParams(model, context, isOAuthToken, transportOptions);
+        const builtParams = buildAnthropicParams(model, context, isOAuthToken, transportOptions);
+        let params = builtParams.params;
+        const toolProjection = builtParams.toolProjection;
         const nextParams = await transportOptions.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
@@ -1344,7 +1341,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 name:
                   typeof contentBlock.name === "string"
                     ? isOAuthToken
-                      ? fromClaudeCodeName(contentBlock.name, context.tools)
+                      ? resolveOriginalAnthropicToolName(contentBlock.name, toolProjection)
                       : contentBlock.name
                     : "",
                 arguments:

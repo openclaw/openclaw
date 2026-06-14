@@ -384,6 +384,35 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   });
 });
 
+describe("handleToolExecutionEnd private result observer", () => {
+  it("reports the sanitized original tool result", async () => {
+    const { ctx } = createTestContext();
+    const onAgentToolResult = vi.fn();
+    ctx.params.onAgentToolResult = onAgentToolResult;
+    const result = {
+      content: [{ type: "text", text: '{"results":[{"text":"ramen"}]}' }],
+      details: { results: [{ text: "ramen" }] },
+    };
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "memory_search",
+        toolCallId: "tool-memory-search",
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "memory_search",
+      result,
+      isError: false,
+    });
+  });
+});
+
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
   it("records accepted sessions_spawn identifiers", async () => {
     const { ctx } = createTestContext();
@@ -931,7 +960,9 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
+    const onAgentToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
+    ctx.params.onAgentToolResult = onAgentToolResult;
 
     await handleToolExecutionEnd(
       ctx as never,
@@ -961,6 +992,13 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Host:");
     expect(text).not.toContain("CWD:");
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "exec",
+      result: expect.objectContaining({
+        details: expect.objectContaining({ status: "approval-unavailable" }),
+      }),
+      isError: true,
+    });
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 

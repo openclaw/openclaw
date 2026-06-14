@@ -2165,6 +2165,43 @@ describe("update-cli", () => {
     expect(logs.join("\n")).not.toContain("already-current");
   });
 
+  it("runs the package update when latest target lookup is unresolved", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    setTty(false);
+    mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: null,
+    });
+
+    await updateCommand({});
+
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).not.toContain("Downgrade confirmation required.");
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expectPackageInstallSpec("openclaw@latest");
+  });
+
+  it("blocks the package update when a non-latest dist-tag lookup is unresolved", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    setTty(false);
+    mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    vi.mocked(fetchNpmTagVersion).mockResolvedValue({
+      tag: "next",
+      version: null,
+      error: "HTTP 404",
+    });
+
+    await updateCommand({ tag: "next" });
+
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain("Downgrade confirmation required.");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(packageInstallCommandCall()).toBeUndefined();
+  });
+
   it("warns but still runs package updates when disk space looks low", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);

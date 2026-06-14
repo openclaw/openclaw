@@ -28,6 +28,7 @@ const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() 
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
+const LIVE_TTS_TIMEOUT_MS = 60_000;
 const ModelRegistryCtor = ModelRegistry as unknown as {
   new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
 };
@@ -139,7 +140,7 @@ function createLiveTtsConfig(): ResolvedTtsConfig {
     },
     personas: {},
     maxTextLength: 4_000,
-    timeoutMs: 30_000,
+    timeoutMs: LIVE_TTS_TIMEOUT_MS,
   };
 }
 
@@ -264,7 +265,7 @@ describeLive("openai plugin live", () => {
     expect(telephony?.outputFormat).toBe("pcm");
     expect(telephony?.sampleRate).toBe(24_000);
     expect(telephony?.audioBuffer.byteLength).toBeGreaterThan(512);
-  }, 45_000);
+  }, 150_000);
 
   it("transcribes synthesized speech through the registered media provider", async () => {
     const { speechProviders, mediaProviders } = await registerOpenAIPlugin();
@@ -297,7 +298,7 @@ describeLive("openai plugin live", () => {
     expect(text.length).toBeGreaterThan(0);
     expect(collapsedText).toContain("speech");
     expect(collapsedText).toMatch(/(?:check|okay|ok|transcription)/);
-  }, 45_000);
+  }, 120_000);
 
   it("opens OpenAI realtime STT before sending audio", async () => {
     const { realtimeTranscriptionProviders } = await registerOpenAIPlugin();

@@ -1181,7 +1181,7 @@ jobs:
   runtime_tool_coverage_release_checks:
     name: Enforce QA Lab runtime tool coverage
     needs: [resolve_target, qa_lab_runtime_parity_release_checks]
-    if: always() && contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -1204,13 +1204,35 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Download runtime parity status
+        uses: actions/download-artifact@v8
+        with:
+          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/
+
+      - name: Verify runtime parity producer status
+        id: verify_runtime_parity_status
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_path=".artifacts/release-check-status/qa_lab_runtime_parity_release_checks.env"
+          status="$(sed -n 's/^status=//p' "$status_path" | tail -n 1)"
+          if [[ "$status" != "success" ]]; then
+            echo "Runtime parity producer status is ${status:-missing}; skipping coverage artifact consumer."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
       - name: Download runtime parity artifacts
+        if: steps.verify_runtime_parity_status.outputs.ready == 'true'
         uses: actions/download-artifact@v8
         with:
           name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
 
       - name: Enforce standard runtime tool coverage
+        if: steps.verify_runtime_parity_status.outputs.ready == 'true'
         run: |
           set -euo pipefail
           pnpm openclaw qa coverage \
@@ -1412,7 +1434,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
         run: |
           set -euo pipefail
 

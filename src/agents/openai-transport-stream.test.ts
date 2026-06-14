@@ -493,6 +493,38 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("skips unreadable model payload tool names in debug summaries", () => {
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
+    try {
+      expect(
+        testing.summarizeResponsesTools([
+          {
+            type: "function",
+            get function(): { name: string } {
+              throw new Error("responses debug tool function getter exploded");
+            },
+          },
+          {
+            type: "function",
+            function: {
+              get name(): string {
+                throw new Error("responses debug nested name getter exploded");
+              },
+            },
+          },
+          { type: "function", function: { name: "wait" } },
+        ]),
+      ).toBe("count=3 names=wait");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
+  });
+
   it("redacts full model payload debug summaries", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
@@ -528,6 +560,36 @@ describe("openai transport stream", () => {
     testing.enforceCodeModeResponsesToolSurface(payload);
     testing.assertCodeModeResponsesToolSurface(payload);
     expect(payload.tools).toHaveLength(2);
+  });
+
+  it("skips unreadable code mode response payload tool names", () => {
+    const payload = {
+      tools: [
+        { type: "function", name: "exec" },
+        {
+          type: "function",
+          get function(): { name: string } {
+            throw new Error("responses code mode function getter exploded");
+          },
+        },
+        {
+          type: "function",
+          function: {
+            get name(): string {
+              throw new Error("responses code mode nested name getter exploded");
+            },
+          },
+        },
+        { type: "function", function: { name: "wait" } },
+      ],
+    };
+
+    testing.enforceCodeModeResponsesToolSurface(payload);
+    testing.assertCodeModeResponsesToolSurface(payload);
+    expect(payload.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "function", function: { name: "wait" } },
+    ]);
   });
 
   it("fails closed when the code mode final payload tool surface is not exec/wait", () => {
@@ -5063,6 +5125,247 @@ describe("openai transport stream", () => {
     ) as { tool_choice?: string };
 
     expect(params.tool_choice).toBe("required");
+  });
+
+  it("keeps healthy Responses tools when a sibling schema is unreadable", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {},
+          },
+        ],
+      } as never,
+      { toolChoice: { type: "function", name: "lookup" } },
+    ) as {
+      tools?: Array<{ name?: string; strict?: boolean }>;
+      tool_choice?: unknown;
+    };
+
+    expect(params.tools).toEqual([expect.objectContaining({ name: "lookup", strict: true })]);
+    expect(params.tool_choice).toEqual({ type: "function", name: "lookup" });
+  });
+
+  it("fails locally when a pinned Responses tool is unreadable", () => {
+    expect(() =>
+      buildOpenAIResponsesParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-responses">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "broken",
+              get parameters(): never {
+                throw new Error("parameters exploded");
+              },
+            },
+          ],
+        } as never,
+        { toolChoice: { type: "function", name: "broken" } },
+      ),
+    ).toThrow('requested unavailable tool "broken"');
+  });
+
+  it("filters official Responses allowed_tools against projected functions", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {},
+          },
+        ],
+      } as never,
+      {
+        toolChoice: {
+          type: "allowed_tools",
+          mode: "required",
+          tools: [
+            { type: "function", name: "broken" },
+            { type: "function", name: "lookup" },
+          ],
+        },
+      },
+    ) as { tool_choice?: unknown };
+
+    expect(params.tool_choice).toEqual({
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "function", name: "lookup" }],
+    });
+  });
+
+  it("fails locally when required Chat Completions has no usable tools", () => {
+    expect(() =>
+      buildOpenAICompletionsParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-completions",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "broken",
+              get parameters(): never {
+                throw new Error("parameters exploded");
+              },
+            },
+          ],
+        } as never,
+        { toolChoice: "required" },
+      ),
+    ).toThrow("no tools survived schema conversion");
+  });
+
+  it("preserves the native empty tools marker for tool history after quarantining every schema", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc",
+                name: "lookup",
+                arguments: {},
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "done" }],
+            toolCallId: "call_abc",
+          },
+          { role: "user", content: "continue", timestamp: 1 },
+        ],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken tool.",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: unknown[] };
+
+    expect(params.tools).toEqual([]);
+  });
+
+  it("does not reread an unreadable tool inventory length", () => {
+    const tools = new Proxy([], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const responsesModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const completionsModel = {
+      ...responsesModel,
+      api: "openai-completions",
+      reasoning: false,
+    } satisfies Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      tools,
+    } as never;
+
+    expect(buildOpenAIResponsesParams(responsesModel, context, undefined)).not.toHaveProperty(
+      "tools",
+    );
+    expect(buildOpenAICompletionsParams(completionsModel, context, undefined)).not.toHaveProperty(
+      "tools",
+    );
   });
 
   it("sorts Responses tools by name for stable prompt-cache payloads", () => {

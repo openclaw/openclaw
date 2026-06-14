@@ -72,9 +72,16 @@ import {
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
-  findOpenAIStrictToolSchemaDiagnostics,
+  projectOpenAITools,
+  reconcileOpenAICompletionsToolChoice,
+  reconcileOpenAIResponsesToolChoice,
+  type OpenAICompletionsToolChoice,
+  type OpenAIToolProjection,
+} from "./openai-tool-projection.js";
+import {
+  findOpenAIStrictToolProjectionDiagnostics,
   normalizeOpenAIStrictToolParameters,
-  resolveOpenAIStrictToolFlagForInventory,
+  resolveOpenAIStrictToolFlagForProjection,
 } from "./openai-tool-schema.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
@@ -199,16 +206,7 @@ type OpenAIResponsesReplayContext = {
 };
 
 type OpenAICompletionsOptions = BaseStreamOptions & {
-  toolChoice?:
-    | "auto"
-    | "none"
-    | "required"
-    | {
-        type: "function";
-        function: {
-          name: string;
-        };
-      };
+  toolChoice?: OpenAICompletionsToolChoice;
   reasoning?: OpenAIReasoningEffort;
   reasoningEffort?: OpenAIReasoningEffort;
 };
@@ -352,19 +350,32 @@ function responseInputRoles(input: unknown): string {
   return [...roles].toSorted().join(",");
 }
 
+function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
+  try {
+    return record[field];
+  } catch {
+    return undefined;
+  }
+}
+
 function readResponsesToolDisplayName(tool: unknown): string {
   if (!tool || typeof tool !== "object") {
     return "";
   }
   const record = tool as Record<string, unknown>;
-  if (typeof record.name === "string") {
-    return record.name;
+  const name = readToolPayloadField(record, "name");
+  if (typeof name === "string") {
+    return name;
   }
-  const fn = record.function;
-  if (fn && typeof fn === "object" && typeof (fn as Record<string, unknown>).name === "string") {
-    return (fn as Record<string, unknown>).name as string;
+  const fn = readToolPayloadField(record, "function");
+  if (fn && typeof fn === "object") {
+    const fnName = readToolPayloadField(fn as Record<string, unknown>, "name");
+    if (typeof fnName === "string") {
+      return fnName;
+    }
   }
-  return typeof record.type === "string" ? record.type : "";
+  const type = readToolPayloadField(record, "type");
+  return typeof type === "string" && type !== "function" ? type : "";
 }
 
 function summarizeResponsesTools(tools: unknown): string {
@@ -383,11 +394,16 @@ function responsesPayloadToolName(tool: unknown): string | undefined {
   if (!isRecord(tool)) {
     return undefined;
   }
-  if (typeof tool.name === "string") {
-    return tool.name;
+  const name = readToolPayloadField(tool, "name");
+  if (typeof name === "string") {
+    return name;
   }
-  const fn = tool.function;
-  return isRecord(fn) && typeof fn.name === "string" ? fn.name : undefined;
+  const fn = readToolPayloadField(tool, "function");
+  if (!isRecord(fn)) {
+    return undefined;
+  }
+  const fnName = readToolPayloadField(fn, "name");
+  return typeof fnName === "string" ? fnName : undefined;
 }
 
 function enforceCodeModeResponsesToolSurface(payload: unknown): void {
@@ -1282,37 +1298,41 @@ function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   model: OpenAIModeModel,
   options?: { strict?: boolean | null },
-): FunctionTool[] {
-  const strict = resolveOpenAIStrictToolFlagWithDiagnostics(tools, options?.strict, {
+): { projection: OpenAIToolProjection; tools: FunctionTool[] } {
+  const projection = projectOpenAITools(tools);
+  const strict = resolveOpenAIStrictToolFlagWithDiagnostics(projection, options?.strict, {
     transport: "responses",
     model,
   });
-  return sortTransportToolsByName(tools).map((tool): FunctionTool => {
-    const result = {
-      type: "function" as const,
-      name: tool.name,
-      description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(
-        tool.parameters,
-        strict === true,
-        model.compat,
-      ) as Record<string, unknown>,
-    } as FunctionTool;
-    if (strict !== undefined) {
-      result.strict = strict;
-    }
-    return result;
-  });
+  return {
+    projection,
+    tools: sortTransportToolsByName(projection.tools).map((tool): FunctionTool => {
+      const result = {
+        type: "function" as const,
+        name: tool.name,
+        description: tool.description,
+        parameters: normalizeOpenAIStrictToolParameters(
+          tool.parameters,
+          strict === true,
+          model.compat,
+        ),
+      } as FunctionTool;
+      if (strict !== undefined) {
+        result.strict = strict;
+      }
+      return result;
+    }),
+  };
 }
 
 function resolveOpenAIStrictToolFlagWithDiagnostics(
-  tools: NonNullable<Context["tools"]>,
+  projection: OpenAIToolProjection,
   strictSetting: boolean | null | undefined,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): boolean | undefined {
-  const strict = resolveOpenAIStrictToolFlagForInventory(tools, strictSetting);
+  const strict = resolveOpenAIStrictToolFlagForProjection(projection, strictSetting);
   if (strictSetting === true && strict === false && log.isEnabled("debug", "any")) {
-    const diagnostics = findOpenAIStrictToolSchemaDiagnostics(tools);
+    const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
     if (!shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)) {
       return strict;
     }
@@ -1337,7 +1357,7 @@ function resolveOpenAIStrictToolFlagWithDiagnostics(
 }
 
 function buildOpenAIStrictToolDowngradeDiagnosticKey(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolSchemaDiagnostics>,
+  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): string {
   return createHash("sha256")
@@ -1357,7 +1377,7 @@ function buildOpenAIStrictToolDowngradeDiagnosticKey(
 }
 
 function shouldLogOpenAIStrictToolDowngradeDiagnostic(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolSchemaDiagnostics>,
+  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): boolean {
   const key = buildOpenAIStrictToolDowngradeDiagnosticKey(diagnostics, context);
@@ -2261,13 +2281,25 @@ export function buildOpenAIResponsesParams(
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    params.tools = convertResponsesTools(context.tools, model as OpenAIModeModel, {
+    const converted = convertResponsesTools(context.tools, model as OpenAIModeModel, {
       strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
         transport: "stream",
       }),
     });
+    if (
+      converted.tools.length > 0 ||
+      (converted.projection.inputToolCount === 0 && converted.projection.diagnostics.length === 0)
+    ) {
+      params.tools = converted.tools;
+    }
     if (options?.toolChoice) {
-      params.tool_choice = options.toolChoice;
+      const toolChoice = reconcileOpenAIResponsesToolChoice(
+        options.toolChoice,
+        converted.projection,
+      );
+      if (toolChoice !== undefined) {
+        params.tool_choice = toolChoice;
+      }
     }
   }
   if (model.reasoning) {
@@ -3707,8 +3739,9 @@ function convertTools(
   compat: ReturnType<typeof getCompat>,
   model: OpenAIModeModel,
 ) {
+  const projection = projectOpenAITools(tools);
   const strict = resolveOpenAIStrictToolFlagWithDiagnostics(
-    tools,
+    projection,
     resolveOpenAIStrictToolSetting(model, {
       transport: "stream",
       supportsStrictMode: compat?.supportsStrictMode,
@@ -3718,29 +3751,32 @@ function convertTools(
       model,
     },
   );
-  return sortTransportToolsByName(tools).map((tool) => {
-    const functionTool: {
-      name: string;
-      description: string | undefined;
-      parameters: ReturnType<typeof normalizeOpenAIStrictToolParameters>;
-      strict?: boolean;
-    } = {
-      name: tool.name,
-      description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(
-        tool.parameters,
-        strict === true,
-        model.compat,
-      ),
-    };
-    if (strict !== undefined) {
-      functionTool.strict = strict;
-    }
-    return {
-      type: "function",
-      function: functionTool,
-    };
-  });
+  return {
+    projection,
+    tools: sortTransportToolsByName(projection.tools).map((tool) => {
+      const functionTool: {
+        name: string;
+        description: string | undefined;
+        parameters: ReturnType<typeof normalizeOpenAIStrictToolParameters>;
+        strict?: boolean;
+      } = {
+        name: tool.name,
+        description: tool.description,
+        parameters: normalizeOpenAIStrictToolParameters(
+          tool.parameters,
+          strict === true,
+          model.compat,
+        ),
+      };
+      if (strict !== undefined) {
+        functionTool.strict = strict;
+      }
+      return {
+        type: "function",
+        function: functionTool,
+      };
+    }),
+  };
 }
 
 function compareTransportToolText(left: string | undefined, right: string | undefined): number {
@@ -4142,9 +4178,23 @@ export function buildOpenAICompletionsParams(
   }
   if (supportsModelTools(model)) {
     if (context.tools) {
-      params.tools = convertTools(context.tools, compat, model);
+      const converted = convertTools(context.tools, compat, model);
+      if (
+        converted.tools.length > 0 ||
+        (converted.projection.inputToolCount === 0 && converted.projection.diagnostics.length === 0)
+      ) {
+        params.tools = converted.tools;
+      } else if (hasToolHistory(context.messages)) {
+        params.tools = [];
+      }
       if (options?.toolChoice) {
-        params.tool_choice = options.toolChoice;
+        const toolChoice = reconcileOpenAICompletionsToolChoice(
+          options.toolChoice,
+          converted.projection,
+        );
+        if (toolChoice !== undefined) {
+          params.tool_choice = toolChoice;
+        }
       } else if (
         compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
         Array.isArray(params.tools) &&
