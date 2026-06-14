@@ -13,7 +13,9 @@ import {
 import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
+  McpServerCatalog,
   McpToolCatalog,
+  McpToolCatalogDiagnostic,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
@@ -169,16 +171,246 @@ function globMatches(pattern: string, value: string): boolean {
   return new RegExp(`^${trimmed.split("*").map(escapeRegex).join(".*")}$`).test(value);
 }
 
-function serverAllowsUtilityTool(
-  server: McpToolCatalog["servers"][string],
-  operation: string,
-): boolean {
+function serverAllowsUtilityTool(server: MaterializedMcpServerCatalog, operation: string): boolean {
   const include = server.toolFilter?.include ?? [];
   const exclude = server.toolFilter?.exclude ?? [];
   if (include.length > 0 && !include.some((pattern) => globMatches(pattern, operation))) {
     return false;
   }
   return !exclude.some((pattern) => globMatches(pattern, operation));
+}
+
+type MaterializedMcpCatalogTool = {
+  descriptor: McpCatalogTool;
+  serverName: string;
+  safeServerName: string;
+  toolName: string;
+  title?: string;
+  description: string;
+  inputSchema: McpCatalogTool["inputSchema"];
+};
+
+type MaterializedMcpServerCatalog = {
+  serverName: string;
+  safeServerName: string;
+  launchSummary: string;
+  resources?: McpServerCatalog["resources"];
+  prompts?: McpServerCatalog["prompts"];
+  supportsParallelToolCalls?: boolean;
+  toolFilter?: {
+    include?: string[];
+    exclude?: string[];
+  };
+};
+
+export type BundleMcpToolCatalogProjection = {
+  tools: AnyAgentTool[];
+  diagnostics: McpToolCatalogDiagnostic[];
+};
+
+function readCatalogField(
+  value: unknown,
+  field: string,
+): { ok: true; value: unknown } | { ok: false } {
+  if (!value || typeof value !== "object") {
+    return { ok: false };
+  }
+  try {
+    return { ok: true, value: (value as Record<string, unknown>)[field] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function normalizeCatalogString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeCatalogStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = value.filter(
+    (entry): entry is string => typeof entry === "string" && Boolean(entry.trim()),
+  );
+  return entries.length > 0 ? entries : undefined;
+}
+
+function catalogDiagnostic(params: {
+  serverName: string;
+  safeServerName?: string;
+  launchSummary?: string;
+  message: string;
+}): McpToolCatalogDiagnostic {
+  return {
+    serverName: params.serverName,
+    safeServerName: params.safeServerName ?? params.serverName,
+    launchSummary: params.launchSummary ?? params.serverName,
+    message: params.message,
+  };
+}
+
+function materializeMcpServerCatalog(params: { serverKey: string; server: unknown }): {
+  server: MaterializedMcpServerCatalog;
+  diagnostics: McpToolCatalogDiagnostic[];
+} {
+  const diagnostics: McpToolCatalogDiagnostic[] = [];
+  const serverNameRead = readCatalogField(params.server, "serverName");
+  const safeServerNameRead = readCatalogField(params.server, "safeServerName");
+  const launchSummaryRead = readCatalogField(params.server, "launchSummary");
+  const serverName =
+    normalizeCatalogString(serverNameRead.ok ? serverNameRead.value : undefined) ??
+    params.serverKey;
+  const safeServerName =
+    normalizeCatalogString(safeServerNameRead.ok ? safeServerNameRead.value : undefined) ??
+    serverName;
+  const launchSummary =
+    normalizeCatalogString(launchSummaryRead.ok ? launchSummaryRead.value : undefined) ??
+    serverName;
+  const resourcesRead = readCatalogField(params.server, "resources");
+  const promptsRead = readCatalogField(params.server, "prompts");
+  const supportsParallelRead = readCatalogField(params.server, "supportsParallelToolCalls");
+  const toolFilterRead = readCatalogField(params.server, "toolFilter");
+  if (!resourcesRead.ok) {
+    diagnostics.push(
+      catalogDiagnostic({
+        serverName,
+        safeServerName,
+        launchSummary,
+        message: `server "${serverName}" resources metadata is unreadable`,
+      }),
+    );
+  }
+  if (!promptsRead.ok) {
+    diagnostics.push(
+      catalogDiagnostic({
+        serverName,
+        safeServerName,
+        launchSummary,
+        message: `server "${serverName}" prompts metadata is unreadable`,
+      }),
+    );
+  }
+  if (!toolFilterRead.ok) {
+    diagnostics.push(
+      catalogDiagnostic({
+        serverName,
+        safeServerName,
+        launchSummary,
+        message: `server "${serverName}" tool filter metadata is unreadable`,
+      }),
+    );
+  }
+  const includeRead = toolFilterRead.ok
+    ? readCatalogField(toolFilterRead.value, "include")
+    : undefined;
+  const excludeRead = toolFilterRead.ok
+    ? readCatalogField(toolFilterRead.value, "exclude")
+    : undefined;
+  return {
+    server: {
+      serverName,
+      safeServerName,
+      launchSummary,
+      ...(resourcesRead.ok && resourcesRead.value && typeof resourcesRead.value === "object"
+        ? { resources: resourcesRead.value as McpServerCatalog["resources"] }
+        : {}),
+      ...(promptsRead.ok && promptsRead.value && typeof promptsRead.value === "object"
+        ? { prompts: promptsRead.value as McpServerCatalog["prompts"] }
+        : {}),
+      ...(supportsParallelRead.ok && supportsParallelRead.value === true
+        ? { supportsParallelToolCalls: true }
+        : {}),
+      ...(toolFilterRead.ok && toolFilterRead.value && typeof toolFilterRead.value === "object"
+        ? {
+            toolFilter: {
+              ...(includeRead?.ok
+                ? { include: normalizeCatalogStringArray(includeRead.value) ?? [] }
+                : {}),
+              ...(excludeRead?.ok
+                ? { exclude: normalizeCatalogStringArray(excludeRead.value) ?? [] }
+                : {}),
+            },
+          }
+        : {}),
+    },
+    diagnostics,
+  };
+}
+
+function materializeMcpCatalogTool(params: {
+  tool: unknown;
+  toolIndex: number;
+  serversByName: ReadonlyMap<string, MaterializedMcpServerCatalog>;
+}): { tool: MaterializedMcpCatalogTool } | { diagnostic: McpToolCatalogDiagnostic } {
+  const serverNameRead = readCatalogField(params.tool, "serverName");
+  const safeServerNameRead = readCatalogField(params.tool, "safeServerName");
+  const toolNameRead = readCatalogField(params.tool, "toolName");
+  const titleRead = readCatalogField(params.tool, "title");
+  const descriptionRead = readCatalogField(params.tool, "description");
+  const fallbackDescriptionRead = readCatalogField(params.tool, "fallbackDescription");
+  const inputSchemaRead = readCatalogField(params.tool, "inputSchema");
+  const serverName = normalizeCatalogString(serverNameRead.ok ? serverNameRead.value : undefined);
+  const safeServerName = normalizeCatalogString(
+    safeServerNameRead.ok ? safeServerNameRead.value : undefined,
+  );
+  const toolName = normalizeCatalogString(toolNameRead.ok ? toolNameRead.value : undefined);
+  const server = serverName ? params.serversByName.get(serverName) : undefined;
+  const fallbackToolLabel = `tool[${params.toolIndex}]`;
+  const diagnosticBase = {
+    serverName: serverName ?? fallbackToolLabel,
+    safeServerName: safeServerName ?? server?.safeServerName ?? serverName ?? fallbackToolLabel,
+    launchSummary: server?.launchSummary ?? serverName ?? fallbackToolLabel,
+  };
+  const fieldViolations = [
+    ...(serverNameRead.ok && serverName ? [] : ["serverName"]),
+    ...(safeServerNameRead.ok && safeServerName ? [] : ["safeServerName"]),
+    ...(toolNameRead.ok && toolName ? [] : ["toolName"]),
+    ...(inputSchemaRead.ok && inputSchemaRead.value !== undefined ? [] : ["inputSchema"]),
+  ];
+  if (
+    !serverName ||
+    !safeServerName ||
+    !toolName ||
+    !inputSchemaRead.ok ||
+    inputSchemaRead.value === undefined
+  ) {
+    return {
+      diagnostic: catalogDiagnostic({
+        ...diagnosticBase,
+        message: `tools[${params.toolIndex}] has unreadable or missing required field(s): ${fieldViolations.join(", ")}`,
+      }),
+    };
+  }
+  const inputSchema = inputSchemaRead.value as McpCatalogTool["inputSchema"];
+  const fallbackDescription =
+    normalizeCatalogString(
+      fallbackDescriptionRead.ok ? fallbackDescriptionRead.value : undefined,
+    ) ?? `Provided by bundle MCP server "${serverName}".`;
+  const description =
+    normalizeCatalogString(descriptionRead.ok ? descriptionRead.value : undefined) ??
+    fallbackDescription;
+  const title = normalizeCatalogString(titleRead.ok ? titleRead.value : undefined);
+  const descriptor: McpCatalogTool = {
+    serverName,
+    safeServerName,
+    toolName,
+    ...(title ? { title } : {}),
+    description,
+    inputSchema,
+    fallbackDescription,
+  };
+  return {
+    tool: {
+      descriptor,
+      serverName,
+      safeServerName,
+      toolName,
+      ...(descriptor.title ? { title: descriptor.title } : {}),
+      description,
+      inputSchema: descriptor.inputSchema,
+    },
+  };
 }
 
 function addMcpUtilityTool(params: {
@@ -237,9 +469,42 @@ export function buildBundleMcpToolsFromCatalog(params: {
   createPromptListExecute?: (serverName: string) => AnyAgentTool["execute"];
   createPromptGetExecute?: (serverName: string) => AnyAgentTool["execute"];
 }): AnyAgentTool[] {
+  return projectBundleMcpToolsFromCatalog(params).tools;
+}
+
+export function projectBundleMcpToolsFromCatalog(params: {
+  catalog: McpToolCatalog;
+  reservedToolNames?: Iterable<string>;
+  createExecute?: (tool: McpCatalogTool) => AnyAgentTool["execute"];
+  createResourceListExecute?: (serverName: string) => AnyAgentTool["execute"];
+  createResourceReadExecute?: (serverName: string) => AnyAgentTool["execute"];
+  createPromptListExecute?: (serverName: string) => AnyAgentTool["execute"];
+  createPromptGetExecute?: (serverName: string) => AnyAgentTool["execute"];
+}): BundleMcpToolCatalogProjection {
   const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const tools: AnyAgentTool[] = [];
-  const sortedCatalogTools = [...params.catalog.tools].toSorted((a, b) => {
+  const diagnostics: McpToolCatalogDiagnostic[] = [];
+  const materializedServers = Object.entries(params.catalog.servers)
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([serverKey, server]) => materializeMcpServerCatalog({ serverKey, server }));
+  diagnostics.push(...materializedServers.flatMap((entry) => entry.diagnostics));
+  const serversByName = new Map(
+    materializedServers.map(({ server }) => [server.serverName, server] as const),
+  );
+  const materializedTools: MaterializedMcpCatalogTool[] = [];
+  for (const [toolIndex, tool] of params.catalog.tools.entries()) {
+    const materialized = materializeMcpCatalogTool({
+      tool,
+      toolIndex,
+      serversByName,
+    });
+    if ("diagnostic" in materialized) {
+      diagnostics.push(materialized.diagnostic);
+    } else {
+      materializedTools.push(materialized.tool);
+    }
+  }
+  const sortedCatalogTools = materializedTools.toSorted((a, b) => {
     const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
     if (serverOrder !== 0) {
       return serverOrder;
@@ -252,11 +517,11 @@ export function buildBundleMcpToolsFromCatalog(params: {
   });
 
   for (const tool of sortedCatalogTools) {
-    const originalName = tool.toolName.trim();
+    const originalName = tool.toolName;
     if (!originalName) {
       continue;
     }
-    const server = params.catalog.servers[tool.serverName];
+    const server = serversByName.get(tool.serverName);
     const executionMode: AnyAgentTool["executionMode"] =
       server?.supportsParallelToolCalls === true ? "parallel" : "sequential";
     const safeToolName = buildSafeToolName({
@@ -273,11 +538,11 @@ export function buildBundleMcpToolsFromCatalog(params: {
     const agentTool: AnyAgentTool = {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
-      description: tool.description || tool.fallbackDescription,
+      description: tool.description,
       parameters: normalizeToolParameterSchema(tool.inputSchema),
       executionMode,
       execute:
-        params.createExecute?.(tool) ??
+        params.createExecute?.(tool.descriptor) ??
         (async () => {
           throw new Error("bundle-mcp catalog projection cannot execute tools");
         }),
@@ -295,10 +560,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
     tools.push(agentTool);
   }
 
-  for (const server of Object.values(params.catalog.servers).toSorted((a, b) =>
-    a.serverName.localeCompare(b.serverName),
-  )) {
-    const safeServerName = server.safeServerName ?? server.serverName;
+  for (const server of materializedServers.map((entry) => entry.server)) {
+    const safeServerName = server.safeServerName;
     const executionMode: AnyAgentTool["executionMode"] = server.supportsParallelToolCalls
       ? "parallel"
       : "sequential";
@@ -380,7 +643,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
   // turns (defensive — listTools() order is usually stable but not guaranteed).
   // Cannot fix name collisions: collision suffixes above are order-dependent.
   tools.sort((a, b) => a.name.localeCompare(b.name));
-  return tools;
+  return { tools, diagnostics };
 }
 
 export async function materializeBundleMcpToolsForRun(params: {
@@ -398,7 +661,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     releaseLease?.();
     throw error;
   }
-  const tools = buildBundleMcpToolsFromCatalog({
+  const projection = projectBundleMcpToolsFromCatalog({
     catalog,
     reservedToolNames: params.reservedToolNames,
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
@@ -457,9 +720,9 @@ export async function materializeBundleMcpToolsForRun(params: {
   });
 
   return {
-    tools,
-    ...(catalog.diagnostics && catalog.diagnostics.length > 0
-      ? { diagnostics: catalog.diagnostics }
+    tools: projection.tools,
+    ...((catalog.diagnostics && catalog.diagnostics.length > 0) || projection.diagnostics.length > 0
+      ? { diagnostics: [...(catalog.diagnostics ?? []), ...projection.diagnostics] }
       : {}),
     dispose: async () => {
       if (disposed) {

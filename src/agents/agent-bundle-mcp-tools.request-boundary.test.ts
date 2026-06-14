@@ -25,18 +25,21 @@ function makeConfiguredRuntime(
   params: {
     serverName?: string;
     toolNames?: string[];
+    tools?: McpCatalogTool[];
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "userMcp";
   const toolNames = params.toolNames ?? ["list_inbox", "send_reply"];
-  const tools: McpCatalogTool[] = toolNames.map((toolName) => ({
-    serverName,
-    safeServerName: serverName,
-    toolName,
-    description: `${serverName}.${toolName}`,
-    inputSchema: { type: "object", properties: {} },
-    fallbackDescription: `${serverName}.${toolName}`,
-  }));
+  const tools: McpCatalogTool[] =
+    params.tools ??
+    toolNames.map((toolName) => ({
+      serverName,
+      safeServerName: serverName,
+      toolName,
+      description: `${serverName}.${toolName}`,
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: `${serverName}.${toolName}`,
+    }));
   return {
     sessionId: "session-request-boundary",
     workspaceDir: "/workspace",
@@ -183,6 +186,52 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
       "userMcp__alpha_tool",
       "userMcp__mu_tool",
       "userMcp__zeta_tool",
+    ]);
+  });
+
+  it("keeps healthy configured MCP tools at the request boundary when a catalog sibling is unreadable", async () => {
+    const brokenTool = {
+      serverName: "userMcp",
+      safeServerName: "userMcp",
+      description: "bad",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "bad",
+    };
+    Object.defineProperty(brokenTool, "toolName", {
+      get() {
+        throw new Error("toolName exploded");
+      },
+    });
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeConfiguredRuntime({
+        tools: [
+          brokenTool as never,
+          {
+            serverName: "userMcp",
+            safeServerName: "userMcp",
+            toolName: "send_reply",
+            description: "userMcp.send_reply",
+            inputSchema: { type: "object", properties: {} },
+            fallbackDescription: "userMcp.send_reply",
+          },
+        ],
+      }),
+    });
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: runtime.tools,
+      config: { tools: { profile: "coding" } },
+      warn: () => {},
+    });
+    const { customTools } = splitSdkTools({ tools: filtered, sandboxEnabled: false });
+
+    expect(customTools.map((tool) => tool.name)).toEqual(["userMcp__send_reply"]);
+    expect(runtime.diagnostics).toEqual([
+      {
+        serverName: "userMcp",
+        safeServerName: "userMcp",
+        launchSummary: "userMcp",
+        message: "tools[0] has unreadable or missing required field(s): toolName",
+      },
     ]);
   });
 });
