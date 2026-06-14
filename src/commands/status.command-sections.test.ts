@@ -112,7 +112,6 @@ describe("status.command-sections", () => {
         Model: "gpt-5.4",
         Runtime: "OpenAI Codex",
         Tokens: "12k",
-        Cost: "muted(—)",
         Cache: "cache ok",
       },
       {
@@ -122,7 +121,6 @@ describe("status.command-sections", () => {
         Model: "gpt-5.5",
         Runtime: "OpenClaw Default",
         Tokens: "12k",
-        Cost: "muted(—)",
         Cache: "cache ok",
       },
     ]);
