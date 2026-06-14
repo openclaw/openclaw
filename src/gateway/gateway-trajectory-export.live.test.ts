@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -215,10 +214,34 @@ function extractChatFinalText(event: EventFrame, runId: string): string | undefi
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  const messageRecord = message as { text?: unknown };
-  return typeof messageRecord.text === "string"
-    ? messageRecord.text
-    : extractFirstTextBlock(message);
+  return extractVisibleMessageText(message);
+}
+
+function extractVisibleMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const record = message as { text?: unknown; content?: unknown };
+  if (typeof record.text === "string" && record.text.trim()) {
+    return record.text;
+  }
+  if (typeof record.content === "string" && record.content.trim()) {
+    return record.content;
+  }
+  if (!Array.isArray(record.content)) {
+    return undefined;
+  }
+  const text = record.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const entry = block as { type?: unknown; text?: unknown };
+      return entry.type === "text" && typeof entry.text === "string" ? entry.text : "";
+    })
+    .filter((value) => value.trim())
+    .join("\n");
+  return text || undefined;
 }
 
 async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
@@ -231,7 +254,7 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
         };
       }
     | undefined;
-  let lastApprovalCommands: string[] = [];
+  let lastApprovalSummaries: Array<{ id?: string; hasTrajectoryExportCommand: boolean }> = [];
   while (Date.now() - startedAt < 60_000) {
     const approvals = (await client.request(
       "exec.approval.list",
@@ -243,9 +266,12 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
         command?: string;
       };
     }>;
-    lastApprovalCommands = approvals
-      .map((entry) => entry.request?.command)
-      .filter((command): command is string => typeof command === "string");
+    lastApprovalSummaries = approvals.map((entry) => ({
+      ...(entry.id ? { id: entry.id } : {}),
+      hasTrajectoryExportCommand: Boolean(
+        entry.request?.command?.includes("sessions export-trajectory"),
+      ),
+    }));
     approval = approvals.find((entry) =>
       entry.request?.command?.includes("sessions export-trajectory"),
     );
@@ -258,7 +284,7 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
   }
   if (!approval?.id) {
     throw new Error(
-      `expected trajectory export approval id; approvals=${JSON.stringify(lastApprovalCommands)}`,
+      `expected trajectory export approval id; approvals=${JSON.stringify(lastApprovalSummaries)}`,
     );
   }
   expect(approval.request?.command).toContain("sessions export-trajectory");
@@ -387,7 +413,7 @@ describeLive("gateway live trajectory export", () => {
       ).toBe(true);
       const finalText =
         typeof exportResponse?.message === "object"
-          ? extractFirstTextBlock(exportResponse.message)
+          ? extractVisibleMessageText(exportResponse.message)
           : await waitForTrajectoryExportInstructionText({
               events: gatewayEvents,
               expectedText: "Trajectory exports can include",
