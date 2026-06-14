@@ -157,7 +157,15 @@ function mockEffectiveUid(uid: number) {
 }
 
 async function readManagedServiceEnabled(env: NodeJS.ProcessEnv = { HOME: TEST_MANAGED_HOME }) {
-  vi.spyOn(fs, "access").mockResolvedValue(undefined);
+  vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+    const pathValue = pathLikeToString(pathname);
+    if (pathValue.includes("/.config/systemd/user/")) {
+      return undefined;
+    }
+    const err = new Error("ENOENT") as NodeJS.ErrnoException;
+    err.code = "ENOENT";
+    throw err;
+  });
   return isSystemdServiceEnabled({ env });
 }
 
@@ -462,7 +470,6 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("throws when systemctl is-enabled fails for non-state errors", async () => {
-    vi.spyOn(fs, "access").mockResolvedValue(undefined);
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
@@ -478,13 +485,12 @@ describe("isSystemdServiceEnabled", () => {
         err.code = 1;
         cb(err, "", "permission denied");
       });
-    await expect(
-      isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } }),
-    ).rejects.toThrow("systemctl is-enabled unavailable: permission denied");
+    await expect(readManagedServiceEnabled({ HOME: "/tmp/openclaw-test-home" })).rejects.toThrow(
+      "systemctl is-enabled unavailable: permission denied",
+    );
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
-    vi.spyOn(fs, "access").mockResolvedValue(undefined);
     execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
       // On Ubuntu 24.04, `systemctl --user is-enabled <unit>` exits with
       // code 4 and prints "not-found" to stdout when the unit doesn't exist.
@@ -494,7 +500,7 @@ describe("isSystemdServiceEnabled", () => {
       err.code = 4;
       cb(err, "not-found\n", "");
     });
-    const result = await isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
+    const result = await readManagedServiceEnabled({ HOME: "/tmp/openclaw-test-home" });
     expect(result).toBe(false);
   });
 });
@@ -552,15 +558,55 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     });
   }
 
-  it("findInstalledSystemdGatewayScope prefers user scope when both exist", async () => {
+  it("findInstalledSystemdGatewayScope prefers active system scope when both exist", async () => {
     mockUnitFileLayout({
       user: true,
       system: "/etc/systemd/system/openclaw-gateway.service",
     });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
+      cb(null, "", "");
+    });
+
     const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
-    expect(result?.scope).toBe("user");
-    expect(result?.unitName).toBe(GATEWAY_SERVICE);
-    expect(result?.unitPath).toContain("/.config/systemd/user/openclaw-gateway.service");
+    expect(result).toEqual({
+      scope: "system",
+      unitName: GATEWAY_SERVICE,
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+      conflictingUnit: {
+        scope: "user",
+        unitName: GATEWAY_SERVICE,
+        unitPath: `${TEST_MANAGED_HOME}/.config/systemd/user/openclaw-gateway.service`,
+      },
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope keeps user scope when the system unit is inactive and disabled", async () => {
+    mockUnitFileLayout({
+      user: true,
+      system: "/etc/systemd/system/openclaw-gateway.service",
+    });
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
+        cb(createExecFileError("inactive", { code: 3 }), "", "inactive");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["is-enabled", GATEWAY_SERVICE]);
+        cb(createExecFileError("disabled"), "disabled\n", "");
+      });
+
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toEqual({
+      scope: "user",
+      unitName: GATEWAY_SERVICE,
+      unitPath: `${TEST_MANAGED_HOME}/.config/systemd/user/openclaw-gateway.service`,
+      conflictingUnit: {
+        scope: "system",
+        unitName: GATEWAY_SERVICE,
+        unitPath: "/etc/systemd/system/openclaw-gateway.service",
+      },
+    });
   });
 
   it("findInstalledSystemdGatewayScope detects system-scope unit in /etc/systemd/system", async () => {
@@ -1652,6 +1698,284 @@ describe("systemd service install and uninstall", () => {
     execFileMock.mockReset();
   });
 
+  it("retires an active same-name system-scope gateway unit after staging a user unit", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-install-test",
+    };
+    const unitPath = resolveSystemdUserUnitPath(env);
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      const realAccess = fs.access.bind(fs);
+      vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+        const pathValue = pathLikeToString(pathname);
+        if (pathValue === "/etc/systemd/system/openclaw-gateway-install-test.service") {
+          return undefined;
+        }
+        return await realAccess(pathname, mode);
+      });
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-active", "--quiet", "openclaw-gateway-install-test.service"]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["disable", "--now", "openclaw-gateway-install-test.service"]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", "openclaw-gateway-install-test.service");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", "openclaw-gateway-install-test.service");
+          cb(null, "", "");
+        });
+
+      const { write, stdout } = createWritableStreamMock();
+      await installSystemdService({
+        env,
+        stdout,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
+
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toContain("openclaw gateway run");
+      expect(write.mock.calls.map(([value]) => String(value)).join("\n")).toContain(
+        "Retired conflicting systemd service",
+      );
+      expect(execFileMock).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves inactive disabled same-name system-scope unit files alone during user install", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-inactive-system-test",
+    };
+    const unitPath = resolveSystemdUserUnitPath(env);
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      const realAccess = fs.access.bind(fs);
+      vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+        const pathValue = pathLikeToString(pathname);
+        if (pathValue === "/etc/systemd/system/openclaw-gateway-inactive-system-test.service") {
+          return undefined;
+        }
+        return await realAccess(pathname, mode);
+      });
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual([
+            "is-active",
+            "--quiet",
+            "openclaw-gateway-inactive-system-test.service",
+          ]);
+          cb(createExecFileError("inactive"), "", "inactive");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-enabled", "openclaw-gateway-inactive-system-test.service"]);
+          cb(createExecFileError("disabled"), "disabled\n", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", "openclaw-gateway-inactive-system-test.service");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", "openclaw-gateway-inactive-system-test.service");
+          cb(null, "", "");
+        });
+
+      const { write, stdout } = createWritableStreamMock();
+      await installSystemdService({
+        env,
+        stdout,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
+
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toContain("openclaw gateway run");
+      expect(write.mock.calls.map(([value]) => String(value)).join("\n")).not.toContain(
+        "Retired conflicting systemd service",
+      );
+      expect(execFileMock).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not stop an active system unit when user install preflight fails", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-preflight-test",
+    };
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      const realAccess = fs.access.bind(fs);
+      vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+        const pathValue = pathLikeToString(pathname);
+        if (pathValue === "/etc/systemd/system/openclaw-gateway-preflight-test.service") {
+          return undefined;
+        }
+        return await realAccess(pathname, mode);
+      });
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-active", "--quiet", "openclaw-gateway-preflight-test.service"]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(
+            createExecFileError("Failed to connect to bus: Permission denied", {
+              stderr: "Failed to connect to bus: Permission denied",
+            }),
+            "",
+            "",
+          );
+        });
+
+      await expect(
+        installSystemdService({
+          env,
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          workingDirectory: "/tmp",
+          environment: {
+            OPENCLAW_GATEWAY_PORT: "18789",
+          },
+        }),
+      ).rejects.toThrow(
+        "systemctl --user unavailable: Failed to connect to bus: Permission denied",
+      );
+
+      expect(execFileMock).toHaveBeenCalledTimes(2);
+      expect(execFileMock.mock.calls.some(([, args]) => args[0] === "disable")).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("restores the system unit when replacement user activation fails", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-activation-test",
+    };
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      const realAccess = fs.access.bind(fs);
+      vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+        const pathValue = pathLikeToString(pathname);
+        if (pathValue === "/etc/systemd/system/openclaw-gateway-activation-test.service") {
+          return undefined;
+        }
+        return await realAccess(pathname, mode);
+      });
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual([
+            "is-active",
+            "--quiet",
+            "openclaw-gateway-activation-test.service",
+          ]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["disable", "--now", "openclaw-gateway-activation-test.service"]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", "openclaw-gateway-activation-test.service");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", "openclaw-gateway-activation-test.service");
+          cb(createExecFileError("restart failed"), "", "bad environment");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(
+            args,
+            "disable",
+            "--now",
+            "openclaw-gateway-activation-test.service",
+          );
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["enable", "--now", "openclaw-gateway-activation-test.service"]);
+          cb(null, "", "");
+        });
+
+      await expect(
+        installSystemdService({
+          env,
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          workingDirectory: "/tmp",
+          environment: {
+            OPENCLAW_GATEWAY_PORT: "18789",
+          },
+        }),
+      ).rejects.toThrow("systemctl restart failed: bad environment");
+
+      expect(execFileMock).toHaveBeenCalledTimes(8);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("activates the OPENCLAW_SYSTEMD_UNIT override during install", async () => {
     await withNodeSystemdFixture(async ({ env, unitPath }) => {
       execFileMock
@@ -1996,6 +2320,50 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ OPENCLAW_PROFILE: "work" });
+  });
+
+  it("retires a conflicting user unit before restarting the active system unit", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-control-"));
+    const home = path.join(tempHomeRoot, "home");
+    const userUnitPath = path.join(home, ".config", "systemd", "user", GATEWAY_SERVICE);
+    try {
+      await fs.mkdir(path.dirname(userUnitPath), { recursive: true });
+      await fs.writeFile(userUnitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
+      const realAccess = fs.access.bind(fs);
+      vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+        const pathValue = pathLikeToString(pathname);
+        if (pathValue === "/etc/systemd/system/openclaw-gateway.service") {
+          return undefined;
+        }
+        return await realAccess(pathname, mode);
+      });
+      mockEffectiveUid(0);
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "debian", "disable", "--now", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["restart", GATEWAY_SERVICE]);
+          cb(null, "", "");
+        });
+
+      const { write, stdout } = createWritableStreamMock();
+      await restartSystemdService({ stdout, env: { HOME: home, SUDO_USER: "debian" } });
+
+      await expect(fs.access(userUnitPath)).rejects.toThrow();
+      expect(requireFirstWrite(write)).toContain("Retired conflicting systemd service");
+      expect(write.mock.calls.map(([value]) => String(value)).join("\n")).toContain(
+        "Restarted systemd service",
+      );
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
   });
 
   it("surfaces stop failures with systemctl detail", async () => {
