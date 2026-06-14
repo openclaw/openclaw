@@ -4,6 +4,8 @@ import {
   JsonFileReadError,
   readJson as readJsonImpl,
   readJsonIfExists as readJsonIfExistsImpl,
+  writeJson as writeJsonImpl,
+  type WriteJsonOptions,
 } from "@openclaw/fs-safe/json";
 import { replaceFileAtomic } from "./replace-file.js";
 
@@ -20,8 +22,6 @@ export {
   readRootStructuredFileSync,
   tryReadJsonSync,
   tryReadJsonSync as readJsonFileSync,
-  writeJson,
-  writeJson as writeJsonAtomic,
   writeJsonSync,
 } from "@openclaw/fs-safe/json";
 
@@ -102,7 +102,7 @@ export async function writeTextAtomic(
     filePath,
     content: payload,
     mode: options?.mode ?? 0o600,
-    dirMode: options?.dirMode ?? 0o777 & ~process.umask(),
+    dirMode: options?.dirMode ?? 0o700,
     copyFallbackOnPermissionError: true,
     syncTempFile: options?.durable !== false,
     syncParentDir: options?.durable !== false,
@@ -110,3 +110,14 @@ export async function writeTextAtomic(
     ...(options?.tempPrefix ? { tempPrefix: options.tempPrefix } : {}),
   });
 }
+
+/** Wrapper that defaults dirMode to 0o700 so state directory writes never relax permissions. */
+export async function writeJson(
+  filePath: string,
+  value: unknown,
+  options?: WriteJsonOptions,
+): Promise<void> {
+  return writeJsonImpl(filePath, value, { dirMode: 0o700, ...options });
+}
+
+export { writeJson as writeJsonAtomic };
