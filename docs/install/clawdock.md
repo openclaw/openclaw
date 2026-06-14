@@ -91,7 +91,7 @@ clawdock-approve <request-id>
 ClawDock works with the same Docker config split described in [Docker](/install/docker):
 
 - `<project>/.env` for Docker-specific values like image name, ports, and the gateway token
-- `~/.openclaw/.env` for env-backed provider keys and bot tokens
+- `~/.openclaw/.env` for env-backed provider keys, bot tokens, and operator-curated tool secrets like `GH_TOKEN` (see [Environment variables](/help/environment#durable-service-env))
 - `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `~/.openclaw/openclaw.json` for behavior config
 

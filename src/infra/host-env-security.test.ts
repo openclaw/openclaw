@@ -1019,6 +1019,76 @@ describe("sanitizeHostExecEnv", () => {
   });
 });
 
+describe("sanitizeHostExecEnv with allowInheritedKeys", () => {
+  it("lets allowlisted override-only inherited keys through", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        GH_TOKEN: "REDACTED-FIXTURE-gh",
+        AWS_ACCESS_KEY_ID: "REDACTED-FIXTURE-aws",
+        NPM_TOKEN: "REDACTED-FIXTURE-npm",
+        OK: "1",
+      },
+      allowInheritedKeys: ["GH_TOKEN", "AWS_ACCESS_KEY_ID", "NPM_TOKEN"],
+    });
+
+    expect(env.GH_TOKEN).toBe("REDACTED-FIXTURE-gh");
+    expect(env.AWS_ACCESS_KEY_ID).toBe("REDACTED-FIXTURE-aws");
+    expect(env.NPM_TOKEN).toBe("REDACTED-FIXTURE-npm");
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OK).toBe("1");
+  });
+
+  it("still strips everywhere-dangerous keys even when allowlisted", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        LD_PRELOAD: "/tmp/evil.so",
+        DYLD_INSERT_LIBRARIES: "/tmp/evil-insert",
+        BASH_ENV: "/tmp/evil.sh",
+      },
+      allowInheritedKeys: ["LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV"],
+    });
+
+    expect(env.LD_PRELOAD).toBeUndefined();
+    expect(env.DYLD_INSERT_LIBRARIES).toBeUndefined();
+    expect(env.BASH_ENV).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin:/bin");
+  });
+
+  it("does not let allowlisted PATH overrides smuggle a tampered PATH value", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        PATH: "/tmp/evil",
+      },
+      allowInheritedKeys: ["PATH"],
+    });
+
+    // baseEnv PATH survives, override PATH is rejected — allowlist must not
+    // bypass the request-override PATH guard.
+    expect(env.PATH).toBe("/usr/bin:/bin");
+  });
+
+  it("default (no allowInheritedKeys) keeps current strict inheritance behavior", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        GH_TOKEN: "REDACTED-FIXTURE-gh",
+        AWS_ACCESS_KEY_ID: "REDACTED-FIXTURE-aws",
+        OK: "1",
+      },
+    });
+
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OK).toBe("1");
+  });
+});
+
 describe("isDangerousHostEnvOverrideVarName", () => {
   it("matches override-only blocked keys case-insensitively", () => {
     expect(isDangerousHostEnvOverrideVarName("HOME")).toBe(true);
