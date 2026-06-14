@@ -16,6 +16,8 @@ export type BlockReplyPipeline = {
   stop: () => void;
   hasBuffered: () => boolean;
   didStream: () => boolean;
+  didObserveBlockReply: () => boolean;
+  didStreamSubstantiveReply: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
   getSentMediaUrls: () => readonly string[];
@@ -73,6 +75,7 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
   });
 }
 
+
 const withTimeout = async <T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -118,6 +121,8 @@ export function createBlockReplyPipeline(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
+  let didObserveBlockReply = false;
+  let didStreamSubstantiveReply = false;
   let didLogTimeout = false;
 
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
@@ -171,6 +176,7 @@ export function createBlockReplyPipeline(params: {
         }
         sentKeys.add(payloadKey);
         const isStatusNotice = isReplyPayloadStatusNotice(payload);
+        didObserveBlockReply = true;
         if (!isStatusNotice) {
           sentContentKeys.add(contentKey);
         }
@@ -183,6 +189,7 @@ export function createBlockReplyPipeline(params: {
         }
         if (!isStatusNotice) {
           didStream = true;
+          didStreamSubstantiveReply = true;
         }
       })
       .catch((err: unknown) => {
@@ -314,6 +321,8 @@ export function createBlockReplyPipeline(params: {
     stop,
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
+    didObserveBlockReply: () => didObserveBlockReply,
+    didStreamSubstantiveReply: () => didStreamSubstantiveReply,
     isAborted: () => aborted,
     hasSentPayload: (payload) => {
       const payloadKey = createBlockReplyContentKey(payload);

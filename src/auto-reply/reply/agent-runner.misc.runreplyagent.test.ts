@@ -3134,6 +3134,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     finalAssistantText?: string;
     payloadText?: string;
     successfulCronAdds?: number;
+    provider?: string;
+    originatingTo?: string;
+    sourceReplyDeliveryMode?: string;
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -3158,9 +3161,12 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         : { successfulCronAdds: params.successfulCronAdds }),
     });
 
+    const provider = params.provider ?? "whatsapp";
+    const originatingTo = params.originatingTo ?? "+15550001111";
     const sessionCtx = {
-      Provider: "whatsapp",
-      OriginatingTo: "+15550001111",
+      Provider: provider,
+      OriginatingChannel: provider,
+      OriginatingTo: originatingTo,
       AccountId: "primary",
       MessageSid: "msg",
       ChatType: "direct",
@@ -3174,7 +3180,10 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         agentDir: "/tmp/agent",
         sessionId: "session",
         sessionKey,
-        messageProvider: "whatsapp",
+        messageProvider: provider,
+        ...(params.sourceReplyDeliveryMode
+          ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+          : {}),
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: tmp,
         // Direct chat + visibleReplies=message_tool resolves to message_tool_only,
@@ -3193,7 +3202,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       },
     } as unknown as FollowupRun;
 
-    await runReplyAgent({
+    return runReplyAgent({
       commandBody: "hello",
       followupRun,
       queueKey: sessionKey,
@@ -3225,6 +3234,19 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
   });
 
+  it("does not leak private final text into the visible guard payload", async () => {
+    const result = await runPrivateFinalCase({
+      provider: "discord",
+      originatingTo: "channel:C1",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(payload?.text).not.toContain("Here is the answer the user asked for");
+  });
+
   it("does not warn for a short private final reply", async () => {
     await runPrivateFinalCase({ finalAssistantText: "Nothing to send here." });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
@@ -3232,7 +3254,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   it("does not warn when the message tool delivered this turn", async () => {
     await runPrivateFinalCase({
-      messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "whatsapp", to: "+15550001111", text: "sent answer" },
+      ],
     });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
   });
