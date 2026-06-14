@@ -507,15 +507,24 @@ export function syncTelegramMenuCommands(params: {
     if (cachedHash === currentHash) {
       // The local hash matches, but the remote Telegram state may have been
       // cleared (e.g. after an interrupted sync or gateway restart).  Verify
-      // with getMyCommands before skipping — if remote is empty we must
-      // re-register.  See #92944.
+      // every scope we write (default, all_group_chats) with getMyCommands
+      // before skipping.  See #92944.
       try {
-        const remoteCommands = await bot.api.getMyCommands();
-        if (remoteCommands && remoteCommands.length > 0) {
+        let allScopesPopulated = true;
+        for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
+          const remoteCommands = await bot.api.getMyCommands(
+            scope.options ?? {},
+          );
+          if (!remoteCommands || remoteCommands.length === 0) {
+            allScopesPopulated = false;
+            break;
+          }
+        }
+        if (allScopesPopulated) {
           logVerbose("telegram: command menu unchanged; skipping sync");
           return;
         }
-        logVerbose("telegram: command menu hash matches but remote is empty; re-syncing");
+        logVerbose("telegram: command menu hash matches but remote is empty in at least one scope; re-syncing");
       } catch {
         // If getMyCommands fails (network, rate limit, etc.), fall through to
         // re-sync rather than trusting the stale hash.
