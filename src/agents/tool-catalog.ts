@@ -45,6 +45,12 @@ type CoreToolDefinition = {
   includeInOpenClawGroup?: boolean;
 };
 
+export const SESSION_DELEGATION_TOOL_IDS = [
+  "sessions_spawn",
+  "sessions_delegate",
+  "sessions_delegate_batch",
+] as const;
+
 const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
   { id: "fs", label: "Files" },
   { id: "runtime", label: "Runtime" },

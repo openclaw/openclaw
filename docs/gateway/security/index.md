@@ -1145,6 +1145,8 @@ Also consider agent workspace access inside the sandbox:
 If you allow session tools, treat delegated sub-agent runs as another boundary decision:
 
 - Deny `sessions_spawn` unless the agent truly needs delegation.
+- `sessions_delegate` and `sessions_delegate_batch` also create child sessions;
+  `deny: ["sessions_spawn"]` blocks all three delegation tools.
 - Keep `agents.defaults.subagents.allowAgents` and any per-agent `agents.list[].subagents.allowAgents` overrides restricted to known-safe target agents.
 - For any workflow that must remain sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
 - `sandbox: "require"` fails fast when the target child runtime is not sandboxed.
@@ -1269,6 +1271,8 @@ Common use cases:
             "sessions_history",
             "sessions_send",
             "sessions_spawn",
+            "sessions_delegate",
+            "sessions_delegate_batch",
             "session_status",
             "whatsapp",
             "telegram",

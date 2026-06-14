@@ -7,6 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   CORE_TOOL_GROUPS,
+  SESSION_DELEGATION_TOOL_IDS,
   resolveCoreToolProfilePolicy,
   type ToolProfileId,
 } from "./tool-catalog.js";
@@ -96,6 +97,15 @@ export function expandToolGroups(list?: string[]) {
     expanded.push(value);
   }
   return uniqueStrings(expanded);
+}
+
+/** Expands deny entries, preserving legacy sessions_spawn delegation blocking. */
+export function expandToolDenyList(list?: string[]) {
+  const expanded = expandToolGroups(list);
+  if (!expanded.includes("sessions_spawn")) {
+    return expanded;
+  }
+  return uniqueStrings([...expanded, ...SESSION_DELEGATION_TOOL_IDS]);
 }
 
 /** Resolves a built-in tool profile policy by id. */

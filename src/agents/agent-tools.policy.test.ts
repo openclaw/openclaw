@@ -248,6 +248,16 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(false);
   });
 
+  it("treats sessions_spawn deny as blocking all delegation tool ids", () => {
+    const policy = {
+      deny: ["sessions_spawn"],
+    };
+
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_delegate", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_delegate_batch", policy)).toBe(false);
+  });
+
   it("applies configured deny to memory tools even though they are allowed by default", () => {
     const cfg = {
       agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
@@ -305,6 +315,12 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   it("depth-2 leaf denies sessions_spawn", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 2);
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+  });
+
+  it("depth-2 leaf denies synchronous delegate tools", () => {
+    const policy = resolveSubagentToolPolicy(baseCfg, 2);
+    expect(isToolAllowedByPolicyName("sessions_delegate", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_delegate_batch", policy)).toBe(false);
   });
 
   it("depth-2 orchestrator (maxSpawnDepth=3) allows sessions_spawn", () => {
@@ -370,6 +386,8 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
 
     const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_delegate", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_delegate_batch", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);

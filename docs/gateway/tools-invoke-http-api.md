@@ -113,7 +113,7 @@ Gateway HTTP also applies a hard deny list by default (even if session policy al
 - `fs_delete` - arbitrary file deletion on the host
 - `fs_move` - arbitrary file move/rename on the host
 - `apply_patch` - patch application can rewrite arbitrary files
-- `sessions_spawn` - session orchestration; spawning agents remotely is RCE
+- `sessions_spawn`, `sessions_delegate`, `sessions_delegate_batch` - session orchestration; spawning agents remotely is RCE
 - `sessions_send` - cross-session message injection
 - `cron` - persistent automation control plane
 - `gateway` - gateway control plane; prevents reconfiguration via HTTP

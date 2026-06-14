@@ -37,6 +37,7 @@ import {
   type SessionCapabilityStore,
   type SubagentSessionRole,
 } from "./subagent-capabilities.js";
+import { SESSION_DELEGATION_TOOL_IDS } from "./tool-catalog.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import {
   mergeAlsoAllowPolicy,
@@ -67,7 +68,7 @@ const SUBAGENT_TOOL_DENY_LEAF = [
   "subagents",
   "sessions_list",
   "sessions_history",
-  "sessions_spawn",
+  ...SESSION_DELEGATION_TOOL_IDS,
 ];
 
 /**
