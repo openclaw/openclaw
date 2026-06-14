@@ -6,27 +6,34 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
-import type { ToolFsPolicy } from "./tool-fs-policy.types.js";
+import type { ToolFsPolicy, ToolFsWorkspaceAlias } from "./tool-fs-policy.types.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
-export type { ToolFsPolicy } from "./tool-fs-policy.types.js";
+export type { ToolFsPolicy, ToolFsWorkspaceAlias } from "./tool-fs-policy.types.js";
 
-export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
+export function createToolFsPolicy(params: {
+  workspaceOnly?: boolean;
+  workspaceAliases?: readonly ToolFsWorkspaceAlias[];
+}): ToolFsPolicy {
   return {
     workspaceOnly: params.workspaceOnly === true,
+    ...(params.workspaceAliases ? { workspaceAliases: params.workspaceAliases } : {}),
   };
 }
 
 export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: string }): {
   workspaceOnly?: boolean;
+  workspaceAliases?: readonly ToolFsWorkspaceAlias[];
 } {
   const cfg = params.cfg;
   const globalFs = cfg?.tools?.fs;
   const agentFs =
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.fs : undefined;
+  const workspaceAliases = agentFs?.workspaceAliases ?? globalFs?.workspaceAliases;
   return {
     workspaceOnly: agentFs?.workspaceOnly ?? globalFs?.workspaceOnly,
+    ...(workspaceAliases ? { workspaceAliases } : {}),
   };
 }
 
