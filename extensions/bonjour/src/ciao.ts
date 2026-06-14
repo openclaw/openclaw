@@ -16,6 +16,9 @@ const CIAO_SELF_PROBE_MESSAGE_RE =
 // can refuse os.networkInterfaces(), which ciao calls during NetworkManager init.
 // Node surfaces this as a SystemError mentioning the libuv syscall by name.
 const CIAO_INTERFACE_ENUMERATION_FAILURE_RE = /\bUV_INTERFACE_ADDRESSES\b/u;
+// IPv6-only or otherwise misconfigured interfaces lack an address that ciao
+// considers valid.  Ciao throws an AssertionError and the gateway crash-loops.
+const CIAO_NO_VALID_ADDRESSES_RE = /COULD NOT FIND VALID ADDRESSES FOR INTERFACE\b/u;
 
 /** Known ciao process-level errors that OpenClaw handles specially. */
 export type CiaoProcessErrorClassification =
@@ -23,7 +26,8 @@ export type CiaoProcessErrorClassification =
   | { kind: "interface-assertion"; formatted: string }
   | { kind: "netmask-assertion"; formatted: string }
   | { kind: "self-probe"; formatted: string }
-  | { kind: "interface-enumeration-failure"; formatted: string };
+  | { kind: "interface-enumeration-failure"; formatted: string }
+  | { kind: "no-valid-addresses"; formatted: string };
 
 /** Classify a ciao error/rejection chain into a known category. */
 export function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClassification | null {
@@ -51,6 +55,9 @@ export function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClass
     }
     if (CIAO_INTERFACE_ENUMERATION_FAILURE_RE.test(message)) {
       return { kind: "interface-enumeration-failure", formatted };
+    }
+    if (CIAO_NO_VALID_ADDRESSES_RE.test(message)) {
+      return { kind: "no-valid-addresses", formatted };
     }
   }
   return null;
