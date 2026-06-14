@@ -141,8 +141,12 @@ export async function mergeHybridResults(params: {
         if (best) {
           const entry = byId.get(best.id)!;
           entry.textScore = Math.max(entry.textScore, r.textScore);
-          if (r.startLine < entry.startLine) entry.startLine = r.startLine;
-          if (r.endLine > entry.endLine) entry.endLine = r.endLine;
+          if (r.startLine < entry.startLine) {
+            entry.startLine = r.startLine;
+          }
+          if (r.endLine > entry.endLine) {
+            entry.endLine = r.endLine;
+          }
           if (r.snippet && r.snippet.length > 0) {
             entry.snippet = r.snippet;
           }
