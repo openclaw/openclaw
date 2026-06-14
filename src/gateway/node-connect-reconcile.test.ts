@@ -118,6 +118,57 @@ describe("reconcileNodePairingOnConnect", () => {
     );
   });
 
+  it("preserves Windows exec approval commands in the paired node surface", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-windows", ts: 1 },
+      created: true,
+    }));
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "windows",
+          deviceFamily: "Windows",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+        caps: ["system"],
+        commands: [
+          "system.run.prepare",
+          "system.run",
+          "system.which",
+          "system.execApprovals.get",
+          "system.execApprovals.set",
+        ],
+      }),
+      pairedNode: null,
+      requestPairing,
+    });
+
+    expect(result.declaredCommands).toEqual([
+      "system.run.prepare",
+      "system.run",
+      "system.which",
+      "system.execApprovals.get",
+      "system.execApprovals.set",
+    ]);
+    expect(result.effectiveCommands).toEqual([]);
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands: [
+          "system.run.prepare",
+          "system.run",
+          "system.which",
+          "system.execApprovals.get",
+          "system.execApprovals.set",
+        ],
+      }),
+    );
+  });
+
   it.each([
     ["conflicts with device family", { deviceFamily: "iPhone" }],
     ["omits device family", {}],
