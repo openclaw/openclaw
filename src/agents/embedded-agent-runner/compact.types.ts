@@ -1,5 +1,9 @@
+/**
+ * Shared parameter and metric types for embedded-agent compaction.
+ */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
@@ -17,6 +21,7 @@ export type CompactEmbeddedAgentSessionParams = {
   sandboxSessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: ChatType;
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -97,6 +102,8 @@ export type CompactEmbeddedAgentSessionParams = {
   }) => void | Promise<void>;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
 };
 
 export type CompactionMessageMetrics = {

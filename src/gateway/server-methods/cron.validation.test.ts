@@ -1,3 +1,5 @@
+// Cron validation tests cover channel target validation against plugin
+// prefixes/aliases and runtime config for cron delivery destinations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -507,6 +509,48 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
+  it("rejects blank announce delivery fields before normalization", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "blank delivery target",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "   ",
+        },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.to must be a non-empty string",
+    });
+  });
+
+  it("rejects blank failure destination fields before normalization", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "blank failure target",
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "telegram:123",
+          failureDestination: {
+            mode: "announce",
+            channel: "   ",
+          },
+        },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.failureDestination.channel must be a non-empty string",
+    });
+  });
+
   it("rejects announce targets prefixed for a different explicit delivery channel", async () => {
     setRuntimeConfig(telegramSlackConfig());
 
@@ -600,6 +644,53 @@ describe("cron method validation", () => {
     const clearPatch = requireCronUpdatePatch(clearResult.context);
     const clearDelivery = requireRecord(clearPatch.delivery, "delivery");
     expect(clearDelivery.completionDestination).toBeNull();
+  });
+
+  it("rejects blank delivery target patches before normalization", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            to: "\t",
+          },
+        },
+      },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "telegram:123" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.to must be a non-empty string",
+    });
+  });
+
+  it("rejects blank completion destination patches before normalization", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            completionDestination: {
+              mode: "webhook",
+              to: " ",
+            },
+          },
+        },
+      },
+      createCronJob({
+        delivery: { mode: "announce" },
+      }),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "delivery.completionDestination.to must be a non-empty string",
+    });
   });
 
   it("accepts nullable delivery target clears on update", async () => {
@@ -940,6 +1031,34 @@ describe("cron method validation", () => {
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
       expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
+    });
+
+    it("rejects a contradictory explicit agentId + agent-prefixed sessionKey pair", async () => {
+      // The cron target resolver treats agentId as authoritative; a
+      // contradictory pair would silently wake a lane the caller never named.
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "ops",
+      });
+      expect(context.cron.wake).not.toHaveBeenCalled();
+      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "contradicts" });
+    });
+
+    it("accepts an explicit agentId matching the agent that owns the sessionKey", async () => {
+      const { context } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "agent-456",
+      });
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "agent-456",
+      });
     });
 
     it("treats whitespace-only sessionKey as omitted at the handler boundary", async () => {

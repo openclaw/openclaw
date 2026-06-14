@@ -1,3 +1,4 @@
+// Transcript append utilities create headers, migrate linear JSONL, and append parent-linked turns.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,6 +15,7 @@ import { redactSecrets } from "../../logging/redact.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   appendJsonlEntry,
+  serializeJsonlEntry,
   serializeJsonlLine,
   writeJsonlEntry,
   writeJsonlLines,
@@ -97,6 +99,7 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
           hasParentLinkedEntries = true;
         }
       }
+      // Large transcripts are scanned cooperatively so appends do not monopolize the event loop.
       await yieldTranscriptAppendScan();
     }
     const tail = carry + decoder.end();
@@ -162,6 +165,7 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
     existingIds.add(id);
     record.id = id;
     if (!Object.hasOwn(record, "parentId")) {
+      // Legacy linear transcripts become a linked list while preserving existing ids when present.
       record.parentId = previousId;
     }
     previousId = id;
@@ -214,6 +218,8 @@ async function withTranscriptAppendQueue<T>(
     releaseCurrent = resolve;
   });
   const tail = previous.catch(() => undefined).then(() => current);
+  // Per-file queue is in-process only; the external session write lock still owns cross-process
+  // ordering.
   transcriptAppendQueues.set(queueKey, tail);
   await previous.catch(() => undefined);
   try {
@@ -284,6 +290,31 @@ export async function appendSessionTranscriptMessage<TMessage>(
   );
 }
 
+export type AppendSessionTranscriptEventParams = {
+  config?: OpenClawConfig;
+  event: unknown;
+  transcriptPath: string;
+};
+
+/** Appends a raw transcript event using the same write lock and FIFO as message appends. */
+export async function appendSessionTranscriptEvent(
+  params: AppendSessionTranscriptEventParams,
+): Promise<void> {
+  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
+    sessionFile: params.transcriptPath,
+  });
+  if (activeLockRunner) {
+    return await activeLockRunner(() =>
+      withTranscriptAppendQueue(params.transcriptPath, () =>
+        appendSessionTranscriptEventLocked(params),
+      ),
+    );
+  }
+  return await withTranscriptAppendQueue(params.transcriptPath, () =>
+    withSessionTranscriptWriteLock(params, () => appendSessionTranscriptEventLocked(params)),
+  );
+}
+
 async function withSessionTranscriptWriteLock<T>(
   params: Pick<AppendSessionTranscriptMessageParams, "transcriptPath" | "config">,
   run: () => Promise<T> | T,
@@ -297,6 +328,18 @@ async function withSessionTranscriptWriteLock<T>(
     return await run();
   } finally {
     await lock.release();
+  }
+}
+
+async function appendSessionTranscriptEventLocked(
+  params: AppendSessionTranscriptEventParams,
+): Promise<void> {
+  await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
+  const handle = await fs.open(params.transcriptPath, "a", 0o600);
+  try {
+    await handle.appendFile(serializeJsonlEntry(params.event), "utf-8");
+  } finally {
+    await handle.close();
   }
 }
 

@@ -1,9 +1,23 @@
+/**
+ * Agent session SDK factory.
+ *
+ * Selects models, wires built-in/custom tools, loads resources, and creates AgentSession instances.
+ */
 import { join } from "node:path";
+import {
+  resolveThinkingDefaultForModel,
+  type ThinkingCatalogEntry,
+} from "../../auto-reply/thinking.js";
 import { clampThinkingLevel } from "../../llm/model-utils.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
-import { Agent, type AgentMessage, type ThinkingLevel } from "../runtime/index.js";
+import {
+  Agent,
+  type AgentMessage,
+  type AgentOptions,
+  type ThinkingLevel,
+} from "../runtime/index.js";
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -35,6 +49,28 @@ import {
   type ToolName,
   withFileMutationQueue,
 } from "./tools/index.js";
+
+type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
+
+function projectThinkingCatalogCompat(compat: Model["compat"]) {
+  if (!compat || typeof compat !== "object") {
+    return undefined;
+  }
+  const record = compat as Record<string, unknown>;
+  const projected: ThinkingCatalogCompat = {};
+  if (typeof record.thinkingFormat === "string") {
+    projected.thinkingFormat = record.thinkingFormat;
+  }
+  if (record.supportedReasoningEfforts === null) {
+    projected.supportedReasoningEfforts = null;
+  } else if (
+    Array.isArray(record.supportedReasoningEfforts) &&
+    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
+  ) {
+    projected.supportedReasoningEfforts = record.supportedReasoningEfforts;
+  }
+  return Object.keys(projected).length > 0 ? projected : undefined;
+}
 
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
@@ -72,6 +108,8 @@ export interface CreateAgentSessionOptions {
   tools?: string[];
   /** Custom tools to register (in addition to built-in tools). */
   customTools?: ToolDefinition[];
+  /** Hydrate an authorized tool deferred out of the current provider-visible tool set. */
+  resolveDeferredTool?: AgentOptions["resolveDeferredTool"];
 
   /** Resource loader. When omitted, DefaultResourceLoader is used. */
   resourceLoader?: ResourceLoader;
@@ -263,16 +301,41 @@ export async function createAgentSession(
 
   let thinkingLevel = options.thinkingLevel;
 
+  // Use "off" when a provider explicitly opts out of thinking (e.g. Ollama). Non-off
+  // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
+  // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
+  const modelThinkingProvider = model?.api === "ollama" ? "ollama" : model?.provider;
+  const modelThinkingCompat = model ? projectThinkingCatalogCompat(model.compat) : undefined;
+  const resolvedProviderDefault =
+    model && modelThinkingProvider
+      ? resolveThinkingDefaultForModel({
+          provider: modelThinkingProvider,
+          model: model.id,
+          catalog: [
+            {
+              provider: modelThinkingProvider,
+              id: model.id,
+              api: model.api,
+              reasoning: model.reasoning,
+              ...(model.params ? { params: model.params } : {}),
+              ...(modelThinkingCompat ? { compat: modelThinkingCompat } : {}),
+            },
+          ],
+        })
+      : undefined;
+  const modelThinkingDefault: ThinkingLevel =
+    resolvedProviderDefault === "off" ? "off" : DEFAULT_THINKING_LEVEL;
+
   // If session has data, restore thinking level from it
   if (thinkingLevel === undefined && hasExistingSession) {
     thinkingLevel = hasThinkingEntry
       ? (existingSession.thinkingLevel as ThinkingLevel)
-      : (settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL);
+      : (settingsManager.getDefaultThinkingLevel() ?? modelThinkingDefault);
   }
 
   // Fall back to settings default
   if (thinkingLevel === undefined) {
-    thinkingLevel = settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
+    thinkingLevel = settingsManager.getDefaultThinkingLevel() ?? modelThinkingDefault;
   }
 
   // Clamp to model capabilities
@@ -398,6 +461,7 @@ export async function createAgentSession(
       }
       return runner.emitContext(messages);
     },
+    resolveDeferredTool: options.resolveDeferredTool,
     steeringMode: settingsManager.getSteeringMode(),
     followUpMode: settingsManager.getFollowUpMode(),
     transport: settingsManager.getTransport(),

@@ -1,3 +1,5 @@
+// Chat error broadcast tests ensure chat.send failures still respond and emit
+// error-state broadcasts for connected UI clients.
 import { describe, expect, it, vi } from "vitest";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -6,6 +8,7 @@ function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const chatAbortControllers = new Map();
+  const chatAbortedRuns = new Map();
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map();
 
@@ -13,6 +16,7 @@ function createMockContext() {
     broadcast,
     nodeSendToSession,
     chatAbortControllers,
+    chatAbortedRuns,
     agentRunSeq,
     dedupe,
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),

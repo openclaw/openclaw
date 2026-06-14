@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
@@ -234,8 +235,12 @@ async function runGeminiSearch(params: {
       const groundingChunks =
         groundingMetadata === undefined
           ? []
-          : isRecord(groundingMetadata) && Array.isArray(groundingMetadata.groundingChunks)
-            ? groundingMetadata.groundingChunks
+          : isRecord(groundingMetadata)
+            ? groundingMetadata.groundingChunks === undefined
+              ? []
+              : Array.isArray(groundingMetadata.groundingChunks)
+                ? groundingMetadata.groundingChunks
+                : undefined
             : undefined;
       if (!groundingChunks) {
         throwMalformedGeminiResponse();

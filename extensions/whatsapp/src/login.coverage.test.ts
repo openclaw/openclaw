@@ -1,3 +1,4 @@
+// Whatsapp tests cover login.coverage plugin behavior.
 import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -58,6 +59,10 @@ vi.mock("./session.js", async () => {
     waitForWaConnection: waitForWaConnectionLocal,
     formatError: formatErrorLocal,
     getStatusCode,
+    readWebAuthExistsForDecision: vi.fn(async () => ({
+      outcome: "stable" as const,
+      exists: true,
+    })),
     logoutWeb: vi.fn(async (params: { authDir?: string }) => {
       await fs.rm(params.authDir ?? authDir, {
         recursive: true,

@@ -1,3 +1,5 @@
+// Covers send validation for target/channel mismatches, configured channel
+// availability, and explicit target requirements.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -361,6 +363,29 @@ describe("runMessageAction send validation", () => {
         toolContext: { currentChannelId: "C12345678" },
       }),
     ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  });
+
+  it("allows send when only schema-padded shared poll modifiers are present", async () => {
+    // LLMs routinely echo the shared `message` tool schema's poll modifier
+    // defaults (`pollDurationHours: 1`, `pollMulti: false`) on every plain
+    // `send` call alongside the rest of the schema-padded slots. Without a
+    // pollQuestion or pollOption present, these defaults are noise — not
+    // poll intent — and must not block the send.
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: "hello",
+        pollQuestion: "",
+        pollOption: [],
+        pollDurationHours: 1,
+        pollMulti: false,
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
   });
 });
 

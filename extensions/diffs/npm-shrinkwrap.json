@@ -469,9 +469,9 @@
       }
     },
     "node_modules/property-information": {
-      "version": "7.1.0",
-      "resolved": "https://registry.npmjs.org/property-information/-/property-information-7.1.0.tgz",
-      "integrity": "sha512-TwEZ+X+yCJmYfL7TPUOcvBZ4QfoT5YenQiJuX//0th53DE6w0xxLEtfK3iyryQFddXuvkIk51EEgrJQ0WJkOmQ==",
+      "version": "7.2.0",
+      "resolved": "https://registry.npmjs.org/property-information/-/property-information-7.2.0.tgz",
+      "integrity": "sha512-IAtzIB6sUiWaJYrX9smp3V46pBGbBeLFRGdh25kg1334VcBlD8HzhPeNIWQH9zhGmo2itIe25EHt9dQP7G5hmg==",
       "license": "MIT",
       "funding": {
         "type": "github",

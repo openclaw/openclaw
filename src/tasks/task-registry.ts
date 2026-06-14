@@ -1,3 +1,4 @@
+// Coordinates task registry creation, updates, delivery state, and snapshots.
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -17,6 +18,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
+import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -2079,7 +2081,21 @@ export async function cancelTaskById(params: {
   const childSessionKey = task.childSessionKey?.trim();
   try {
     if (task.runtime !== "cli") {
-      if (!childSessionKey) {
+      if (task.runtime === "cron") {
+        if (
+          !cancelActiveCronTaskRun({
+            runId: task.runId,
+            reason: params.reason?.trim() || "Cancelled by operator.",
+          })
+        ) {
+          return {
+            found: true,
+            cancelled: false,
+            reason: "Cron task has no active cancellation handle.",
+            task: cloneTaskRecord(task),
+          };
+        }
+      } else if (!childSessionKey) {
         if (!isChildlessCodexNativeSubagentTask(task)) {
           return {
             found: true,
@@ -2089,7 +2105,10 @@ export async function cancelTaskById(params: {
           };
         }
       }
-      if (!childSessionKey) {
+      if (task.runtime === "cron") {
+        // The live cron service owns the abort signal; registry finalization below
+        // keeps CLI/Gateway callers aligned while the run unwinds.
+      } else if (!childSessionKey) {
         // Codex native subagents are mirrored from the Codex app server and do
         // not have OpenClaw child sessions to terminate. Cancellation clears
         // the stale task-registry record only.

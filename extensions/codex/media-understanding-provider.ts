@@ -1,3 +1,7 @@
+/**
+ * Codex-backed media understanding provider for bounded image description and
+ * structured extraction turns.
+ */
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
@@ -39,11 +43,16 @@ const DEFAULT_CODEX_IMAGE_MODEL =
   FALLBACK_CODEX_MODELS[0]?.id;
 const DEFAULT_CODEX_IMAGE_PROMPT = "Describe the image.";
 
+/** Dependencies and plugin config for Codex media-understanding calls. */
 export type CodexMediaUnderstandingProviderOptions = {
   pluginConfig?: unknown;
   clientFactory?: CodexAppServerClientFactory;
 };
 
+/**
+ * Builds the media-understanding provider that delegates image tasks to an
+ * isolated Codex app-server session.
+ */
 export function buildCodexMediaUnderstandingProvider(
   options: CodexMediaUnderstandingProviderOptions = {},
 ): MediaUnderstandingProvider {
@@ -93,6 +102,8 @@ async function describeCodexImages(
     profile: req.profile,
     timeoutMs: req.timeoutMs,
     agentDir: req.agentDir,
+    authStore: req.authStore,
+    cfg: req.cfg,
     options,
     taskLabel: "image understanding",
     developerInstructions:
@@ -114,6 +125,8 @@ type BoundedCodexVisionTurnParams = {
   profile?: string;
   timeoutMs: number;
   agentDir?: string;
+  authStore?: ImagesDescriptionRequest["authStore"];
+  cfg: ImagesDescriptionRequest["cfg"];
   options: CodexMediaUnderstandingProviderOptions;
   taskLabel: string;
   developerInstructions: string;
@@ -126,15 +139,22 @@ async function runBoundedCodexVisionTurn(params: BoundedCodexVisionTurnParams): 
     pluginConfig: params.options.pluginConfig,
   });
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const agentDir = params.agentDir?.trim() || undefined;
+  const cwd = agentDir ?? process.cwd();
   const ownsClient = !params.options.clientFactory;
+  // Tests inject a client factory; production creates an isolated app-server
+  // client so media tasks cannot reuse the interactive attempt session.
   const client = params.options.clientFactory
-    ? await params.options.clientFactory(appServer.start, params.profile)
+    ? await params.options.clientFactory(appServer.start, params.profile, agentDir, params.cfg)
     : await import("./src/app-server/shared-client.js").then(
         ({ createIsolatedCodexAppServerClient }) =>
           createIsolatedCodexAppServerClient({
             startOptions: appServer.start,
             timeoutMs,
             authProfileId: params.profile,
+            agentDir,
+            authProfileStore: params.authStore,
+            config: params.cfg,
           }),
       );
   const abortController = new AbortController();
@@ -155,11 +175,13 @@ async function runBoundedCodexVisionTurn(params: BoundedCodexVisionTurnParams): 
         {
           model: params.model,
           modelProvider: "openai",
-          cwd: params.agentDir || process.cwd(),
+          cwd,
           approvalPolicy: "on-request",
           sandbox: "read-only",
           serviceName: "OpenClaw",
           developerInstructions: params.developerInstructions,
+          // Media workers are bounded read-only turns; native code mode and
+          // dynamic tools stay disabled to avoid side effects while inspecting media.
           config: buildCodexRuntimeThreadConfig(undefined, { nativeCodeModeEnabled: false }),
           environments: [],
           dynamicTools: [],
@@ -180,7 +202,7 @@ async function runBoundedCodexVisionTurn(params: BoundedCodexVisionTurnParams): 
           {
             threadId: thread.thread.id,
             input: params.input,
-            cwd: params.agentDir || process.cwd(),
+            cwd,
             approvalPolicy: "on-request",
             model: params.model,
             effort: "low",
@@ -229,6 +251,8 @@ async function extractCodexStructured(
     profile: req.profile,
     timeoutMs: req.timeoutMs,
     agentDir: req.agentDir,
+    authStore: req.authStore,
+    cfg: req.cfg,
     options,
     taskLabel: "structured extraction",
     developerInstructions:

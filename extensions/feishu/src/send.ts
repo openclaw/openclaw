@@ -1,3 +1,4 @@
+// Feishu plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -9,7 +10,7 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { createFeishuApiError, requestFeishuApi } from "./comment-shared.js";
+import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -65,6 +66,11 @@ function isWithdrawnReplyError(err: unknown): boolean {
     WITHDRAWN_REPLY_ERROR_CODES.has(response.data.code)
   ) {
     return true;
+  }
+  // Wrapped error shape from createFeishuApiError: err.cause holds the original error.
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && cause !== err) {
+    return isWithdrawnReplyError(cause);
   }
   return false;
 }
@@ -168,17 +174,22 @@ async function sendReplyOrFallbackDirect(
 
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
-    response = await client.im.message.reply({
-      path: { message_id: params.replyToMessageId },
-      data: {
-        content: params.content,
-        msg_type: params.msgType,
-        ...(params.replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    response = await requestFeishuApi(
+      () =>
+        client.im.message.reply({
+          path: { message_id: params.replyToMessageId! },
+          data: {
+            content: params.content,
+            msg_type: params.msgType,
+            ...(params.replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      params.replyErrorPrefix,
+      { includeNestedErrorLogId: true },
+    );
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
-      throw createFeishuApiError(err, params.replyErrorPrefix, { includeNestedErrorLogId: true });
+      throw err;
     }
     if (replyTargetFallbackError) {
       throw replyTargetFallbackError;

@@ -1,9 +1,11 @@
+// E2E Run With Pty tests cover e2e run with pty script behavior.
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const scriptPath = path.join(repoRoot, "scripts/e2e/lib/run-with-pty.mjs");
@@ -24,8 +26,8 @@ function runPtyProbe(
       env: { ...process.env, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
     const timeout = setTimeout(() => {
       child.kill("SIGTERM");
       reject(new Error("PTY probe timed out"));
@@ -34,10 +36,10 @@ function runPtyProbe(
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr.append(chunk);
     });
     child.on("error", (error) => {
       clearTimeout(timeout);
@@ -45,7 +47,7 @@ function runPtyProbe(
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
-      resolve({ code, stdout, stderr });
+      resolve({ code, stdout: stdout.text(), stderr: stderr.text() });
     });
     child.stdin.end(input);
   });
@@ -105,6 +107,23 @@ describe("run-with-pty", () => {
     }
   });
 
+  it("fails when the transcript log cannot be written", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
+    try {
+      const result = await runPtyProbe(
+        tempRoot,
+        {},
+        [process.execPath, "-e", "console.log('ready')"],
+        "",
+      );
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("run-with-pty transcript log failed:");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   posixIt("escalates forwarded termination signals for PTY commands that ignore them", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-run-with-pty-"));
     const logPath = path.join(tempRoot, "pty.log");
@@ -125,25 +144,25 @@ describe("run-with-pty", () => {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr.append(chunk);
     });
 
     try {
-      await waitFor(() => stdout.includes("ready"));
+      await waitFor(() => stdout.text().includes("ready"));
       child.kill("SIGTERM");
       const result = await waitForClose(child, 5_000);
       const log = await readFile(logPath, "utf8");
 
       expect(result).toEqual({ code: 143, signal: null });
-      expect(stderr).toBe("");
+      expect(stderr.text()).toBe("");
       expect(log).toContain("ready");
     } finally {
       if (child.pid && isProcessAlive(child.pid)) {

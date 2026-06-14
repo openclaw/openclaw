@@ -1,3 +1,4 @@
+// Test Install Sh Docker tests cover test install sh docker script behavior.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -61,14 +62,45 @@ function runNonrootNodePreflight(version: string, options: { sqlite?: boolean } 
   }
 }
 
-describe("test-install-sh-docker", () => {
-  it("defaults local Apple Silicon smoke runs to native arm64 while keeping CI on amd64", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+function runDefaultSmokePlatform(env: Record<string, string>, hostArch: string): string {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const match = script.match(
+    /(resolve_default_smoke_platform\(\) \{[\s\S]*?\n\})\n\nprint_pack_audit/u,
+  );
+  if (!match) {
+    throw new Error("resolve_default_smoke_platform was not found");
+  }
+  const result = spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `${match[1]}\nuname() { if [[ "\${1:-}" == "-m" ]]; then printf "%s" "$FAKE_UNAME_ARCH"; else command uname "$@"; fi; }\nresolve_default_smoke_platform`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        HOME: "/tmp",
+        PATH: process.env.PATH ?? "",
+        FAKE_UNAME_ARCH: hostArch,
+        ...env,
+      },
+    },
+  );
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  return result.stdout;
+}
 
-    expect(script).toContain("resolve_default_smoke_platform");
-    expect(script).toContain('printf "linux/amd64"');
-    expect(script).toContain('[[ "$host_os" == "Darwin" && "$host_arch" == "arm64" ]]');
-    expect(script).toContain('printf "linux/arm64"');
+describe("test-install-sh-docker", () => {
+  it("defaults ARM hosts to native arm64 while keeping x64 CI on amd64", () => {
+    expect(runDefaultSmokePlatform({ CI: "true" }, "aarch64")).toBe("linux/arm64");
+    expect(runDefaultSmokePlatform({ GITHUB_ACTIONS: "true" }, "x86_64")).toBe("linux/amd64");
+    expect(runDefaultSmokePlatform({}, "arm64")).toBe("linux/arm64");
+    expect(
+      runDefaultSmokePlatform({ OPENCLAW_INSTALL_SMOKE_PLATFORM: "linux/s390x" }, "x86_64"),
+    ).toBe("linux/s390x");
   });
 
   it("supports npm update package specs without a separate expected-version env", () => {
@@ -425,11 +457,20 @@ describe("bun global install smoke", () => {
     );
     expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
     expect(script).toContain(
-      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"',
+      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"',
     );
+    expect(script).toContain("cleanup_restore_dist() {");
+    expect(script).toContain('mv "$ROOT_DIR/dist" "$backup_dir"');
+    expect(script).toContain('mv "$temp_dir/dist" "$ROOT_DIR/dist"');
+    expect(script).toContain('mktemp -d "$ROOT_DIR/.bun-dist.XXXXXX"');
+    expect(script).toContain('rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true');
+    expect(script).toContain('&& mv "$backup_dir" "$ROOT_DIR/dist"');
     expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
+    expect(script).toContain("cleanup_restore_dist\n    return 1");
+    expect(script).not.toContain("trap cleanup_restore_dist RETURN");
     expect(script).not.toContain('container_id="$(docker create "$image")"');
     expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
+    expect(script).not.toContain('\n  rm -rf "$ROOT_DIR/dist"\n');
   });
 
   it("gates workflow Bun install smoke to scheduled and release-check runs", () => {

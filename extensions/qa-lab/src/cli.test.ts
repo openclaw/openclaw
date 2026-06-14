@@ -1,3 +1,4 @@
+// Qa Lab tests cover cli plugin behavior.
 import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -661,6 +662,7 @@ describe("qa cli registration", () => {
 
     const options = requireQaSuiteOptions();
     expect(options.allowFailures).toBe(true);
+    expect(options.providerMode).toBeUndefined();
   });
 
   it("forwards --pack for suite runs", async () => {

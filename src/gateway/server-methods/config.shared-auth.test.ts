@@ -1,3 +1,6 @@
+/**
+ * Tests shared gateway auth behavior across config method updates.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -29,8 +32,6 @@ vi.mock("../../config/config.js", async () => {
   return {
     ...actual,
     createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
-    readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
-    validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
     writeConfigFile: writeConfigFileMock,
     replaceConfigFile: async (params: { nextConfig: OpenClawConfig; writeOptions?: unknown }) => {
       await writeConfigFileMock(params.nextConfig, params.writeOptions);
@@ -45,6 +46,25 @@ vi.mock("../../config/config.js", async () => {
         followUp: { mode: "auto", requiresRestart: false },
       };
     },
+  };
+});
+
+vi.mock("../../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/io.js")>("../../config/io.js");
+  return {
+    ...actual,
+    createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
+    readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
+  };
+});
+
+vi.mock("../../config/validation.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/validation.js")>(
+    "../../config/validation.js",
+  );
+  return {
+    ...actual,
+    validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   };
 });
 
@@ -129,7 +149,7 @@ function mockPreviousConfig(config: OpenClawConfig): void {
 
 async function runConfigPatch(
   raw: unknown,
-  params: { sessionKey?: string; restartDelayMs?: number } = {},
+  params: { sessionKey?: string; restartDelayMs?: number; replacePaths?: string[] } = {},
 ) {
   const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
     method: "config.patch",
@@ -138,6 +158,7 @@ async function runConfigPatch(
       raw: typeof raw === "string" ? raw : JSON.stringify(raw),
       restartDelayMs: params.restartDelayMs ?? 1_000,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
     },
   });
 
@@ -264,16 +285,19 @@ describe("config shared auth disconnects", () => {
       }),
     );
 
-    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch({
-      gateway: {
-        auth: {
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            allowUsers: ["bob@example.com"],
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+      {
+        gateway: {
+          auth: {
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              allowUsers: ["bob@example.com"],
+            },
           },
         },
       },
-    });
+      { replacePaths: ["gateway.auth.trustedProxy.allowUsers"] },
+    );
 
     expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
@@ -286,11 +310,14 @@ describe("config shared auth disconnects", () => {
       }),
     );
 
-    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch({
-      gateway: {
-        trustedProxies: ["10.0.0.10"],
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+      {
+        gateway: {
+          trustedProxies: ["10.0.0.10"],
+        },
       },
-    });
+      { replacePaths: ["gateway.trustedProxies"] },
+    );
 
     expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);

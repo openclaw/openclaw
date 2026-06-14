@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
+import { requestFeishuApi } from "./comment-shared.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -154,16 +155,6 @@ function shouldPushStreamingUpdate(previousText: string, nextText: string): bool
   return nextText.length - previousText.length >= STREAMING_SIGNIFICANT_DELTA_CHARS;
 }
 
-function resolveStreamingCardAppendContent(previousText: string, nextText: string): string {
-  if (!nextText || nextText === previousText) {
-    return "";
-  }
-  if (!previousText) {
-    return nextText;
-  }
-  return nextText.startsWith(previousText) ? nextText.slice(previousText.length) : nextText;
-}
-
 export function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
@@ -305,32 +296,44 @@ export class FeishuStreamingSession {
     const sendOptions = options ?? {};
     const sendMode = resolveStreamingCardSendMode(sendOptions);
     if (sendMode === "reply") {
-      sendRes = await this.client.im.message.reply({
-        path: { message_id: sendOptions.replyToMessageId! },
-        data: {
-          msg_type: "interactive",
-          content: cardContent,
-          ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
+      sendRes = await requestFeishuApi(
+        () =>
+          this.client.im.message.reply({
+            path: { message_id: sendOptions.replyToMessageId! },
+            data: {
+              msg_type: "interactive",
+              content: cardContent,
+              ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
+            },
+          }),
+        "Send card failed",
+      );
     } else if (sendMode === "root_create") {
       // root_id is undeclared in the SDK types but accepted at runtime
-      sendRes = await this.client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: Object.assign(
-          { receive_id: receiveId, msg_type: "interactive", content: cardContent },
-          { root_id: sendOptions.rootId },
-        ),
-      });
+      sendRes = await requestFeishuApi(
+        () =>
+          this.client.im.message.create({
+            params: { receive_id_type: receiveIdType },
+            data: Object.assign(
+              { receive_id: receiveId, msg_type: "interactive", content: cardContent },
+              { root_id: sendOptions.rootId },
+            ),
+          }),
+        "Send card failed",
+      );
     } else {
-      sendRes = await this.client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          msg_type: "interactive",
-          content: cardContent,
-        },
-      });
+      sendRes = await requestFeishuApi(
+        () =>
+          this.client.im.message.create({
+            params: { receive_id_type: receiveIdType },
+            data: {
+              receive_id: receiveId,
+              msg_type: "interactive",
+              content: cardContent,
+            },
+          }),
+        "Send card failed",
+      );
     }
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
@@ -477,13 +480,12 @@ export class FeishuStreamingSession {
       if (!mergedText || mergedText === this.state.currentText) {
         return;
       }
-      const appendContent = resolveStreamingCardAppendContent(this.state.sentText, mergedText);
-      if (!appendContent) {
+      if (mergedText === this.state.sentText) {
         return;
       }
       this.pendingText = null;
       this.state.currentText = mergedText;
-      const sent = await this.updateCardContent(appendContent, (e) =>
+      const sent = await this.updateCardContent(mergedText, (e) =>
         this.log?.(`Update failed: ${String(e)}`),
       );
       if (sent && this.state) {
@@ -540,10 +542,7 @@ export class FeishuStreamingSession {
     // An explicit empty final text clears a transient preview before closeout.
     if ((text || finalText !== undefined) && text !== this.state.sentText) {
       const sent = text.startsWith(this.state.sentText)
-        ? await this.updateCardContent(
-            resolveStreamingCardAppendContent(this.state.sentText, text),
-            (e) => this.log?.(`Final update failed: ${String(e)}`),
-          )
+        ? await this.updateCardContent(text, (e) => this.log?.(`Final update failed: ${String(e)}`))
         : await this.replaceCardContent(text, (e) =>
             this.log?.(`Final replace failed: ${String(e)}`),
           );

@@ -1,6 +1,8 @@
+// Home environment test support isolates HOME-style paths for skill tests.
 import os from "node:os";
 import { vi } from "vitest";
 
+/** Process home env snapshot used by skill loader tests. */
 export type SkillsHomeEnvSnapshot = {
   previousHome: string | undefined;
   previousOpenClawHome: string | undefined;

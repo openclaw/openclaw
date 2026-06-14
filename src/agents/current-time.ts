@@ -1,3 +1,6 @@
+/**
+ * Formats cron-style current-time prompt text with local and UTC references.
+ */
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   type TimeFormatPreference,
@@ -21,6 +24,7 @@ type TimeConfigLike = {
   };
 };
 
+/** Resolve localized and UTC current-time text for agent prompts. */
 export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
   const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
@@ -32,6 +36,7 @@ export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronSty
   return { userTimezone, formattedTime, timeLine };
 }
 
+/** Append a current-time block unless the text already contains one. */
 export function appendCronStyleCurrentTimeLine(text: string, cfg: TimeConfigLike, nowMs: number) {
   const base = text.trimEnd();
   if (!base || base.includes("Current time:")) {

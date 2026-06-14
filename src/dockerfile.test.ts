@@ -1,3 +1,4 @@
+// Tests Dockerfile metadata and expected install commands.
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,10 +31,13 @@ describe("Dockerfile", () => {
   it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63"',
+      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63"',
     );
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"',
+      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"',
+    );
+    expect(dockerfile).toContain(
+      'ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"',
     );
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps");
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
@@ -190,10 +194,37 @@ describe("Dockerfile", () => {
 
   it("does not let pnpm resync the full source workspace during Docker build scripts", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-
-    expect(dockerfile).toContain(
+    const collapsed = collapseDockerContinuations(dockerfile);
+    const qaLabBuildBlock =
+      /RUN if printf '%s\\n' "\$OPENCLAW_EXTENSIONS" \| tr ',' ' ' \| tr ' ' '\\n' \| grep -qx 'qa-lab'; then\s+pnpm_config_verify_deps_before_run=false pnpm qa:lab:build &&\s+mkdir -p dist\/extensions\/qa-lab\/web &&\s+rm -rf dist\/extensions\/qa-lab\/web\/dist &&\s+cp -R extensions\/qa-lab\/web\/dist dist\/extensions\/qa-lab\/web\/dist;\s+fi/u;
+    const qaLabExtensionCheckIndex = collapsed.indexOf("grep -qx 'qa-lab'");
+    const qaLabBuildBlockMatch = qaLabBuildBlock.exec(collapsed);
+    const privateQaExportIndex = collapsed.indexOf(
+      "export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1",
+    );
+    const buildDockerIndex = collapsed.indexOf(
       "NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker",
     );
+    const qaLabBuildIndex = collapsed.indexOf(
+      "pnpm_config_verify_deps_before_run=false pnpm qa:lab:build",
+    );
+    const qaLabDistCopyIndex = collapsed.indexOf(
+      "cp -R extensions/qa-lab/web/dist dist/extensions/qa-lab/web/dist",
+    );
+    const runtimeAssetsIndex = collapsed.indexOf("FROM build AS runtime-assets");
+
+    expect(qaLabExtensionCheckIndex).toBeGreaterThan(-1);
+    expect(qaLabBuildBlockMatch?.index).toBeGreaterThan(-1);
+    expect(buildDockerIndex).toBeGreaterThan(-1);
+    expect(qaLabBuildIndex).toBeGreaterThan(-1);
+    expect(qaLabDistCopyIndex).toBeGreaterThan(-1);
+    expect(runtimeAssetsIndex).toBeGreaterThan(-1);
+    expect(privateQaExportIndex).toBeGreaterThan(qaLabExtensionCheckIndex);
+    expect(privateQaExportIndex).toBeLessThan(buildDockerIndex);
+    expect(qaLabBuildIndex).toBeGreaterThan(buildDockerIndex);
+    expect(qaLabBuildBlockMatch?.index).toBeGreaterThan(buildDockerIndex);
+    expect(qaLabDistCopyIndex).toBeGreaterThan(qaLabBuildIndex);
+    expect(qaLabDistCopyIndex).toBeLessThan(runtimeAssetsIndex);
     expect(dockerfile).toContain(
       "pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle",
     );

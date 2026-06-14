@@ -1,3 +1,7 @@
+/**
+ * Shared Claude CLI backend normalization. It sanitizes command args, maps
+ * thinking levels, and keeps OpenClaw-managed CLI runs isolated from shell env.
+ */
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
@@ -17,6 +21,7 @@ export {
 // consulting its local login state, so inherited shell overrides must not
 // steer OpenClaw-managed Claude CLI runs toward a different provider,
 // endpoint, token source, plugin/config tree, or telemetry bootstrap mode.
+/** Environment variables removed before launching OpenClaw-managed Claude CLI runs. */
 export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
@@ -62,11 +67,36 @@ const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
 const CLAUDE_EFFORT_ARG = "--effort";
+const CLAUDE_BARE_ARG = "--bare";
+const CLAUDE_SAFE_MODE_ARG = "--safe-mode";
+const CLAUDE_TOOLS_ARG = "--tools";
+const CLAUDE_DISALLOWED_TOOLS_ARG = "--disallowedTools";
+const CLAUDE_MCP_CONFIG_ARG = "--mcp-config";
+const CLAUDE_STRICT_MCP_CONFIG_ARG = "--strict-mcp-config";
+const CLAUDE_NO_SESSION_PERSISTENCE_ARG = "--no-session-persistence";
+const CLAUDE_MAX_TURNS_ARG = "--max-turns";
+const CLAUDE_SESSION_ID_ARG = "--session-id";
+const CLAUDE_RESUME_ARG = "--resume";
+const CLAUDE_RESUME_SESSION_AT_ARG = "--resume-session-at";
+const CLAUDE_RESUME_SHORT_ARG = "-r";
+const CLAUDE_CONTINUE_ARG = "--continue";
+const CLAUDE_CONTINUE_SHORT_ARG = "-c";
+const CLAUDE_FORK_SESSION_ARG = "--fork-session";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
+const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
+const CLAUDE_NO_TOOLS_VALUE = "";
+const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Explicit thinking opt-out for Claude CLI routes unsupported by Claude Code. */
+export const CLAUDE_CLI_OFF_THINKING_PROFILE = {
+  levels: [{ id: "off" }],
+  defaultLevel: "off",
+} as const;
+
+/** Return whether a provider id refers to the Claude CLI backend. */
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
@@ -81,6 +111,7 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
   return security === "full" && ask === "off";
 }
 
+/** Resolve Claude permission mode from OpenClaw exec security settings. */
 export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
   mode?: string;
   overrideExisting: boolean;
@@ -90,6 +121,7 @@ export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigC
     : { overrideExisting: false };
 }
 
+/** Normalize Claude permission arguments, removing legacy skip-permissions flags. */
 export function normalizeClaudePermissionArgs(
   args?: string[],
   options?: { mode?: string; overrideExisting?: boolean },
@@ -138,6 +170,7 @@ export function normalizeClaudePermissionArgs(
   return normalized;
 }
 
+/** Ensure Claude CLI setting sources stay restricted to user settings. */
 export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
   if (!args) {
     return args;
@@ -172,6 +205,7 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
   return normalized;
 }
 
+/** Map OpenClaw thinking levels to Claude CLI effort flags for a model id. */
 export function mapClaudeCliThinkingLevelToEffort(
   thinkingLevel?: string | null,
 ): ClaudeCliEffort | undefined {
@@ -216,9 +250,89 @@ function stripClaudeEffortArgs(args: readonly string[]): string[] {
   return normalized;
 }
 
+const CLAUDE_SIDE_QUESTION_VARIADIC_VALUE_ARGS = new Set([
+  "--allowedTools",
+  "--allowed-tools",
+  CLAUDE_DISALLOWED_TOOLS_ARG,
+  "--disallowed-tools",
+  CLAUDE_TOOLS_ARG,
+  CLAUDE_MCP_CONFIG_ARG,
+]);
+
+const CLAUDE_SIDE_QUESTION_VALUE_ARGS = new Set([
+  CLAUDE_PERMISSION_MODE_ARG,
+  CLAUDE_SESSION_ID_ARG,
+  CLAUDE_RESUME_ARG,
+  CLAUDE_RESUME_SESSION_AT_ARG,
+  CLAUDE_RESUME_SHORT_ARG,
+  CLAUDE_MAX_TURNS_ARG,
+]);
+
+const CLAUDE_SIDE_QUESTION_BARE_ARGS = new Set([
+  CLAUDE_CONTINUE_ARG,
+  CLAUDE_CONTINUE_SHORT_ARG,
+  CLAUDE_FORK_SESSION_ARG,
+  CLAUDE_BARE_ARG,
+  CLAUDE_SAFE_MODE_ARG,
+  CLAUDE_STRICT_MCP_CONFIG_ARG,
+  CLAUDE_NO_SESSION_PERSISTENCE_ARG,
+]);
+
+function stripClaudeSideQuestionConflictingArgs(args: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    const equalsIndex = arg.indexOf("=");
+    const argName = equalsIndex > 0 ? arg.slice(0, equalsIndex) : arg;
+    if (CLAUDE_SIDE_QUESTION_BARE_ARGS.has(argName)) {
+      continue;
+    }
+    if (CLAUDE_SIDE_QUESTION_VARIADIC_VALUE_ARGS.has(argName)) {
+      if (equalsIndex < 0) {
+        while (typeof args[i + 1] === "string" && !args[i + 1]?.startsWith("-")) {
+          i += 1;
+        }
+      }
+      continue;
+    }
+    if (CLAUDE_SIDE_QUESTION_VALUE_ARGS.has(argName)) {
+      if (equalsIndex < 0) {
+        const maybeValue = args[i + 1];
+        if (typeof maybeValue === "string" && !maybeValue.startsWith("-")) {
+          i += 1;
+        }
+      }
+      continue;
+    }
+    normalized.push(arg);
+  }
+  return normalized;
+}
+
+function resolveClaudeCliSideQuestionExecutionArgs(baseArgs: readonly string[]): string[] {
+  return [
+    ...stripClaudeSideQuestionConflictingArgs(stripClaudeEffortArgs(baseArgs)),
+    CLAUDE_SAFE_MODE_ARG,
+    CLAUDE_TOOLS_ARG,
+    CLAUDE_NO_TOOLS_VALUE,
+    CLAUDE_DISALLOWED_TOOLS_ARG,
+    CLAUDE_DENY_MCP_TOOLS_VALUE,
+    CLAUDE_STRICT_MCP_CONFIG_ARG,
+    CLAUDE_NO_SESSION_PERSISTENCE_ARG,
+    CLAUDE_MAX_TURNS_ARG,
+    "1",
+    CLAUDE_PERMISSION_MODE_ARG,
+    CLAUDE_DEFAULT_PERMISSION_MODE,
+  ];
+}
+
+/** Resolve final Claude CLI execution args for one backend invocation. */
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
 ): string[] {
+  if (context.executionMode === "side-question") {
+    return resolveClaudeCliSideQuestionExecutionArgs(context.baseArgs);
+  }
   const effort = mapClaudeCliThinkingLevelToEffort(context.thinkingLevel);
   if (!effort) {
     return [...context.baseArgs];
@@ -226,6 +340,7 @@ export function resolveClaudeCliExecutionArgs(
   return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, effort];
 }
 
+/** Normalize Claude CLI backend config before registration or execution. */
 export function normalizeClaudeBackendConfig(
   config: CliBackendConfig,
   context?: CliBackendNormalizeConfigContext,

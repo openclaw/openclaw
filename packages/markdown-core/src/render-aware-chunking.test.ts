@@ -1,3 +1,4 @@
+// Markdown Core tests cover render aware chunking behavior.
 import { describe, expect, it } from "vitest";
 import type { MarkdownIR } from "./ir.js";
 import { markdownToIR } from "./ir.js";
@@ -82,5 +83,19 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
 
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["a", "b", "c"]);
     expect(chunks.every((chunk) => chunk.rendered.length <= 1)).toBe(true);
+  });
+
+  it("treats Infinity as no size cap and returns a single chunk", () => {
+    const text = "one two three four five six seven eight nine ten";
+    const ir = markdownToIR(text);
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir,
+      limit: Number.POSITIVE_INFINITY,
+      renderChunk: renderEscapedHtml,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.source.text).toBe(text);
   });
 });

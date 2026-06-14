@@ -1,3 +1,4 @@
+// Memory Host SDK module implements embeddings behavior.
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
@@ -27,6 +28,7 @@ export { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 
 export type LocalEmbeddingProviderRuntimeOptions = {
   workerScriptPath?: string;
+  nodeLlamaCppImportUrl?: string;
 };
 
 async function disposeResources(
@@ -47,8 +49,9 @@ async function disposeResources(
 
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
+  runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): Promise<EmbeddingProvider> {
-  return await createLocalEmbeddingWorkerProvider(options);
+  return await createLocalEmbeddingWorkerProvider(options, runtimeOptions);
 }
 
 export async function createLocalEmbeddingProviderInProcess(
@@ -56,10 +59,15 @@ export async function createLocalEmbeddingProviderInProcess(
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
   const modelCacheDir = normalizeOptionalString(options.local?.modelCacheDir);
+  const nodeLlamaCppImportUrl = normalizeOptionalString(
+    (options.local as EmbeddingProviderOptions["local"] & { nodeLlamaCppImportUrl?: string })
+      ?.nodeLlamaCppImportUrl,
+  );
   const contextSize: number | "auto" = options.local?.contextSize ?? 4096;
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
-  const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
+  const { getLlama, resolveModelFile, LlamaLogLevel } =
+    await importNodeLlamaCpp(nodeLlamaCppImportUrl);
 
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;

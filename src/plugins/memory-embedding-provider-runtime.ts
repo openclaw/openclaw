@@ -1,8 +1,9 @@
+// Runtime bridge for plugin-provided memory embedding providers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readConfiguredProviderApiId } from "./embedding-provider-config.js";
 import {
   getRuntimeEmbeddingProviderAdapter,
   listRuntimeEmbeddingProviderAdapters,
-  readConfiguredProviderApiId,
   resolveRuntimeEmbeddingProviderLookupIds,
 } from "./embedding-provider-runtime-shared.js";
 import {
@@ -13,9 +14,12 @@ import {
 
 export { listRegisteredMemoryEmbeddingProviders };
 
+/** Lists registered memory embedding provider adapters without registry metadata. */
 export function listRegisteredMemoryEmbeddingProviderAdapters(): MemoryEmbeddingProviderAdapter[] {
   return listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter);
 }
+
+/** Lists memory embedding providers from runtime config and registered adapters. */
 export function listMemoryEmbeddingProviders(
   cfg?: OpenClawConfig,
 ): MemoryEmbeddingProviderAdapter[] {
@@ -41,6 +45,7 @@ function resolveMemoryEmbeddingProviderLookupIds(id: string, cfg?: OpenClawConfi
   });
 }
 
+/** Resolves one memory embedding provider by id, alias, or configured API owner. */
 export function getMemoryEmbeddingProvider(
   id: string,
   cfg?: OpenClawConfig,

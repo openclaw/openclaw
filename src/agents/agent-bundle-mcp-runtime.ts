@@ -1,3 +1,4 @@
+/** Session-scoped MCP runtime manager, catalog loader, and transport lifecycle. */
 import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -764,7 +765,7 @@ export function createSessionMcpRuntime(params: {
         }
         released = true;
         activeLeases = Math.max(0, activeLeases - 1);
-        lastUsedAt = Date.now();
+        // Release is not use: refreshing lastUsedAt here defeats the idle-sweep TTL.
       };
     },
     getCatalog,

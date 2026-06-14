@@ -1,9 +1,12 @@
+// Assertions for release scenario E2E packages and plugin state.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
+import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
@@ -13,6 +16,7 @@ const command = process.argv[2];
 const SCAN_CHUNK_BYTES = 64 * 1024;
 const SCAN_CARRY_CHARS = 256;
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 
 function assert(condition, message) {
   if (!condition) {
@@ -20,8 +24,30 @@ function assert(condition, message) {
   }
 }
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+function readJson(file, maxBytes = JSON_ARTIFACT_MAX_BYTES) {
+  const stat = fs.statSync(file);
+  if (!stat.isFile()) {
+    throw new Error(`${file} is not a file`);
+  }
+  if (stat.size > maxBytes) {
+    throw new Error(
+      `JSON artifact exceeded ${maxBytes} bytes: ${file} (${stat.size} bytes). Tail: ${readTextFileTail(
+        file,
+        ERROR_DETAIL_TAIL_BYTES,
+      )}`,
+    );
+  }
+  const text = fs.readFileSync(file, "utf8");
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > maxBytes) {
+    throw new Error(
+      `JSON artifact exceeded ${maxBytes} bytes: ${file} (${bytes} bytes). Tail: ${readTextFileTail(
+        file,
+        ERROR_DETAIL_TAIL_BYTES,
+      )}`,
+    );
+  }
+  return JSON.parse(text);
 }
 
 function fileContainsText(file, needle) {
@@ -81,9 +107,41 @@ function authProfilesPath() {
   );
 }
 
+function authProfilesDatabasePath() {
+  return path.join(
+    process.env.HOME ?? "",
+    ".openclaw",
+    "agents",
+    "main",
+    "agent",
+    "openclaw-agent.sqlite",
+  );
+}
+
+function readAuthProfileStoreSqliteText() {
+  const dbPath = authProfilesDatabasePath();
+  if (!fs.existsSync(dbPath)) {
+    return "";
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
+      .get("primary");
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } catch {
+    return "";
+  } finally {
+    db?.close();
+  }
+}
+
 function readStateText() {
   const paths = [configPath(), authProfilesPath()].filter((file) => fs.existsSync(file));
-  return paths.map((file) => fs.readFileSync(file, "utf8")).join("\n");
+  return [...paths.map((file) => fs.readFileSync(file, "utf8")), readAuthProfileStoreSqliteText()]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function configureMockOpenAi() {
@@ -95,10 +153,14 @@ function configureMockOpenAi() {
 
 function assertOpenAiEnvRef() {
   const rawKey = process.argv[3];
-  const state = readStateText();
-  assert(state.includes("OPENAI_API_KEY"), "OpenAI env ref was not persisted");
-  assert(!state.includes(rawKey), "raw OpenAI key was persisted");
   assert(fs.existsSync(configPath()), "openclaw.json missing");
+  assertOpenAiEnvAuthProfileStore(readAuthProfileStoreSqliteText(), {
+    missingMessage: "OpenAI env ref was not persisted",
+    envRefMessage: "OpenAI env ref was not persisted",
+    rawKeyMessage: "raw OpenAI key was persisted",
+    rawKeyNeedle: rawKey,
+  });
+  assert(!readStateText().includes(rawKey), "raw OpenAI key was persisted");
 }
 
 function assertAgentTurn() {

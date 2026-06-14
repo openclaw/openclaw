@@ -1,3 +1,4 @@
+// Control UI type declarations define types contracts.
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
@@ -386,6 +387,66 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
+export type SessionWorkspaceFileEntry = {
+  path: string;
+  name: string;
+  kind: "modified" | "read";
+  missing: boolean;
+  size?: number;
+  updatedAtMs?: number;
+  content?: string;
+};
+
+export type SessionWorkspaceBrowserEntry = {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+  sessionKind?: "modified" | "read" | "mixed";
+  size?: number;
+  updatedAtMs?: number;
+};
+
+export type SessionWorkspaceBrowserResult = {
+  path: string;
+  parentPath?: string;
+  search?: string;
+  entries: SessionWorkspaceBrowserEntry[];
+  truncated?: boolean;
+};
+
+export type SessionWorkspaceArtifactEntry = {
+  id: string;
+  type: string;
+  title: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  source?: string;
+  download: {
+    mode: "bytes" | "url" | "unsupported";
+  };
+};
+
+export type SessionWorkspaceListResult = {
+  sessionKey: string;
+  root?: string;
+  files: SessionWorkspaceFileEntry[];
+  browser?: SessionWorkspaceBrowserResult;
+  artifacts?: SessionWorkspaceArtifactEntry[];
+};
+
+export type SessionWorkspaceGetResult = {
+  sessionKey: string;
+  root?: string;
+  file: SessionWorkspaceFileEntry;
+};
+
+export type ArtifactDownloadResult = {
+  artifact: SessionWorkspaceArtifactEntry;
+  encoding?: "base64";
+  data?: string;
+  url?: string;
+};
+
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 export type SubagentRunState = "active" | "interrupted" | "historical";
 
@@ -547,6 +608,16 @@ export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
+  | {
+      kind: "command";
+      argv: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+      input?: string;
+      timeoutSeconds?: number;
+      noOutputTimeoutSeconds?: number;
+      outputMaxBytes?: number;
+    }
   | {
       kind: "agentTurn";
       message: string;

@@ -1,10 +1,11 @@
+// Live verification for extra-params behavior against provider APIs.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { isLiveBillingDrift } from "./live-test-provider-drift.js";
+import { isLiveAuthDrift, isLiveBillingDrift } from "./live-test-provider-drift.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
@@ -16,6 +17,8 @@ const describeAnthropicLive = ANTHROPIC_LIVE && ANTHROPIC_KEY ? describe : descr
 
 describeLive("embedded agent extra params (live)", () => {
   it("applies config max_completion_tokens alias to openai streamFn", async () => {
+    // This is live because token-limit alias behavior is enforced by OpenAI's
+    // API, not just by local payload mutation.
     const model: Model<"openai-responses"> = {
       id: "gpt-5.4",
       name: "GPT-5.4",
@@ -78,6 +81,8 @@ describeLive("embedded agent extra params (live)", () => {
   }, 30_000);
 
   it("verifies OpenAI fast-mode service_tier semantics against the live API", async () => {
+    // service_tier is provider-defined response metadata; mocked wrappers cannot
+    // prove that the live API accepts both values.
     const headers = {
       "content-type": "application/json",
       authorization: `Bearer ${OPENAI_KEY}`,
@@ -138,9 +143,15 @@ describeAnthropicLive("embedded agent extra params (anthropic live)", () => {
         usage?: { service_tier?: string };
       };
       const errorMessage = json.error?.message ?? `HTTP ${res.status}`;
-      if (!res.ok && isLiveBillingDrift(errorMessage)) {
-        console.warn(`[anthropic:live] skip service_tier ${serviceTier}: billing drift`);
-        return null;
+      if (!res.ok) {
+        if (isLiveBillingDrift(errorMessage)) {
+          console.warn(`[anthropic:live] skip service_tier ${serviceTier}: billing drift`);
+          return null;
+        }
+        if (isLiveAuthDrift(errorMessage)) {
+          console.warn(`[anthropic:live] skip service_tier ${serviceTier}: auth drift`);
+          return null;
+        }
       }
       expect(res.ok, errorMessage).toBe(true);
       return json;
