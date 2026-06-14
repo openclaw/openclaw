@@ -3,7 +3,6 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pluginCommandSupportsChannel } from "./command-registration.js";
 import { pluginCommands } from "./command-registry-state.js";
 import type { PluginCommandRegistration } from "./registry-types.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
@@ -22,10 +21,125 @@ export type PluginCommandEntrySpec = {
   nativeName?: string;
 };
 
-function resolvePluginNativeName(
+type ProjectablePluginCommand = {
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+  nativeNames?: Record<string, string>;
+  descriptionLocalizations?: Record<string, string>;
+  channels?: string[];
+};
+
+type ReadResult<T> = { ok: true; value: T } | { ok: false };
+
+function readField<T>(read: () => T): ReadResult<T> {
+  try {
+    return { ok: true, value: read() };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecordLike(value)) {
+    return undefined;
+  }
+  const entries = readField(() => Object.entries(value));
+  if (!entries.ok) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, raw] of entries.value) {
+    if (typeof raw === "string") {
+      out[key] = raw;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function readStringArray(value: unknown): string[] | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const out: string[] = [];
+  let index = 0;
+  while (index < value.length) {
+    const entry = readField(() => value[index]);
+    if (!entry.ok || typeof entry.value !== "string") {
+      return null;
+    }
+    out.push(entry.value);
+    index += 1;
+  }
+  return out;
+}
+
+function snapshotPluginCommandForSpecs(
   command: OpenClawPluginCommandDefinition,
-  provider?: string,
-): string {
+): ProjectablePluginCommand | null {
+  const name = readField(() => command.name);
+  if (!name.ok || typeof name.value !== "string" || !name.value.trim()) {
+    return null;
+  }
+  const description = readField(() => command.description);
+  if (!description.ok || typeof description.value !== "string" || !description.value.trim()) {
+    return null;
+  }
+  const channels = readField(() => command.channels);
+  if (!channels.ok) {
+    return null;
+  }
+  const normalizedChannels = readStringArray(channels.value);
+  if (channels.value !== undefined && normalizedChannels == null) {
+    return null;
+  }
+  const acceptsArgs = readField(() => command.acceptsArgs);
+  const nativeNames = readField(() => command.nativeNames);
+  const descriptionLocalizations = readField(() => command.descriptionLocalizations);
+  const nativeNamesValue = nativeNames.ok ? readStringRecord(nativeNames.value) : undefined;
+  const descriptionLocalizationsValue = descriptionLocalizations.ok
+    ? readStringRecord(descriptionLocalizations.value)
+    : undefined;
+  return {
+    name: name.value,
+    description: description.value,
+    acceptsArgs: acceptsArgs.ok ? acceptsArgs.value === true : false,
+    ...(nativeNamesValue ? { nativeNames: nativeNamesValue } : {}),
+    ...(descriptionLocalizationsValue
+      ? { descriptionLocalizations: descriptionLocalizationsValue }
+      : {}),
+    ...(normalizedChannels !== undefined ? { channels: normalizedChannels } : {}),
+  };
+}
+
+function snapshotPluginCommandRegistration(
+  registration: PluginCommandRegistration,
+): ProjectablePluginCommand | null {
+  const command = readField(() => registration.command);
+  return command.ok ? snapshotPluginCommandForSpecs(command.value) : null;
+}
+
+function pluginCommandSupportsChannelSnapshot(
+  command: ProjectablePluginCommand,
+  channel?: string,
+): boolean {
+  if (!command.channels || command.channels.length === 0 || !channel) {
+    return true;
+  }
+  const normalizedChannel = normalizeOptionalLowercaseString(channel) ?? "";
+  return command.channels.some(
+    (entry) => (normalizeOptionalLowercaseString(entry) ?? "") === normalizedChannel,
+  );
+}
+
+function resolvePluginNativeName(command: ProjectablePluginCommand, provider?: string): string {
   const providerName = normalizeOptionalLowercaseString(provider);
   const providerOverride = providerName ? command.nativeNames?.[providerName] : undefined;
   if (typeof providerOverride === "string" && providerOverride.trim()) {
@@ -39,7 +153,7 @@ function resolvePluginNativeName(
   return fallbackName || command.name;
 }
 
-function resolvePluginTextName(command: OpenClawPluginCommandDefinition): string {
+function resolvePluginTextName(command: ProjectablePluginCommand): string {
   const name = command.name.trim();
   return name || command.name;
 }
@@ -103,6 +217,8 @@ export function getPluginCommandEntrySpecs(
   const providerName = normalizeOptionalLowercaseString(provider);
   const nativeCommandsEnabled = pluginNativeCommandsEnabled(providerName, options);
   return Array.from(pluginCommands.values())
+    .map(snapshotPluginCommandForSpecs)
+    .filter((cmd): cmd is ProjectablePluginCommand => cmd !== null)
     .map((cmd) => serializePluginCommandEntrySpec(cmd, providerName, nativeCommandsEnabled))
     .filter((spec): spec is PluginCommandEntrySpec => spec !== null);
 }
@@ -115,9 +231,9 @@ export function getPluginCommandEntrySpecsFromRegistrations(
   const providerName = normalizeOptionalLowercaseString(provider);
   const nativeCommandsEnabled = pluginNativeCommandsEnabled(providerName, options);
   return commands
-    .map((entry) =>
-      serializePluginCommandEntrySpec(entry.command, providerName, nativeCommandsEnabled),
-    )
+    .map(snapshotPluginCommandRegistration)
+    .filter((cmd): cmd is ProjectablePluginCommand => cmd !== null)
+    .map((cmd) => serializePluginCommandEntrySpec(cmd, providerName, nativeCommandsEnabled))
     .filter((spec): spec is PluginCommandEntrySpec => spec !== null);
 }
 
@@ -129,7 +245,9 @@ export function listProviderPluginCommandSpecs(provider?: string): Array<{
   acceptsArgs: boolean;
 }> {
   return Array.from(pluginCommands.values())
-    .filter((cmd) => pluginCommandSupportsChannel(cmd, provider))
+    .map(snapshotPluginCommandForSpecs)
+    .filter((cmd): cmd is ProjectablePluginCommand => cmd !== null)
+    .filter((cmd) => pluginCommandSupportsChannelSnapshot(cmd, provider))
     .map((cmd) => serializePluginCommandSpec(cmd, provider));
 }
 
@@ -143,13 +261,14 @@ export function listProviderPluginCommandSpecsFromRegistrations(
   acceptsArgs: boolean;
 }> {
   return commands
-    .map((entry) => entry.command)
-    .filter((cmd) => pluginCommandSupportsChannel(cmd, provider))
+    .map(snapshotPluginCommandRegistration)
+    .filter((cmd): cmd is ProjectablePluginCommand => cmd !== null)
+    .filter((cmd) => pluginCommandSupportsChannelSnapshot(cmd, provider))
     .map((cmd) => serializePluginCommandSpec(cmd, provider));
 }
 
 function serializePluginCommandSpec(
-  cmd: OpenClawPluginCommandDefinition,
+  cmd: ProjectablePluginCommand,
   provider?: string,
 ): {
   name: string;
@@ -174,11 +293,11 @@ function serializePluginCommandSpec(
 }
 
 function serializePluginCommandEntrySpec(
-  cmd: OpenClawPluginCommandDefinition,
+  cmd: ProjectablePluginCommand,
   provider: string | undefined,
   nativeCommandsEnabled: boolean,
 ): PluginCommandEntrySpec | null {
-  if (!pluginCommandSupportsChannel(cmd, provider)) {
+  if (!pluginCommandSupportsChannelSnapshot(cmd, provider)) {
     return null;
   }
   const nativeName = nativeCommandsEnabled ? resolvePluginNativeName(cmd, provider) : undefined;
