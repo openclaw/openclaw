@@ -421,9 +421,13 @@ export type WorkboardUiState = {
 
 type WorkboardHost = object;
 
+type WorkboardLoadToken = {
+  queuedAfterGeneration?: number;
+};
+
 const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
 const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
-const workboardLoadTokens = new WeakMap<WorkboardHost, object>();
+const workboardLoadTokens = new WeakMap<WorkboardHost, WorkboardLoadToken>();
 const workboardLifecycleTaskRefreshPromises = new WeakMap<WorkboardHost, Promise<number | null>>();
 const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
 const workboardLifecycleReconciliationEpochs = new WeakMap<WorkboardHost, number>();
@@ -1924,7 +1928,7 @@ function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   };
 }
 
-export async function loadWorkboard(params: {
+type LoadWorkboardParams = {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
@@ -1932,7 +1936,16 @@ export async function loadWorkboard(params: {
   refreshDiagnostics?: boolean;
   taskRefresh?: "all" | "linked";
   preserveError?: boolean;
-}): Promise<boolean> {
+};
+
+export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolean> {
+  return await loadWorkboardInternal(params);
+}
+
+async function loadWorkboardInternal(
+  params: LoadWorkboardParams,
+  queuedAfterGeneration?: number,
+): Promise<boolean> {
   const state = getWorkboardState(params.host);
   if (
     !params.client ||
@@ -1947,18 +1960,27 @@ export async function loadWorkboard(params: {
   if (existingLoad) {
     const existingGeneration = workboardLoadGenerations.get(params.host);
     const result = await existingLoad;
+    const existingLoadIsCurrent =
+      existingGeneration !== undefined &&
+      isCurrentWorkboardLoadGeneration(params.host, existingGeneration);
+    const currentLoadToken = workboardLoadTokens.get(params.host);
+    // Only follow a replacement created by this load's forced-waiter queue.
+    // Fresh loads after teardown or writes must not revive stale callers.
+    const queuedLoadReplacedExisting =
+      existingGeneration !== undefined &&
+      currentLoadToken?.queuedAfterGeneration === existingGeneration &&
+      workboardLoadPromises.has(params.host);
     // Forced callers carry their own diagnostics/task-refresh contract, so a
     // weaker in-flight load cannot satisfy them.
     return params.force &&
-      existingGeneration !== undefined &&
-      isCurrentWorkboardLoadGeneration(params.host, existingGeneration) &&
+      (existingLoadIsCurrent || queuedLoadReplacedExisting) &&
       !state.dispatching &&
       !workboardHasActiveWrites(state)
-      ? await loadWorkboard(params)
+      ? await loadWorkboardInternal(params, existingGeneration)
       : result;
   }
   const generation = nextWorkboardLoadGeneration(params.host);
-  const loadToken = {};
+  const loadToken: WorkboardLoadToken = { queuedAfterGeneration };
   workboardLoadTokens.set(params.host, loadToken);
   const lastRefreshErrorBeforeLoad = state.lastRefreshError;
   state.loadAttempted = true;

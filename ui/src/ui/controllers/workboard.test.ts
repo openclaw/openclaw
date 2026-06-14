@@ -1783,6 +1783,60 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards).toMatchObject([{ title: "Forced full refresh" }]);
   });
 
+  it("preserves a stronger forced refresh behind another queued forced refresh", async () => {
+    const host = {};
+    const initialList = createDeferred<unknown>();
+    const weakerCard = { ...sampleCard, title: "Weaker queued refresh" };
+    const strongerCard = { ...sampleCard, title: "Stronger queued refresh" };
+    let cardListCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        cardListCalls += 1;
+        if (cardListCalls === 1) {
+          return initialList.promise;
+        }
+        return {
+          cards: [cardListCalls === 2 ? weakerCard : strongerCard],
+          statuses: ["todo", "done"],
+        };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+
+    const initial = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      taskRefresh: "linked",
+    });
+    await Promise.resolve();
+    const weaker = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      taskRefresh: "linked",
+    });
+    const stronger = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      refreshDiagnostics: true,
+      taskRefresh: "all",
+    });
+    initialList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await Promise.all([initial, weaker, stronger]);
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.diagnostics.refresh", {});
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
+    ).toHaveLength(3);
+    expect(client.request.mock.calls.filter(([method]) => method === "tasks.list")).toHaveLength(1);
+    expect(getWorkboardState(host).cards).toMatchObject([{ title: "Stronger queued refresh" }]);
+  });
+
   it("does not restart a queued forced refresh after lifecycle teardown", async () => {
     const host = {};
     const pollList = createDeferred<unknown>();
@@ -1816,6 +1870,49 @@ describe("workboard controller", () => {
       client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
     ).toHaveLength(1);
     expect(getWorkboardState(host).loaded).toBe(false);
+  });
+
+  it("does not attach a stale forced refresh to a reopened board load", async () => {
+    const host = {};
+    const staleList = createDeferred<unknown>();
+    const reopenedList = createDeferred<unknown>();
+    const reopenedCard = { ...sampleCard, title: "Reopened board" };
+    let cardListCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        cardListCalls += 1;
+        return cardListCalls === 1 ? staleList.promise : reopenedList.promise;
+      }
+      return {};
+    });
+
+    const initial = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      taskRefresh: "linked",
+    });
+    await Promise.resolve();
+    const forced = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      refreshDiagnostics: true,
+      taskRefresh: "all",
+    });
+    stopWorkboardLifecycleRefresh(host);
+    const reopened = loadWorkboard({ host, client: client as never });
+
+    staleList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await initial;
+    reopenedList.resolve({ cards: [reopenedCard], statuses: ["todo", "done"] });
+    await Promise.all([forced, reopened]);
+
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.diagnostics.refresh", {});
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
+    ).toHaveLength(2);
+    expect(getWorkboardState(host).cards).toMatchObject([{ title: "Reopened board" }]);
   });
 
   it("detaches a stalled initial load during lifecycle teardown", async () => {
