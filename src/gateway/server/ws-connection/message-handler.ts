@@ -977,6 +977,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
             );
             if (!signatureRateCheck.allowed) {
+              // A handshake that presents a bootstrap- or device-token candidate
+              // is rate-limited under that credential's own per-IP bucket
+              // (checked, recorded, and surfaced as `rate_limited` in
+              // resolveConnectAuthDecision). Surface that same reason here so the
+              // pre-crypto signature gate does not shadow the bootstrap/device-token
+              // rate-limit contract with a signature-scope reason. The crypto bound
+              // still holds: this returns before any createPublicKey/verify work.
+              if (bootstrapTokenCandidate || deviceTokenCandidate) {
+                rejectUnauthorized({
+                  ok: false,
+                  reason: "rate_limited",
+                  rateLimited: true,
+                  retryAfterMs: signatureRateCheck.retryAfterMs,
+                });
+                return;
+              }
               setHandshakeState("failed");
               setCloseCause("device-auth-invalid", {
                 reason: "device-signature-rate-limited",
