@@ -13,6 +13,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagent-capabilities.js";
+import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -152,6 +153,7 @@ export function resolveSkillDispatchTools(params: {
     subagentPolicy,
     inheritedToolPolicy,
   ];
+  const explicitDenylist = collectExplicitDenylist(explicitPolicyList);
   const inheritedToolAllowlist: string[] = [];
   const beforeToolCallHookContext = params.skillCommand
     ? {
@@ -191,9 +193,9 @@ export function resolveSkillDispatchTools(params: {
     modelProvider: params.provider,
     modelId: params.model,
     pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),
-    pluginToolDenylist: collectExplicitDenylist(explicitPolicyList),
+    pluginToolDenylist: explicitDenylist,
     inheritedToolAllowlist,
-    inheritedToolDenylist: collectExplicitDenylist(explicitPolicyList),
+    inheritedToolDenylist: explicitDenylist,
   });
   const policyFiltered = applyToolPolicyPipeline({
     tools,
@@ -219,6 +221,11 @@ export function resolveSkillDispatchTools(params: {
       { policy: subagentPolicy, label: "subagent tools.allow" },
       { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
+    declaredToolAllowlist: buildDeclaredToolAllowlistContext({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      toolDenylist: explicitDenylist,
+    }),
   });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
