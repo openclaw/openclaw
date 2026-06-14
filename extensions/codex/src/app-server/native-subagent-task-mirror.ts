@@ -48,6 +48,8 @@ export class CodexNativeSubagentTaskMirror {
 
   markAuthoritativeCompletion(childThreadId: string): void {
     const runId = codexNativeSubagentRunId(childThreadId);
+    // Run identity is per child thread, not per resumed turn. Once the monitor
+    // finalizes and delivers this task, later mirror events must not rewrite it.
     this.authoritativeRunIds.add(runId);
     this.terminalRunIds.add(runId);
   }
@@ -137,6 +139,9 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const runId = codexNativeSubagentRunId(threadId);
+    if (this.authoritativeRunIds.has(runId)) {
+      return;
+    }
     if (this.terminalRunIds.has(runId) && statusType !== "systemError") {
       return;
     }
@@ -278,7 +283,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const runId = codexNativeSubagentRunId(threadId);
-    if (this.authoritativeRunIds.has(runId) && normalizedStatus === "completed") {
+    if (this.authoritativeRunIds.has(runId)) {
       return;
     }
     if (this.terminalRunIds.has(runId) && isNonTerminalAgentStateStatus(normalizedStatus)) {

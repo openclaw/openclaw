@@ -501,7 +501,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
-  it("allows terminal collab failures after authoritative completion", () => {
+  it("keeps terminal collab failures from rewriting authoritative completion", () => {
     const runtime = createRuntime();
     const mirror = new CodexNativeSubagentTaskMirror(
       {
@@ -542,13 +542,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "codex-thread:child-thread",
-        status: "failed",
-        error: "later turn failed",
-      }),
-    );
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
   it("lets terminal collab agent state finalize after an earlier idle thread status", () => {

@@ -298,7 +298,7 @@ describe("CodexNativeSubagentMonitor", () => {
     );
   });
 
-  it("allows later system errors to correct native completion results", async () => {
+  it("keeps later lifecycle errors from rewriting native completion results", async () => {
     const client = createClient();
     const runtime = createRuntime();
     const monitor = new CodexNativeSubagentMonitor(client, runtime);
@@ -326,10 +326,12 @@ describe("CodexNativeSubagentMonitor", () => {
       },
     });
 
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenLastCalledWith(
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(1);
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "codex-thread:child-thread",
-        status: "failed",
+        status: "succeeded",
+        terminalSummary: "child final result",
       }),
     );
   });
