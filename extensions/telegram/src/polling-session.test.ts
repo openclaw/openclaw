@@ -2803,7 +2803,7 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("keeps a timed-out lane guarded until the old handler stops", async () => {
+  it("releases a timed-out lane when the old handler ignores reply abort", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -2813,7 +2813,7 @@ describe("TelegramPollingSession", () => {
     const firstTurnDone = new Promise<void>((resolve) => {
       releaseFirstTurn = resolve;
     });
-    createTelegramBotMock.mockReturnValueOnce({
+    const firstBot = {
       api: {
         deleteWebhook: vi.fn(async () => true),
         config: { use: vi.fn() },
@@ -2824,7 +2824,20 @@ describe("TelegramPollingSession", () => {
         await firstTurnDone;
       }),
       stop: vi.fn(async () => undefined),
-    });
+    };
+    const secondBot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`second:${update.update_id}`);
+        abort.abort();
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(firstBot).mockReturnValueOnce(secondBot);
     await writeSpooledTestUpdates(tempDir, [
       topicUpdate(42, 10, "wedged topic 10 turn"),
       topicUpdate(43, 10, "later topic 10 turn"),
@@ -2851,16 +2864,18 @@ describe("TelegramPollingSession", () => {
       await vi.advanceTimersByTimeAsync(250);
       await vi.waitFor(() => expectLogIncludes(log, "did not stop within 100ms"));
       await vi.advanceTimersByTimeAsync(500);
+      await vi.waitFor(() => expect(worker.createWorker).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(events).toEqual(["first:42", "second:43"]));
 
-      expect(worker.createWorker).toHaveBeenCalledTimes(1);
-      expect(events).toEqual(["first:42"]);
       expect(await failedUpdateIds(tempDir)).toEqual([42]);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
 
       releaseFirstTurn?.();
-      abort.abort();
       await vi.advanceTimersByTimeAsync(20_000);
       await runPromise;
+
+      expect(firstBot.stop).toHaveBeenCalledTimes(1);
+      expect(secondBot.stop).toHaveBeenCalledTimes(1);
     } finally {
       releaseFirstTurn?.();
       abort.abort();
