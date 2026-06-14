@@ -479,6 +479,9 @@ names that plugin registers. Active Memory lists those tools in the recall
 prompt and passes the same list to the embedded sub-agent. If none of the
 configured tools are available, or the memory sub-agent fails, Active Memory
 skips recall for that turn and the main reply continues without memory context.
+For custom recall tools, non-empty model-visible tool output counts as recall
+evidence unless structured result fields explicitly report an empty result or
+failure.
 `toolsAllow` only accepts concrete memory tool names. Wildcards, `group:*`
 entries, and core agent tools such as `read`, `exec`, `message`, and
 `web_search` are ignored before the hidden memory sub-agent starts.

@@ -217,6 +217,18 @@ describe("active-memory plugin", () => {
       "utf8",
     );
   };
+  const writeUsableMemoryTranscript = async (sessionFile: string, text: string) => {
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        message: {
+          role: "toolResult",
+          toolName: "memory_search",
+          details: { results: [{ text }] },
+          content: [{ type: "text", text: JSON.stringify({ results: [{ text }] }) }],
+        },
+      },
+    ]);
+  };
   const waitForAbort = async (abortSignal?: AbortSignal): Promise<never> => {
     if (abortSignal?.aborted) {
       throw toLintErrorObject(
@@ -372,8 +384,11 @@ describe("active-memory plugin", () => {
     for (const key of Object.keys(registeredCommands)) {
       delete registeredCommands[key];
     }
-    runEmbeddedAgent.mockResolvedValue({
-      payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
+    runEmbeddedAgent.mockImplementation(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, "lemon pepper wings with blue cheese");
+      return {
+        payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
+      };
     });
     testing.resetActiveRecallCacheForTests();
     testing.setTimeoutPartialDataGraceMsForTests(5);
@@ -394,21 +409,21 @@ describe("active-memory plugin", () => {
     const [hookName, handler, options] = firstHookRegistration();
     expect(hookName).toBe("before_prompt_build");
     expect(typeof handler).toBe("function");
-    expect(options).toEqual({ timeoutMs: 16_500 });
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(16_500);
+    expect(options).toEqual({ timeoutMs: 151_500 });
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(151_500);
   });
 
-  it("registers before_prompt_build with the configured recall timeout", () => {
+  it("keeps the outer hook timeout at the live-config ceiling", () => {
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 90_000,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(91_500);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(151_500);
   });
 
-  it("registers before_prompt_build with explicit setup grace when configured", () => {
+  it("covers the maximum recall and setup-grace budgets", () => {
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 90_000,
@@ -416,7 +431,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(121_500);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(151_500);
   });
 
   it("runs recall without recording shared auth-profile failures", async () => {
@@ -1822,8 +1837,11 @@ describe("active-memory plugin", () => {
   });
 
   it("preserves leading digits in a plain-text summary", async () => {
-    runEmbeddedAgent.mockResolvedValueOnce({
-      payloads: [{ text: "2024 trip to tokyo and 2% milk both matter here." }],
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, "2024 trip to tokyo and 2% milk");
+      return {
+        payloads: [{ text: "2024 trip to tokyo and 2% milk both matter here." }],
+      };
     });
 
     const result = await hooks.before_prompt_build(
@@ -2021,7 +2039,8 @@ describe("active-memory plugin", () => {
       sessionId: "s-main",
       updatedAt: 0,
     };
-    runEmbeddedAgent.mockImplementationOnce(async () => {
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, "lemon pepper wings");
       return {
         meta: {
           activeMemorySearchDebug: {
@@ -2181,7 +2200,7 @@ describe("active-memory plugin", () => {
         },
         ["memory_lookup_custom"],
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       testing.hasUsableMemoryResultInSessionRecord(
         {
@@ -2190,6 +2209,35 @@ describe("active-memory plugin", () => {
             toolName: "memory_lookup_custom",
             details: { results: [] },
             content: [{ type: "text", text: "No memories found." }],
+          },
+        },
+        ["memory_lookup_custom"],
+      ),
+    ).toBe(false);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_lookup_custom",
+            details: {},
+            content: [{ type: "text", text: "[]" }],
+          },
+        },
+        ["memory_lookup_custom"],
+      ),
+    ).toBe(false);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_lookup_custom",
+            details: {},
+            content: [
+              { type: "text", text: '{"results":[]}' },
+              { type: "text", text: "No matching memories were found." },
+            ],
           },
         },
         ["memory_lookup_custom"],
@@ -3153,12 +3201,82 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     await vi.waitFor(() => {
-      expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(1);
+      expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalled();
     });
     expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledWith({
       cfg: configFile,
       agentId: "main",
     });
+  });
+
+  it("schedules timeout cleanup before slow status persistence", async () => {
+    vi.useFakeTimers();
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
+    hoisted.updateSessionStore.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 5_000);
+        }),
+    );
+
+    const resultPromise = hooks.before_prompt_build(
+      { prompt: "what wings should i order? slow timeout persistence", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:slow-timeout-persistence",
+        messageProvider: "webchat",
+      },
+    );
+    await vi.advanceTimersByTimeAsync(1_501);
+
+    await expect(resultPromise).resolves.toBeUndefined();
+    expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clean up memory managers when only successful status persistence stalls", async () => {
+    vi.useFakeTimers();
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 25,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    let markPersistenceStarted: (() => void) | undefined;
+    const persistenceStarted = new Promise<void>((resolve) => {
+      markPersistenceStarted = resolve;
+    });
+    hoisted.updateSessionStore.mockImplementationOnce(async () => {
+      markPersistenceStarted?.();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 5_000);
+      });
+    });
+
+    const resultPromise = hooks.before_prompt_build(
+      { prompt: "what wings should i order? slow successful persistence", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:slow-success-persistence",
+        messageProvider: "webchat",
+      },
+    );
+    await persistenceStarted;
+    await vi.advanceTimersByTimeAsync(1_525);
+
+    await expect(resultPromise).resolves.toBeUndefined();
+    expect(hoisted.closeActiveMemorySearchManager).not.toHaveBeenCalled();
   });
 
   it("does not share cached recall results across session-id-only contexts", async () => {
@@ -3252,10 +3370,11 @@ describe("active-memory plugin", () => {
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    runEmbeddedAgent.mockImplementationOnce(async () => {
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await new Promise((resolve) => {
         setTimeout(resolve, CONFIGURED_TIMEOUT_MS + 5);
       });
+      await writeUsableMemoryTranscript(params.sessionFile, "remember the ramen place");
       return { payloads: [{ text: "remember the ramen place" }] };
     });
 
@@ -3784,7 +3903,7 @@ describe("active-memory plugin", () => {
             content: [
               {
                 type: "text",
-                text: '{"results":[{"text":"User usually orders ramen."}]}',
+                text: "User usually orders ramen.",
               },
             ],
           },
@@ -3830,10 +3949,15 @@ describe("active-memory plugin", () => {
           message: {
             role: "toolResult",
             toolName: "memory_lookup_custom",
+            details: { success: true },
             content: [
               {
                 type: "text",
                 text: '{"success":false,"error":"backend unavailable"}',
+              },
+              {
+                type: "text",
+                text: "The custom backend returned a diagnostic.",
               },
             ],
           },
@@ -3849,6 +3973,130 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=unavailable");
+  });
+
+  it("fails open at the live deadline when pre-recall session state stalls", async () => {
+    vi.useFakeTimers();
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 25,
+      logging: true,
+    };
+    let resolveLookup: ((value: undefined) => void) | undefined;
+    vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
+      lookup: () =>
+        new Promise<undefined>((resolve) => {
+          resolveLookup = resolve;
+        }),
+    });
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const resultPromise = hooks.before_prompt_build(
+      { prompt: "what food do i usually order? stalled toggle lookup", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:stalled-toggle",
+        messageProvider: "webchat",
+      },
+    );
+    await vi.advanceTimersByTimeAsync(1_525);
+
+    await expect(resultPromise).resolves.toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    const warnLines = vi
+      .mocked(api.logger.warn)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(warnLines, "before_prompt_build timed out after 1525ms");
+    resolveLookup?.(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("cleans up when pre-recall latency lets the live deadline beat the recall watchdog", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 25,
+      logging: true,
+    };
+    vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
+      lookup: async () =>
+        await new Promise<undefined>((resolve) => {
+          setTimeout(() => resolve(undefined), 1_501);
+        }),
+    });
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    const resultPromise = hooks.before_prompt_build(
+      { prompt: "what food do i usually order? delayed recall start", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:delayed-recall-start",
+        messageProvider: "webchat",
+      },
+    );
+    await vi.advanceTimersByTimeAsync(1_501);
+    const hasStartedRecall = () =>
+      vi
+        .mocked(api.logger.info)
+        .mock.calls.some((call: unknown[]) =>
+          String(call[0]).includes("session=agent:main:delayed-recall-start"),
+        );
+    for (let attempt = 0; attempt < 20 && !hasStartedRecall(); attempt += 1) {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+    expect(hasStartedRecall()).toBe(true);
+    await vi.advanceTimersByTimeAsync(24);
+
+    await expect(resultPromise).resolves.toBeUndefined();
+    await vi.runOnlyPendingTimersAsync();
+    expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalled();
+  });
+
+  it("rejects completed output after a memory search returns no recall evidence", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:empty-search-completed-output";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-empty-search-completed-output",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: { results: [] },
+            content: [{ type: "text", text: '{"results":[]}' }],
+          },
+        },
+      ]);
+      return { payloads: [{ text: "This ungrounded summary must not become recalled context." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? empty search", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=no_relevant_memory");
   });
 
   it("does not recover arbitrary assistant text without successful memory evidence", async () => {
@@ -4717,8 +4965,11 @@ describe("active-memory plugin", () => {
   });
 
   it("trusts the subagent's relevance decision for explicit preference recall prompts", async () => {
-    runEmbeddedAgent.mockResolvedValueOnce({
-      payloads: [{ text: "User prefers aisle seats and extra buffer on connections." }],
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, "aisle seats and connection buffer");
+      return {
+        payloads: [{ text: "User prefers aisle seats and extra buffer on connections." }],
+      };
     });
 
     const result = await hooks.before_prompt_build(
@@ -4742,12 +4993,15 @@ describe("active-memory plugin", () => {
       maxSummaryChars: 40,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    runEmbeddedAgent.mockResolvedValueOnce({
-      payloads: [
-        {
-          text: "alpha beta gamma delta epsilon zetalongword",
-        },
-      ],
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, "alpha beta gamma");
+      return {
+        payloads: [
+          {
+            text: "alpha beta gamma delta epsilon zetalongword",
+          },
+        ],
+      };
     });
 
     const result = await hooks.before_prompt_build(
@@ -4820,7 +5074,7 @@ describe("active-memory plugin", () => {
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    const mkdirSpy = vi.spyOn(fs, "mkdir");
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
     const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
 

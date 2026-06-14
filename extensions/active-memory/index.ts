@@ -49,6 +49,8 @@ const DEFAULT_MAX_CACHE_ENTRIES = 1000;
 const CACHE_SWEEP_INTERVAL_MS = 1000;
 const DEFAULT_MIN_TIMEOUT_MS = 250;
 const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
+const MAX_TIMEOUT_MS = 120_000;
+const MAX_SETUP_GRACE_TIMEOUT_MS = 30_000;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
@@ -844,9 +846,14 @@ function normalizePluginConfig(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
       minimumTimeoutMs,
-      120_000,
+      MAX_TIMEOUT_MS,
     ),
-    setupGraceTimeoutMs: clampInt(raw.setupGraceTimeoutMs, setupGraceTimeoutMs, 0, 30_000),
+    setupGraceTimeoutMs: clampInt(
+      raw.setupGraceTimeoutMs,
+      setupGraceTimeoutMs,
+      0,
+      MAX_SETUP_GRACE_TIMEOUT_MS,
+    ),
     queryMode:
       raw.queryMode === "message" || raw.queryMode === "recent" || raw.queryMode === "full"
         ? raw.queryMode
@@ -1768,29 +1775,32 @@ function hasUnavailableMemoryResultInSessionRecord(
   if (unavailable) {
     return true;
   }
-  const hasExplicitResultState =
-    details && ["disabled", "unavailable", "success", "error"].some((key) => key in details);
-  if (hasExplicitResultState) {
-    return false;
-  }
-  const content = extractTextContent(message.content);
+  return readStructuredMemoryFailureFromContent(message.content) === true;
+}
+
+async function resolveActiveMemoryHookWithDeadline<T>(params: {
+  promise: Promise<T>;
+  timeoutMs: number;
+  onTimeout: () => void;
+}): Promise<T | undefined> {
+  const timeoutSentinel = Symbol("active-memory-hook-timeout");
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<typeof timeoutSentinel>((resolve) => {
+    timeoutId = setTimeout(() => resolve(timeoutSentinel), params.timeoutMs);
+    timeoutId.unref?.();
+  });
   try {
-    const parsed = asRecord(JSON.parse(content));
-    if (parsed) {
-      const hasFailureFields = ["disabled", "unavailable", "success", "error"].some(
-        (key) => key in parsed,
-      );
-      if (hasFailureFields) {
-        return (
-          parsed.disabled === true ||
-          parsed.unavailable === true ||
-          parsed.success === false ||
-          Boolean(parsed.error)
-        );
-      }
+    const result = await Promise.race([params.promise, timeoutPromise]);
+    if (result === timeoutSentinel) {
+      params.onTimeout();
+      return undefined;
     }
-  } catch {}
-  return false;
+    return result;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function hasUsableMemoryResultInSessionRecord(
@@ -1816,16 +1826,10 @@ function hasUsableMemoryResultInSessionRecord(
   if (!toolName || !toolsAllow.includes(toolName)) {
     return false;
   }
-  const details = asRecord(message.details);
-  if (
-    message.isError === true ||
-    details?.disabled === true ||
-    details?.unavailable === true ||
-    details?.success === false ||
-    Boolean(details?.error)
-  ) {
+  if (hasUnavailableMemoryResultInSessionRecord(value, toolsAllow)) {
     return false;
   }
+  const details = asRecord(message.details);
   const content = extractTextContent(message.content);
   if (toolName === "memory_search") {
     if (Array.isArray(details?.results)) {
@@ -1885,34 +1889,13 @@ function hasUsableMemoryResultInSessionRecord(
   }
   const normalizedContent = normalizeOptionalString(content);
   const explicitEvidence = details ? readExplicitMemoryEvidence(details) : undefined;
-  const originalDetailKeys = Array.isArray(details?.originalDetailKeys)
-    ? details.originalDetailKeys
-    : [];
-  const hasCappedEvidenceFields =
-    details?.persistedDetailsTruncated === true &&
-    originalDetailKeys.some(
-      (key) =>
-        typeof key === "string" &&
-        [
-          "results",
-          "memories",
-          "items",
-          "count",
-          "matches",
-          "memoryCount",
-          "resultCount",
-          "totalMatches",
-          "found",
-          "hasResults",
-        ].includes(key),
-    );
-  const cappedEvidence =
-    hasCappedEvidenceFields && normalizedContent
-      ? readStructuredMemoryEvidenceFromContent(normalizedContent)
-      : undefined;
-  // Free-form custom tool prose cannot reliably distinguish recall evidence
-  // from diagnostics. Require structured positive metadata and visible text.
-  return (explicitEvidence === true || cappedEvidence === true) && Boolean(normalizedContent);
+  const structuredEvidence = normalizedContent
+    ? readStructuredMemoryEvidenceFromContent(message.content)
+    : undefined;
+  // Custom recall tools have a shipped native-output contract. Preserve
+  // non-empty model-visible results unless structured fields explicitly say
+  // the lookup was empty; explicit failures are rejected above.
+  return Boolean(normalizedContent) && explicitEvidence !== false && structuredEvidence !== false;
 }
 
 async function readActiveMemoryTranscriptState(
@@ -2305,9 +2288,7 @@ function buildSubagentRecallResult(params: {
     params.fallbackHasUsableMemoryResult === true;
   const hasUnavailableMemorySearchResult =
     params.subagentResult.hasUnavailableMemorySearchResult === true;
-  const canUseSummary =
-    (!isUnavailableMemorySearchDebug(searchDebug) && !hasUnavailableMemorySearchResult) ||
-    hasUsableMemoryResult;
+  const canUseSummary = hasUsableMemoryResult;
   return summary.length > 0 && canUseSummary
     ? {
         status: "ok",
@@ -2376,13 +2357,64 @@ function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | 
   return undefined;
 }
 
-function readStructuredMemoryEvidenceFromContent(content: string): boolean | undefined {
-  try {
-    const parsed = asRecord(JSON.parse(content));
-    return parsed ? readExplicitMemoryEvidence(parsed) : undefined;
-  } catch {
+function readStructuredMemoryFailure(source: unknown): boolean | undefined {
+  const record = asRecord(source);
+  if (!record) {
     return undefined;
   }
+  const hasFailureFields = ["disabled", "unavailable", "success", "error"].some(
+    (key) => key in record,
+  );
+  if (!hasFailureFields) {
+    return undefined;
+  }
+  return (
+    record.disabled === true ||
+    record.unavailable === true ||
+    record.success === false ||
+    Boolean(record.error)
+  );
+}
+
+function readStructuredMemoryEvidence(source: unknown): boolean | undefined {
+  if (Array.isArray(source)) {
+    return source.length > 0;
+  }
+  const record = asRecord(source);
+  return record ? readExplicitMemoryEvidence(record) : undefined;
+}
+
+function readStructuredContentState(
+  content: unknown,
+  readState: (source: unknown) => boolean | undefined,
+  decisiveState: boolean,
+): boolean | undefined {
+  const parts = extractTextContentParts(content);
+  let sawOtherState = false;
+  for (const part of parts) {
+    try {
+      const state = readState(JSON.parse(part));
+      if (state === decisiveState) {
+        return decisiveState;
+      }
+      sawOtherState ||= state === !decisiveState;
+    } catch {}
+  }
+  try {
+    const state = readState(JSON.parse(parts.join(" ").trim()));
+    if (state !== undefined) {
+      return state;
+    }
+  } catch {}
+  return sawOtherState ? !decisiveState : undefined;
+}
+
+function readStructuredMemoryFailureFromContent(content: unknown): boolean | undefined {
+  return readStructuredContentState(content, readStructuredMemoryFailure, true);
+}
+
+function readStructuredMemoryEvidenceFromContent(content: unknown): boolean | undefined {
+  return readStructuredContentState(content, readStructuredMemoryEvidence, false);
 }
 
 function isTimeoutBoilerplateSummary(value: string): boolean {
@@ -2582,12 +2614,12 @@ function buildSearchQuery(params: {
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
-function extractTextContent(content: unknown): string {
+function extractTextContentParts(content: unknown): string[] {
   if (typeof content === "string") {
-    return content;
+    return content.trim() ? [content] : [];
   }
   if (!Array.isArray(content)) {
-    return "";
+    return [];
   }
   const parts: string[] = [];
   for (const item of content) {
@@ -2607,7 +2639,11 @@ function extractTextContent(content: unknown): string {
       parts.push(typed.content);
     }
   }
-  return parts.join(" ").trim();
+  return parts.map((part) => part.trim()).filter(Boolean);
+}
+
+function extractTextContent(content: unknown): string {
+  return extractTextContentParts(content).join(" ").trim();
 }
 
 function stripRecalledContextNoise(text: string): string {
@@ -2934,7 +2970,9 @@ async function maybeResolveActiveRecall(params: {
   searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
+  abortSignal?: AbortSignal;
 }): Promise<ActiveRecallResult> {
+  params.abortSignal?.throwIfAborted();
   const startedAt = Date.now();
   const cacheKey = buildCacheKey({
     agentId: params.agentId,
@@ -2958,6 +2996,7 @@ async function maybeResolveActiveRecall(params: {
       : []),
   ].join(" ");
   if (cached) {
+    params.abortSignal?.throwIfAborted();
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,
@@ -2966,6 +3005,7 @@ async function maybeResolveActiveRecall(params: {
       debugSummary: buildPersistedDebugSummary(cached),
       searchDebug: cached.searchDebug,
     });
+    params.abortSignal?.throwIfAborted();
     if (params.config.logging) {
       params.api.logger.info?.(
         `${logPrefix} cached status=${cached.status} summaryChars=${String(cached.summary?.length ?? 0)} queryChars=${String(params.query.length)}`,
@@ -2981,6 +3021,15 @@ async function maybeResolveActiveRecall(params: {
     resolvedModelRef?.provider,
     resolvedModelRef?.model,
   );
+  let timeoutCleanupRecorded = false;
+  const recordTimeoutAndScheduleCleanup = () => {
+    if (timeoutCleanupRecorded) {
+      return;
+    }
+    timeoutCleanupRecorded = true;
+    recordCircuitBreakerTimeout(cbKey);
+    scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
+  };
   if (
     isCircuitBreakerOpen(
       cbKey,
@@ -2998,6 +3047,7 @@ async function maybeResolveActiveRecall(params: {
         `${logPrefix} skipped (circuit breaker open after consecutive timeouts)`,
       );
     }
+    params.abortSignal?.throwIfAborted();
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,
@@ -3016,10 +3066,17 @@ async function maybeResolveActiveRecall(params: {
   }
 
   const controller = new AbortController();
+  const abortFromParent = () => controller.abort(params.abortSignal?.reason);
+  params.abortSignal?.addEventListener("abort", abortFromParent, { once: true });
+  if (params.abortSignal?.aborted) {
+    abortFromParent();
+  }
   const TIMEOUT_SENTINEL = Symbol("timeout");
   let sessionFile: string | undefined;
+  let recallTimedOut = false;
   const watchdogTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
+    recallTimedOut = true;
     controller.abort(new Error(`active-memory timeout after ${watchdogTimeoutMs}ms`));
   }, watchdogTimeoutMs);
   timeoutId.unref?.();
@@ -3035,7 +3092,9 @@ async function maybeResolveActiveRecall(params: {
   });
 
   let terminalMemorySearchWatch: TerminalMemorySearchWatch | undefined;
+  let recallInFlight = false;
   try {
+    recallInFlight = true;
     const subagentPromise = runRecallSubagent({
       ...params,
       modelRef: resolvedModelRef,
@@ -3072,8 +3131,14 @@ async function maybeResolveActiveRecall(params: {
       fallbackHasUsableMemoryResult = true;
       raceResult = await Promise.race([subagentPromise, timeoutPromise]);
     }
+    if (raceResult !== TIMEOUT_SENTINEL) {
+      recallInFlight = false;
+    }
 
     if (raceResult === TIMEOUT_SENTINEL) {
+      if (recallTimedOut || (params.abortSignal?.aborted && recallInFlight)) {
+        recordTimeoutAndScheduleCleanup();
+      }
       const elapsedMs = Date.now() - startedAt;
       const result: ActiveRecallResult = fallbackHasUsableMemoryResult
         ? {
@@ -3094,6 +3159,7 @@ async function maybeResolveActiveRecall(params: {
           `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
         );
       }
+      params.abortSignal?.throwIfAborted();
       await persistPluginStatusLines({
         api: params.api,
         agentId: params.agentId,
@@ -3102,8 +3168,7 @@ async function maybeResolveActiveRecall(params: {
         debugSummary: buildPersistedDebugSummary(result),
         searchDebug: result.searchDebug,
       });
-      recordCircuitBreakerTimeout(cbKey);
-      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
+      params.abortSignal?.throwIfAborted();
       return result;
     }
 
@@ -3120,6 +3185,8 @@ async function maybeResolveActiveRecall(params: {
           `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
         );
       }
+      resetCircuitBreaker(cbKey);
+      params.abortSignal?.throwIfAborted();
       await persistPluginStatusLines({
         api: params.api,
         agentId: params.agentId,
@@ -3127,10 +3194,10 @@ async function maybeResolveActiveRecall(params: {
         statusLine: buildPluginStatusLine({ result, config: params.config }),
         searchDebug: result.searchDebug,
       });
+      params.abortSignal?.throwIfAborted();
       if (shouldCacheResult(result)) {
         setCachedResult(cacheKey, result, params.config.cacheTtlMs);
       }
-      resetCircuitBreaker(cbKey);
       return result;
     }
 
@@ -3150,6 +3217,8 @@ async function maybeResolveActiveRecall(params: {
         `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
       );
     }
+    resetCircuitBreaker(cbKey);
+    params.abortSignal?.throwIfAborted();
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,
@@ -3158,13 +3227,22 @@ async function maybeResolveActiveRecall(params: {
       debugSummary: buildPersistedDebugSummary(result),
       searchDebug: result.searchDebug,
     });
+    params.abortSignal?.throwIfAborted();
     if (shouldCacheResult(result)) {
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
     }
-    resetCircuitBreaker(cbKey);
     return result;
   } catch (error) {
+    if (params.abortSignal?.aborted) {
+      if (recallTimedOut || recallInFlight) {
+        recordTimeoutAndScheduleCleanup();
+      }
+      params.abortSignal.throwIfAborted();
+    }
     if (controller.signal.aborted) {
+      if (recallTimedOut) {
+        recordTimeoutAndScheduleCleanup();
+      }
       const partialTimeoutData = readPartialTimeoutData(error);
       const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
@@ -3180,6 +3258,7 @@ async function maybeResolveActiveRecall(params: {
           `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
         );
       }
+      params.abortSignal?.throwIfAborted();
       await persistPluginStatusLines({
         api: params.api,
         agentId: params.agentId,
@@ -3188,8 +3267,7 @@ async function maybeResolveActiveRecall(params: {
         debugSummary: buildPersistedDebugSummary(result),
         searchDebug: result.searchDebug,
       });
-      recordCircuitBreakerTimeout(cbKey);
-      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
+      params.abortSignal?.throwIfAborted();
       return result;
     }
     const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
@@ -3201,6 +3279,7 @@ async function maybeResolveActiveRecall(params: {
       elapsedMs: Date.now() - startedAt,
       summary: null,
     };
+    params.abortSignal?.throwIfAborted();
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,
@@ -3210,6 +3289,7 @@ async function maybeResolveActiveRecall(params: {
     });
     return result;
   } finally {
+    params.abortSignal?.removeEventListener("abort", abortFromParent);
     terminalMemorySearchWatch?.stop();
     clearTimeout(timeoutId);
   }
@@ -3350,120 +3430,151 @@ export default definePluginEntry({
       },
     });
 
-    // Recall work stops at the configured deadline. The outer hook keeps a
-    // fixed completion allowance for abort settlement and transcript recovery.
+    // Live config can raise the recall deadline after registration. Keep the
+    // outer hook at the supported ceiling; the inner watchdog enforces each
+    // current budget and the fixed abort-settlement allowance.
     const beforePromptBuildTimeoutMs =
-      config.timeoutMs + config.setupGraceTimeoutMs + HOOK_TIMEOUT_RECOVERY_GRACE_MS;
+      MAX_TIMEOUT_MS + MAX_SETUP_GRACE_TIMEOUT_MS + HOOK_TIMEOUT_RECOVERY_GRACE_MS;
     api.on(
       "before_prompt_build",
       async (event, ctx) => {
-        try {
-          refreshLiveConfigFromRuntime();
-          const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
-          const resolvedSessionKey =
-            ctx.sessionKey?.trim() ||
-            (resolvedAgentId
-              ? resolveCanonicalSessionKeyFromSessionId({
-                  api,
-                  agentId: resolvedAgentId,
-                  sessionId: ctx.sessionId,
-                })
-              : undefined);
-          const effectiveAgentId =
-            resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
-          if (await isSessionActiveMemoryDisabled({ api, sessionKey: resolvedSessionKey })) {
-            await persistPluginStatusLines({
+        refreshLiveConfigFromRuntime();
+        const invocationConfig = config;
+        const liveBeforePromptBuildTimeoutMs =
+          invocationConfig.timeoutMs +
+          invocationConfig.setupGraceTimeoutMs +
+          HOOK_TIMEOUT_RECOVERY_GRACE_MS;
+        const deadlineController = new AbortController();
+        const handlerPromise = (async () => {
+          try {
+            const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
+            const resolvedSessionKey =
+              ctx.sessionKey?.trim() ||
+              (resolvedAgentId
+                ? resolveCanonicalSessionKeyFromSessionId({
+                    api,
+                    agentId: resolvedAgentId,
+                    sessionId: ctx.sessionId,
+                  })
+                : undefined);
+            const effectiveAgentId =
+              resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
+            const sessionDisabled = await isSessionActiveMemoryDisabled({
               api,
-              agentId: effectiveAgentId,
               sessionKey: resolvedSessionKey,
             });
-            return undefined;
-          }
-          if (!isEnabledForAgent(config, effectiveAgentId)) {
-            await persistPluginStatusLines({
+            deadlineController.signal.throwIfAborted();
+            if (sessionDisabled) {
+              await persistPluginStatusLines({
+                api,
+                agentId: effectiveAgentId,
+                sessionKey: resolvedSessionKey,
+              });
+              return undefined;
+            }
+            if (!isEnabledForAgent(invocationConfig, effectiveAgentId)) {
+              await persistPluginStatusLines({
+                api,
+                agentId: effectiveAgentId,
+                sessionKey: resolvedSessionKey,
+              });
+              return undefined;
+            }
+            if (!isEligibleInteractiveSession(ctx)) {
+              await persistPluginStatusLines({
+                api,
+                agentId: effectiveAgentId,
+                sessionKey: resolvedSessionKey,
+              });
+              return undefined;
+            }
+            if (
+              !isAllowedChatType(invocationConfig, {
+                ...ctx,
+                sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+                mainKey: api.config.session?.mainKey,
+              })
+            ) {
+              await persistPluginStatusLines({
+                api,
+                agentId: effectiveAgentId,
+                sessionKey: resolvedSessionKey,
+              });
+              return undefined;
+            }
+            if (
+              !isAllowedChatId(invocationConfig, {
+                sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+                messageProvider: ctx.messageProvider,
+              })
+            ) {
+              await persistPluginStatusLines({
+                api,
+                agentId: effectiveAgentId,
+                sessionKey: resolvedSessionKey,
+              });
+              return undefined;
+            }
+            const recentTurns = extractRecentTurns(event.messages);
+            const query = buildQuery({
+              latestUserMessage: event.prompt,
+              recentTurns,
+              config: invocationConfig,
+            });
+            const searchQuery = buildSearchQuery({
+              latestUserMessage: event.prompt,
+              recentTurns,
+            });
+            const result = await maybeResolveActiveRecall({
               api,
+              config: invocationConfig,
               agentId: effectiveAgentId,
               sessionKey: resolvedSessionKey,
-            });
-            return undefined;
-          }
-          if (!isEligibleInteractiveSession(ctx)) {
-            await persistPluginStatusLines({
-              api,
-              agentId: effectiveAgentId,
-              sessionKey: resolvedSessionKey,
-            });
-            return undefined;
-          }
-          if (
-            !isAllowedChatType(config, {
-              ...ctx,
-              sessionKey: resolvedSessionKey ?? ctx.sessionKey,
-              mainKey: api.config.session?.mainKey,
-            })
-          ) {
-            await persistPluginStatusLines({
-              api,
-              agentId: effectiveAgentId,
-              sessionKey: resolvedSessionKey,
-            });
-            return undefined;
-          }
-          if (
-            !isAllowedChatId(config, {
-              sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+              sessionId: ctx.sessionId,
               messageProvider: ctx.messageProvider,
-            })
-          ) {
-            await persistPluginStatusLines({
-              api,
-              agentId: effectiveAgentId,
-              sessionKey: resolvedSessionKey,
+              channelId: ctx.channelId,
+              query,
+              searchQuery,
+              currentModelProviderId: ctx.modelProviderId,
+              currentModelId: ctx.modelId,
+              abortSignal: deadlineController.signal,
             });
+            deadlineController.signal.throwIfAborted();
+            if (!result.summary) {
+              return undefined;
+            }
+            const promptPrefix = buildPromptPrefix(result.summary);
+            if (!promptPrefix) {
+              return undefined;
+            }
+            return {
+              prependContext: promptPrefix,
+            };
+          } catch (error) {
+            if (deadlineController.signal.aborted) {
+              return undefined;
+            }
+            const message = toSingleLineLogValue(
+              error instanceof Error ? error.message : String(error),
+            );
+            api.logger.warn?.(
+              `active-memory: before_prompt_build failed, skipping memory lookup: ${message}`,
+            );
             return undefined;
           }
-          const recentTurns = extractRecentTurns(event.messages);
-          const query = buildQuery({
-            latestUserMessage: event.prompt,
-            recentTurns,
-            config,
-          });
-          const searchQuery = buildSearchQuery({
-            latestUserMessage: event.prompt,
-            recentTurns,
-          });
-          const result = await maybeResolveActiveRecall({
-            api,
-            config,
-            agentId: effectiveAgentId,
-            sessionKey: resolvedSessionKey,
-            sessionId: ctx.sessionId,
-            messageProvider: ctx.messageProvider,
-            channelId: ctx.channelId,
-            query,
-            searchQuery,
-            currentModelProviderId: ctx.modelProviderId,
-            currentModelId: ctx.modelId,
-          });
-          if (!result.summary) {
-            return undefined;
-          }
-          const promptPrefix = buildPromptPrefix(result.summary);
-          if (!promptPrefix) {
-            return undefined;
-          }
-          return {
-            prependContext: promptPrefix,
-          };
-        } catch (error) {
-          const message = toSingleLineLogValue(
-            error instanceof Error ? error.message : String(error),
-          );
-          api.logger.warn?.(
-            `active-memory: before_prompt_build failed, skipping memory lookup: ${message}`,
-          );
-          return undefined;
-        }
+        })();
+        return await resolveActiveMemoryHookWithDeadline({
+          promise: handlerPromise,
+          timeoutMs: liveBeforePromptBuildTimeoutMs,
+          onTimeout: () => {
+            deadlineController.abort(
+              new Error(`active-memory hook timeout after ${liveBeforePromptBuildTimeoutMs}ms`),
+            );
+            api.logger.warn?.(
+              `active-memory: before_prompt_build timed out after ${String(liveBeforePromptBuildTimeoutMs)}ms; skipping memory lookup`,
+            );
+          },
+        });
       },
       { timeoutMs: beforePromptBuildTimeoutMs },
     );
