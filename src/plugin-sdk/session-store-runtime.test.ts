@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as jsonFiles from "../infra/json-files.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -112,5 +113,32 @@ describe("session-store-runtime compatibility surface", () => {
       providerOverride: "openai",
       sessionId: "session-1",
     });
+  });
+
+  it("preserves requireWriteSuccess for critical session entry updates", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry({
+      sessionKey,
+      storePath,
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 10,
+      },
+    });
+    const writeError = Object.assign(new Error("write failed"), { code: "ENOENT" });
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic").mockRejectedValue(writeError);
+
+    try {
+      await expect(
+        updateSessionStoreEntry({
+          sessionKey,
+          storePath,
+          requireWriteSuccess: true,
+          update: () => ({ model: "gpt-5.5" }),
+        }),
+      ).rejects.toBe(writeError);
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 });

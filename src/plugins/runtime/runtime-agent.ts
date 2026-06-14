@@ -52,6 +52,7 @@ type RuntimeSessionStoreEntryUpdateParams = {
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
+  requireWriteSuccess?: boolean;
 };
 
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
@@ -137,6 +138,7 @@ async function updateSessionStoreEntry(
     {
       skipMaintenance: params.skipMaintenance,
       takeCacheOwnership: params.takeCacheOwnership,
+      requireWriteSuccess: params.requireWriteSuccess,
     },
   );
 }

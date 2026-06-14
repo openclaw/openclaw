@@ -51,6 +51,7 @@ type UpdateSessionStoreEntryParams = {
   update: SessionStoreEntryUpdate;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
+  requireWriteSuccess?: boolean;
 };
 
 type UpsertSessionEntryParams = SessionStoreReadParams & {
@@ -126,6 +127,7 @@ export async function updateSessionStoreEntry(
     {
       skipMaintenance: params.skipMaintenance,
       takeCacheOwnership: params.takeCacheOwnership,
+      requireWriteSuccess: params.requireWriteSuccess,
     },
   );
 }
