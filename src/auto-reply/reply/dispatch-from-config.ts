@@ -2738,7 +2738,6 @@ export async function dispatchReplyFromConfig(
       return (
         !suppressAutomaticSourceDelivery ||
         (allowSuppressedSourceProgressCallbacks &&
-          ctx.InboundEventKind !== "room_event" &&
           !sendPolicyDenied &&
           options?.forwardWhenSourceDeliverySuppressed === true)
       );
@@ -2777,34 +2776,46 @@ export async function dispatchReplyFromConfig(
     // classification in the CLI runners is wired once at run start, so a
     // mid-run verbose toggle cannot move inter-tool commentary between lanes.
     const deliverStandaloneCommentaryProgress = shouldEmitVerboseProgress();
-    const forwardItemEvent = wrapProgressCallback(params.replyOptions?.onItemEvent, {
+    const itemEventForwardingOptions = {
       forwardWhenSourceDeliverySuppressed: true,
       requiresToolSummaryVisibility: true,
-      waitForDirectBlockReplyDelivery: true,
-      onForward: (payload) => {
-        if (hasFailedProgressStatus(payload)) {
-          markVisibleToolErrorProgress();
-        }
-      },
-    });
+    } as const;
+    const canForwardItemEvents =
+      Boolean(params.replyOptions?.onItemEvent) &&
+      shouldForwardProgressCallback(itemEventForwardingOptions);
+    const canForwardSuppressedSourceItemEvents =
+      suppressAutomaticSourceDelivery &&
+      allowSuppressedSourceProgressCallbacks &&
+      canForwardItemEvents;
+    const forwardItemEvent = canForwardItemEvents
+      ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
+          ...itemEventForwardingOptions,
+          waitForDirectBlockReplyDelivery: true,
+          onForward: (payload) => {
+            if (hasFailedProgressStatus(payload)) {
+              markVisibleToolErrorProgress();
+            }
+          },
+        })
+      : undefined;
+    const canConsumeItemEvents = deliverStandaloneCommentaryProgress || canForwardItemEvents;
     // Item-event presence gates CLI commentary classification downstream, so
     // the handler exists exactly when verbose buffers it or a channel consumes it.
-    const onItemEvent =
-      deliverStandaloneCommentaryProgress || forwardItemEvent
-        ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
-            if (isDispatchOperationAborted()) {
-              return;
-            }
-            if (!forwardItemEvent) {
-              // The wrapped forwarder marks progress itself when present.
-              markProgress();
-            }
-            if (deliverStandaloneCommentaryProgress && payload.kind === "preamble") {
-              await noteCommentaryProgress(payload);
-            }
-            await forwardItemEvent?.(payload);
+    const onItemEvent = canConsumeItemEvents
+      ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
+          if (isDispatchOperationAborted()) {
+            return;
           }
-        : undefined;
+          if (!forwardItemEvent) {
+            // The wrapped forwarder marks progress itself when present.
+            markProgress();
+          }
+          if (deliverStandaloneCommentaryProgress && payload.kind === "preamble") {
+            await noteCommentaryProgress(payload);
+          }
+          await forwardItemEvent?.(payload);
+        }
+      : undefined;
     // Let draft-rendering channels yield their ephemeral commentary lines while
     // the durable verbose commentary lane is delivering the same content.
     params.replyOptions?.onVerboseProgressVisibility?.(
@@ -2856,7 +2867,9 @@ export async function dispatchReplyFromConfig(
             }),
             onItemEvent,
             commentaryProgressEnabled:
-              deliverStandaloneCommentaryProgress || params.replyOptions?.commentaryProgressEnabled,
+              deliverStandaloneCommentaryProgress ||
+              canForwardSuppressedSourceItemEvents ||
+              params.replyOptions?.commentaryProgressEnabled,
             onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
