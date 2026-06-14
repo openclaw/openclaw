@@ -1746,6 +1746,43 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await ensureResponseConsumed(res);
   });
 
+  it("accepts file-only input without text, matching image-only", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      instructions: "Summarize the attached document.",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              source: {
+                type: "base64",
+                media_type: "text/plain",
+                data: Buffer.from("the quick brown fox").toString("base64"),
+                filename: "doc.txt",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = firstAgentOpts();
+    expect((opts as { message?: string }).message ?? "").not.toBe("");
+    const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
+    expect(extraSystemPrompt).toContain('<file name="doc.txt">');
+    expect(extraSystemPrompt).toContain("the quick brown fox");
+    await ensureResponseConsumed(res);
+  });
+
   it("still rejects input with neither text nor image", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
