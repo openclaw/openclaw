@@ -139,6 +139,8 @@ const SESSION_SYNC_YIELD_EVERY = 10;
 const SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES = 128;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS = 10_000;
+const MEMORY_INDEX_STALE_TEMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MEMORY_INDEX_TEMP_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -185,6 +187,71 @@ function resolveMemoryNativeWatchFactory(): typeof fsSync.watch {
     }
   }
   return fsSync.watch.bind(fsSync);
+}
+
+function resolveMemoryIndexTempFamilyBaseName(
+  dbBaseName: string,
+  entryName: string,
+): string | null {
+  const prefix = `${dbBaseName}.tmp-`;
+  if (!entryName.startsWith(prefix)) {
+    return null;
+  }
+  const withoutSidecar = entryName.endsWith("-wal")
+    ? entryName.slice(0, -4)
+    : entryName.endsWith("-shm")
+      ? entryName.slice(0, -4)
+      : entryName;
+  const suffix = withoutSidecar.slice(prefix.length);
+  return MEMORY_INDEX_TEMP_UUID_RE.test(suffix) ? withoutSidecar : null;
+}
+
+function removeStaleMemoryIndexTempFamilies(dbPath: string, nowMs = Date.now()): void {
+  const dir = path.dirname(dbPath);
+  const dbBaseName = path.basename(dbPath);
+  let entries: fsSync.Dirent[];
+  try {
+    entries = fsSync.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const families = new Map<string, string[]>();
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const familyBaseName = resolveMemoryIndexTempFamilyBaseName(dbBaseName, entry.name);
+    if (!familyBaseName) {
+      continue;
+    }
+    const family = families.get(familyBaseName) ?? [];
+    family.push(path.join(dir, entry.name));
+    families.set(familyBaseName, family);
+  }
+  const staleBeforeMs = nowMs - MEMORY_INDEX_STALE_TEMP_MAX_AGE_MS;
+  for (const family of families.values()) {
+    const stats = family
+      .map((entry) => {
+        try {
+          return fsSync.statSync(entry);
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry): entry is fsSync.Stats => entry !== null);
+    if (stats.length === 0 || stats.some((entry) => entry.mtimeMs > staleBeforeMs)) {
+      continue;
+    }
+    for (const entry of family) {
+      try {
+        fsSync.rmSync(entry, { force: true });
+      } catch (err) {
+        log.debug(
+          `failed to remove stale memory index temp file ${entry}: ${formatErrorMessage(err)}`,
+        );
+      }
+    }
+  }
 }
 
 function shouldIgnoreMemoryWatchPath(
@@ -640,6 +707,7 @@ export abstract class MemoryManagerSyncOps {
 
   protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.path);
+    removeStaleMemoryIndexTempFamilies(dbPath);
     return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
   }
 

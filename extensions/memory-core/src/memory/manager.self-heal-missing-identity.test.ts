@@ -65,14 +65,12 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     }
   });
 
-  async function createManager(
-    params: { provider?: string; vectorEnabled?: boolean } = {},
-  ): Promise<MemoryIndexManager> {
+  function createCfg(params: { provider?: string; vectorEnabled?: boolean } = {}): OpenClawConfig {
     const store =
       params.vectorEnabled === undefined
         ? { path: indexPath }
         : { path: indexPath, vector: { enabled: params.vectorEnabled } };
-    const cfg = {
+    return {
       memory: { backend: "builtin" },
       agents: {
         defaults: {
@@ -88,12 +86,26 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+  }
+
+  async function createManager(
+    params: { provider?: string; vectorEnabled?: boolean } = {},
+  ): Promise<MemoryIndexManager> {
+    const result = await getMemorySearchManager({ cfg: createCfg(params), agentId: "main" });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }
     manager = result.manager as unknown as MemoryIndexManager;
     return manager;
+  }
+
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
+  async function markOld(paths: string[]): Promise<void> {
+    const oldDate = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    await Promise.all(paths.map((entry) => fs.utimes(entry, oldDate, oldDate)));
   }
 
   async function seedChunksWithNoMeta(model = "fts-only"): Promise<void> {
@@ -152,5 +164,45 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     expect(indexIdentityStatus(memoryManager)).toBe("missing");
     expect(statusAfter.chunks).toBe(1);
     expect(statusAfter.dirty).toBe(true);
+  });
+
+  it("removes stale atomic reindex temp sqlite families when opening the manager", async () => {
+    const staleTemp = `${indexPath}.tmp-11111111-1111-4111-8111-111111111111`;
+    const stalePaths = [staleTemp, `${staleTemp}-wal`, `${staleTemp}-shm`];
+    const freshTemp = `${indexPath}.tmp-22222222-2222-4222-8222-222222222222`;
+    await Promise.all([...stalePaths, freshTemp].map((entry) => fs.writeFile(entry, "temp")));
+    await markOld(stalePaths);
+
+    await createManager({ provider: "none", vectorEnabled: false });
+
+    await Promise.all(stalePaths.map((entry) => expectPathMissing(entry)));
+    await expect(fs.access(freshTemp)).resolves.toBeUndefined();
+  });
+
+  it("refreshes a cached manager after a cli atomic reindex replaces the sqlite file", async () => {
+    await seedChunksWithNoMeta();
+    const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+
+    expect(indexIdentityStatus(memoryManager)).toBe("missing");
+
+    const cliResult = await getMemorySearchManager({
+      cfg: createCfg({ provider: "none", vectorEnabled: false }),
+      agentId: "main",
+      purpose: "cli",
+    });
+    if (!cliResult.manager) {
+      throw new Error(cliResult.error ?? "cli manager missing");
+    }
+    const cliManager = cliResult.manager as unknown as MemoryIndexManager;
+    try {
+      await cliManager.sync({ reason: "cli", force: true });
+    } finally {
+      await cliManager.close?.();
+    }
+
+    const statusAfter = memoryManager.status();
+    expect(statusAfter.custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(statusAfter.chunks).toBeGreaterThan(0);
+    expect(statusAfter.dirty).toBe(false);
   });
 });
