@@ -3164,6 +3164,8 @@ const DEEPSEEK_DSML_TOOL_MAX_OPEN_TOKEN_LEN = Math.max(
   ...DEEPSEEK_DSML_TOOL_OPEN_TOKENS.map((token) => token.length),
 );
 
+const MAX_DSML_RECOVERY_BUFFER_BYTES = 256_000;
+
 function createDeepSeekDsmlToolCallRecoverer() {
   let buffer = "";
 
@@ -3194,7 +3196,7 @@ function createDeepSeekDsmlToolCallRecoverer() {
       const afterOpen = buffer.slice(open.token.length);
       const close = findEarliestStringToken(afterOpen, DEEPSEEK_DSML_TOOL_CLOSE_TOKENS);
       if (!close) {
-        if (final) {
+        if (final || buffer.length > MAX_DSML_RECOVERY_BUFFER_BYTES) {
           output.push({ kind: "text", text: buffer });
           buffer = "";
         }
