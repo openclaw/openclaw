@@ -65,7 +65,7 @@ import {
   restoreRegisteredEmbeddingProviders,
 } from "./embedding-providers.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
-import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -1709,14 +1709,11 @@ function activatePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
   workspaceDir?: string,
 ): void {
-  const preserveGatewayHookRunner =
-    runtimeSubagentMode === "default" &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
-    getGlobalHookRunner() !== null;
+  // Always re-initialize: the global runner resolves hooks from the live
+  // registry set (active + pinned surfaces), so activation order and scope
+  // cannot drop hooks the way the old preserve-one-runner gate did (#91918).
   setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
-  if (!preserveGatewayHookRunner) {
-    initializeGlobalHookRunner(registry);
-  }
+  initializeGlobalHookRunner(registry);
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
