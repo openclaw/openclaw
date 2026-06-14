@@ -1400,6 +1400,26 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         lastAssistant: { stopReason: "end_turn" },
       }),
     ).toBe(false);
+    expect(
+      isIncompleteTerminalAssistantTurn({
+        hasAssistantVisibleText: true,
+        lastAssistant: { stopReason: "length" },
+      }),
+    ).toBe(true);
+    expect(
+      isIncompleteTerminalAssistantTurn({
+        hasAssistantVisibleText: true,
+        hasTerminalOutput: true,
+        lastAssistant: { stopReason: "length" },
+      }),
+    ).toBe(false);
+    expect(
+      isIncompleteTerminalAssistantTurn({
+        hasAssistantVisibleText: true,
+        hasTerminalOutput: true,
+        lastAssistant: { stopReason: "toolUse" },
+      }),
+    ).toBe(true);
   });
 
   it("surfaces no-visible-answer recovery for app-server interrupted tool-only output", () => {
@@ -2565,6 +2585,109 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
+  it("surfaces incomplete-turn text for token-limited partial answers", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Partial answer"],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "length",
+          provider: "ollama",
+          model: "qwen3.5",
+          content: [{ type: "text", text: "Partial answer" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
+  it("keeps complete visible stop turns successful", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Complete answer"],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "qwen3.5",
+          content: [{ type: "text", text: "Complete answer" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("preserves terminal tool media on token-limited turns", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Partial answer"],
+        toolMediaUrls: ["file:///tmp/render.png"],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "length",
+          provider: "ollama",
+          model: "qwen3.5",
+          content: [{ type: "text", text: "Partial answer" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("preserves tool media already delivered through block replies", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Partial answer"],
+        hasToolMediaBlockReply: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "length",
+          provider: "ollama",
+          model: "qwen3.5",
+          content: [{ type: "text", text: "Partial answer" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("preserves successful cron progress on token-limited turns", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Partial answer"],
+        successfulCronAdds: 1,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "length",
+          provider: "ollama",
+          model: "qwen3.5",
+          content: [{ type: "text", text: "Partial answer" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
   });
 
   it.each([

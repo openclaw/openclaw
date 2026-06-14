@@ -15,6 +15,7 @@ function makeOllamaResponse(params: {
   content?: string;
   thinking?: string;
   reasoning?: string;
+  done_reason?: string;
   tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
 }) {
   return {
@@ -28,6 +29,7 @@ function makeOllamaResponse(params: {
       ...(params.tool_calls ? { tool_calls: params.tool_calls } : {}),
     },
     done: true,
+    ...(params.done_reason ? { done_reason: params.done_reason } : {}),
     prompt_eval_count: 100,
     eval_count: 50,
   };
@@ -85,6 +87,24 @@ describe("buildAssistantMessage", () => {
     const msg = buildAssistantMessage(response, MODEL_INFO);
     expect(msg.content).toHaveLength(1);
     expect(msg.content[0]).toEqual({ type: "text", text: "Just text" });
+  });
+
+  it("preserves output-budget length stops", () => {
+    const response = makeOllamaResponse({
+      content: "Partial answer",
+      done_reason: "length",
+    });
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.stopReason).toBe("length");
+  });
+
+  it("keeps tool use authoritative over a length stop", () => {
+    const response = makeOllamaResponse({
+      done_reason: "length",
+      tool_calls: [{ function: { name: "read", arguments: { path: "README.md" } } }],
+    });
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.stopReason).toBe("toolUse");
   });
 });
 
@@ -233,6 +253,33 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const textStart = events.find((e) => e.type === "text_start") as { contentIndex?: number };
     expect(textStart?.contentIndex).toBe(0);
+  });
+
+  it("emits length for a token-limited native stream", async () => {
+    const events = await streamOllamaEvents([
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:00Z",
+        message: { role: "assistant", content: "Partial answer" },
+        done: false,
+      },
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:01Z",
+        message: { role: "assistant", content: "" },
+        done: true,
+        done_reason: "length",
+        prompt_eval_count: 10,
+        eval_count: 5,
+      },
+    ]);
+
+    const done = events.find((event) => event.type === "done") as {
+      reason?: string;
+      message?: { stopReason?: string };
+    };
+    expect(done.reason).toBe("length");
+    expect(done.message?.stopReason).toBe("length");
   });
 
   it("uses generic stream timeout for Ollama request timeout", async () => {
