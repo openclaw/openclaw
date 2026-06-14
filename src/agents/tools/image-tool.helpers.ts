@@ -8,6 +8,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { configuredModelInputSupportsImage } from "../../media-understanding/known-model-capabilities.js";
+import { buildMediaUnderstandingManifestMetadataRegistry } from "../../media-understanding/manifest-metadata.js";
 import { extractAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -174,13 +175,21 @@ function modelIdMatchesProviderlessRef(params: {
   return false;
 }
 
-function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: string }): string[] {
+function findConfiguredImageModelMatches(params: {
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  ref: string;
+}): string[] {
   const providers = params.cfg?.models?.providers;
   if (!providers || typeof providers !== "object") {
     return [];
   }
 
   const matches = new Set<string>();
+  const providerRegistry = buildMediaUnderstandingManifestMetadataRegistry(
+    params.cfg,
+    params.workspaceDir,
+  );
   for (const [providerKey, providerConfig] of Object.entries(providers)) {
     const provider = normalizeProviderId(providerKey);
     if (!provider || !Array.isArray(providerConfig?.models)) {
@@ -191,9 +200,9 @@ function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: st
       if (
         !modelId ||
         !configuredModelInputSupportsImage({
-          providerId: provider,
           modelId,
           input: entry?.input,
+          provider: providerRegistry.get(provider),
         })
       ) {
         continue;
@@ -209,6 +218,7 @@ function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: st
 
 function resolveProviderlessConfiguredImageModelRef(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   ref: string;
 }): string {
   const ref = params.ref.trim();
@@ -216,7 +226,11 @@ function resolveProviderlessConfiguredImageModelRef(params: {
     return ref;
   }
 
-  const matches = findConfiguredImageModelMatches({ cfg: params.cfg, ref });
+  const matches = findConfiguredImageModelMatches({
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    ref,
+  });
   if (matches.length === 0) {
     return ref;
   }
@@ -233,18 +247,29 @@ function resolveProviderlessConfiguredImageModelRef(params: {
 /** Resolves providerless configured image model refs against configured provider models. */
 export function resolveConfiguredImageModelRefs(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   imageModelConfig: ImageModelConfig;
 }): ImageModelConfig {
   const primary = params.imageModelConfig.primary?.trim();
   const fallbacks = params.imageModelConfig.fallbacks
-    ?.map((ref) => resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref }))
+    ?.map((ref) =>
+      resolveProviderlessConfiguredImageModelRef({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        ref,
+      }),
+    )
     .filter((ref) => ref.length > 0);
 
   return {
     ...(params.imageModelConfig.primary !== undefined
       ? {
           primary: primary
-            ? resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref: primary })
+            ? resolveProviderlessConfiguredImageModelRef({
+                cfg: params.cfg,
+                workspaceDir: params.workspaceDir,
+                ref: primary,
+              })
             : primary,
         }
       : {}),
@@ -258,6 +283,7 @@ export function resolveConfiguredImageModelRefs(params: {
 /** Returns the configured vision-capable model for a provider, if present. */
 export function resolveProviderVisionModelFromConfig(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   provider: string;
 }): string | null {
   if (isMinimaxVlmProvider(params.provider)) {
@@ -268,14 +294,19 @@ export function resolveProviderVisionModelFromConfig(params: {
     params.provider,
   ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
   const models = providerCfg?.models ?? [];
+  const providerRegistry = buildMediaUnderstandingManifestMetadataRegistry(
+    params.cfg,
+    params.workspaceDir,
+  );
+  const providerMetadata = providerRegistry.get(normalizeProviderId(params.provider));
   const picked = models.find((m) => {
     const id = (m?.id ?? "").trim();
     return Boolean(
       id &&
       configuredModelInputSupportsImage({
-        providerId: params.provider,
         modelId: id,
         input: m.input,
+        provider: providerMetadata,
       }),
     );
   });

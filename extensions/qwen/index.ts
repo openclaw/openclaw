@@ -2,7 +2,10 @@
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
-import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  buildQwenMediaUnderstandingProvider,
+  QWEN_MEDIA_UNDERSTANDING_PROVIDER_IDS,
+} from "./media-understanding-provider.js";
 import {
   isQwenCodingPlanBaseUrl,
   QWEN_36_PLUS_MODEL_ID,
@@ -237,7 +240,9 @@ export default defineSingleProviderPluginEntry({
       },
       wrapStreamFn: wrapQwenProviderStream,
     });
-    api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider());
+    for (const providerId of QWEN_MEDIA_UNDERSTANDING_PROVIDER_IDS) {
+      api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider(providerId));
+    }
     api.registerVideoGenerationProvider(buildQwenVideoGenerationProvider());
   },
 });

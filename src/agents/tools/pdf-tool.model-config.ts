@@ -11,6 +11,8 @@ import {
   resolveDocumentMediaModel,
 } from "../../media-understanding/defaults.js";
 import { configuredModelInputSupportsImage } from "../../media-understanding/known-model-capabilities.js";
+import { buildMediaUnderstandingManifestMetadataRegistry } from "../../media-understanding/manifest-metadata.js";
+import { normalizeMediaProviderId } from "../../media-understanding/provider-id.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { findNormalizedProviderValue } from "../model-selection.js";
 import {
@@ -94,6 +96,7 @@ function resolveImageCandidateRefs(params: {
         documentImageModel ??
         resolveProviderVisionModelFromConfig({
           cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
           provider: providerId,
         })?.split("/")[1] ??
         resolveDefaultMediaModel({
@@ -203,6 +206,7 @@ export function resolvePdfModelConfigForTool(params: {
     // PDF-specific config wins over generic image model config.
     return resolveConfiguredImageModelRefs({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       imageModelConfig: explicitPdf,
     });
   }
@@ -211,6 +215,7 @@ export function resolvePdfModelConfigForTool(params: {
   if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
     return resolveConfiguredImageModelRefs({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       imageModelConfig: explicitImage,
     });
   }
@@ -243,6 +248,7 @@ export function resolvePdfModelConfigForTool(params: {
   });
   const providerVision = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     provider: primary.provider,
   });
   const providerDefault =
@@ -283,6 +289,10 @@ export function resolvePdfModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
   });
+  const mediaProviderRegistry = buildMediaUnderstandingManifestMetadataRegistry(
+    params.cfg,
+    params.workspaceDir,
+  );
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
@@ -319,9 +329,9 @@ export function resolvePdfModelConfigForTool(params: {
           return Boolean(
             candidateModelId &&
             configuredModelInputSupportsImage({
-              providerId,
               modelId: candidateModelId,
               input: model?.input,
+              provider: mediaProviderRegistry.get(normalizeMediaProviderId(providerId)),
             }),
           );
         })

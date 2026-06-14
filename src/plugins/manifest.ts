@@ -452,6 +452,11 @@ export type PluginManifestContracts = {
 
 export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
 
+export type PluginManifestMediaUnderstandingModelCapabilityOverrides = {
+  nonImageModels?: string[];
+  nonImageModelFamilies?: string[];
+};
+
 export type PluginManifestMediaUnderstandingProviderMetadata = {
   capabilities?: PluginManifestMediaUnderstandingCapability[];
   defaultModels?: Partial<Record<PluginManifestMediaUnderstandingCapability, string>>;
@@ -466,6 +471,7 @@ export type PluginManifestMediaUnderstandingProviderMetadata = {
       }
     >
   >;
+  modelCapabilityOverrides?: PluginManifestMediaUnderstandingModelCapabilityOverrides;
 };
 
 export type PluginManifestProviderBaseUrlGuard = {
@@ -665,6 +671,21 @@ function normalizeMediaUnderstandingDocumentModels(
   return Object.keys(pdf).length > 0 ? { pdf } : undefined;
 }
 
+function normalizeMediaUnderstandingModelCapabilityOverrides(
+  value: unknown,
+): PluginManifestMediaUnderstandingProviderMetadata["modelCapabilityOverrides"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const nonImageModels = normalizeTrimmedStringList(value.nonImageModels);
+  const nonImageModelFamilies = normalizeTrimmedStringList(value.nonImageModelFamilies);
+  const normalized = {
+    ...(nonImageModels.length > 0 ? { nonImageModels } : {}),
+    ...(nonImageModelFamilies.length > 0 ? { nonImageModelFamilies } : {}),
+  } satisfies PluginManifestMediaUnderstandingModelCapabilityOverrides;
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeMediaUnderstandingProviderMetadata(
   value: unknown,
 ): Record<string, PluginManifestMediaUnderstandingProviderMetadata> | undefined {
@@ -685,12 +706,16 @@ function normalizeMediaUnderstandingProviderMetadata(
       rawMetadata.nativeDocumentInputs,
     );
     const documentModels = normalizeMediaUnderstandingDocumentModels(rawMetadata.documentModels);
+    const modelCapabilityOverrides = normalizeMediaUnderstandingModelCapabilityOverrides(
+      rawMetadata.modelCapabilityOverrides,
+    );
     const metadata = {
       ...(capabilities ? { capabilities } : {}),
       ...(defaultModels ? { defaultModels } : {}),
       ...(autoPriority ? { autoPriority } : {}),
       ...(nativeDocumentInputs ? { nativeDocumentInputs } : {}),
       ...(documentModels ? { documentModels } : {}),
+      ...(modelCapabilityOverrides ? { modelCapabilityOverrides } : {}),
     } satisfies PluginManifestMediaUnderstandingProviderMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[providerId] = metadata;

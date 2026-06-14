@@ -573,7 +573,8 @@ describe("runCapability image skip", () => {
       provider: {
         id: "qwen",
         capabilities: ["image"],
-        defaultModels: { image: "qwen3.5-plus" },
+        defaultModels: { image: "qwen-vl-max-latest" },
+        modelCapabilityOverrides: { nonImageModels: ["qwen3.7-max"] },
         describeImage: async (req) => ({ text: "qwen image ok", model: req.model }),
       },
     });
@@ -587,11 +588,65 @@ describe("runCapability image skip", () => {
         }),
       ).resolves.toEqual({
         provider: "qwen",
-        model: "qwen3.5-plus",
+        model: "qwen-vl-max-latest",
       });
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("uses provider-owned metadata to reject configured text-only image metadata", async () => {
+    catalog = [
+      {
+        id: "atlas-chat",
+        name: "Atlas Chat",
+        provider: "atlas",
+        input: ["text", "image"] as const,
+      },
+    ];
+    const cfg = {
+      models: {
+        providers: {
+          atlas: {
+            apiKey: "atlas-test",
+            models: [
+              {
+                id: "atlas-chat",
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "atlas",
+      pluginName: "Atlas Provider",
+      source: "test",
+      provider: {
+        id: "atlas",
+        capabilities: ["image"],
+        defaultModels: { image: "atlas-vision" },
+        modelCapabilityOverrides: { nonImageModels: ["atlas-chat"] },
+        describeImage: async (req) => ({ text: "atlas image ok", model: req.model }),
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await expect(
+        resolveAutoImageModel({
+          cfg,
+          activeModel: { provider: "atlas", model: "atlas-chat" },
+        }),
+      ).resolves.toEqual({
+        provider: "atlas",
+        model: "atlas-vision",
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
     }
   });
 

@@ -73,6 +73,7 @@ function providerHasDeclaredCapability(
 function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
   providerId: string;
+  registry: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
   const normalizedProviderId = normalizeMediaProviderId(params.providerId);
   const providers = params.cfg?.models?.providers;
@@ -89,9 +90,9 @@ function resolveConfiguredImageProviderModel(params: {
       return Boolean(
         id &&
         configuredModelInputSupportsImage({
-          providerId: providerKey,
           modelId: id,
           input: model?.input,
+          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
         }),
       );
     });
@@ -100,8 +101,11 @@ function resolveConfiguredImageProviderModel(params: {
   return undefined;
 }
 
-function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
-  const providers = cfg?.models?.providers;
+function resolveConfiguredImageProviderIds(params: {
+  cfg?: OpenClawConfig;
+  registry: Map<string, MediaUnderstandingProvider>;
+}): string[] {
+  const providers = params.cfg?.models?.providers;
   if (!providers || typeof providers !== "object") {
     return [];
   }
@@ -117,9 +121,9 @@ function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
       return Boolean(
         id &&
         configuredModelInputSupportsImage({
-          providerId: providerKey,
           modelId: id,
           input: model?.input,
+          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
         }),
       );
     });
@@ -163,20 +167,21 @@ export function resolveDefaultMediaModel(params: {
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
   includeConfiguredImageModels?: boolean;
 }): string | undefined {
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   if (!params.providerRegistry && params.includeConfiguredImageModels !== false) {
     const configuredImageModel =
       params.capability === "image"
         ? resolveConfiguredImageProviderModel({
             cfg: params.cfg,
             providerId: params.providerId,
+            registry,
           })
         : undefined;
     if (configuredImageModel) {
       return configuredImageModel;
     }
   }
-  const registry =
-    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   const manifestDefaultModel = normalizeOptionalString(
     provider?.defaultModels?.[params.capability],
@@ -222,7 +227,7 @@ export function resolveAutoMediaKeyProviders(params: {
   }
   return insertConfiguredImageProviders({
     prioritized,
-    configured: resolveConfiguredImageProviderIds(params.cfg),
+    configured: resolveConfiguredImageProviderIds({ cfg: params.cfg, registry }),
   });
 }
 

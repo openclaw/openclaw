@@ -23,6 +23,8 @@ function mergeProviderIntoRegistry(
         autoPriority: provider.autoPriority ?? existing.autoPriority,
         nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
         documentModels: provider.documentModels ?? existing.documentModels,
+        modelCapabilityOverrides:
+          provider.modelCapabilityOverrides ?? existing.modelCapabilityOverrides,
       }
     : provider;
   registry.set(normalizedKey, hydrateModelBackedMediaProvider(merged));
@@ -61,7 +63,7 @@ export function buildMediaUnderstandingRegistry(
     mergeProviderIntoRegistry(registry, provider);
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)
-  for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
+  for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg, registry)) {
     if (!registry.has(normalizedKey)) {
       mergeProviderIntoRegistry(registry, {
         id: normalizedKey,

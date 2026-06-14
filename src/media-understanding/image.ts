@@ -24,12 +24,14 @@ import {
   resolveCopilotApiToken,
 } from "../plugin-sdk/provider-auth.js";
 import { isKnownNonImageModel } from "./known-model-capabilities.js";
+import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
+  MediaUnderstandingProvider,
 } from "./types.js";
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
@@ -64,11 +66,11 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
   }).usesKnownNativeOpenAIRoute;
 }
 
-function modelSupportsImage(model: Model): boolean {
-  return (
-    model.input.includes("image") &&
-    !isKnownNonImageModel({ providerId: model.provider, modelId: model.id })
-  );
+function modelSupportsImage(
+  model: Model,
+  provider?: Pick<MediaUnderstandingProvider, "modelCapabilityOverrides">,
+): boolean {
+  return model.input.includes("image") && !isKnownNonImageModel({ modelId: model.id, provider });
 }
 
 function removeReasoningInclude(value: unknown): unknown {
@@ -151,6 +153,10 @@ async function resolveImageRuntime(params: {
   // Fast static resolution avoids provider runtime hooks during tool discovery;
   // execution falls back to full model discovery when the static path lacks image metadata.
   const resolvedRef = normalizeModelRef(params.provider, params.model);
+  const providerMetadata = buildMediaUnderstandingManifestMetadataRegistry(
+    params.cfg,
+    params.workspaceDir,
+  ).get(normalizeMediaProviderId(resolvedRef.provider));
   const fastResolved = await resolveModelAsync(
     resolvedRef.provider,
     resolvedRef.model,
@@ -163,7 +169,7 @@ async function resolveImageRuntime(params: {
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     },
   );
-  if (fastResolved.model && modelSupportsImage(fastResolved.model)) {
+  if (fastResolved.model && modelSupportsImage(fastResolved.model, providerMetadata)) {
     const normalizedResolved = await resolveModelAsync(
       resolvedRef.provider,
       resolvedRef.model,
@@ -175,7 +181,10 @@ async function resolveImageRuntime(params: {
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       },
     );
-    if (normalizedResolved.model && modelSupportsImage(normalizedResolved.model)) {
+    if (
+      normalizedResolved.model &&
+      modelSupportsImage(normalizedResolved.model, providerMetadata)
+    ) {
       return await prepareResolvedImageRuntime(
         params,
         normalizedResolved.model,
@@ -201,7 +210,7 @@ async function resolveImageRuntime(params: {
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
-  if (!modelSupportsImage(model)) {
+  if (!modelSupportsImage(model, providerMetadata)) {
     // resolveModelWithRegistry may synthesize a text-only fallback for configured
     // providers, which would change "Unknown model" → "Model does not support images"
     // and skip the MiniMax VLM recovery path. Throw Unknown model for MiniMax VLM
