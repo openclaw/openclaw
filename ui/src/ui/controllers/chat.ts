@@ -1236,6 +1236,23 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
 }
 
+function isTailDuplicate(messages: unknown[], candidate: unknown): boolean {
+  if (messages.length === 0) {
+    return false;
+  }
+  const tail = messages[messages.length - 1];
+  if (!tail || !candidate || typeof tail !== "object" || typeof candidate !== "object") {
+    return false;
+  }
+  const tailContent = (tail as { content?: unknown }).content;
+  const candidateContent = (candidate as { content?: unknown }).content;
+  try {
+    return JSON.stringify(tailContent) === JSON.stringify(candidateContent);
+  } catch {
+    return false;
+  }
+}
+
 export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
@@ -1261,6 +1278,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+        // Cross-run finals are always appended — a sub-agent or separate
+        // run may legitimately produce the same text as the current tail.
+        // The renderer collapses consecutive identical messages with
+        // duplicateCount instead of dropping them from state.
         state.chatMessages = [...state.chatMessages, finalMessage];
         return null;
       }
@@ -1296,7 +1317,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+    if (
+      finalMessage &&
+      !shouldHideAssistantChatMessage(finalMessage) &&
+      !isTailDuplicate(state.chatMessages, finalMessage)
+    ) {
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
@@ -1304,7 +1329,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     reconcileTerminalRun("done", "done");
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
+    if (
+      normalizedMessage &&
+      !shouldHideAssistantChatMessage(normalizedMessage) &&
+      !isTailDuplicate(state.chatMessages, normalizedMessage)
+    ) {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
         replacementMessages: [normalizedMessage],
         includeCurrent: false,
