@@ -4299,4 +4299,71 @@ describe("createFeishuMessageReceiveHandler", () => {
     firstCanFinish.resolve();
     await firstPromise;
   });
+
+  it.each([
+    { label: "control", suffix: "control", text: "/stop" },
+    { label: "btw", suffix: "btw", text: "/btw keep this in order" },
+  ])("keeps same-chat $label lane serialized while the lane is active", async ({ suffix, text }) => {
+    const firstStarted = createDeferred();
+    const firstCanFinish = createDeferred();
+    let secondStarted = false;
+    const handleMessage = vi.fn(
+      async ({ event }: { event?: FeishuMessageEvent; processingClaimHeld?: boolean }) => {
+        if (event?.message.message_id === `msg-${suffix}-first`) {
+          firstStarted.resolve();
+          await firstCanFinish.promise;
+        }
+        if (event?.message.message_id === `msg-${suffix}-second`) {
+          secondStarted = true;
+        }
+      },
+    );
+    const core = {
+      channel: createReceiveHandlerChannelRuntime(),
+    } as unknown as PluginRuntime;
+    const handler = createFeishuMessageReceiveHandler({
+      cfg: { channels: { feishu: { dmPolicy: "open" } } } as ClawdbotConfig,
+      channelRuntime: core.channel,
+      accountId: `receive-${suffix}-lane`,
+      chatHistories: new Map(),
+      handleMessage,
+      resolveDebounceText: ({ event }) => JSON.parse(event.message.content).text,
+      resolveSequentialKey: () => `feishu:receive-lane:oc-dm:${suffix}`,
+      hasProcessedMessage: vi.fn(async () => false),
+      recordProcessedMessage: vi.fn(async () => true),
+    });
+
+    const firstPromise = handler(
+      createReceiveTextEvent({
+        messageId: `msg-${suffix}-first`,
+        text,
+      }),
+    );
+    await firstStarted.promise;
+
+    const secondPromise = handler(
+      createReceiveTextEvent({
+        messageId: `msg-${suffix}-second`,
+        text,
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(secondStarted).toBe(false);
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+
+    firstCanFinish.resolve();
+    await firstPromise;
+    await secondPromise;
+
+    expect(secondStarted).toBe(true);
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(
+      mockCallArg<{ event?: FeishuMessageEvent; processingClaimHeld?: boolean }>(
+        handleMessage,
+        1,
+        0,
+      ).event?.message.message_id,
+    ).toBe(`msg-${suffix}-second`);
+  });
 });
