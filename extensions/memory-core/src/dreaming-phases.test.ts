@@ -450,6 +450,121 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
+  it("prefers fresh light snippets over recent diary-covered first-day memories", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const stalePath = path.join(workspaceDir, "memory", "2026-04-03.md");
+    const freshPath = path.join(workspaceDir, "memory", "2026-04-04.md");
+    const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
+    await fs.writeFile(stalePath, "初次见面时，我第一次醒来并认识了主人。\n", "utf-8");
+    await fs.writeFile(
+      freshPath,
+      "Later routing notes: queue hydration changed after plugin reload.\n",
+      "utf-8",
+    );
+    for (const query of ["first meeting", "first day", "waking up", "初次见面"]) {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query,
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.93,
+            snippet: "初次见面时，我第一次醒来并认识了主人。",
+            source: "memory",
+          },
+        ],
+      });
+    }
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "routing queue reload",
+      nowMs,
+      results: [
+        {
+          path: "memory/2026-04-04.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.91,
+          snippet: "Later routing notes: queue hydration changed after plugin reload.",
+          source: "memory",
+        },
+      ],
+    });
+    await fs.writeFile(
+      path.join(workspaceDir, "DREAMS.md"),
+      [
+        "# Dream Diary",
+        "",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "---",
+        "",
+        "*April 4, 2026, 10:00 AM UTC*",
+        "",
+        "初次见面时，我第一次醒来并认识了主人。",
+        "",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const subagent = createMockNarrativeSubagent("A later routing note finally took the page.");
+    const testConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                storage: { mode: "inline", separateReports: false },
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 1,
+                    lookbackDays: 7,
+                  },
+                  rem: {
+                    enabled: false,
+                    limit: 0,
+                    lookbackDays: 7,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await runDreamingSweepPhases({
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      logger,
+      subagent,
+      nowMs,
+    });
+
+    const message = firstNarrativeRun(subagent).message;
+    expect(message).toContain("Later routing notes: queue hydration changed after plugin reload.");
+    expect(message).toContain("Recent diary entries already written");
+    expect(message).not.toContain("\n- 初次见面时，我第一次醒来并认识了主人。");
+  });
+
   it("triggers light dreaming when the token is embedded in a reminder body", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await withDreamingTestClock(async () => {
