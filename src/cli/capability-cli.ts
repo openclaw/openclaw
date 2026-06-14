@@ -197,6 +197,7 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     description: "Generate raster images with configured image providers.",
     transports: ["local"],
     flags: [
+      "--file",
       "--prompt",
       "--model",
       "--count",
@@ -2220,6 +2221,7 @@ export function registerCapabilityCli(program: Command) {
   image
     .command("generate")
     .description("Generate images")
+    .option("--file <path>", "Input file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
     .option("--count <n>", "Number of images")
@@ -2234,6 +2236,11 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const files = Array.isArray(opts.file)
+          ? (opts.file as string[])
+          : opts.file
+            ? [String(opts.file)]
+            : undefined;
         const result = await runImageGenerate({
           capability: "image.generate",
           prompt: String(opts.prompt),
@@ -2242,6 +2249,7 @@ export function registerCapabilityCli(program: Command) {
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
+          file: files,
           outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
           background: normalizeImageBackground(opts.background as string | undefined),
           openaiBackground: normalizeImageBackground(
