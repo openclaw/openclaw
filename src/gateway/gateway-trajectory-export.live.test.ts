@@ -141,6 +141,65 @@ async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> 
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
+function extractAssistantTexts(messages: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if ((entry as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
+function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
+  const combined = texts.join("\n\n").trim();
+  if (!combined) {
+    return "<none>";
+  }
+  return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
+}
+
+async function waitForAssistantText(params: {
+  client: GatewayClient;
+  contains: string;
+  sessionKey: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const timeoutMs = params.timeoutMs ?? 60_000;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const history: { messages?: unknown[] } = await params.client.request("chat.history", {
+      sessionKey: params.sessionKey,
+      limit: 24,
+    });
+    const assistantTexts = extractAssistantTexts(history.messages ?? []);
+    const matched = assistantTexts.find((text) => text.includes(params.contains));
+    if (matched) {
+      return matched;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
+  }
+
+  const finalHistory: { messages?: unknown[] } = await params.client.request("chat.history", {
+    sessionKey: params.sessionKey,
+    limit: 24,
+  });
+  throw new Error(
+    `timed out waiting for assistant text containing ${params.contains}: ${formatAssistantTextPreview(
+      extractAssistantTexts(finalHistory.messages ?? []),
+    )}`,
+  );
+}
+
 async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
   const approvals = (await client.request(
     "exec.approval.list",
@@ -282,7 +341,12 @@ describeLive("gateway live trajectory export", () => {
       const finalText =
         typeof exportResponse?.message === "object"
           ? extractFirstTextBlock(exportResponse.message)
-          : undefined;
+          : await waitForAssistantText({
+              client,
+              sessionKey,
+              contains: "Trajectory exports can include",
+              timeoutMs: 60_000,
+            });
       expect(finalText).toContain("Trajectory exports can include");
       expect(finalText).toContain("through exec approval");
       const approvalId = await approveTrajectoryExport(client);
