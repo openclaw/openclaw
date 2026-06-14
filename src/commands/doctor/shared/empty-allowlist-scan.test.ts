@@ -132,29 +132,6 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings.some((w) => w.includes("group messages"))).toBe(true);
   });
 
-  it("still warns when top-level has Telegram credentials plus named accounts with own allowFrom", () => {
-    // The top-level record has botToken, making it an active implicit default
-    // account, not just a parent/fallback. The warning must still fire.
-    const warnings = scanEmptyAllowlistPolicyWarnings(
-      {
-        channels: {
-          telegram: {
-            botToken: "123:abc",
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            accounts: {
-              bot1: {
-                groupAllowFrom: ["@alice"],
-              },
-            },
-          },
-        },
-      },
-      { doctorFixCommand: "openclaw doctor --fix" },
-    );
-    expect(warnings.some((w) => w.includes("group messages"))).toBe(true);
-  });
-
   it("still warns when the default account is present even if named accounts have own allowFrom", () => {
     // When the `default` account exists, the top-level is also an active
     // account (not just a parent). The parent warning must still fire.

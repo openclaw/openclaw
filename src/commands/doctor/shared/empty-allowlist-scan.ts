@@ -104,35 +104,13 @@ export function scanEmptyAllowlistPolicyWarnings(
     // empty groupAllowFrom is an unused parent/fallback and should not
     // trigger a warning.  If any account lacks its own list and relies on
     // the top-level, the warning is still legitimate.
-    // When the top-level record has its own credentials (e.g. botToken on
-    // Telegram, token on other channels) it is an active account, not just a
-    // parent/fallback.  Preserve the warning so operators don't miss empty
-    // groupAllowFrom on the implicit default account.
-    const topLevelHasCredentials =
-      channelConfig &&
-      typeof channelConfig === "object" &&
-      Object.keys(channelConfig).some(
-        (k) =>
-          k !== "accounts" &&
-          k !== "enabled" &&
-          k !== "groupPolicy" &&
-          k !== "dmPolicy" &&
-          k !== "groupAllowFrom" &&
-          k !== "allowFrom" &&
-          k !== "groups" &&
-          k !== "channels" &&
-          k !== "defaultAccount" &&
-          !k.startsWith("_") &&
-          typeof (channelConfig as Record<string, unknown>)[k] === "string",
-      );
-
-    // When the `default` account is present, the top-level config is also
-    // an active account (not just a parent/fallback).
+    // When the `default` account is present, the top-level config is also an
+    // active account — the `default` entry routes traffic through the
+    // top-level credentials. Preserve its groupAllowFrom warnings.
     const hasDefaultAccount =
       accounts && "default" in accounts && !isDisabledRecord(accounts["default"]);
 
     const allAccountsHaveOwnAllowFrom =
-      !topLevelHasCredentials &&
       !hasDefaultAccount &&
       accounts &&
       Object.keys(accounts).length > 0 &&
