@@ -1,6 +1,9 @@
 // Covers context-window cache application and session-manager runtime registry.
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
+import { resetBundledPluginPublicArtifactLoaderForTest } from "../plugins/public-surface-loader.js";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import {
   MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
@@ -22,6 +25,19 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
   projectConfigOntoRuntimeSourceSnapshot: (config: unknown) => config,
 }));
+
+beforeEach(() => {
+  const bundledPluginsDir = path.resolve(import.meta.dirname, "../../extensions");
+  setBundledPluginsDirOverrideForTest(bundledPluginsDir);
+  resetBundledPluginPublicArtifactLoaderForTest();
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledPluginsDir);
+});
+
+afterEach(() => {
+  setBundledPluginsDirOverrideForTest(undefined);
+  resetBundledPluginPublicArtifactLoaderForTest();
+  vi.unstubAllEnvs();
+});
 
 function testModelContextWindow(id: string, contextWindow: number) {
   return {
@@ -305,6 +321,28 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
+  it("uses bundled refreshable manifest context windows for sync provider lookups", () => {
+    const result = resolveContextTokensForModel({
+      provider: "opencode-go",
+      model: "mimo-v2.5-pro",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(1_048_576);
+  });
+
+  it("keeps shipped OpenCode Go compatibility ids on bundled sync context lookup", () => {
+    const result = resolveContextTokensForModel({
+      provider: "opencode-go",
+      model: "kimi-k2.5",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(262_144);
+  });
+
   it("uses provider-level context defaults when no model-level cap is set", () => {
     const result = resolveContextTokensForModel({
       cfg: {

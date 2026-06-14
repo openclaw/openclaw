@@ -25,6 +25,7 @@ import {
   beginContextWindowCacheRefresh,
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
+import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export {
@@ -301,6 +302,48 @@ function resolveDiscoveredAnthropicFixedContextWindow(model: ModelEntry): number
     : undefined;
 }
 
+function resolveBundledStaticCatalogProviderModelRef(params: {
+  provider?: string;
+  model?: string;
+}): { provider: string; model: string } | undefined {
+  const modelRaw = params.model?.trim();
+  if (!modelRaw) {
+    return undefined;
+  }
+  const providerRaw = params.provider?.trim();
+  if (providerRaw) {
+    const provider = normalizeProviderId(providerRaw);
+    return provider ? { provider, model: modelRaw } : undefined;
+  }
+  const slash = modelRaw.indexOf("/");
+  if (slash <= 0) {
+    return undefined;
+  }
+  const provider = normalizeProviderId(modelRaw.slice(0, slash));
+  const model = modelRaw.slice(slash + 1).trim();
+  return provider && model ? { provider, model } : undefined;
+}
+
+function resolveBundledStaticCatalogContextTokens(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+}): number | undefined {
+  const model = resolveBundledStaticCatalogModel({
+    provider: params.provider,
+    modelId: params.modelId,
+    cfg: params.cfg,
+    includeRefreshableDiscovery: true,
+  });
+  if (typeof model?.contextTokens === "number" && model.contextTokens > 0) {
+    return model.contextTokens;
+  }
+  if (typeof model?.contextWindow === "number" && model.contextWindow > 0) {
+    return model.contextWindow;
+  }
+  return undefined;
+}
+
 export function resolveContextTokensForModel(
   params: ContextTokenResolutionParams,
 ): number | undefined {
@@ -315,9 +358,32 @@ export function resolveContextTokensForModel(
       : params.cfg
         ? projectConfigOntoRuntimeSourceSnapshot(params.cfg)
         : undefined;
-  return resolveContextTokensForModelFromCache(
-    { ...params, sourceCfg },
+  const resolved = resolveContextTokensForModelFromCache(
+    { ...params, sourceCfg, fallbackContextTokens: undefined },
     (modelId) => lookupCachedContextTokens(modelId),
     (modelId) => lookupCachedContextWindow(modelId),
   );
+  if (resolved !== undefined) {
+    return resolved;
+  }
+
+  const explicitProvider = params.provider?.trim();
+  const ref = explicitProvider
+    ? resolveBundledStaticCatalogProviderModelRef({
+        provider: explicitProvider,
+        model: params.model,
+      })
+    : undefined;
+  if (explicitProvider && ref) {
+    const bundledStaticCatalogResult = resolveBundledStaticCatalogContextTokens({
+      cfg: params.cfg,
+      provider: ref.provider,
+      modelId: ref.model,
+    });
+    if (bundledStaticCatalogResult !== undefined) {
+      return bundledStaticCatalogResult;
+    }
+  }
+
+  return params.fallbackContextTokens;
 }

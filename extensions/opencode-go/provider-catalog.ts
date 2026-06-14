@@ -1,4 +1,3 @@
-// Opencode Go provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -12,13 +11,16 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 
 const PROVIDER_ID = "opencode-go";
-
 const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
-const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set(["kimi-k2.5", "kimi-k2.6"]);
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
+const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2.7-code",
+]);
 
 type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
@@ -27,7 +29,7 @@ type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   input: Array<"text" | "image">;
 };
 
-const OPENCODE_GO_MODELS = (
+const OPENCODE_GO_ACTIVE_MODELS = (
   [
     {
       id: "deepseek-v4-pro",
@@ -38,9 +40,9 @@ const OPENCODE_GO_MODELS = (
       reasoning: true,
       input: ["text"],
       cost: {
-        input: 1.74,
-        output: 3.48,
-        cacheRead: 0.145,
+        input: 0.435,
+        output: 0.87,
+        cacheRead: 0.003625,
         cacheWrite: 0,
       },
       contextWindow: 1_000_000,
@@ -62,7 +64,7 @@ const OPENCODE_GO_MODELS = (
       cost: {
         input: 0.14,
         output: 0.28,
-        cacheRead: 0.028,
+        cacheRead: 0.0028,
         cacheWrite: 0,
       },
       contextWindow: 1_000_000,
@@ -87,8 +89,8 @@ const OPENCODE_GO_MODELS = (
         cacheRead: 0.2,
         cacheWrite: 0,
       },
-      contextWindow: 202_752,
-      maxTokens: 32_768,
+      contextWindow: 204_800,
+      maxTokens: 131_072,
     },
     {
       id: "glm-5.1",
@@ -99,14 +101,175 @@ const OPENCODE_GO_MODELS = (
       reasoning: true,
       input: ["text"],
       cost: {
-        input: 1.4,
-        output: 4.4,
-        cacheRead: 0.26,
+        input: 6,
+        output: 24,
+        cacheRead: 1.3,
         cacheWrite: 0,
       },
-      contextWindow: 202_752,
-      maxTokens: 32_768,
+      contextWindow: 200_000,
+      maxTokens: 131_072,
     },
+    {
+      id: "kimi-k2.7-code",
+      name: "Kimi K2.7 Code",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0.75,
+        output: 3.5,
+        cacheRead: 0.16,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 262_144,
+    },
+    {
+      id: "kimi-k2.6",
+      name: "Kimi K2.6",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0.95,
+        output: 4,
+        cacheRead: 0.2,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 262_144,
+    },
+    {
+      id: "mimo-v2.5",
+      name: "MiMo V2.5",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0.14,
+        output: 0.28,
+        cacheRead: 0.0028,
+        cacheWrite: 0,
+      },
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+    },
+    {
+      id: "mimo-v2.5-pro",
+      name: "MiMo V2.5 Pro",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0.435,
+        output: 0.87,
+        cacheRead: 0.0036,
+        cacheWrite: 0,
+      },
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+    },
+    {
+      id: "minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0.3,
+        output: 1.2,
+        cacheRead: 0.06,
+        cacheWrite: 0.375,
+      },
+      contextWindow: 204_800,
+      maxTokens: 131_072,
+    },
+    {
+      id: "minimax-m3",
+      name: "MiniMax M3",
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0.6,
+        output: 2.4,
+        cacheRead: 0.12,
+        cacheWrite: 0,
+      },
+      contextWindow: 512_000,
+      maxTokens: 128_000,
+    },
+    {
+      id: "qwen3.6-plus",
+      name: "Qwen3.6 Plus",
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      compat: { thinkingFormat: "qwen" },
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0.5,
+        output: 3,
+        cacheRead: 0.05,
+        cacheWrite: 0.625,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 65_536,
+    },
+    {
+      id: "qwen3.7-max",
+      name: "Qwen3.7 Max",
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      compat: { thinkingFormat: "qwen" },
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 2.5,
+        output: 7.5,
+        cacheRead: 0.5,
+        cacheWrite: 3.125,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 65_536,
+    },
+    {
+      id: "qwen3.7-plus",
+      name: "Qwen3.7 Plus",
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      compat: { thinkingFormat: "qwen" },
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0.5,
+        output: 3,
+        cacheRead: 0.05,
+        cacheWrite: 0.625,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+    },
+  ] satisfies OpencodeGoModelDefinition[]
+).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
+
+const OPENCODE_GO_COMPAT_MODELS = (
+  [
     {
       id: "hy3-preview",
       name: "HY3 Preview",
@@ -142,23 +305,6 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 65_536,
     },
     {
-      id: "kimi-k2.6",
-      name: "Kimi K2.6",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.95,
-        output: 4,
-        cacheRead: 0.16,
-        cacheWrite: 0,
-      },
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    },
-    {
       id: "mimo-v2-omni",
       name: "MiMo V2 Omni",
       api: "openai-completions",
@@ -174,23 +320,6 @@ const OPENCODE_GO_MODELS = (
       },
       contextWindow: 262_144,
       maxTokens: 32_000,
-    },
-    {
-      id: "mimo-v2.5",
-      name: "MiMo V2.5",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.4,
-        output: 2,
-        cacheRead: 0.08,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
     },
     {
       id: "mimo-v2-pro",
@@ -210,23 +339,6 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 32_000,
     },
     {
-      id: "mimo-v2.5-pro",
-      name: "MiMo V2.5 Pro",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1,
-        output: 3,
-        cacheRead: 0.2,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_048_576,
-      maxTokens: 128_000,
-    },
-    {
       id: "minimax-m2.5",
       name: "MiniMax M2.5",
       api: "anthropic-messages",
@@ -242,40 +354,6 @@ const OPENCODE_GO_MODELS = (
       },
       contextWindow: 204_800,
       maxTokens: 65_536,
-    },
-    {
-      id: "minimax-m2.7",
-      name: "MiniMax M2.7",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.3,
-        output: 1.2,
-        cacheRead: 0.06,
-        cacheWrite: 0.375,
-      },
-      contextWindow: 204_800,
-      maxTokens: 131_072,
-    },
-    {
-      id: "minimax-m3",
-      name: "MiniMax M3",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.6,
-        output: 2.4,
-        cacheRead: 0.12,
-        cacheWrite: 0.75,
-      },
-      contextWindow: 204_800,
-      maxTokens: 131_072,
     },
     {
       id: "qwen3.5-plus",
@@ -295,62 +373,10 @@ const OPENCODE_GO_MODELS = (
       contextWindow: 262_144,
       maxTokens: 65_536,
     },
-    {
-      id: "qwen3.7-max",
-      name: "Qwen3.7 Max",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 2.5,
-        output: 7.5,
-        cacheRead: 0.5,
-        cacheWrite: 3.125,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 65_536,
-    },
-    {
-      id: "qwen3.7-plus",
-      name: "Qwen3.7 Plus",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.4,
-        output: 1.6,
-        cacheRead: 0.04,
-        cacheWrite: 0.5,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 65_536,
-    },
-    {
-      id: "qwen3.6-plus",
-      name: "Qwen3.6 Plus",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.5,
-        output: 3,
-        cacheRead: 0.05,
-        cacheWrite: 0.625,
-      },
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    },
   ] satisfies OpencodeGoModelDefinition[]
 ).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
+
+const OPENCODE_GO_RUNTIME_MODELS = [...OPENCODE_GO_ACTIVE_MODELS, ...OPENCODE_GO_COMPAT_MODELS];
 
 export type FetchOpencodeGoLiveModelIdsParams = {
   apiKey?: string;
@@ -360,19 +386,23 @@ export type FetchOpencodeGoLiveModelIdsParams = {
 };
 
 function buildOpencodeGoProviderConfig(
-  models: OpencodeGoModelDefinition[],
+  models: readonly ModelDefinitionConfig[],
   apiKey?: string,
 ): ModelProviderConfig {
   return {
     api: "openai-completions",
     baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
     ...(apiKey ? { apiKey } : {}),
-    models,
+    models: [...models],
   };
 }
 
 export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProviderConfig {
-  return buildOpencodeGoProviderConfig(OPENCODE_GO_MODELS, apiKey);
+  return buildOpencodeGoProviderConfig(OPENCODE_GO_ACTIVE_MODELS, apiKey);
+}
+
+export function buildStaticOpencodeGoCompatProviderConfig(apiKey?: string): ModelProviderConfig {
+  return buildOpencodeGoProviderConfig(OPENCODE_GO_RUNTIME_MODELS, apiKey);
 }
 
 export async function buildOpencodeGoLiveProviderConfig(
@@ -385,7 +415,7 @@ export async function buildOpencodeGoLiveProviderConfig(
       api: "openai-completions",
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
     },
-    models: OPENCODE_GO_MODELS,
+    models: OPENCODE_GO_RUNTIME_MODELS,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
@@ -397,7 +427,7 @@ export async function buildOpencodeGoLiveProviderConfig(
 }
 
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
-  return OPENCODE_GO_MODELS.map((model) => ({
+  return OPENCODE_GO_ACTIVE_MODELS.map((model) => ({
     provider: model.provider,
     id: model.id,
     name: model.name,
@@ -409,7 +439,7 @@ export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
-  return OPENCODE_GO_MODELS.find((model) => model.id === normalizedModelId);
+  return OPENCODE_GO_RUNTIME_MODELS.find((model) => model.id === normalizedModelId);
 }
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {
@@ -469,4 +499,10 @@ export function normalizeOpencodeGoBaseUrl(params: {
       : OPENCODE_GO_OPENAI_BASE_URL;
   }
   return undefined;
+}
+
+export function resolveBundledOpencodeGoStaticModel(
+  modelId: string,
+): ProviderRuntimeModel | undefined {
+  return resolveOpencodeGoModel(modelId);
 }

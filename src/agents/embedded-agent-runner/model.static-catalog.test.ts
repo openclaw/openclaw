@@ -13,6 +13,9 @@ const providerMocks = vi.hoisted(() => ({
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   runProviderStaticCatalog: vi.fn(),
 }));
+const publicSurfaceLoaderMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleSync: vi.fn(),
+}));
 
 vi.mock("../../plugins/manifest-metadata-scan.js", () => ({
   listOpenClawPluginManifestMetadata: manifestMocks.listOpenClawPluginManifestMetadata,
@@ -41,12 +44,19 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
   runProviderStaticCatalog: providerMocks.runProviderStaticCatalog,
 }));
 
+vi.mock("../../plugins/public-surface-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/public-surface-loader.js")>()),
+  loadBundledPluginPublicArtifactModuleSync:
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
+}));
+
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
   createBundledProviderStaticCatalogContextResolver,
   createBundledProviderStaticCatalogModelResolver,
   createBundledStaticCatalogModelResolver,
   loadBundledProviderStaticCatalogContextModels,
+  resetBundledStaticCatalogResolverCacheForTest,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
@@ -128,6 +138,8 @@ beforeEach(() => {
   providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
   providerMocks.runProviderStaticCatalog.mockResolvedValue(undefined);
   providerMocks.normalizePluginDiscoveryResult.mockReturnValue({});
+  publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockReset();
+  resetBundledStaticCatalogResolverCacheForTest();
 });
 
 describe("resolveBundledStaticCatalogModel", () => {
@@ -202,6 +214,161 @@ describe("resolveBundledStaticCatalogModel", () => {
     });
 
     expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("can include bundled refreshable manifest catalog rows for read-only metadata fallbacks", () => {
+    setManifestPlugins([createMistralManifestPlugin({ discovery: "refreshable" })]);
+
+    const model = resolveBundledStaticCatalogModel({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: {},
+      includeRefreshableDiscovery: true,
+    });
+
+    expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("caches repeated refreshable manifest misses across direct lookups", () => {
+    setManifestPlugins([createMistralManifestPlugin({ discovery: "refreshable" })]);
+
+    expect(
+      resolveBundledStaticCatalogModel({
+        provider: "mistral",
+        modelId: "missing-model",
+        cfg: {},
+        includeRefreshableDiscovery: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveBundledStaticCatalogModel({
+        provider: "mistral",
+        modelId: "still-missing",
+        cfg: {},
+        includeRefreshableDiscovery: true,
+      }),
+    ).toBeUndefined();
+
+    expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to provider catalog entry rows for bundled compatibility-only ids", () => {
+    setManifestPlugins([
+      {
+        id: "opencode-go",
+        origin: "bundled",
+        providers: ["opencode-go"],
+        providerCatalogEntry: "./provider-discovery.ts",
+        modelCatalog: {
+          providers: {
+            "opencode-go": {
+              baseUrl: "https://opencode.ai/zen/go/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "kimi-k2.7-code",
+                  name: "Kimi K2.7 Code",
+                  input: ["text", "image"],
+                  contextWindow: 262144,
+                  maxTokens: 262144,
+                  cost: { input: 0.75, output: 3.5, cacheRead: 0.16, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+          discovery: {
+            "opencode-go": "refreshable",
+          },
+        },
+      },
+    ]);
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockReturnValue({
+      buildBundledStaticProviderConfig: () => ({
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        api: "openai-completions",
+        models: [
+          {
+            id: "kimi-k2.5",
+            name: "Kimi K2.5",
+            input: ["text", "image"],
+            contextWindow: 262144,
+            maxTokens: 65536,
+            cost: { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
+          },
+        ],
+      }),
+    });
+
+    const model = resolveBundledStaticCatalogModel({
+      provider: "opencode-go",
+      modelId: "kimi-k2.5",
+      includeRefreshableDiscovery: true,
+    });
+
+    expect(model?.id).toBe("kimi-k2.5");
+    expect(model?.contextWindow).toBe(262144);
+    expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
+      {
+        dirName: "opencode-go",
+        artifactBasename: "./provider-discovery.js",
+      },
+    );
+  });
+
+  it.each([
+    "Unable to resolve bundled plugin public surface opencode-go/./provider-discovery.js",
+    "Unable to open bundled plugin public surface opencode-go/./provider-discovery.js",
+  ])("falls through when the provider catalog entry artifact is unavailable: %s", (message) => {
+    setManifestPlugins([
+      {
+        id: "opencode-go",
+        origin: "bundled",
+        providers: ["opencode-go"],
+        providerCatalogEntry: "./provider-discovery.ts",
+        modelCatalog: {
+          providers: {
+            "opencode-go": {
+              baseUrl: "https://opencode.ai/zen/go/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "kimi-k2.7-code",
+                  name: "Kimi K2.7 Code",
+                  input: ["text", "image"],
+                  contextWindow: 262144,
+                  maxTokens: 262144,
+                  cost: { input: 0.75, output: 3.5, cacheRead: 0.16, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+          discovery: {
+            "opencode-go": "refreshable",
+          },
+        },
+      },
+    ]);
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(() => {
+      throw new Error(message);
+    });
+
+    expect(
+      resolveBundledStaticCatalogModel({
+        provider: "opencode-go",
+        modelId: "kimi-k2.5",
+        includeRefreshableDiscovery: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveBundledStaticCatalogModel({
+        provider: "opencode-go",
+        modelId: "kimi-k2.5",
+        includeRefreshableDiscovery: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
+    ).toHaveBeenCalledTimes(1);
   });
 
   it("requires an exact provider and model match", () => {

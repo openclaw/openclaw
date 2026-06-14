@@ -20,6 +20,7 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
@@ -134,7 +135,10 @@ function modelFromProviderStaticCatalog(params: {
 
 type StaticCatalogPlugin = Parameters<
   typeof planManifestModelCatalogRows
->[0]["registry"]["plugins"][number];
+>[0]["registry"]["plugins"][number] & {
+  providerAuthAliases?: Record<string, string>;
+  providerCatalogEntry?: string;
+};
 
 function listBundledStaticCatalogPlugins(env: NodeJS.ProcessEnv): StaticCatalogPlugin[] {
   return listOpenClawPluginManifestMetadata(env).flatMap((record): StaticCatalogPlugin[] => {
@@ -142,7 +146,7 @@ function listBundledStaticCatalogPlugins(env: NodeJS.ProcessEnv): StaticCatalogP
       return [];
     }
     const loaded = loadPluginManifest(record.pluginDir);
-    if (!loaded.ok || !loaded.manifest.modelCatalog) {
+    if (!loaded.ok) {
       return [];
     }
     return [
@@ -150,9 +154,114 @@ function listBundledStaticCatalogPlugins(env: NodeJS.ProcessEnv): StaticCatalogP
         id: loaded.manifest.id,
         providers: loaded.manifest.providers,
         modelCatalog: loaded.manifest.modelCatalog,
+        providerAuthAliases: loaded.manifest.providerAuthAliases,
+        providerCatalogEntry: loaded.manifest.providerCatalogEntry,
       },
     ];
   });
+}
+
+function pluginOwnsBundledProviderRef(plugin: StaticCatalogPlugin, provider: string): boolean {
+  const normalizedProvider = normalizeProviderId(provider);
+  const ownedProviders = plugin.providers ?? [];
+  if (!normalizedProvider) {
+    return false;
+  }
+  if (ownedProviders.some((candidate) => normalizeProviderId(candidate) === normalizedProvider)) {
+    return true;
+  }
+  for (const [rawAlias, rawTarget] of Object.entries(plugin.providerAuthAliases ?? {})) {
+    const normalizedAlias = normalizeProviderId(rawAlias);
+    const normalizedTarget = normalizeProviderId(rawTarget);
+    if (
+      normalizedAlias === normalizedProvider &&
+      normalizedTarget &&
+      ownedProviders.some((candidate) => normalizeProviderId(candidate) === normalizedTarget)
+    ) {
+      return true;
+    }
+  }
+  for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
+    const normalizedAlias = normalizeProviderId(rawAlias);
+    const normalizedTarget = normalizeProviderId(alias.provider);
+    if (
+      normalizedAlias === normalizedProvider &&
+      normalizedTarget &&
+      ownedProviders.some((candidate) => normalizeProviderId(candidate) === normalizedTarget)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeProviderCatalogArtifactPath(providerCatalogEntry: string): string {
+  const normalized = providerCatalogEntry.replace(/\\/gu, "/");
+  return normalized.replace(/\.(?:[cm]?ts|[cm]?js)$/u, ".js");
+}
+
+type BundledProviderCatalogEntrySurface = {
+  buildBundledStaticProviderConfig?: () => ModelProviderConfig | undefined;
+};
+
+const MISSING_BUNDLED_PUBLIC_SURFACE_PREFIX = "Unable to resolve bundled plugin public surface ";
+const UNOPENABLE_BUNDLED_PUBLIC_SURFACE_PREFIX = "Unable to open bundled plugin public surface ";
+
+function isOptionalBundledPublicSurfaceLoadError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message.startsWith(MISSING_BUNDLED_PUBLIC_SURFACE_PREFIX) ||
+      error.message.startsWith(UNOPENABLE_BUNDLED_PUBLIC_SURFACE_PREFIX))
+  );
+}
+
+function loadBundledProviderCatalogEntryModel(params: {
+  provider: string;
+  modelId: string;
+  plugins: readonly StaticCatalogPlugin[];
+}): ProviderRuntimeModel | undefined {
+  const provider = normalizeProviderId(params.provider);
+  if (!provider) {
+    return undefined;
+  }
+  for (const plugin of params.plugins) {
+    if (!plugin.providerCatalogEntry || !pluginOwnsBundledProviderRef(plugin, provider)) {
+      continue;
+    }
+    let mod: BundledProviderCatalogEntrySurface;
+    try {
+      mod = loadBundledPluginPublicArtifactModuleSync<BundledProviderCatalogEntrySurface>({
+        dirName: plugin.id,
+        artifactBasename: normalizeProviderCatalogArtifactPath(plugin.providerCatalogEntry),
+      });
+    } catch (error) {
+      // providerCatalogEntry is an optional metadata fast path. Missing or
+      // unreadable bundled artifacts should fall through to other lookup paths.
+      if (isOptionalBundledPublicSurfaceLoadError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    const providerConfig = mod.buildBundledStaticProviderConfig?.();
+    if (!providerConfig?.models) {
+      continue;
+    }
+    const matchedModel = providerConfig.models.find((candidate) =>
+      staticModelIdMatches({
+        candidateId: candidate.id,
+        provider,
+        modelId: params.modelId,
+      }),
+    );
+    if (matchedModel) {
+      return modelFromProviderStaticCatalog({
+        provider,
+        providerConfig,
+        model: matchedModel,
+      });
+    }
+  }
+  return undefined;
 }
 
 function resolveManifestModelCatalogProviderAlias(params: {
@@ -249,19 +358,33 @@ type BundledProviderStaticCatalogResolverParams = {
   env?: NodeJS.ProcessEnv;
 };
 
+type BundledStaticCatalogResolverCacheKey = `${0 | 1}:${0 | 1}`;
+
+const bundledStaticCatalogResolverCache = new Map<
+  BundledStaticCatalogResolverCacheKey,
+  ReturnType<typeof createBundledStaticCatalogModelResolver>
+>();
+
+export function resetBundledStaticCatalogResolverCacheForTest(): void {
+  bundledStaticCatalogResolverCache.clear();
+}
+
 /**
  * Prepares a process-stable bundled manifest catalog lookup.
  * Manifest discovery runs once; provider-specific plans are cached on demand.
  */
 export function createBundledStaticCatalogModelResolver(params?: {
   env?: NodeJS.ProcessEnv;
+  includeRefreshableDiscovery?: boolean;
   includeRuntimeDiscovery?: boolean;
 }): (lookup: BundledStaticCatalogLookup) => ProviderRuntimeModel | undefined {
   const bundledStaticPlugins = listBundledStaticCatalogPlugins(params?.env ?? process.env);
   const plans = new Map<string, ReturnType<typeof planManifestModelCatalogRows>>();
+  const providerCatalogEntryLookups = new Map<string, ProviderRuntimeModel | null>();
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
-    if (!provider || !lookup.modelId.trim() || bundledStaticPlugins.length === 0) {
+    const modelId = lookup.modelId.trim();
+    if (!provider || !modelId) {
       return undefined;
     }
     let plan = plans.get(provider);
@@ -273,9 +396,11 @@ export function createBundledStaticCatalogModelResolver(params?: {
       plans.set(provider, plan);
     }
     for (const entry of plan.entries) {
+      const discovery = entry.discovery ?? "static";
       if (
-        entry.discovery !== "static" &&
-        !(params?.includeRuntimeDiscovery && entry.discovery === "runtime")
+        discovery !== "static" &&
+        !(discovery === "refreshable" && params?.includeRefreshableDiscovery === true) &&
+        !(discovery === "runtime" && params?.includeRuntimeDiscovery === true)
       ) {
         continue;
       }
@@ -290,7 +415,18 @@ export function createBundledStaticCatalogModelResolver(params?: {
         return modelFromStaticCatalogRow(row);
       }
     }
-    return undefined;
+    const fallbackKey = `${provider}\0${modelId.toLowerCase()}`;
+    const cachedFallback = providerCatalogEntryLookups.get(fallbackKey);
+    if (cachedFallback !== undefined) {
+      return cachedFallback ?? undefined;
+    }
+    const fallbackModel = loadBundledProviderCatalogEntryModel({
+      provider,
+      modelId,
+      plugins: bundledStaticPlugins,
+    });
+    providerCatalogEntryLookups.set(fallbackKey, fallbackModel ?? null);
+    return fallbackModel;
   };
 }
 
@@ -300,15 +436,37 @@ export function resolveBundledStaticCatalogModel(
     cfg?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    includeRefreshableDiscovery?: boolean;
     includeRuntimeDiscovery?: boolean;
   },
 ): ProviderRuntimeModel | undefined {
-  return createBundledStaticCatalogModelResolver({
-    ...(params.env ? { env: params.env } : {}),
-    ...(params.includeRuntimeDiscovery !== undefined
-      ? { includeRuntimeDiscovery: params.includeRuntimeDiscovery }
-      : {}),
-  })(params);
+  if (params.env) {
+    return createBundledStaticCatalogModelResolver({
+      env: params.env,
+      ...(params.includeRefreshableDiscovery !== undefined
+        ? { includeRefreshableDiscovery: params.includeRefreshableDiscovery }
+        : {}),
+      ...(params.includeRuntimeDiscovery !== undefined
+        ? { includeRuntimeDiscovery: params.includeRuntimeDiscovery }
+        : {}),
+    })(params);
+  }
+  const refreshableFlag: 0 | 1 = params.includeRefreshableDiscovery === true ? 1 : 0;
+  const runtimeFlag: 0 | 1 = params.includeRuntimeDiscovery === true ? 1 : 0;
+  const cacheKey: BundledStaticCatalogResolverCacheKey = `${refreshableFlag}:${runtimeFlag}`;
+  let resolver = bundledStaticCatalogResolverCache.get(cacheKey);
+  if (!resolver) {
+    resolver = createBundledStaticCatalogModelResolver({
+      ...(params.includeRefreshableDiscovery !== undefined
+        ? { includeRefreshableDiscovery: params.includeRefreshableDiscovery }
+        : {}),
+      ...(params.includeRuntimeDiscovery !== undefined
+        ? { includeRuntimeDiscovery: params.includeRuntimeDiscovery }
+        : {}),
+    });
+    bundledStaticCatalogResolverCache.set(cacheKey, resolver);
+  }
+  return resolver(params);
 }
 
 function resolveBundledProviderStaticCatalogPluginIds(params: {
