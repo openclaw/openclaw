@@ -403,6 +403,19 @@ export async function resolveSessionReference(params: {
       requesterInternalKey: params.requesterInternalKey,
     }) ?? params.sessionKey.trim();
   if (rawInput === "current") {
+    // "current" is a well-known alias for the requester's session.
+    // Resolve directly when requesterInternalKey is available to avoid
+    // unnecessary gateway roundtrips that produce INVALID_REQUEST error
+    // logs for every tool call using sessionKey="current" (#78424).
+    if (params.requesterInternalKey) {
+      return buildResolvedSessionReference({
+        key: params.requesterInternalKey,
+        alias: params.alias,
+        mainKey: params.mainKey,
+        resolvedViaSessionId: false,
+      });
+    }
+    // Fallback: try gateway resolution if requesterInternalKey is not available.
     const resolvedCurrent = await resolveSessionReferenceByKeyOrSessionId({
       raw: rawInput,
       alias: params.alias,

@@ -250,9 +250,7 @@ describe("resolved session visibility checks", () => {
 });
 
 describe("resolveSessionReference", () => {
-  it("prefers a literal current session key before alias fallback", async () => {
-    callGatewayMock.mockResolvedValueOnce({ key: "current" });
-
+  it("resolves current alias directly to requesterInternalKey without gateway call", async () => {
     const result = await resolveSessionReference({
       sessionKey: "current",
       alias: "main",
@@ -261,8 +259,27 @@ describe("resolveSessionReference", () => {
       restrictToSpawned: false,
     });
     expectResolvedSessionReference(result, {
-      key: "current",
-      displayKey: "current",
+      key: "agent:main:subagent:child",
+      displayKey: "agent:main:subagent:child",
+      resolvedViaSessionId: false,
+    });
+    // Should NOT call the gateway — "current" is resolved internally.
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to gateway when requesterInternalKey is absent for current alias", async () => {
+    callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:main" });
+
+    const result = await resolveSessionReference({
+      sessionKey: "current",
+      alias: "main",
+      mainKey: "main",
+      requesterInternalKey: undefined,
+      restrictToSpawned: false,
+    });
+    expectResolvedSessionReference(result, {
+      key: "agent:ops:main",
+      displayKey: "agent:ops:main",
       resolvedViaSessionId: false,
     });
     expect(callGatewayMock).toHaveBeenCalledWith({
@@ -274,41 +291,7 @@ describe("resolveSessionReference", () => {
     });
   });
 
-  it("prefers a literal current sessionId before alias fallback", async () => {
-    callGatewayMock.mockResolvedValueOnce({});
-    callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:main" });
-
-    const result = await resolveSessionReference({
-      sessionKey: "current",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:subagent:child",
-      restrictToSpawned: false,
-    });
-    expectResolvedSessionReference(result, {
-      key: "agent:ops:main",
-      displayKey: "agent:ops:main",
-      resolvedViaSessionId: true,
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.resolve",
-      params: {
-        key: "current",
-        spawnedBy: undefined,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
-      method: "sessions.resolve",
-      params: {
-        sessionId: "current",
-        spawnedBy: undefined,
-        includeGlobal: true,
-        includeUnknown: true,
-      },
-    });
-  });
-
-  it("skips literal current key lookup when spawned visibility is restricted", async () => {
+  it("resolves current alias directly even when spawned visibility is restricted", async () => {
     const result = await resolveSessionReference({
       sessionKey: "current",
       alias: "main",
@@ -321,16 +304,8 @@ describe("resolveSessionReference", () => {
       displayKey: "agent:main:subagent:child",
       resolvedViaSessionId: false,
     });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.resolve",
-      params: {
-        sessionId: "current",
-        spawnedBy: "agent:main:subagent:child",
-        includeGlobal: false,
-        includeUnknown: false,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    // Should NOT call the gateway — "current" is resolved internally.
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("treats the TUI client label as the requester session", async () => {
