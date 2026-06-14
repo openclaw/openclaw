@@ -427,7 +427,7 @@ async function maybeFetchProviderWebFetchPayload(
   const payload = normalizeProviderWebFetchPayload({
     providerId: providerFallback.provider.id,
     payload: rawPayload,
-    requestedUrl: params.url,
+    requestedUrl: params.urlToFetch,
     extractMode: params.extractMode,
     maxChars: params.maxChars,
     tookMs: params.tookMs,
@@ -456,23 +456,32 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
 
   let parsedUrl: URL;
+  // Preserve standard URL percent-encoding for valid URLs.  Only recover
+  // from whitespace immediately after the scheme (LLMs sometimes generate
+  // "https:// docs.example.com"); other structural malformations remain
+  // rejected so the fetched target is never silently changed.
   try {
     parsedUrl = new URL(params.url);
   } catch {
-    throw new Error("Invalid URL: must be http or https");
+    try {
+      parsedUrl = new URL(params.url.replace(/^(https?:\/\/)\s+/i, "$1"));
+    } catch {
+      throw new Error("Invalid URL: must be http or https");
+    }
   }
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
   }
+  const normalizedUrl = parsedUrl.href;
 
   const start = Date.now();
   let res: Response;
   let release: (() => Promise<void>) | null;
-  let finalUrl = params.url;
+  let finalUrl = normalizedUrl;
   try {
     const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
     const result = await fetchWithWebToolsNetworkGuard({
-      url: params.url,
+      url: normalizedUrl,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
@@ -524,7 +533,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       }
       const payload = await maybeFetchProviderWebFetchPayload({
         ...params,
-        urlToFetch: params.url,
+        urlToFetch: normalizedUrl,
         cacheKey,
         tookMs: Date.now() - start,
       });
@@ -632,7 +641,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
     const wrappedWarning = wrapWebFetchField(responseTruncatedWarning);
     const payload = {
-      url: params.url, // Keep raw for tool chaining
+      url: normalizedUrl,
       finalUrl, // Keep raw
       status: res.status,
       contentType: normalizedContentType, // Protocol metadata, don't wrap
