@@ -1301,6 +1301,7 @@ jobs:
               pnpm lint:webhook:no-low-level-body-read
               pnpm lint:auth:no-pairing-store-group
               pnpm lint:auth:pairing-account-scope
+              pnpm test src/commands/doctor-lint.test.ts src/flows/doctor-lint-flow.test.ts
               pnpm check:import-cycles
               # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
               NODE_OPTIONS=--max-old-space-size=8192 pnpm build:plugin-sdk:strict-smoke

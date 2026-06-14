@@ -84,6 +84,47 @@ describe("runDoctorLintChecks", () => {
       },
     ]);
   });
+
+  it("keeps lint finding order deterministic when severity/check/path tie", async () => {
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [
+        check("same", async () => [
+          {
+            checkId: "same",
+            severity: "warning",
+            path: "agents.defaults.model.primary",
+            line: 8,
+            message: "zeta",
+          },
+          {
+            checkId: "same",
+            severity: "warning",
+            path: "agents.defaults.model.primary",
+            line: 8,
+            message: "alpha",
+          },
+          {
+            checkId: "same",
+            severity: "warning",
+            path: "agents.defaults.model.primary",
+            line: 3,
+            message: "middle",
+          },
+        ]),
+      ],
+    });
+
+    expect(
+      result.findings.map(
+        (finding) =>
+          `${finding.checkId}:${finding.path ?? ""}:${finding.line ?? ""}:${finding.message}`,
+      ),
+    ).toEqual([
+      "same:agents.defaults.model.primary:3:middle",
+      "same:agents.defaults.model.primary:8:alpha",
+      "same:agents.defaults.model.primary:8:zeta",
+    ]);
+  });
 });
 
 describe("exitCodeFromFindings", () => {

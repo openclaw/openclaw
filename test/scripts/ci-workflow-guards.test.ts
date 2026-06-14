@@ -163,7 +163,7 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it("runs dependency policy guards in PR CI preflight", () => {
+  it("runs dependency and doctor lint policy guards in PR CI preflight", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(
       workflow.indexOf("guards)"),
@@ -178,6 +178,9 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain("check-shrinkwrap");
     expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
+    expect(preflightGuards).toContain(
+      "pnpm test src/commands/doctor-lint.test.ts src/flows/doctor-lint-flow.test.ts",
+    );
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {
