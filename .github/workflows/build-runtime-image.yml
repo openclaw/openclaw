@@ -1,10 +1,13 @@
 name: build-runtime-image
 
-# Builds and pushes the per-tenant multitenant runtime image to GHCR.
+# Builds and pushes the per-tenant multitenant runtime image to GHCR and Fly's
+# private registry.
 # Triggered on changes to anything that affects the image, and manually.
 #
 # Two jobs:
-#   1. build         — buildx + push to ghcr.io/rockielab/rockielab-runtime-multitenant:{sha,latest}
+#   1. build         — buildx + push to:
+#                      - ghcr.io/rockielab/rockielab-runtime-multitenant:{sha,latest}
+#                      - registry.fly.io/rockielab-runtime-multitenant:{sha,latest}
 #   2. dispatch-deploy — optional cross-repo trigger of deploy-hetzner.yml
 #                        (skipped silently if PLATFORM_CONTEXT_DISPATCH_TOKEN
 #                        isn't set on this repo).
@@ -17,6 +20,8 @@ name: build-runtime-image
 #   - PLATFORM_SKILLS_READ_TOKEN  (fine-grained PAT with Contents:Read on
 #     Rockielab/platform-skills only. Required because platform-skills is
 #     private and the default GITHUB_TOKEN is scoped to this repo only.)
+#   - FLY_API_TOKEN  (used to push the private runtime image to Fly's registry;
+#     tenant Machines pull registry.fly.io images from inside Fly)
 #
 # GHCR push auth uses the workflow's auto-minted GITHUB_TOKEN (the
 # job-level `permissions: packages: write` block grants the necessary
@@ -105,10 +110,12 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE: ghcr.io/rockielab/rockielab-runtime-multitenant
+      GHCR_IMAGE: ghcr.io/rockielab/rockielab-runtime-multitenant
+      FLY_IMAGE: registry.fly.io/rockielab-runtime-multitenant
       # Map the secret to env so we can `if:` on it (secrets context is
       # not available in step-level if expressions; env is).
       SKILLS_READ_TOKEN: ${{ secrets.PLATFORM_SKILLS_READ_TOKEN }}
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
     steps:
       - name: Preflight — require PLATFORM_SKILLS_READ_TOKEN
         if: env.SKILLS_READ_TOKEN == ''
@@ -116,6 +123,13 @@ jobs:
           echo "::error::PLATFORM_SKILLS_READ_TOKEN secret is not set on this repo."
           echo "Generate a fine-grained PAT with Contents:Read on Rockielab/platform-skills,"
           echo "then: gh secret set PLATFORM_SKILLS_READ_TOKEN --repo Rockielab/platform-runtime --body '<pat>'"
+          exit 1
+
+      - name: Preflight — require FLY_API_TOKEN
+        if: env.FLY_API_TOKEN == ''
+        run: |
+          echo "::error::FLY_API_TOKEN secret is not set on this repo."
+          echo "It is required to push the private runtime image to registry.fly.io for tenant Machines."
           exit 1
 
       - uses: actions/checkout@v4
@@ -157,6 +171,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Fly registry
+        uses: docker/login-action@v3
+        with:
+          registry: registry.fly.io
+          username: x
+          password: ${{ secrets.FLY_API_TOKEN }}
+
       - name: Start build timer
         id: build_timer
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
@@ -174,20 +195,22 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+            ${{ env.GHCR_IMAGE }}:latest
+            ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+            ${{ env.FLY_IMAGE }}:latest
+            ${{ env.FLY_IMAGE }}:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache,mode=max
 
       - name: Record pushed image ref
         id: image
         run: |
-          image_ref="${{ env.IMAGE }}:${{ github.sha }}"
+          image_ref="${{ env.FLY_IMAGE }}:${{ github.sha }}"
           echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
 
       - name: Record runtime image platform proof
         env:
-          RUNTIME_IMAGE_REF: ${{ env.IMAGE }}:${{ github.sha }}
+          RUNTIME_IMAGE_REF: ${{ env.FLY_IMAGE }}:${{ github.sha }}
           TARGET_PLATFORM: linux/amd64
         run: |
           set -euo pipefail
@@ -260,13 +283,15 @@ jobs:
           setup_elapsed=$(( ${{ steps.build_timer.outputs.started_at }} - ${{ steps.setup_timer.outputs.started_at }} ))
           echo "## Pushed runtime image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- GHCR audit image: \`${{ env.GHCR_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- GHCR audit image: \`${{ env.GHCR_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Fly rollout image: \`${{ env.FLY_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Fly rollout image: \`${{ env.FLY_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- setup duration: \`${setup_elapsed}s\`" >> $GITHUB_STEP_SUMMARY
           echo "- build+push duration: \`${build_elapsed}s\`" >> $GITHUB_STEP_SUMMARY
           echo "- queue metadata: run \`${{ github.run_id }}\` attempt \`${{ github.run_attempt }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Set \`ROCKIELAB_RUNTIME_IMAGE=${{ env.IMAGE }}:${{ github.sha }}\` in platform-context's Hetzner .env to roll forward." >> $GITHUB_STEP_SUMMARY
+          echo "Set \`ROCKIELAB_RUNTIME_IMAGE=${{ env.FLY_IMAGE }}:${{ github.sha }}\` in platform-context's Hetzner .env to roll forward." >> $GITHUB_STEP_SUMMARY
 
   dispatch-deploy:
     needs: build
@@ -325,7 +350,7 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
       GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
-      IMAGE_TAG: ghcr.io/rockielab/rockielab-runtime-multitenant:${{ github.sha }}
+      IMAGE_TAG: ${{ needs.build.outputs.image_ref }}
       ROLLOUT_TENANT_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_tenant_id || '' }}
       ROLLOUT_CANARY_COUNT: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_canary_count || '' }}
       ROLLOUT_CANARY_WAIT_SEC: ${{ github.event_name == 'workflow_dispatch' && inputs.rollout_canary_wait_sec || '' }}

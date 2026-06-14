@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_FLY_ORG_SLUG = "sam-larson-851";
+const DEFAULT_FLY_ORG_SLUG = "personal";
 const DEFAULT_FLY_MACHINES_API = "https://api.machines.dev/v1";
 const TENANT_APP_PREFIX = "rockielab-tenant-";
 const WORKFLOW_FILE = "build-runtime-image.yml";
@@ -699,6 +699,7 @@ function renderMarkdown(summary) {
 async function writeArtifacts(dir, summary, attempts) {
   await mkdir(dir, { recursive: true });
   const paths = artifactPaths(dir);
+  const renderedSummary = renderMarkdown(summary);
   const attemptsText = attempts.map((attempt) => JSON.stringify(attempt)).join("\n");
   await writeFile(paths.attemptsJsonl, attemptsText ? `${attemptsText}\n` : "");
   await writeFile(paths.finalResponseTxt, summary.final_response_body || "");
@@ -712,9 +713,14 @@ async function writeArtifacts(dir, summary, attempts) {
   delete summaryForJson.final_response_body;
   delete summaryForJson.final_response_json;
   await writeFile(paths.summaryJson, `${JSON.stringify(summaryForJson, null, 2)}\n`);
-  await writeFile(paths.summaryMd, renderMarkdown(summary));
+  await writeFile(paths.summaryMd, renderedSummary);
   if (process.env.GITHUB_STEP_SUMMARY) {
-    await writeFile(process.env.GITHUB_STEP_SUMMARY, renderMarkdown(summary), { flag: "a" });
+    try {
+      await writeFile(process.env.GITHUB_STEP_SUMMARY, renderedSummary, { flag: "a" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`Could not append rollout summary to GITHUB_STEP_SUMMARY: ${message}`);
+    }
   }
 }
 

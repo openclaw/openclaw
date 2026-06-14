@@ -41,6 +41,7 @@ const ROLLOUT_ENV_NAMES = [
   "GITHUB_TOKEN",
   "GITHUB_REPOSITORY",
   "GITHUB_RUN_NUMBER",
+  "GITHUB_STEP_SUMMARY",
   "API_PASSWORD",
 ] as const;
 
@@ -344,6 +345,111 @@ describe("scripts/runtime-rollout", () => {
         token: "<redacted>",
         expires_in: 300,
       });
+    } finally {
+      vi.unstubAllGlobals();
+      restoreEnv(previousEnv);
+      await rm(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rolls out Fly registry images without GHCR preflight calls", async () => {
+    const previousEnv = snapshotEnv();
+    const artifactDir = await mkdtemp(path.join(tmpdir(), "runtime-rollout-"));
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    try {
+      process.env.API_URL = "https://api.rockielab.test";
+      process.env.ADMIN_TOKEN = "admin-token";
+      process.env.IMAGE_TAG = "registry.fly.io/rockielab-runtime-multitenant:sha";
+      process.env.ROLLOUT_ARTIFACT_DIR = artifactDir;
+      process.env.ROLLOUT_MAX_ATTEMPTS = "1";
+      process.env.ROLLOUT_CURL_MAX_TIME = "1";
+      delete process.env.FLY_API_TOKEN;
+      delete process.env.GHCR_PULL_USERNAME;
+      delete process.env.GHCR_PULL_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_REPOSITORY;
+      delete process.env.GITHUB_RUN_NUMBER;
+      delete process.env.API_PASSWORD;
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+          const requestUrl = String(url);
+          fetchCalls.push({ url: requestUrl, init });
+          const parsed = new URL(requestUrl);
+          if (init?.method === "POST" && parsed.pathname === "/api/admin/tenants/rollout") {
+            expect(parsed.searchParams.get("image")).toBe(
+              "registry.fly.io/rockielab-runtime-multitenant:sha",
+            );
+            return jsonResponse(200, {
+              updated: [{ tenant_id: "t-demo", machine_id: "machine-1" }],
+              skipped: [],
+              failed: [],
+              summary: { updated: 1, skipped: 0, failed: 0, total: 1 },
+            });
+          }
+          throw new Error(`unexpected fetch: ${requestUrl}`);
+        }),
+      );
+
+      await expect(runRollout()).resolves.toBe(0);
+
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0].url).toBe(
+        "https://api.rockielab.test/api/admin/tenants/rollout?image=registry.fly.io%2Frockielab-runtime-multitenant%3Asha&confirm=true&async=true",
+      );
+      expect(fetchCalls.some((call) => call.url.startsWith("https://ghcr.io"))).toBe(false);
+
+      const summary = await readRolloutSummary(artifactDir);
+      expect(summary.final_result).toBe("succeeded");
+      expect(summary.buckets).toMatchObject({ updated: 1, skipped: 0, failed: 0, total: 1 });
+      expect(summary.ghcr_pull_preflight).toMatchObject({
+        ok: true,
+        skipped: true,
+        auth_mode: "skipped-non-ghcr",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      restoreEnv(previousEnv);
+      await rm(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still writes rollout artifacts when the GitHub step summary path disappears", async () => {
+    const previousEnv = snapshotEnv();
+    const artifactDir = await mkdtemp(path.join(tmpdir(), "runtime-rollout-"));
+    try {
+      process.env.API_URL = "https://api.rockielab.test";
+      process.env.ADMIN_TOKEN = "admin-token";
+      process.env.IMAGE_TAG = "registry.fly.io/rockielab-runtime-multitenant:sha";
+      process.env.ROLLOUT_ARTIFACT_DIR = artifactDir;
+      process.env.ROLLOUT_MAX_ATTEMPTS = "1";
+      process.env.ROLLOUT_CURL_MAX_TIME = "1";
+      process.env.GITHUB_STEP_SUMMARY = path.join(artifactDir, "missing", "summary.md");
+      delete process.env.FLY_API_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_REPOSITORY;
+      delete process.env.GITHUB_RUN_NUMBER;
+      delete process.env.API_PASSWORD;
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          jsonResponse(200, {
+            updated: [{ tenant_id: "t-demo" }],
+            skipped: [],
+            failed: [],
+          }),
+        ),
+      );
+
+      await expect(runRollout()).resolves.toBe(0);
+
+      const summary = await readRolloutSummary(artifactDir);
+      expect(summary.final_result).toBe("succeeded");
+      await expect(
+        readFile(path.join(artifactDir, "rollout-summary.md"), "utf8"),
+      ).resolves.toContain("Cross-tenant rollout");
     } finally {
       vi.unstubAllGlobals();
       restoreEnv(previousEnv);

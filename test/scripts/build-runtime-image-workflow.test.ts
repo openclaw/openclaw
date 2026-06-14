@@ -72,6 +72,7 @@ describe("build-runtime-image rollout workflow", () => {
     expect(text).toContain("setup duration");
     expect(text).toContain("build+push duration");
     expect(text).toContain("queue metadata");
+    expect(text).toContain("registry.fly.io/rockielab-runtime-multitenant");
   });
 
   it("exposes event-safe manual rollout inputs", () => {
@@ -123,7 +124,7 @@ describe("build-runtime-image rollout workflow", () => {
       FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN }}",
       GHCR_PULL_USERNAME: "${{ secrets.GHCR_PULL_USERNAME }}",
       GHCR_PULL_TOKEN: "${{ secrets.GHCR_PULL_TOKEN }}",
-      IMAGE_TAG: "ghcr.io/rockielab/rockielab-runtime-multitenant:${{ github.sha }}",
+      IMAGE_TAG: "${{ needs.build.outputs.image_ref }}",
       ROLLOUT_ARTIFACT_DIR: ".artifacts/runtime-rollout",
       ROLLOUT_MAX_ATTEMPTS: "5",
       ROLLOUT_FALLBACK_AFTER_TRANSIENTS: "2",
@@ -169,6 +170,35 @@ describe("build-runtime-image rollout workflow", () => {
     expect(workflow).toContain(
       "GHCR_PULL_TOKEN: optional preflight token for private runtime image pulls",
     );
+  });
+
+  it("pushes a Fly registry image for tenant rollout without making GHCR public", () => {
+    const workflow = readWorkflow();
+    const build = workflow.jobs?.build;
+    expect(build, "expected build job").toBeDefined();
+    expect(build!.env).toMatchObject({
+      GHCR_IMAGE: "ghcr.io/rockielab/rockielab-runtime-multitenant",
+      FLY_IMAGE: "registry.fly.io/rockielab-runtime-multitenant",
+      FLY_API_TOKEN: "${{ secrets.FLY_API_TOKEN }}",
+    });
+
+    const flyPreflight = workflowStep(build!, "Preflight — require FLY_API_TOKEN");
+    expect(flyPreflight.if).toBe("env.FLY_API_TOKEN == ''");
+
+    const flyLogin = workflowStep(build!, "Log in to Fly registry");
+    expect(flyLogin.uses).toBe("docker/login-action@v3");
+    expect(flyLogin.with).toMatchObject({
+      registry: "registry.fly.io",
+      username: "x",
+      password: "${{ secrets.FLY_API_TOKEN }}",
+    });
+
+    const buildPush = workflowStep(build!, "Build and push");
+    expect(buildPush.with?.tags).toContain("${{ env.GHCR_IMAGE }}:${{ github.sha }}");
+    expect(buildPush.with?.tags).toContain("${{ env.FLY_IMAGE }}:${{ github.sha }}");
+
+    const record = workflowStep(build!, "Record pushed image ref");
+    expect(record.run).toContain('image_ref="${{ env.FLY_IMAGE }}:${{ github.sha }}"');
   });
 
   it("falls back after Cloudflare 524s through per-tenant admin rollout", () => {
