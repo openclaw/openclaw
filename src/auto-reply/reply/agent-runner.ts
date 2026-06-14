@@ -2084,6 +2084,9 @@ export async function runReplyAgent(params: {
     const hasVisibleBlockProgress = Boolean(
       blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
     );
+    const hasSubstantiveBlockReply = Boolean(
+      blockReplyPipeline?.didStreamSubstantiveReply() && !blockReplyPipeline.isAborted(),
+    );
     const hasDirectBlockProgress = (directlySentBlockKeys?.size ?? 0) > 0;
     const hasRunToolActivity = (runResult.meta?.toolSummary?.calls ?? 0) > 0;
     const successfulSideEffectDelivery = hasSuccessfulSideEffectDelivery({
@@ -2139,7 +2142,7 @@ export async function runReplyAgent(params: {
         hasVisibleReplyEvidence:
           hasMessageToolOnlyCurrentSourceVisibleReplyEvidence ||
           (followupRun.run.sourceReplyDeliveryMode === "message_tool_only" &&
-            hasVisibleBlockProgress),
+            hasSubstantiveBlockReply),
         hasPotentialResponseActivity: hasMessageToolOnlyResponseActivity,
         hasSubstantiveFinalPayload: hasMessageToolOnlySubstantiveFinalPayload(payloadArray),
       });
