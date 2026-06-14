@@ -305,19 +305,49 @@ function toTrajectoryToolDefinitions(
   }
   return tools
     .flatMap((tool) => {
-      const name = tool.name?.trim();
+      const name = readTrajectoryToolName(tool);
       if (!name) {
         return [];
       }
+      const description = readTrajectoryToolDescription(tool);
       return [
         {
           name,
-          description: tool.description,
-          parameters: sanitizeValue(tool.inputSchema),
+          ...(description ? { description } : {}),
+          parameters: sanitizeValue(readTrajectoryToolInputSchema(tool)),
         },
       ];
     })
     .toSorted((left, right) => left.name.localeCompare(right.name));
+}
+
+function readTrajectoryToolName(tool: { name?: string }): string | undefined {
+  try {
+    const rawName = tool.name;
+    if (typeof rawName !== "string") {
+      return undefined;
+    }
+    return rawName.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readTrajectoryToolDescription(tool: { description?: string }): string | undefined {
+  try {
+    const description = tool.description;
+    return typeof description === "string" ? description : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readTrajectoryToolInputSchema(tool: { inputSchema?: unknown }): unknown {
+  try {
+    return tool.inputSchema;
+  } catch {
+    return "<unreadable>";
+  }
 }
 
 function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
@@ -343,16 +373,51 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
     return "<truncated>";
   }
   if (Array.isArray(value)) {
-    return value.slice(0, 100).map((entry) => sanitizeValue(entry, depth + 1, key));
+    let length: number;
+    try {
+      length = value.length;
+    } catch {
+      return "<unreadable>";
+    }
+    const result: unknown[] = [];
+    for (let index = 0; index < Math.min(length, 100); index += 1) {
+      let entry: unknown;
+      try {
+        entry = value[index];
+      } catch {
+        result.push("<unreadable>");
+        continue;
+      }
+      result.push(sanitizeValue(entry, depth + 1, key));
+    }
+    return result;
   }
   if (typeof value === "object") {
     const next: Record<string, unknown> = {};
-    for (const [keyLocal, child] of Object.entries(value).slice(0, 100)) {
+    let keys: string[];
+    try {
+      keys = Object.keys(value).slice(0, 100);
+    } catch {
+      return "<unreadable>";
+    }
+    const record = value as Record<string, unknown>;
+    for (const keyLocal of keys) {
+      let child: unknown;
+      try {
+        child = record[keyLocal];
+      } catch {
+        next[keyLocal] = "<unreadable>";
+        continue;
+      }
       next[keyLocal] = sanitizeValue(child, depth + 1, keyLocal);
     }
     return next;
   }
-  return JSON.stringify(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "<unreadable>";
+  }
 }
 
 function redactSensitiveString(value: string): string {
