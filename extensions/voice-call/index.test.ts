@@ -174,6 +174,15 @@ function firstRuntimeConfig(): VoiceCallRuntime["config"] | undefined {
   return options?.config;
 }
 
+function managerMocks() {
+  return runtimeStub.manager as unknown as {
+    getCall: ReturnType<typeof vi.fn>;
+    getCallByProviderCallId: ReturnType<typeof vi.fn>;
+    getActiveCalls: ReturnType<typeof vi.fn>;
+    getCallHistory: ReturnType<typeof vi.fn>;
+  };
+}
+
 function expectWarningIncludes(text: string): void {
   expect(noopLogger.warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
@@ -488,6 +497,109 @@ describe("voice-call plugin", () => {
     const [ok, payload] = firstRespondCall(respond);
     expect(ok).toBe(true);
     expect(payload?.found).toBe(true);
+  });
+
+  it("redacts private objectives from status readback", async () => {
+    const privateCall = createCallRecord({
+      callId: "private-call",
+      metadata: {
+        initialMessage: "Hola, buenas tardes.",
+        objective: "Book a restaurant table.",
+      },
+    });
+    managerMocks().getCall.mockReturnValue(privateCall);
+    managerMocks().getActiveCalls.mockReturnValue([privateCall]);
+
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+
+    const singleRespond = vi.fn();
+    await handler?.({ params: { callId: "private-call" }, respond: singleRespond });
+    const singlePayload = firstRespondCall(singleRespond)[1] as {
+      call?: { metadata?: Record<string, unknown> };
+    };
+    expect(singlePayload.call?.metadata).toEqual({ initialMessage: "Hola, buenas tardes." });
+
+    const listRespond = vi.fn();
+    await handler?.({ params: {}, respond: listRespond });
+    const listPayload = firstRespondCall(listRespond)[1] as {
+      calls?: Array<{ metadata?: Record<string, unknown> }>;
+    };
+    expect(listPayload.calls?.[0]?.metadata).toEqual({ initialMessage: "Hola, buenas tardes." });
+  });
+
+  it("returns completed call status from history", async () => {
+    runtimeStub = createRuntimeStub("active-call");
+    const completed = createCallRecord({
+      callId: "completed-call",
+      providerCallId: "provider-completed-call",
+      state: "completed",
+      endedAt: Date.UTC(2026, 4, 2, 9, 5, 0),
+      endReason: "completed",
+      transcript: [{ timestamp: Date.now(), speaker: "bot", text: "Done", isFinal: true }],
+    });
+    managerMocks().getCall.mockReturnValue(undefined);
+    managerMocks().getCallByProviderCallId.mockReturnValue(undefined);
+    managerMocks().getCallHistory.mockResolvedValue([completed]);
+
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { callId: "completed-call" }, respond });
+
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { found: true, call: { ...completed, metadata: undefined } },
+    ]);
+  });
+
+  it("prefers a completed provider history record with call content", async () => {
+    runtimeStub = createRuntimeStub("active-call");
+    const completed = createCallRecord({
+      callId: "completed-call",
+      providerCallId: "provider-completed-call",
+      state: "completed",
+      endedAt: Date.UTC(2026, 4, 2, 9, 5, 0),
+      endReason: "completed",
+      transcript: [{ timestamp: Date.now(), speaker: "bot", text: "Booked", isFinal: true }],
+      metadata: { objective: "Book a restaurant table." },
+    });
+    const emptyLateDuplicate = createCallRecord({
+      callId: "late-duplicate-call",
+      providerCallId: "provider-completed-call",
+      state: "completed",
+      endedAt: Date.UTC(2026, 4, 2, 9, 6, 0),
+      endReason: "completed",
+      transcript: [],
+    });
+    managerMocks().getCall.mockReturnValue(undefined);
+    managerMocks().getCallByProviderCallId.mockReturnValue(undefined);
+    managerMocks().getCallHistory.mockResolvedValue([completed, emptyLateDuplicate]);
+
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { callId: "provider-completed-call" }, respond });
+
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { found: true, call: { ...completed, metadata: undefined } },
+    ]);
   });
 
   it("sends DTMF via voicecall.dtmf", async () => {

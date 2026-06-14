@@ -129,6 +129,7 @@ export async function initiateCall(
   const opts: OutboundCallOptions =
     typeof options === "string" ? { message: options } : (options ?? {});
   const initialMessage = opts.message;
+  const objective = opts.objective?.trim();
   const mode = opts.mode ?? ctx.config.outbound.defaultMode;
   const dtmfSequence = opts.dtmfSequence;
   const requesterSessionKey = opts.requesterSessionKey?.trim();
@@ -186,6 +187,7 @@ export async function initiateCall(
     processedEventIds: [],
     metadata: {
       ...(initialMessage && { initialMessage }),
+      ...(objective ? { objective } : {}),
       mode,
       ...(requesterSessionKey ? { requesterSessionKey } : {}),
     },

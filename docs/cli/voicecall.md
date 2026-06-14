@@ -17,8 +17,8 @@ When the Gateway is running, operational commands (`call`, `start`, `continue`, 
 ```bash
 openclaw voicecall setup    [--json]
 openclaw voicecall smoke    [-t <phone>] [--message <text>] [--mode <m>] [--yes] [--json]
-openclaw voicecall call     -m <text> [-t <phone>] [--mode <m>]
-openclaw voicecall start    --to <phone> [--message <text>] [--mode <m>]
+openclaw voicecall call     -m <text> [-t <phone>] [--mode <m>] [--objective <text>]
+openclaw voicecall start    --to <phone> [--message <text>] [--mode <m>] [--objective <text>]
 openclaw voicecall continue --call-id <id> --message <text>
 openclaw voicecall speak    --call-id <id> --message <text>
 openclaw voicecall dtmf     --call-id <id> --digits <digits>
@@ -88,6 +88,7 @@ Initiate an outbound voice call.
 | `-m, --message <text>` | yes      | (none)            | Message to speak when the call connects.                                   |
 | `-t, --to <phone>`     | no       | config `toNumber` | E.164 phone number to call.                                                |
 | `--mode <mode>`        | no       | `conversation`    | Call mode: `notify` (hang up after message) or `conversation` (stay open). |
+| `--objective <text>`   | no       | (none)            | Private per-call objective for realtime task calls; not spoken as opener.  |
 
 ```bash
 openclaw voicecall call --to "+15555550123" --message "Hello"
@@ -98,11 +99,12 @@ openclaw voicecall call -m "Heads up" --mode notify
 
 Alias for `call` with a different default flag shape.
 
-| Flag               | Required | Default        | Description                              |
-| ------------------ | -------- | -------------- | ---------------------------------------- |
-| `--to <phone>`     | yes      | (none)         | Phone number to call.                    |
-| `--message <text>` | no       | (none)         | Message to speak when the call connects. |
-| `--mode <mode>`    | no       | `conversation` | Call mode: `notify` or `conversation`.   |
+| Flag                 | Required | Default        | Description                                                               |
+| -------------------- | -------- | -------------- | ------------------------------------------------------------------------- |
+| `--to <phone>`       | yes      | (none)         | Phone number to call.                                                     |
+| `--message <text>`   | no       | (none)         | Message to speak when the call connects.                                  |
+| `--mode <mode>`      | no       | `conversation` | Call mode: `notify` or `conversation`.                                    |
+| `--objective <text>` | no       | (none)         | Private per-call objective for realtime task calls; not spoken as opener. |
 
 ### `continue`
 
