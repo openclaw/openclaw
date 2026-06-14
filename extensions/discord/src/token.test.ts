@@ -172,4 +172,91 @@ describe("resolveDiscordToken", () => {
     expect(res.source).toBe("config");
     expect(res.tokenStatus).toBe("configured_unavailable");
   });
+
+  it("default account falls through to env when accounts.default.token is explicitly blank", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: { token: "" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("env-token");
+    expect(res.source).toBe("env");
+    expect(res.tokenStatus).toBe("available");
+  });
+
+  it("default account falls through to top-level token when accounts.default.token is explicitly blank", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "base-token",
+          accounts: {
+            default: { token: "" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("base-token");
+    expect(res.source).toBe("config");
+    expect(res.tokenStatus).toBe("available");
+  });
+
+  it("default account reports missing when both accounts.default.token and env are absent", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: { token: "" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+    expect(res.tokenStatus).toBe("missing");
+  });
+
+  it("default account preserves configured_unavailable for unresolved SecretRef even with env set", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN_MISSING" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("config");
+    expect(res.tokenStatus).toBe("configured_unavailable");
+  });
+
+  it("default account uses env when accounts.default exists with no token key", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveDiscordToken(cfg);
+    expect(res.token).toBe("env-token");
+    expect(res.source).toBe("env");
+    expect(res.tokenStatus).toBe("available");
+  });
 });
