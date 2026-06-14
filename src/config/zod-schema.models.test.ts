@@ -50,4 +50,30 @@ describe("ModelsConfigSchema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts compat.sendSessionAffinityHeaders", () => {
+    // The field is consumed at runtime (getCompat/detectCompat plus the
+    // openai-completions and anthropic providers) and is present in the
+    // ModelCompat type, but was missing from the strict Zod schema, so a valid
+    // config setting it was rejected with "Unrecognized key(s)" — the same drift
+    // class as issue #89660.
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "my-proxy": {
+          baseUrl: "https://my-proxy.example.com/v1",
+          models: [
+            {
+              id: "some-model",
+              name: "Some Model",
+              compat: {
+                sendSessionAffinityHeaders: true,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });
