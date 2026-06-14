@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-function createModelSuppressionRegistry(): PluginManifestRegistry {
+function createModelSuppressionRegistry(params?: {
+  sparkSuppressionWhen?: {
+    baseUrlHosts?: string[];
+    providerConfigApiIn?: string[];
+  };
+}): PluginManifestRegistry {
   return {
     diagnostics: [],
     plugins: [
@@ -26,6 +31,7 @@ function createModelSuppressionRegistry(): PluginManifestRegistry {
               model: "gpt-5.3-codex-spark",
               reason:
                 "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+              ...(params?.sparkSuppressionWhen ? { when: params.sparkSuppressionWhen } : {}),
             },
           ],
         },
@@ -80,6 +86,29 @@ describe("config model reference validation", () => {
       {
         pluginMetadataSnapshot: {
           manifestRegistry: createModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts conditionally suppressed provider/model pairs during config validation", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.3-codex-spark",
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createModelSuppressionRegistry({
+            sparkSuppressionWhen: { baseUrlHosts: ["api.openai.com"] },
+          }),
         },
       },
     );
