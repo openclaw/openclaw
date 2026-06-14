@@ -1,8 +1,9 @@
 // Transcript redaction tests cover structured and text transcript fields so
 // secrets do not persist in logs or replay artifacts.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as loggingConfigModule from "../logging/config.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
 // AgentMessage includes custom message types without content; this accessor
@@ -36,6 +37,18 @@ const BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING = Buffer.from(
 ).toString("base64");
 const CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES =
   "gAAAAABpQnQrXzzZqcAfo3unbAY-ku84xgsvB0fpLkbDvSh3WS5qzfSCmcgwr8_abcdefghijvK2RyV2GQ4ohzcfYwhRwTvY76TvR7Tvr_";
+const BASE64_TEXT_SIGNATURE = "QUJDREVGR0hJSktMTU5PUA==";
+const COPILOT_CONNECTION_BOUND_ID = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
+const OPENAI_REASONING_REPLAY_METADATA = {
+  v: 1,
+  source: "openai-responses",
+  provider: "openai",
+  api: "openai-responses",
+  model: "gpt-5.5",
+  baseUrlHash: "base-hash",
+  sessionHash: "session-hash",
+  authProfileHash: "auth-hash",
+} as const;
 
 describe("redactTranscriptMessage", () => {
   it("redacts text block matching default patterns (sk- token)", () => {
@@ -60,9 +73,15 @@ describe("redactTranscriptMessage", () => {
 
   it("preserves OpenAI encrypted reasoning inside thinkingSignature", () => {
     const thinkingSignature = JSON.stringify({
+      id: "rs_secret_identifier",
       type: "reasoning",
       encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
-      summary: [],
+      summary: [{ type: "summary_text", text: "secret sk-abcdef1234567890xyz" }],
+      content: [{ type: "reasoning_text", text: "secret sk-abcdef1234567890xyz" }],
+      __openclaw_replay: {
+        ...OPENAI_REASONING_REPLAY_METADATA,
+        secret: "sk-abcdef1234567890xyz",
+      },
     });
     const msg = {
       role: "assistant",
@@ -71,27 +90,65 @@ describe("redactTranscriptMessage", () => {
           type: "thinking",
           thinking: "secret sk-abcdef1234567890xyz",
           thinkingSignature,
+          openclawReasoningReplay: {
+            ...OPENAI_REASONING_REPLAY_METADATA,
+            secret: "sk-abcdef1234567890xyz",
+          },
         },
       ],
     } as unknown as AgentMessage;
 
-    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const result = redactTranscriptMessage(
+      msg,
+      cfg("tools", [String.raw`rs_[A-Za-z0-9_]+`, "reasoning", "summary_text"]),
+    );
     const block = (msgContent(result) as Array<{ thinking: string; thinkingSignature: string }>)[0];
+    const replayItem = JSON.parse(block.thinkingSignature) as {
+      id: string;
+      type: string;
+      encrypted_content: string;
+      summary: unknown[];
+      content?: unknown[];
+      __openclaw_replay: Record<string, unknown>;
+    };
+    const blockMetadata = (block as unknown as { openclawReasoningReplay: Record<string, unknown> })
+      .openclawReasoningReplay;
     expect(block.thinking).not.toContain("sk-abcdef1234567890xyz");
-    expect(block.thinkingSignature).toBe(thinkingSignature);
-    expect(block.thinkingSignature).toContain(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
-    expect(block.thinkingSignature).not.toContain("…");
+    expect(replayItem.id).toBe("rs_secret_identifier");
+    expect(replayItem.type).toBe("reasoning");
+    expect(replayItem.encrypted_content).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+    expect(replayItem.summary).toEqual([]);
+    expect(replayItem.content).toBeUndefined();
+    expect(replayItem["__openclaw_replay"]).toEqual(OPENAI_REASONING_REPLAY_METADATA);
+    expect(blockMetadata).toEqual(OPENAI_REASONING_REPLAY_METADATA);
+    expect(block.thinkingSignature).not.toContain("sk-abcdef1234567890xyz");
+    expect(JSON.stringify(blockMetadata)).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("preserves opaque encrypted_content fields while redacting siblings", () => {
+  it("preserves Google tool-call thought signatures while redacting arguments", () => {
     const msg = {
       role: "assistant",
       content: [
         {
-          type: "gatewayCustom",
-          encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
-          payload: {
+          type: "toolCall",
+          id: "call_1",
+          name: "send_request",
+          thoughtSignature: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          arguments: {
             apiKey: "plainsecretvalue123",
+            thinkingSignature: "sk-abcdef1234567890xyz",
+            thoughtSignature: "sk-abcdef1234567890xyz",
+            thought_signature: "sk-abcdef1234567890xyz",
+            encrypted_content: "sk-abcdef1234567890xyz",
+            nestedAssistant: {
+              role: "assistant",
+              content: [
+                {
+                  type: "thinking",
+                  thinkingSignature: "sk-abcdef1234567890xyz",
+                },
+              ],
+            },
           },
         },
       ],
@@ -99,10 +156,54 @@ describe("redactTranscriptMessage", () => {
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const block = (
-      msgContent(result) as Array<{ encrypted_content: string; payload: { apiKey: string } }>
+      msgContent(result) as Array<{
+        thoughtSignature: string;
+        arguments: Record<string, string>;
+      }>
     )[0];
-    expect(block.encrypted_content).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
-    expect(block.payload.apiKey).toBe("plains…e123");
+    expect(block.thoughtSignature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+    expect(JSON.stringify(block.arguments)).not.toContain("sk-abcdef1234567890xyz");
+    expect(block.arguments.apiKey).toBe("plains…e123");
+  });
+
+  it("preserves direct text and legacy thinking signatures", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "secret sk-abcdef1234567890xyz",
+          textSignature: BASE64_TEXT_SIGNATURE,
+        },
+        {
+          type: "text",
+          text: "visible",
+          textSignature: JSON.stringify({ v: 1, id: COPILOT_CONNECTION_BOUND_ID }),
+        },
+        {
+          type: "text",
+          text: "visible",
+          textSignature: "sk-abcdef1234567890xyz",
+        },
+        {
+          type: "thinking",
+          thinking: "secret sk-abcdef1234567890xyz",
+          thought_signature: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(
+      msg,
+      cfg("tools", [BASE64_TEXT_SIGNATURE, COPILOT_CONNECTION_BOUND_ID]),
+    );
+    const blocks = msgContent(result) as Array<Record<string, string>>;
+    expect(blocks[0].text).not.toContain("sk-abcdef1234567890xyz");
+    expect(blocks[0].textSignature).toBe(BASE64_TEXT_SIGNATURE);
+    expect(blocks[1].textSignature).toBe(JSON.stringify({ v: 1, id: COPILOT_CONNECTION_BOUND_ID }));
+    expect(blocks[2].textSignature).not.toContain("sk-abcdef1234567890xyz");
+    expect(blocks[3].thinking).not.toContain("sk-abcdef1234567890xyz");
+    expect(blocks[3].thought_signature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
   });
 
   it("preserves Anthropic redacted_thinking data while redacting siblings", () => {
@@ -112,6 +213,8 @@ describe("redactTranscriptMessage", () => {
         {
           type: "redacted_thinking",
           data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          thinkingSignature: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          thought_signature: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
           metadata: {
             accessToken: "nestedplainsecret123",
           },
@@ -121,13 +224,20 @@ describe("redactTranscriptMessage", () => {
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const block = (
-      msgContent(result) as Array<{ data: string; metadata: { accessToken: string } }>
+      msgContent(result) as Array<{
+        data: string;
+        thinkingSignature: string;
+        thought_signature: string;
+        metadata: { accessToken: string };
+      }>
     )[0];
     expect(block.data).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+    expect(block.thinkingSignature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+    expect(block.thought_signature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
     expect(block.metadata.accessToken).toBe("nested…t123");
   });
 
-  it("redacts ordinary data and signature fields", () => {
+  it("redacts provider-shaped fields outside direct assistant content blocks", () => {
     const msg = {
       role: "assistant",
       content: [
@@ -135,14 +245,20 @@ describe("redactTranscriptMessage", () => {
           type: "gatewayCustom",
           data: "secret sk-abcdef1234567890xyz",
           signature: "secret sk-abcdef1234567890xyz",
+          thinkingSignature: "secret sk-abcdef1234567890xyz",
+          thoughtSignature: "secret sk-abcdef1234567890xyz",
+          thought_signature: "secret sk-abcdef1234567890xyz",
+          encrypted_content: "secret sk-abcdef1234567890xyz",
+          nested: {
+            type: "redacted_thinking",
+            data: "secret sk-abcdef1234567890xyz",
+          },
         },
       ],
     } as unknown as AgentMessage;
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ data: string; signature: string }>)[0];
-    expect(block.data).not.toContain("sk-abcdef1234567890xyz");
-    expect(block.signature).not.toContain("sk-abcdef1234567890xyz");
+    expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("redacts partialJson block", () => {
@@ -657,6 +773,33 @@ describe("redactTranscriptMessage", () => {
     const msg = textMessage("nothing sensitive here");
     const result = redactTranscriptMessage(msg, cfg("tools"));
     expect(result).toBe(msg);
+  });
+
+  it("passes through signatures unchanged when global redaction is off", () => {
+    const readLoggingConfig = vi
+      .spyOn(loggingConfigModule, "readLoggingConfig")
+      .mockReturnValue({ redactSensitive: "off" });
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "secret sk-abcdef1234567890xyz",
+          thinkingSignature: JSON.stringify({
+            id: "rs_secret_identifier",
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "secret sk-abcdef1234567890xyz" }],
+            encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          }),
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    try {
+      expect(redactTranscriptMessage(msg)).toBe(msg);
+    } finally {
+      readLoggingConfig.mockRestore();
+    }
   });
 
   it("redacts with cfg=undefined (falls back to default patterns)", () => {

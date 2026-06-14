@@ -35,6 +35,10 @@ function redactTranscriptOptions(cfg?: OpenClawConfig) {
   };
 }
 
+function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
+  return (cfg?.logging?.redactSensitive ?? readLoggingConfig()?.redactSensitive) === "off";
+}
+
 function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
   if (cfg?.logging?.redactSensitive === "off") {
     return value;
@@ -180,29 +184,169 @@ function shouldPreserveNestedImageDataUrlFields(
   );
 }
 
-const OPAQUE_PROVIDER_FIELD_KEYS = new Set([
-  "encrypted_content",
-  "thinkingSignature",
-  "thoughtSignature",
-  "thought_signature",
+type TranscriptValueLocation =
+  | "root"
+  | "assistant-content-array"
+  | "assistant-content-block"
+  | "nested";
+
+function isCanonicalBase64Signature(value: string): boolean {
+  const compact = value.trim().replace(/\s+/g, "");
+  if (!compact || !/^[A-Za-z0-9+/=_-]+$/.test(compact)) {
+    return false;
+  }
+  const encoding = compact.includes("-") || compact.includes("_") ? "base64url" : "base64";
+  try {
+    const encoded = Buffer.from(compact, encoding).toString(encoding);
+    return encoded.replace(/=+$/g, "") === compact.replace(/=+$/g, "");
+  } catch {
+    return false;
+  }
+}
+
+function isOpenAITextSignature(value: string): boolean {
+  if (value.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (!parsed || typeof parsed !== "object" || !isPlainTranscriptObject(parsed)) {
+        return false;
+      }
+      if (!Object.keys(parsed).every((key) => key === "v" || key === "id" || key === "phase")) {
+        return false;
+      }
+      const id = typeof parsed.id === "string" && parsed.id.length > 0 ? parsed.id : undefined;
+      const phase =
+        parsed.phase === "commentary" || parsed.phase === "final_answer" ? parsed.phase : undefined;
+      return parsed.v === 1 && (id !== undefined || phase !== undefined);
+    } catch {
+      return false;
+    }
+  }
+  return /^msg_[A-Za-z0-9_-]+$/.test(value);
+}
+
+function isReplayableTextSignature(value: string): boolean {
+  return isOpenAITextSignature(value) || isCanonicalBase64Signature(value);
+}
+
+const OPENAI_REASONING_REPLAY_METADATA_KEYS = new Set([
+  "v",
+  "source",
+  "provider",
+  "api",
+  "model",
+  "baseUrlHash",
+  "sessionHash",
+  "authProfileHash",
 ]);
+const OPENAI_REASONING_REPLAY_METADATA_KEY = "__openclaw_replay";
+
+function sanitizeOpenAIReasoningReplayMetadata(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || !isPlainTranscriptObject(value)) {
+    return undefined;
+  }
+  if (
+    value.v !== 1 ||
+    value.source !== "openai-responses" ||
+    typeof value.provider !== "string" ||
+    typeof value.api !== "string" ||
+    typeof value.model !== "string" ||
+    (value.baseUrlHash !== undefined && typeof value.baseUrlHash !== "string") ||
+    (value.sessionHash !== undefined && typeof value.sessionHash !== "string") ||
+    (value.authProfileHash !== undefined && typeof value.authProfileHash !== "string")
+  ) {
+    return undefined;
+  }
+  if (Object.keys(value).every((key) => OPENAI_REASONING_REPLAY_METADATA_KEYS.has(key))) {
+    return value;
+  }
+  return {
+    v: 1,
+    source: "openai-responses",
+    provider: value.provider,
+    api: value.api,
+    model: value.model,
+    ...(value.baseUrlHash !== undefined ? { baseUrlHash: value.baseUrlHash } : {}),
+    ...(value.sessionHash !== undefined ? { sessionHash: value.sessionHash } : {}),
+    ...(value.authProfileHash !== undefined ? { authProfileHash: value.authProfileHash } : {}),
+  };
+}
 
 function shouldPreserveOpaqueProviderPayload(
   source: Record<string, unknown>,
   key: string,
   item: unknown,
+  location: TranscriptValueLocation,
 ): boolean {
-  if (typeof item !== "string") {
+  if (location !== "assistant-content-block" || typeof item !== "string") {
     return false;
-  }
-  if (OPAQUE_PROVIDER_FIELD_KEYS.has(key)) {
-    return true;
   }
   const type = source.type;
   return (
-    (type === "redacted_thinking" && key === "data") ||
-    ((type === "thinking" || type === "redacted_thinking") && key === "signature")
+    (type === "text" && key === "textSignature" && isReplayableTextSignature(item)) ||
+    (type === "thinking" &&
+      (key === "thinkingSignature" || key === "signature" || key === "thought_signature")) ||
+    (type === "redacted_thinking" &&
+      (key === "data" ||
+        key === "signature" ||
+        key === "thinkingSignature" ||
+        key === "thought_signature")) ||
+    (type === "toolCall" && key === "thoughtSignature")
   );
+}
+
+function sanitizeOpenAIReasoningSignature(value: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !isPlainTranscriptObject(parsed) ||
+    parsed.type !== "reasoning" ||
+    (parsed.summary !== undefined && !Array.isArray(parsed.summary))
+  ) {
+    return undefined;
+  }
+  const encryptedContent = parsed.encrypted_content;
+  const hasEncryptedContent = Object.hasOwn(parsed, "encrypted_content");
+  if (
+    encryptedContent !== undefined &&
+    encryptedContent !== null &&
+    typeof encryptedContent !== "string"
+  ) {
+    return undefined;
+  }
+  if (parsed.id !== undefined && typeof parsed.id !== "string") {
+    return undefined;
+  }
+  if (
+    parsed.status !== undefined &&
+    parsed.status !== "in_progress" &&
+    parsed.status !== "completed" &&
+    parsed.status !== "incomplete"
+  ) {
+    return undefined;
+  }
+  if (!hasEncryptedContent && typeof parsed.id !== "string") {
+    return undefined;
+  }
+  const replayMetadata = sanitizeOpenAIReasoningReplayMetadata(
+    parsed[OPENAI_REASONING_REPLAY_METADATA_KEY],
+  );
+  return JSON.stringify({
+    ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+    type: "reasoning",
+    summary: [],
+    ...(parsed.status !== undefined ? { status: parsed.status } : {}),
+    ...(hasEncryptedContent ? { encrypted_content: encryptedContent } : {}),
+    ...(replayMetadata ? { [OPENAI_REASONING_REPLAY_METADATA_KEY]: replayMetadata } : {}),
+  });
 }
 
 function redactTranscriptStructuredValue(
@@ -211,6 +355,7 @@ function redactTranscriptStructuredValue(
   fieldKey?: string,
   seen: WeakSet<object> = new WeakSet<object>(),
   preserveImageDataUrlFields = false,
+  location: TranscriptValueLocation = "nested",
 ): unknown {
   if (typeof value === "string") {
     if (fieldKey) {
@@ -231,6 +376,7 @@ function redactTranscriptStructuredValue(
         fieldKey,
         seen,
         preserveImageDataUrlFields,
+        location === "assistant-content-array" ? "assistant-content-block" : "nested",
       );
       changed ||= next !== item;
       return next;
@@ -260,8 +406,37 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    if (
+      location === "assistant-content-block" &&
+      source.type === "thinking" &&
+      key === "openclawReasoningReplay"
+    ) {
+      const sanitizedMetadata = sanitizeOpenAIReasoningReplayMetadata(item);
+      if (sanitizedMetadata !== undefined) {
+        if (sanitizedMetadata !== item) {
+          next ??= { ...source };
+          next[key] = sanitizedMetadata;
+        }
+        continue;
+      }
+    }
+    if (
+      location === "assistant-content-block" &&
+      source.type === "thinking" &&
+      key === "thinkingSignature" &&
+      typeof item === "string"
+    ) {
+      const sanitizedSignature = sanitizeOpenAIReasoningSignature(item);
+      if (sanitizedSignature !== undefined) {
+        if (sanitizedSignature !== item) {
+          next ??= { ...source };
+          next[key] = sanitizedSignature;
+        }
+        continue;
+      }
+    }
     // Provider-signed/encrypted bytes must remain exact or replayed tool turns fail.
-    if (shouldPreserveOpaqueProviderPayload(source, key, item)) {
+    if (shouldPreserveOpaqueProviderPayload(source, key, item, location)) {
       continue;
     }
     if (typeof item === "string") {
@@ -288,6 +463,9 @@ function redactTranscriptStructuredValue(
       key,
       seen,
       preserveImageDataUrlFields || shouldPreserveNestedImageDataUrlFields(source, key),
+      location === "root" && source.role === "assistant" && key === "content" && Array.isArray(item)
+        ? "assistant-content-array"
+        : "nested",
     );
     if (redacted === item) {
       continue;
@@ -301,8 +479,15 @@ function redactTranscriptStructuredValue(
 
 /** Return a redacted transcript message according to logging config. */
 export function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): AgentMessage {
-  if (cfg?.logging?.redactSensitive === "off") {
+  if (isTranscriptRedactionDisabled(cfg)) {
     return message;
   }
-  return redactTranscriptStructuredValue(message, cfg) as AgentMessage;
+  return redactTranscriptStructuredValue(
+    message,
+    cfg,
+    undefined,
+    new WeakSet<object>(),
+    false,
+    "root",
+  ) as AgentMessage;
 }
