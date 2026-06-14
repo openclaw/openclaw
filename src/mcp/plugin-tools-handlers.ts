@@ -13,34 +13,95 @@ type CallPluginToolParams = {
   arguments?: unknown;
 };
 
-function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
-  const params = tool.parameters;
-  if (params && typeof params === "object" && "type" in params) {
-    return params as Record<string, unknown>;
+type PluginMcpToolEntry = {
+  description: string;
+  inputSchema: Record<string, unknown>;
+  name: string;
+  tool: AnyAgentTool;
+};
+
+function readToolName(tool: AnyAgentTool): string | undefined {
+  try {
+    const value = tool.name;
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  } catch {
+    return undefined;
   }
-  return { type: "object", properties: {} };
+}
+
+function readToolDescription(tool: AnyAgentTool): string {
+  try {
+    return typeof tool.description === "string" ? tool.description : "";
+  } catch {
+    return "";
+  }
+}
+
+function readToolParameters(tool: AnyAgentTool): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: tool.parameters };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function resolveJsonSchemaForTool(
+  tool: AnyAgentTool,
+): { ok: true; schema: Record<string, unknown> } | { ok: false } {
+  const params = readToolParameters(tool);
+  if (!params.ok) {
+    return { ok: false };
+  }
+  try {
+    if (params.value && typeof params.value === "object" && "type" in params.value) {
+      return { ok: true, schema: params.value as Record<string, unknown> };
+    }
+  } catch {
+    return { ok: false };
+  }
+  return { ok: true, schema: { type: "object", properties: {} } };
 }
 
 export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
-  const wrappedTools = tools.map((tool) => {
-    if (isToolWrappedWithBeforeToolCallHook(tool)) {
-      return rewrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" });
+  const toolEntries: PluginMcpToolEntry[] = [];
+  for (const tool of tools) {
+    const name = readToolName(tool);
+    if (!name) {
+      continue;
     }
-    // The ACPX MCP bridge should enforce the same pre-execution hook boundary
-    // as the agent and HTTP tool execution paths.
-    return wrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" });
-  });
+    const inputSchema = resolveJsonSchemaForTool(tool);
+    if (!inputSchema.ok) {
+      continue;
+    }
+    const description = readToolDescription(tool);
+    let wrappedTool: AnyAgentTool;
+    try {
+      // The ACPX MCP bridge should enforce the same pre-execution hook boundary
+      // as the agent and HTTP tool execution paths.
+      wrappedTool = isToolWrappedWithBeforeToolCallHook(tool)
+        ? rewrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" })
+        : wrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" });
+    } catch {
+      continue;
+    }
+    toolEntries.push({
+      description,
+      inputSchema: inputSchema.schema,
+      name,
+      tool: wrappedTool,
+    });
+  }
   const toolMap = new Map<string, AnyAgentTool>();
-  for (const tool of wrappedTools) {
-    toolMap.set(tool.name, tool);
+  for (const entry of toolEntries) {
+    toolMap.set(entry.name, entry.tool);
   }
 
   return {
     listTools: async () => ({
-      tools: wrappedTools.map((tool) => ({
-        name: tool.name,
-        description: tool.description ?? "",
-        inputSchema: resolveJsonSchemaForTool(tool),
+      tools: toolEntries.map((entry) => ({
+        name: entry.name,
+        description: entry.description,
+        inputSchema: entry.inputSchema,
       })),
     }),
     callTool: async (params: CallPluginToolParams, signal?: AbortSignal) => {
