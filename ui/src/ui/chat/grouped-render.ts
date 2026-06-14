@@ -1014,6 +1014,7 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
     return false;
   }
   return (
+    isCanonicalInboundMediaRef(trimmed) ||
     trimmed.startsWith("file://") ||
     trimmed.startsWith("~") ||
     trimmed.startsWith("/") ||
@@ -1021,9 +1022,29 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
   );
 }
 
+function isCanonicalInboundMediaRef(source: string): boolean {
+  try {
+    const parsed = new URL(source.trim());
+    const id = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+    return (
+      parsed.protocol === "media:" &&
+      parsed.hostname === "inbound" &&
+      Boolean(id) &&
+      !id.includes("/") &&
+      !id.includes("\\") &&
+      !id.includes("\0")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function normalizeLocalAttachmentPath(source: string): string | null {
   const trimmed = source.trim();
   if (!isLocalAssistantAttachmentSource(trimmed)) {
+    return null;
+  }
+  if (isCanonicalInboundMediaRef(trimmed)) {
     return null;
   }
   if (trimmed.startsWith("file://")) {
@@ -1076,6 +1097,9 @@ function isLocalAttachmentPreviewAllowed(
   source: string,
   localMediaPreviewRoots: readonly string[],
 ): boolean {
+  if (isCanonicalInboundMediaRef(source)) {
+    return true;
+  }
   const normalizedSource = normalizeLocalAttachmentPath(source);
   const comparableSources = normalizedSource
     ? [canonicalizeLocalPathForComparison(normalizedSource)]
