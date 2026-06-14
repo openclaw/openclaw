@@ -35,8 +35,9 @@ const MISSING_CONFIG_MAX_RETRIES = 2;
 
 // Watcher 'error' events (for example EMFILE/ENOSPC inotify exhaustion) close
 // the chokidar watcher. Re-create it with bounded backoff so a transient fault
-// does not permanently kill config hot-reload, but escalate to error + a
-// persistent disabled status once the retry budget is exhausted.
+// does not permanently kill config hot-reload. If all native retries are
+// exhausted (typical when the host has insufficient inotify watches), fall
+// back to polling mode before giving up entirely.
 const WATCHER_RECREATE_MAX_RETRIES = 3;
 const WATCHER_RECREATE_BACKOFF_MS = [500, 2000, 5000] as const;
 
@@ -407,6 +408,7 @@ export function startGatewayConfigReloader(opts: {
   let watcherRecreateRetries = 0;
   let watcherRecreateTimer: ReturnType<typeof setTimeout> | null = null;
   let hotReloadStatus: GatewayHotReloadStatus = "active";
+  let degradedToPolling = false;
 
   const createWatcher = () => {
     if (stopped) {
@@ -415,7 +417,7 @@ export function startGatewayConfigReloader(opts: {
     const next = chokidar.watch(opts.watchPath, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-      usePolling: Boolean(process.env.VITEST),
+      usePolling: Boolean(process.env.VITEST) || degradedToPolling,
     });
     next.on("add", scheduleFromWatcher);
     next.on("change", scheduleFromWatcher);
@@ -435,9 +437,24 @@ export function startGatewayConfigReloader(opts: {
     watcher = null;
     void source?.close().catch(() => {});
     if (watcherRecreateRetries >= WATCHER_RECREATE_MAX_RETRIES) {
+      // All native (inotify/kqueue) retries exhausted — fall back to polling
+      // mode so config hot-reload survives on hosts where inotify resources
+      // are constrained (e.g. low fs.inotify.max_user_watches).
+      if (!degradedToPolling) {
+        degradedToPolling = true;
+        watcherRecreateRetries = 0;
+        opts.log.warn(
+          `config watcher native retries exhausted; degrading to polling mode: ${String(err)}`,
+        );
+        watcherRecreateTimer = setTimeout(() => {
+          watcherRecreateTimer = null;
+          createWatcher();
+        }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
+        return;
+      }
       hotReloadStatus = "disabled";
       opts.log.error(
-        `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts: ${String(err)}`,
+        `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts in polling mode: ${String(err)}`,
       );
       return;
     }
