@@ -21,9 +21,11 @@ import {
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 import { resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
+import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import {
   PROVIDER_ID,
   fetchCopilotModelCatalog,
@@ -82,6 +84,30 @@ function applyCopilotDefaultModel(cfg: OpenClawConfig): OpenClawConfig {
       },
     },
   };
+}
+
+function buildCopilotFallbackModelCatalog() {
+  return getDefaultCopilotModelIds().map((modelId) => buildCopilotModelDefinition(modelId));
+}
+
+function mergeLiveCopilotModelsWithFallback(
+  liveModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>>,
+) {
+  const models = [...liveModels];
+  const seen = new Set(
+    liveModels
+      .map((model) => normalizeOptionalLowercaseString(model.id))
+      .filter((modelId): modelId is string => Boolean(modelId)),
+  );
+  for (const fallbackModel of buildCopilotFallbackModelCatalog()) {
+    const modelId = normalizeOptionalLowercaseString(fallbackModel.id);
+    if (!modelId || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    models.push(fallbackModel);
+  }
+  return models;
 }
 
 function resolveExistingCopilotTokenProfileId(agentDir?: string): string | undefined {
@@ -270,20 +296,26 @@ export default definePluginEntry({
     async function runGithubCopilotCatalog(
       ctx: ProviderCatalogContext,
     ): Promise<ProviderCatalogResult> {
+      const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
+        await loadGithubCopilotRuntime();
+      const fallbackCatalog = () => ({
+        provider: {
+          baseUrl: DEFAULT_COPILOT_API_BASE_URL,
+          models: buildCopilotFallbackModelCatalog(),
+        },
+      });
       const pluginConfig = resolveCurrentPluginConfig(ctx.config);
       const discoveryEnabled = pluginConfig.discovery?.enabled;
       if (discoveryEnabled === false) {
-        return null;
+        return fallbackCatalog();
       }
-      const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
-        await loadGithubCopilotRuntime();
       const { githubToken, hasProfile } = await resolveFirstGithubToken({
         agentDir: ctx.agentDir,
         config: ctx.config,
         env: ctx.env,
       });
       if (!hasProfile && !githubToken) {
-        return null;
+        return fallbackCatalog();
       }
       let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
       let copilotApiToken: string | undefined;
@@ -299,11 +331,9 @@ export default definePluginEntry({
           baseUrl = DEFAULT_COPILOT_API_BASE_URL;
         }
       }
-      // Try to fetch the live model catalog from Copilot's /models endpoint so
-      // the runtime tracks per-account entitlements and accurate context
-      // windows (max_context_window_tokens) without manifest churn. On any
-      // failure we return an empty model list, which lets the static manifest
-      // catalog continue to be the visible fallback for users.
+      // Live /models rows are authoritative for available entitlements and
+      // metadata. Keep static rows only as a degraded offline/disabled fallback,
+      // appending them after live rows so duplicate ids retain live values.
       let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
       if (copilotApiToken) {
         try {
@@ -322,7 +352,7 @@ export default definePluginEntry({
       return {
         provider: {
           baseUrl,
-          models: discoveredModels,
+          models: mergeLiveCopilotModelsWithFallback(discoveredModels),
         },
       };
     }
@@ -449,6 +479,18 @@ export default definePluginEntry({
       catalog: {
         order: "late",
         run: runGithubCopilotCatalog,
+      },
+      staticCatalog: {
+        order: "late",
+        run: async () => {
+          const { DEFAULT_COPILOT_API_BASE_URL } = await loadGithubCopilotRuntime();
+          return {
+            provider: {
+              baseUrl: DEFAULT_COPILOT_API_BASE_URL,
+              models: buildCopilotFallbackModelCatalog(),
+            },
+          };
+        },
       },
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
       wrapStreamFn: wrapCopilotProviderStream,

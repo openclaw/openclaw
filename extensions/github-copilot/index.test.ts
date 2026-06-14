@@ -213,7 +213,22 @@ describe("github-copilot plugin", () => {
     expect(adapter.id).toBe("github-copilot");
   });
 
-  it("skips catalog discovery when plugin discovery is disabled", async () => {
+  it("keeps bounded static Copilot fallback rows refreshable", async () => {
+    const manifestPath = path.join(process.cwd(), "extensions/github-copilot/openclaw.plugin.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+      modelCatalog?: {
+        providers?: Record<string, { models?: Array<{ id?: string }> }>;
+        discovery?: Record<string, string>;
+      };
+    };
+
+    expect(manifest.modelCatalog?.discovery?.["github-copilot"]).toBe("refreshable");
+    expect(
+      manifest.modelCatalog?.providers?.["github-copilot"]?.models?.map((model) => model.id),
+    ).toContain("gpt-5.5");
+  });
+
+  it("uses static fallback rows when plugin discovery is disabled", async () => {
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 
     const result = await provider.catalog.run({
@@ -233,7 +248,14 @@ describe("github-copilot plugin", () => {
       resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
     } as never);
 
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      provider: {
+        baseUrl: "https://api.githubcopilot.test",
+        models: expect.arrayContaining([
+          expect.objectContaining({ id: "gpt-5.5", contextWindow: 400_000 }),
+        ]),
+      },
+    });
     expect(mocks.resolveCopilotApiToken).not.toHaveBeenCalled();
   });
 
@@ -304,12 +326,15 @@ describe("github-copilot plugin", () => {
     expect(result).toEqual({
       provider: {
         baseUrl: "https://api.githubcopilot.live",
-        models: [],
+        models: expect.arrayContaining([
+          expect.objectContaining({ id: "gpt-5.5" }),
+          expect.objectContaining({ id: "claude-opus-4.8" }),
+        ]),
       },
     });
   });
 
-  it("dual-publishes unified live catalog rows with existing discovery semantics", async () => {
+  it("dual-publishes unified catalog rows with existing discovery semantics", async () => {
     mocks.resolveCopilotApiToken.mockResolvedValueOnce({
       token: "copilot_api_token",
       baseUrl: "https://api.githubcopilot.live",
@@ -344,7 +369,73 @@ describe("github-copilot plugin", () => {
       githubToken: "gh_test_token",
       env: { GH_TOKEN: "gh_test_token" },
     });
-    expect(result).toEqual([]);
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "github-copilot", model: "gpt-5.5" }),
+        expect.objectContaining({ provider: "github-copilot", model: "claude-opus-4.8" }),
+      ]),
+    );
+  });
+
+  it("uses live Copilot /models metadata before static fallback rows", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5 Live",
+                object: "model",
+                vendor: "openai",
+                capabilities: {
+                  type: "chat",
+                  limits: {
+                    max_context_window_tokens: 1_000_000,
+                    max_output_tokens: 128_000,
+                  },
+                  supports: {
+                    vision: true,
+                    reasoning_effort: ["low", "medium", "high"],
+                  },
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
+      token: "copilot_api_token",
+      baseUrl: "https://api.githubcopilot.live",
+    });
+    const provider = registerProviderWithPluginConfig({});
+
+    const result = await provider.catalog.run({
+      config: {},
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+    } as never);
+
+    expect(result && "provider" in result ? result.provider.baseUrl : undefined).toBe(
+      "https://api.githubcopilot.live",
+    );
+    const models = result && "provider" in result ? (result.provider.models ?? []) : [];
+    expect(models[0]).toEqual(
+      expect.objectContaining({
+        id: "gpt-5.5",
+        name: "GPT-5.5 Live",
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        input: ["text", "image"],
+        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      }),
+    );
+    expect(models.filter((model) => model.id === "gpt-5.5")).toHaveLength(1);
+    expect(models.map((model) => model.id)).toContain("claude-opus-4.8");
   });
 
   it("offers to reuse an existing token profile during interactive onboarding", async () => {
