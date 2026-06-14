@@ -103,7 +103,11 @@ async function resolveStatusRuntimeContextTokens(params: {
   provider: string;
   model: string;
 }): Promise<number | undefined> {
-  await ensureContextWindowCacheLoaded();
+  try {
+    await ensureContextWindowCacheLoaded();
+  } catch {
+    // Cache unavailable — proceed without it; resolution will use fallback values.
+  }
   return resolveContextTokensForModel({
     cfg: params.cfg,
     provider: params.provider,
