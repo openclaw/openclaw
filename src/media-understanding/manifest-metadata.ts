@@ -39,6 +39,7 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
         autoPriority: metadata.autoPriority,
         nativeDocumentInputs: metadata.nativeDocumentInputs,
         documentModels: metadata.documentModels,
+        modelCapabilityOverrides: metadata.modelCapabilityOverrides,
       });
     }
   }

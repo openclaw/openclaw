@@ -1,21 +1,41 @@
-// Provider-specific media capability facts observed outside unreliable user config.
+// Generic provider-owned model capability helpers.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeMediaProviderId } from "./provider-id.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
-function isQwenCloudProvider(providerId: string): boolean {
-  return ["qwen", "qwencloud", "modelstudio", "dashscope"].includes(providerId);
+function localModelId(modelId: string): string {
+  const slash = modelId.indexOf("/");
+  return slash > 0 ? modelId.slice(slash + 1) : modelId;
 }
 
-export function isKnownNonImageModel(params: { providerId: string; modelId: string }): boolean {
-  const providerId = normalizeMediaProviderId(params.providerId);
-  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  return isQwenCloudProvider(providerId) && /^qwen3\.7-max(?:$|[-.])/.test(modelId);
+function normalizeModelId(modelId: string): string {
+  return normalizeLowercaseStringOrEmpty(localModelId(modelId));
+}
+
+export function isKnownNonImageModel(params: {
+  modelId: string;
+  provider?: Pick<MediaUnderstandingProvider, "modelCapabilityOverrides">;
+}): boolean {
+  const modelId = normalizeModelId(params.modelId);
+  if (!modelId) {
+    return false;
+  }
+  const overrides = params.provider?.modelCapabilityOverrides;
+  if (!overrides) {
+    return false;
+  }
+  const exact = new Set((overrides.nonImageModels ?? []).map(normalizeModelId));
+  if (exact.has(modelId)) {
+    return true;
+  }
+  return (overrides.nonImageModelFamilies ?? [])
+    .map(normalizeModelId)
+    .some((family) => family && (modelId === family || modelId.startsWith(`${family}-`)));
 }
 
 export function configuredModelInputSupportsImage(params: {
-  providerId: string;
   modelId: string;
   input?: readonly string[];
+  provider?: Pick<MediaUnderstandingProvider, "modelCapabilityOverrides">;
 }): boolean {
   return (
     Array.isArray(params.input) && params.input.includes("image") && !isKnownNonImageModel(params)

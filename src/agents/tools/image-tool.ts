@@ -241,6 +241,7 @@ export function resolveImageModelConfigForTool(params: {
   if (hasToolModelConfig(explicit)) {
     return resolveConfiguredImageModelRefs({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       imageModelConfig: explicit,
     });
   }
@@ -249,6 +250,7 @@ export function resolveImageModelConfigForTool(params: {
 
   const providerVisionFromConfig = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     provider: primary.provider,
   });
   const primaryCandidates = (() => {
@@ -732,6 +734,7 @@ export function createImageTool(options?: {
   const explicitImageModelConfig = hasToolModelConfig(explicit)
     ? resolveConfiguredImageModelRefs({
         cfg: options?.config,
+        workspaceDir: options?.workspaceDir,
         imageModelConfig: explicit,
       })
     : null;

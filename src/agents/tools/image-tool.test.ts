@@ -1203,9 +1203,10 @@ describe("image tool implicit imageModel config", () => {
       installImageUnderstandingProviderStubs({
         id: "qwen",
         capabilities: ["image"],
-        defaultModels: { image: "qwen3.5-plus" },
+        defaultModels: { image: "qwen-vl-max-latest" },
+        modelCapabilityOverrides: { nonImageModels: ["qwen3.7-max"] },
       });
-      const defaultImageModels = new Map<string, string>([["qwen", "qwen3.5-plus"]]);
+      const defaultImageModels = new Map<string, string>([["qwen", "qwen-vl-max-latest"]]);
       testing.setProviderDepsForTest({
         buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
           imageProviderHarness.buildProviderRegistry(overrides),
@@ -1235,7 +1236,7 @@ describe("image tool implicit imageModel config", () => {
       };
 
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "qwen/qwen3.5-plus",
+        primary: "qwen/qwen-vl-max-latest",
       });
     });
   });

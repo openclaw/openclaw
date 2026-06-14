@@ -143,6 +143,7 @@ function resolveConfiguredKeyProviderOrder(params: {
 function resolveConfiguredImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
+  providerRegistry: ProviderRegistry;
 }): string | undefined {
   if (isMinimaxVlmProvider(params.providerId)) {
     return undefined;
@@ -155,6 +156,7 @@ function resolveConfiguredImageModelId(params: {
 function resolveConfiguredImageModel(params: {
   cfg: OpenClawConfig;
   providerId: string;
+  providerRegistry: ProviderRegistry;
 }): { id?: string; input?: string[] } | undefined {
   const providerCfg = findNormalizedProviderValue(
     params.cfg.models?.providers,
@@ -172,9 +174,9 @@ function resolveConfiguredImageModel(params: {
     return Boolean(
       id &&
       configuredModelInputSupportsImage({
-        providerId: params.providerId,
         modelId: id,
         input: entry?.input,
+        provider: params.providerRegistry.get(normalizeMediaProviderId(params.providerId)),
       }),
     );
   });
@@ -241,11 +243,15 @@ async function explicitImageModelVisionStatus(params: {
   cfg: OpenClawConfig;
   providerId: string;
   model: string;
+  providerRegistry: ProviderRegistry;
 }): Promise<"supported" | "unsupported" | "unknown"> {
   // Explicit model overrides should survive unknown catalog state, but known
   // text-only models must not be routed into image understanding.
   if (
-    isKnownNonImageModel({ providerId: params.providerId, modelId: params.model }) ||
+    isKnownNonImageModel({
+      modelId: params.model,
+      provider: params.providerRegistry.get(normalizeMediaProviderId(params.providerId)),
+    }) ||
     (isMinimaxVlmProvider(params.providerId) && !isMinimaxVlmModel(params.providerId, params.model))
   ) {
     return "unsupported";
@@ -254,9 +260,9 @@ async function explicitImageModelVisionStatus(params: {
   if (
     configured?.id?.trim() === params.model &&
     configuredModelInputSupportsImage({
-      providerId: params.providerId,
       modelId: params.model,
       input: configured.input,
+      provider: params.providerRegistry.get(normalizeMediaProviderId(params.providerId)),
     })
   ) {
     return "supported";
@@ -283,6 +289,7 @@ async function resolveAutoImageModelId(params: {
       cfg: params.cfg,
       providerId: params.providerId,
       model: explicit,
+      providerRegistry: params.providerRegistry,
     });
     if (explicitStatus !== "unsupported") {
       return explicit;
@@ -749,6 +756,7 @@ function isMinimaxNativeVisionModel(params: { provider: string; model?: string }
 
 async function activeModelSupportsNativeVision(params: {
   cfg: OpenClawConfig;
+  providerRegistry: ProviderRegistry;
   activeModel?: ActiveMediaModel;
 }): Promise<boolean> {
   const activeProvider = params.activeModel?.provider?.trim();
@@ -757,8 +765,8 @@ async function activeModelSupportsNativeVision(params: {
   }
   if (
     isKnownNonImageModel({
-      providerId: activeProvider,
       modelId: params.activeModel?.model ?? "",
+      provider: params.providerRegistry.get(normalizeMediaProviderId(activeProvider)),
     }) ||
     (isMinimaxVlmProvider(activeProvider) &&
       !isMinimaxNativeVisionModel({
@@ -786,6 +794,7 @@ async function resolveAutoEntries(params: {
   if (params.capability === "image") {
     const activeSupportsVision = await activeModelSupportsNativeVision({
       cfg: params.cfg,
+      providerRegistry: params.providerRegistry,
       activeModel: params.activeModel,
     });
     if (!activeSupportsVision) {
@@ -1096,7 +1105,13 @@ export async function runCapability(params: {
       config,
     })
   ) {
-    if (await activeModelSupportsNativeVision({ cfg, activeModel: params.activeModel })) {
+    if (
+      await activeModelSupportsNativeVision({
+        cfg,
+        providerRegistry: params.providerRegistry,
+        activeModel: params.activeModel,
+      })
+    ) {
       if (shouldLogVerbose()) {
         logVerbose("Skipping image understanding: primary model supports vision natively");
       }

@@ -214,18 +214,51 @@
     }
   },
   "contracts": {
-    "mediaUnderstandingProviders": ["qwen"],
+    "mediaUnderstandingProviders": ["qwen", "qwencloud", "modelstudio", "dashscope"],
     "videoGenerationProviders": ["qwen"]
   },
   "mediaUnderstandingProviderMetadata": {
     "qwen": {
       "capabilities": ["image", "video"],
       "defaultModels": {
-        "image": "qwen3.5-plus",
+        "image": "qwen-vl-max-latest",
         "video": "qwen-vl-max-latest"
+      },
+      "modelCapabilityOverrides": {
+        "nonImageModelFamilies": ["qwen3.7-max"]
       },
       "autoPriority": {
         "video": 15
+      }
+    },
+    "qwencloud": {
+      "capabilities": ["image", "video"],
+      "defaultModels": {
+        "image": "qwen-vl-max-latest",
+        "video": "qwen-vl-max-latest"
+      },
+      "modelCapabilityOverrides": {
+        "nonImageModelFamilies": ["qwen3.7-max"]
+      }
+    },
+    "modelstudio": {
+      "capabilities": ["image", "video"],
+      "defaultModels": {
+        "image": "qwen-vl-max-latest",
+        "video": "qwen-vl-max-latest"
+      },
+      "modelCapabilityOverrides": {
+        "nonImageModelFamilies": ["qwen3.7-max"]
+      }
+    },
+    "dashscope": {
+      "capabilities": ["image", "video"],
+      "defaultModels": {
+        "image": "qwen-vl-max-latest",
+        "video": "qwen-vl-max-latest"
+      },
+      "modelCapabilityOverrides": {
+        "nonImageModelFamilies": ["qwen3.7-max"]
       }
     }
   },
