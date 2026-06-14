@@ -418,6 +418,7 @@ async function previewStoreCleanup(params: {
     store: previewStore,
     storePath: params.target.storePath,
     olderThanMs: params.maintenance.pruneAfterMs,
+    resetArchiveRetentionMs: params.maintenance.resetArchiveRetentionMs,
     dryRun: true,
     excludeCanonicalPaths: new Set([...budgetRemovedFilePaths, ...entryCleanupArtifactPaths]),
   });
@@ -503,6 +504,22 @@ export async function runSessionsCleanup(params: {
       const appliedReportRef: { current: SessionMaintenanceApplyReport | null } = {
         current: null,
       };
+      const preCleanupStore = loadSessionStore(target.storePath, { skipCache: true });
+      const preUpdateUnreferencedArtifacts =
+        mode === "warn"
+          ? {
+              scannedFiles: 0,
+              removedFiles: 0,
+              freedBytes: 0,
+              olderThanMs: maintenance.pruneAfterMs,
+            }
+          : await pruneUnreferencedSessionArtifacts({
+              store: preCleanupStore,
+              storePath: target.storePath,
+              olderThanMs: maintenance.pruneAfterMs,
+              resetArchiveRetentionMs: maintenance.resetArchiveRetentionMs,
+              dryRun: false,
+            });
       const dmScopeRemovedSessionFiles = new Map<string, string | undefined>();
       let missingApplied = 0;
       let dmScopeRetiredApplied = 0;
@@ -558,7 +575,7 @@ export async function runSessionsCleanup(params: {
         });
       }
       const afterStore = loadSessionStore(target.storePath, { skipCache: true });
-      const unreferencedArtifacts =
+      const postUpdateUnreferencedArtifacts =
         mode === "warn"
           ? {
               scannedFiles: 0,
@@ -570,8 +587,20 @@ export async function runSessionsCleanup(params: {
               store: afterStore,
               storePath: target.storePath,
               olderThanMs: maintenance.pruneAfterMs,
+              resetArchiveRetentionMs: maintenance.resetArchiveRetentionMs,
               dryRun: false,
             });
+      const unreferencedArtifacts = {
+        scannedFiles:
+          preUpdateUnreferencedArtifacts.scannedFiles +
+          postUpdateUnreferencedArtifacts.scannedFiles,
+        removedFiles:
+          preUpdateUnreferencedArtifacts.removedFiles +
+          postUpdateUnreferencedArtifacts.removedFiles,
+        freedBytes:
+          preUpdateUnreferencedArtifacts.freedBytes + postUpdateUnreferencedArtifacts.freedBytes,
+        olderThanMs: maintenance.pruneAfterMs,
+      };
       const preview = previewResults.find(
         (result) => result.summary.storePath === target.storePath,
       );

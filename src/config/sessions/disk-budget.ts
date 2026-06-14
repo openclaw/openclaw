@@ -15,6 +15,7 @@ import {
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
   isTrajectorySessionArtifactName,
+  parseSessionArchiveTimestamp,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
@@ -301,6 +302,22 @@ function isUnreferencedSessionArtifactFile(
   );
 }
 
+function isSessionCleanupArchiveExpired(
+  fileName: string,
+  deletedCutoffMs: number,
+  resetArchiveCutoffMs: number | null,
+): boolean {
+  const deletedTimestamp = parseSessionArchiveTimestamp(fileName, "deleted");
+  if (deletedTimestamp != null) {
+    return deletedTimestamp <= deletedCutoffMs;
+  }
+  if (resetArchiveCutoffMs == null) {
+    return false;
+  }
+  const resetTimestamp = parseSessionArchiveTimestamp(fileName, "reset");
+  return resetTimestamp != null && resetTimestamp <= resetArchiveCutoffMs;
+}
+
 // An orphaned `sessions.json.<pid>.<uuid>.tmp` older than this is never a live
 // atomic write (those rename within milliseconds), so it is safe to reclaim
 // regardless of the general unreferenced-artifact age threshold (#56827).
@@ -442,11 +459,14 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
   olderThanMs: number;
+  resetArchiveRetentionMs?: number | null;
   dryRun?: boolean;
   excludeCanonicalPaths?: ReadonlySet<string>;
 }): Promise<SessionUnreferencedArtifactSweepResult> {
   const olderThanMs =
     Number.isFinite(params.olderThanMs) && params.olderThanMs > 0 ? params.olderThanMs : 0;
+  const resetArchiveRetentionMs =
+    params.resetArchiveRetentionMs === undefined ? olderThanMs : params.resetArchiveRetentionMs;
   const sessionsDir = path.dirname(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
@@ -467,6 +487,13 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     }).store,
   );
   const cutoffMs = Date.now() - olderThanMs;
+  const resetArchiveCutoffMs =
+    resetArchiveRetentionMs == null
+      ? null
+      : Date.now() -
+        (Number.isFinite(resetArchiveRetentionMs) && resetArchiveRetentionMs > 0
+          ? resetArchiveRetentionMs
+          : 0);
   const tempCutoffMs = Date.now() - SESSION_STORE_TEMP_STALE_MS;
   const promptBlobCutoffMs =
     Date.now() - Math.max(olderThanMs, SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS);
@@ -480,7 +507,15 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     if (isSessionStoreTempArtifactName(file.name, storeBasename)) {
       return file.mtimeMs <= tempCutoffMs;
     }
-    return file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths);
+    if (
+      parseSessionArchiveTimestamp(file.name, "deleted") != null ||
+      parseSessionArchiveTimestamp(file.name, "reset") != null
+    ) {
+      return isSessionCleanupArchiveExpired(file.name, cutoffMs, resetArchiveCutoffMs);
+    }
+    return (
+      file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths)
+    );
   });
   const removablePromptBlobFiles = promptBlobFiles.filter((file) => {
     if (params.excludeCanonicalPaths?.has(file.canonicalPath)) {
