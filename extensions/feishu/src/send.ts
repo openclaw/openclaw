@@ -414,6 +414,7 @@ export async function getMessageFeishu(params: {
 
   try {
     const response = (await client.im.message.get({
+      params: { card_msg_content_type: "user_card_content" },
       path: { message_id: messageId },
     })) as FeishuGetMessageResponse;
 
