@@ -22,7 +22,7 @@ import {
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { buildStatusReply, buildStatusText } from "./commands-status.js";
+import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
   baseCommandTestConfig,
   buildCommandTestParams,
@@ -42,6 +42,15 @@ type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
 
 const pluginHealthRuntimeMock = vi.hoisted(() => ({
+  collectInstalledPluginHealthSnapshot: vi.fn(
+    async (): Promise<StatusPluginHealthSnapshot> => ({
+      plugins: [],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeToolQuarantines: [],
+      channelPluginFailures: [],
+    }),
+  ),
   collectRuntimePluginHealthSnapshot: vi.fn(
     (): StatusPluginHealthSnapshot => ({
       plugins: [],
@@ -187,6 +196,14 @@ afterEach(() => {
   providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
     updatedAt: Date.now(),
     providers: [],
+  });
+  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockReset();
+  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockResolvedValue({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
   });
   pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReset();
   pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReturnValue({
@@ -768,6 +785,24 @@ describe("buildStatusReply subagent summary", () => {
     // channel inspection happens on this path.
     expect(pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot).toHaveBeenCalledWith();
     expect(normalizeTestText(text)).toContain("Plugins: 1 channel plugin failure");
+  });
+
+  it("gates /status plugins behind the plugin command flag", async () => {
+    const commandParams = buildCommandTestParams("/status plugins", {
+      ...baseCfg,
+      commands: { text: true, plugins: false },
+    });
+
+    const reply = await buildStatusPluginsReply({
+      cfg: commandParams.cfg,
+      command: commandParams.command,
+      workspaceDir: commandParams.workspaceDir,
+    });
+
+    expect(reply?.text).toBe(
+      "⚠️ /status plugins is disabled. Set commands.plugins=true to enable.",
+    );
+    expect(pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot).not.toHaveBeenCalled();
   });
 
   it("shows the effective non-OpenClaw embedded harness in /status", async () => {

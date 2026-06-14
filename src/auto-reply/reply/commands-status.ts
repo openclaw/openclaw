@@ -4,6 +4,7 @@ import { formatDetailedPluginHealth } from "../../status/status-plugin-health.js
 import { buildStatusText } from "../../status/status-text.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import type { ReplyPayload } from "../types.js";
+import { requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandContext } from "./commands-types.js";
 export { buildStatusText } from "../../status/status-text.js";
 
@@ -38,6 +39,13 @@ export async function buildStatusPluginsReply(
       `Ignoring /status plugins from unauthorized sender: ${command.senderId || "<unknown>"}`,
     );
     return undefined;
+  }
+  const disabled = requireCommandFlagEnabled(params.cfg, {
+    label: "/status plugins",
+    configKey: "plugins",
+  });
+  if (disabled) {
+    return disabled.reply;
   }
 
   try {
