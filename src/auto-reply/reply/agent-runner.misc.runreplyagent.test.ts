@@ -2776,9 +2776,9 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("anthropic🤖 claude 🌘 🐌");
-    expect(text).toContain("↕️ 12/3");
-    expect(text).toContain("🗄 22%");
+    expect(text).toContain("anthropic🤖claude🌘🐌");
+    expect(text).not.toContain("↕️");
+    expect(text).not.toContain("🗄");
     expect(text).not.toContain("Usage:");
     expect(text).not.toContain("· session ");
   });
@@ -2825,7 +2825,7 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
-  it("keeps partial token counts in the built-in full footer", async () => {
+  it("omits partial token counts from the built-in full footer", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -2843,11 +2843,12 @@ describe("runReplyAgent response usage footer", () => {
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("↕️ ?/125");
+    expect(text).toContain("anthropic🤖claude");
+    expect(text).not.toContain("↕️");
     expect(text).not.toContain("Usage:");
   });
 
-  it("shows aggregate-only token totals in the built-in full footer", async () => {
+  it("omits aggregate-only token totals in the built-in full footer", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -2874,8 +2875,8 @@ describe("runReplyAgent response usage footer", () => {
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("↕️ 1.3k");
-    expect(text).not.toContain("↕️ ?/?");
+    expect(text).toContain("anthropic🤖claude");
+    expect(text).not.toContain("↕️");
     expect(text).not.toContain("💰");
     expect(text).not.toContain("Usage:");
   });
@@ -2922,9 +2923,9 @@ describe("runReplyAgent response usage footer", () => {
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
 
-    expect(text).toContain("amazon-bedrock🤖 us.anthropic.claude-sonnet-4-6 🌘 🐌");
-    expect(text).toContain("↕️ 1.0k/2.0k");
-    expect(text).toContain("🗄 14%");
+    expect(text).toContain("amazon-bedrock🤖us.anthropic.claude-sonnet-4-6🌘🐌");
+    expect(text).not.toContain("↕️");
+    expect(text).not.toContain("🗄");
     expect(text).toContain("💰0.0406");
     expect(text).not.toContain("Usage:");
     expect(text).not.toContain("· session ");
