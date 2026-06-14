@@ -154,6 +154,7 @@ describe("runAgentAttempt spawn-init requestCompactionOpts plumbing", () => {
       sessionId: sessionEntry.sessionId,
       sessionKey,
       sessionAgentId: "main",
+      lifecycleGeneration: "test-generation",
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
       body: "trap-test prompt",
