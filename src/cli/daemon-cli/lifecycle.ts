@@ -17,7 +17,11 @@ import {
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
-import { type GatewayRestartIntent, writeGatewayRestartIntentSync } from "../../infra/restart.js";
+import {
+  type GatewayRestartIntent,
+  triggerOpenClawRestart,
+  writeGatewayRestartIntentSync,
+} from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -251,6 +255,22 @@ async function restartGatewayWithoutServiceManager(
     reason: "gateway.restart",
     ...(restartIntent ? { intent: restartIntent } : {}),
   });
+  // On Windows, SIGUSR1 is not supported for cross-process signaling.
+  // Node.js unconditionally terminates the target on Windows for SIGTERM too,
+  // so we must use the scheduled-task restart handoff instead.
+  if (process.platform === "win32") {
+    const result = triggerOpenClawRestart();
+    if (!result.ok) {
+      throw new Error(
+        `Gateway restart failed on Windows: ${result.detail ?? "unknown error"}. ` +
+          `Run "openclaw gateway install" to set up the Windows scheduled task.`,
+      );
+    }
+    return {
+      result: "restarted" as const,
+      message: `Gateway restart triggered via ${result.method} on port ${port}: ${pids[0]}.`,
+    };
+  }
   signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");
   return {
     result: "restarted" as const,
