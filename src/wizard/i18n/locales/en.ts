@@ -250,6 +250,7 @@ export const en = {
       localGatewayMissing: "No gateway detected ({url})",
       localGatewayReachable: "Gateway reachable ({url})",
       modifyCurrent: "Review and update",
+      modifyCurrentAuthChoiceHint: "Choose this to enter or update the selected provider key.",
       pluginCompatibilityTitle: "Plugin compatibility",
       quickstartOnlyLocal: "QuickStart only supports local gateways. Switching to Manual mode.",
       quickstartTitle: "QuickStart",
