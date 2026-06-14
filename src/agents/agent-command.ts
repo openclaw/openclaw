@@ -94,7 +94,7 @@ import {
   resolveInternalEventTranscriptBody,
 } from "./command/attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
-import { resolveSession } from "./command/session.js";
+import { resolveSessionWithReservation } from "./command/session-resolution-reservation.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -698,13 +698,14 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   });
   const runTimeoutOverrideMs = hasExplicitTimeoutOption ? timeoutMs : undefined;
 
-  const sessionResolution = resolveSession({
+  const sessionResolution = await resolveSessionWithReservation({
     cfg,
     to: opts.to,
     sessionId: opts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
     clone: false,
+    suppressVisibleSessionEffects: opts.sessionEffects === "internal",
   });
 
   const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
