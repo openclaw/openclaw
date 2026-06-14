@@ -10,7 +10,6 @@ import {
   resolveSessionFilePathOptions,
   rewriteSessionFileForNewSessionId,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -316,12 +315,10 @@ export async function incrementCompactionCount(params: {
     ...updates,
   };
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = {
-        ...store[sessionKey],
-        ...updates,
-      };
-    });
+    const persistedEntry = await upsertSessionEntry({ storePath, sessionKey }, updates);
+    if (persistedEntry) {
+      sessionStore[sessionKey] = persistedEntry;
+    }
   }
   if ((sessionIdChanged || sessionFileChanged) && cfg) {
     emitCompactionSessionLifecycleHooks({

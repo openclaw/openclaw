@@ -63,7 +63,7 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 type EmbeddedAgentRuntime = typeof import("../../agents/embedded-agent.js");
-type UpdateSessionStoreEntryParams = {
+type UpdateSessionEntryParams = {
   storePath: string;
   sessionKey: string;
   skipMaintenance?: boolean;
@@ -101,8 +101,8 @@ async function runEmbeddedAgentDefault(
   return await runEmbeddedAgent(...args);
 }
 
-async function updateSessionStoreEntryDefault(
-  params: UpdateSessionStoreEntryParams,
+async function updateSessionEntryDefault(
+  params: UpdateSessionEntryParams,
 ): Promise<SessionEntry | null> {
   return await updateSessionEntry(
     {
@@ -150,7 +150,7 @@ const memoryDeps = {
   registerAgentRunContext,
   refreshQueuedFollowupSession,
   incrementCompactionCount,
-  updateSessionStoreEntry: updateSessionStoreEntryDefault,
+  updateSessionEntry: updateSessionEntryDefault,
   emitAgentEvent,
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
@@ -167,7 +167,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
     registerAgentRunContext,
     refreshQueuedFollowupSession,
     incrementCompactionCount,
-    updateSessionStoreEntry: updateSessionStoreEntryDefault,
+    updateSessionEntry: updateSessionEntryDefault,
     emitAgentEvent,
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
@@ -1423,7 +1423,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     if (params.storePath && params.sessionKey) {
       try {
-        const updatedEntry = await memoryDeps.updateSessionStoreEntry({
+        const updatedEntry = await memoryDeps.updateSessionEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
           skipMaintenance: true,
@@ -1453,7 +1453,7 @@ export async function runMemoryFlushIfNeeded(params: {
     if (!isAbortError(err) && params.storePath && params.sessionKey) {
       try {
         const failedAt = memoryDeps.now();
-        const failedEntry = await memoryDeps.updateSessionStoreEntry({
+        const failedEntry = await memoryDeps.updateSessionEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
           skipMaintenance: true,
@@ -1501,7 +1501,7 @@ export async function runMemoryFlushIfNeeded(params: {
               maxAttempts: MAX_FLUSH_FAILURES,
             },
           });
-          const exhaustedEntry = await memoryDeps.updateSessionStoreEntry({
+          const exhaustedEntry = await memoryDeps.updateSessionEntry({
             storePath: params.storePath,
             sessionKey: params.sessionKey,
             skipMaintenance: true,
