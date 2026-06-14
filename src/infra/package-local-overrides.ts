@@ -570,7 +570,7 @@ async function deleteLocalOverrideTarget(params: {
     await params.packageFs.remove(moved.movedPath);
     return moved.mode;
   } catch (error) {
-    await throwAfterRestoringMovedLocalOverrideTarget({
+    return await throwAfterRestoringMovedLocalOverrideTarget({
       packageFs: params.packageFs,
       movedPath: moved.movedPath,
       relativePath: params.relativePath,
