@@ -21,6 +21,21 @@ export const ModelChoiceSchema = Type.Object(
     available: Type.Optional(Type.Boolean()),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
+    agentRuntime: Type.Optional(
+      Type.Object(
+        {
+          id: NonEmptyString,
+          label: NonEmptyString,
+          source: Type.Union([
+            Type.Literal("implicit"),
+            Type.Literal("model"),
+            Type.Literal("provider"),
+            Type.Literal("session-key"),
+          ]),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

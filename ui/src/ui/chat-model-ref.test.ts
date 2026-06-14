@@ -53,12 +53,17 @@ describe("chat-model-ref helpers", () => {
     ).toBe("openrouter/google/gemma-4-26b-a4b-it");
   });
 
-  it("prefers alias over name for picker labels", () => {
+  it("preserves explicit aliases verbatim for picker labels", () => {
     const aliasedModel = {
       id: "moonshotai/kimi-k2.5",
       alias: "Kimi K2.5 (NVIDIA)",
       name: "Kimi K2.5",
       provider: "nvidia",
+      agentRuntime: {
+        id: "codex",
+        label: "OpenAI Codex",
+        source: "model" as const,
+      },
     };
 
     expect(buildChatModelOption(aliasedModel, [aliasedModel])).toEqual({
@@ -67,6 +72,48 @@ describe("chat-model-ref helpers", () => {
     });
     expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.5", [aliasedModel])).toBe(
       "Kimi K2.5 (NVIDIA)",
+    );
+  });
+
+  it("surfaces configured agent runtime metadata in picker labels", () => {
+    const codexModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+      agentRuntime: {
+        id: "codex",
+        label: "OpenAI Codex",
+        source: "model" as const,
+      },
+    };
+
+    expect(buildChatModelOption(codexModel, [codexModel])).toEqual({
+      value: "openai/gpt-5.5",
+      label: "GPT-5.5 · OpenAI Codex",
+    });
+    expect(formatCatalogChatModelDisplay("openai/gpt-5.5", [codexModel])).toBe(
+      "GPT-5.5 · OpenAI Codex",
+    );
+  });
+
+  it("surfaces explicit OpenClaw runtime overrides in picker labels", () => {
+    const openclawModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+      agentRuntime: {
+        id: "openclaw",
+        label: "OpenClaw Default",
+        source: "model" as const,
+      },
+    };
+
+    expect(buildChatModelOption(openclawModel, [openclawModel])).toEqual({
+      value: "openai/gpt-5.5",
+      label: "GPT-5.5 · OpenClaw Default",
+    });
+    expect(formatCatalogChatModelDisplay("openai/gpt-5.5", [openclawModel])).toBe(
+      "GPT-5.5 · OpenClaw Default",
     );
   });
 
