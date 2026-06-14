@@ -122,10 +122,12 @@ function createReplyOperation(): ReplyOperation {
     updateSessionId: vi.fn(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
+    retainFailureUntilComplete: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn((afterClear: () => void) => {
       afterClear();
     }),
+    completeWithAfterClearBarrier: vi.fn(),
     fail: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
