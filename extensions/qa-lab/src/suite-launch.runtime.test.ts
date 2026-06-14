@@ -84,7 +84,6 @@ describe("qa suite runtime launcher", () => {
         return {
           outputDir: params.outputDir,
           executionKind: scenario.execution.kind,
-          reportPath: path.join(params.outputDir, `qa-${scenario.execution.kind}-report.md`),
           evidencePath,
           results: params.scenarios.map((scenarioItem) => ({
             durationMs: 1,
