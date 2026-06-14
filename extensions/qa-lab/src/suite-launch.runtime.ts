@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { renderQaMarkdownReport, type QaReportScenario } from "openclaw/plugin-sdk/qa-runtime";
+import { toRepoRelativePath } from "./cli-paths.js";
 import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
@@ -172,13 +173,15 @@ function mergeQaEvidenceSummaries(params: {
 
 function testFileScenarioResultToSuiteScenario(
   result: QaTestFileScenarioRunResult["results"][number],
+  repoRoot: string,
 ): QaSuiteScenarioResult {
   const suiteStatus = result.status === "pass" ? "pass" : "fail";
   const stepStatus = result.status === "skipped" ? "skip" : suiteStatus;
+  const logPath = toRepoRelativePath(repoRoot, result.logPath);
   const details = [
     `execution.kind=${result.scenario.execution.kind}`,
     `execution.path=${result.scenario.execution.path}`,
-    `log=${result.logPath}`,
+    `log=${logPath}`,
     ...(result.failureMessage ? [`failure=${result.failureMessage}`] : []),
   ].join("\n");
   return {
@@ -318,7 +321,7 @@ async function runUnifiedQaSuite(params: {
     for (const scenarioResult of result.results) {
       scenarioResultsById.set(
         scenarioResult.scenario.id,
-        testFileScenarioResultToSuiteScenario(scenarioResult),
+        testFileScenarioResultToSuiteScenario(scenarioResult, repoRoot),
       );
     }
     evidenceSummaries.push(await readQaSuiteEvidenceSummary(result.evidencePath));

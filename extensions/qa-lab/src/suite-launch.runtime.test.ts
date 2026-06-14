@@ -203,7 +203,7 @@ describe("qa suite runtime launcher", () => {
       await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
     ) as {
       run?: { scenarioIds?: unknown };
-      scenarios?: Array<{ name?: unknown; status?: unknown }>;
+      scenarios?: Array<{ details?: unknown; name?: unknown; status?: unknown }>;
     };
     expect(summary.run?.scenarioIds).toEqual([
       "channel-chat-baseline",
@@ -213,6 +213,10 @@ describe("qa suite runtime launcher", () => {
       { name: "channel-chat-baseline", status: "pass" },
       { name: "Control UI chat flow Playwright coverage", status: "pass" },
     ]);
+    expect(JSON.stringify(summary)).not.toContain(repoRoot);
+    expect(summary.scenarios?.[1]?.details).toContain(
+      "log=.artifacts/qa-e2e/mixed/playwright/control-ui-chat-flow-playwright.log",
+    );
   });
 
   it("rejects runtime-pair requests for Vitest/Playwright scenarios", async () => {
