@@ -36,7 +36,10 @@ const DEFAULT_LOCAL_MODEL_FILE_NAME =
   DEFAULT_LOCAL_MODEL.split(/[\\/]/).at(-1) ?? DEFAULT_LOCAL_MODEL;
 
 function resolveModelFileName(model: string): string {
-  return model.trim().split(/[\\/]/).filter(Boolean).at(-1) ?? model.trim();
+  const trimmed = model.trim();
+  const normalized = trimmed.replace(/\\/g, "/");
+  const separatorIndex = normalized.lastIndexOf("/");
+  return separatorIndex >= 0 ? normalized.slice(separatorIndex + 1) || trimmed : trimmed;
 }
 
 function isDefaultLocalModelPath(model: string): boolean {
