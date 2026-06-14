@@ -18,6 +18,7 @@ import {
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
   restoreMemoryPluginState,
+  type MemoryPluginPublicArtifact,
 } from "./memory-state.js";
 
 function createMemoryRuntime() {
@@ -240,6 +241,82 @@ describe("memory plugin state", () => {
         relativePath: "MEMORY.md",
         absolutePath: "/tmp/workspace/MEMORY.md",
         agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
+  it("treats missing agentIds as empty when cloning public artifacts", async () => {
+    registerMemoryCapability("memory-lancedb", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace/MEMORY.md",
+              agentIds: undefined,
+              contentType: "markdown" as const,
+            } as unknown as MemoryPluginPublicArtifact,
+          ];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace/MEMORY.md",
+        agentIds: [],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
+  it("sorts public artifacts with missing agentIds without crashing", async () => {
+    registerMemoryCapability("memory-lancedb", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "daily-note",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "memory/2026-04-07.md",
+              absolutePath: "/tmp/workspace/memory/2026-04-07.md",
+              agentIds: undefined,
+              contentType: "markdown" as const,
+            } as unknown as MemoryPluginPublicArtifact,
+            {
+              kind: "daily-note",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "memory/2026-04-06.md",
+              absolutePath: "/tmp/workspace/memory/2026-04-06.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "memory/2026-04-06.md",
+        absolutePath: "/tmp/workspace/memory/2026-04-06.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "memory/2026-04-07.md",
+        absolutePath: "/tmp/workspace/memory/2026-04-07.md",
+        agentIds: [],
         contentType: "markdown",
       },
     ]);
