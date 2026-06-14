@@ -672,6 +672,19 @@ function hasVisiblePendingToolMediaReply(
   );
 }
 
+function hasToolNamed(tools: readonly { name?: unknown }[], expectedName: string): boolean {
+  for (const tool of tools) {
+    try {
+      if (tool.name === expectedName) {
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
@@ -1324,7 +1337,7 @@ export async function runEmbeddedAttempt(
         })();
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
-    const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
+    const bootstrapHasFileAccess = toolsEnabled && hasToolNamed(toolsRaw, "read");
     const bootstrapWarn = makeBootstrapWarn({
       sessionLabel,
       workspaceDir: resolvedWorkspace,

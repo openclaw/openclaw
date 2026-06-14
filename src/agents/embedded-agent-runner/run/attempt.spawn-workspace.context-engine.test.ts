@@ -1493,6 +1493,75 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ]);
   });
 
+  it("keeps bootstrap file access when a sibling raw tool name is unreadable", async () => {
+    hoisted.isWorkspaceBootstrapPendingMock.mockResolvedValueOnce(true);
+    hoisted.createOpenClawCodingToolsMock.mockImplementationOnce(() => [
+      {
+        get name() {
+          throw new Error("bootstrap tool name getter exploded");
+        },
+        label: "Broken",
+        description: "Broken descriptor.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "bad" }),
+      },
+      {
+        name: "read",
+        label: "Read",
+        description: "Read files.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "ok" }),
+      },
+    ]);
+    hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+      bootstrapFiles: [
+        {
+          name: "BOOTSTRAP.md",
+          path: "/tmp/openclaw-bootstrap-workspace/BOOTSTRAP.md",
+          content: "Ask who I am.",
+          missing: false,
+        },
+      ],
+      contextFiles: [
+        {
+          path: "/tmp/openclaw-bootstrap-workspace/BOOTSTRAP.md",
+          content: "Ask who I am.",
+        },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+        trigger: "user",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+      bootstrapMode?: string;
+      contextFiles?: Array<{ path: string; content: string }>;
+    };
+
+    expect(promptInput.bootstrapMode).toBe("full");
+    expect(promptInput.contextFiles).toEqual([
+      {
+        path: "/tmp/openclaw-bootstrap-workspace/BOOTSTRAP.md",
+        content: "Ask who I am.",
+      },
+    ]);
+  });
+
   it("skips bootstrap preload on completed continuation-skip turns", async () => {
     hoisted.resolveContextInjectionModeMock.mockReturnValue("continuation-skip");
     hoisted.hasCompletedBootstrapTurnMock.mockResolvedValue(true);
