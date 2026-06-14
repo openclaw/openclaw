@@ -29,7 +29,7 @@ export async function handleToolsInvokeHttpRequest(
 ): Promise<boolean> {
   let url: URL;
   try {
-    url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    url = new URL(req.url ?? "/", "http://localhost");
   } catch {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "bad_request", message: "Invalid request URL" }));

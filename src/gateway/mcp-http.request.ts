@@ -115,7 +115,7 @@ export function validateMcpLoopbackRequest(params: {
 }): { senderIsOwner: boolean } | null {
   let url: URL;
   try {
-    url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
+    url = new URL(params.req.url ?? "/", "http://localhost");
   } catch {
     logMcpLoopbackHttp("reject", { reason: "bad_request_url", method: params.req.method ?? "" });
     params.res.writeHead(400, { "Content-Type": "application/json" });
