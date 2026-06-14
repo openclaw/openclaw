@@ -1,6 +1,8 @@
 // Plugin runtime load context helpers resolve agent and workspace facts for runtime activation.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveConfigEnvVars } from "../../config/env-substitution.js";
+import { createConfigRuntimeEnv } from "../../config/env-vars.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -30,6 +32,12 @@ export type PluginRuntimeLoadContext = {
   logger: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
   installRecords?: Record<string, PluginInstallRecord>;
+  /**
+   * True when this context performed the single raw-config env substitution
+   * pass. Loads built from it must keep raw-mode cache semantics: resolved
+   * values can change between calls and must never enter cache keys.
+   */
+  rawConfigEnvVarsResolved?: boolean;
 };
 
 /** Runtime load option values that can be passed directly to plugin loading. */
@@ -43,6 +51,7 @@ export type PluginRuntimeResolvedLoadValues = Pick<
   | "logger"
   | "manifestRegistry"
   | "installRecords"
+  | "rawConfigEnvVarsResolved"
 >;
 
 /** Options accepted while resolving plugin runtime load context. */
@@ -53,6 +62,14 @@ export type PluginRuntimeLoadContextOptions = {
   workspaceDir?: string;
   logger?: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
+  /**
+   * Set only when the supplied `config`/`activationSourceConfig` are raw
+   * source inputs that have never been through config env substitution.
+   * Prepared runtime config (including the `getRuntimeConfig()` default) must
+   * stay untouched: it already had its single substitution pass, and resolving
+   * it again would turn escaped `$${VAR}` literals into real env values.
+   */
+  resolveRawConfigEnvVars?: boolean;
 };
 
 /** Creates the default plugin runtime loader logger. */
@@ -69,10 +86,24 @@ export function createPluginRuntimeLoaderLogger(): PluginLogger {
 export function resolvePluginRuntimeLoadContext(
   options?: PluginRuntimeLoadContextOptions,
 ): PluginRuntimeLoadContext {
-  const env = options?.env ?? process.env;
+  const baseEnv = options?.env ?? process.env;
   const rawConfig = options?.config ?? getRuntimeConfig();
+  // Env placeholders resolve only for caller-supplied raw config; the
+  // getRuntimeConfig() default is already substituted and a second pass would
+  // resolve escaped $${VAR} literals.
+  const shouldResolveRawConfigEnvVars =
+    options?.resolveRawConfigEnvVars === true && options.config !== undefined;
+  // Merge config env.vars only for that raw substitution pass; prepared
+  // contexts keep the caller env object untouched (callers rely on identity).
+  const env = shouldResolveRawConfigEnvVars ? createConfigRuntimeEnv(rawConfig, baseEnv) : baseEnv;
+  const resolvedRawConfig = shouldResolveRawConfigEnvVars
+    ? (resolveConfigEnvVars(rawConfig, env, {
+        onMissing: () => undefined,
+      }) as OpenClawConfig)
+    : rawConfig;
   const rawWorkspaceDir =
-    options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
+    options?.workspaceDir ??
+    resolveAgentWorkspaceDir(resolvedRawConfig, resolveDefaultAgentId(resolvedRawConfig));
   const metadataSnapshot = options?.manifestRegistry
     ? undefined
     : resolvePluginMetadataSnapshot({
@@ -85,12 +116,17 @@ export function resolvePluginRuntimeLoadContext(
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
     : undefined;
-  const activationSourceConfig = resolvePluginActivationSourceConfig({
+  const rawActivationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
   });
+  const activationSourceConfig = shouldResolveRawConfigEnvVars
+    ? (resolveConfigEnvVars(rawActivationSourceConfig, env, {
+        onMissing: () => undefined,
+      }) as OpenClawConfig)
+    : rawActivationSourceConfig;
   const autoEnabled = applyPluginAutoEnable({
-    config: rawConfig,
+    config: resolvedRawConfig,
     env,
     manifestRegistry,
     discovery: metadataSnapshot?.discovery,
@@ -121,6 +157,7 @@ export function resolvePluginRuntimeLoadContext(
     logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
     manifestRegistry,
     installRecords,
+    rawConfigEnvVarsResolved: shouldResolveRawConfigEnvVars,
   };
 }
 
@@ -146,6 +183,7 @@ export function buildPluginRuntimeLoadOptionsFromValues(
     logger: values.logger,
     manifestRegistry: values.manifestRegistry,
     installRecords: values.installRecords,
+    ...(values.rawConfigEnvVarsResolved === true ? { rawConfigEnvVarsResolved: true } : {}),
     ...overrides,
   };
 }

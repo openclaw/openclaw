@@ -111,6 +111,13 @@ function resolveScopePluginIds(params: {
 function resolveOrLoadRuntimePluginRegistry(
   loadOptions: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>,
 ): void {
+  if (loadOptions.rawConfigEnvVarsResolved === true) {
+    // Raw-config loads carry env-resolved values that registry compatibility
+    // checks cannot see; an active registry keyed on plugin ids and workspace
+    // alone may be stale, so always load fresh.
+    loadOpenClawPlugins(loadOptions);
+    return;
+  }
   if (
     !getLoadedRuntimePluginRegistry({
       env: loadOptions.env,
@@ -131,6 +138,8 @@ export function ensurePluginRegistryLoaded(options?: {
   workspaceDir?: string;
   onlyPluginIds?: string[];
   onlyChannelIds?: string[];
+  /** Only for raw source configs that never went through env substitution. */
+  resolveRawConfigEnvVars?: boolean;
 }): void {
   const scope = options?.scope ?? "all";
   const requestedPluginIdsFromOptions = normalizePluginIdScope(options?.onlyPluginIds);
@@ -160,7 +169,12 @@ export function ensurePluginRegistryLoaded(options?: {
   const active = getActivePluginRegistry();
   const requestedPluginIdsForScope =
     scope === "all" && expectedPluginIds.length === 0 ? expectedPluginIds : undefined;
+  // Contexts that resolved raw-config env vars cannot reuse registries by
+  // scope/plugin-id checks alone: the same ids can carry different env-resolved
+  // values between calls, so skip both reuse paths and load fresh.
+  const bypassRegistryReuse = context.rawConfigEnvVarsResolved;
   if (
+    !bypassRegistryReuse &&
     !scopedLoad &&
     scopeRank(pluginRegistryLoaded) >= scopeRank(scope) &&
     activeRegistrySatisfiesScope(
@@ -174,6 +188,7 @@ export function ensurePluginRegistryLoaded(options?: {
     return;
   }
   if (
+    !bypassRegistryReuse &&
     (pluginRegistryLoaded === "none" || scopedLoad) &&
     activeRegistrySatisfiesScope(
       scope,

@@ -117,26 +117,27 @@ describe("resolvePluginRuntimeLoadContext", () => {
         demo: ["demo configured"],
       },
       workspaceDir: "/resolved-workspace",
-      env,
+      env: context.env,
       logger: context.logger,
       manifestRegistry,
       installRecords: {},
+      rawConfigEnvVarsResolved: false,
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       allowWorkspaceScopedCurrent: true,
       config: rawConfig,
-      env,
+      env: context.env,
       workspaceDir: "/resolved-workspace",
     });
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: rawConfig,
-      env,
+      env: context.env,
       manifestRegistry,
     });
     expect(setCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(metadataSnapshot, {
       config: rawConfig,
       compatibleConfigs: [resolvedConfig, rawConfig],
-      env,
+      env: context.env,
       workspaceDir: "/resolved-workspace",
     });
     expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(resolvedConfig);
@@ -158,7 +159,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     expect(setCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(derivedSnapshot, {
       config: { plugins: {} },
       compatibleConfigs: [{ plugins: {} }, { plugins: {} }],
-      env: { HOME: "/tmp/openclaw-home" },
+      env: expect.objectContaining({ HOME: "/tmp/openclaw-home" }),
       workspaceDir: "/resolved-workspace",
     });
     expect(clearCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
@@ -178,10 +179,10 @@ describe("resolvePluginRuntimeLoadContext", () => {
     const context = resolvePluginRuntimeLoadContext();
 
     expect(context.rawConfig).toBe(runtimeConfig);
-    expect(context.activationSourceConfig).toBe(sourceConfig);
+    expect(context.activationSourceConfig).toEqual(sourceConfig);
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: runtimeConfig,
-      env: process.env,
+      env: expect.objectContaining(process.env),
       manifestRegistry,
     });
   });
@@ -238,5 +239,126 @@ describe("resolvePluginRuntimeLoadContext", () => {
       activate: false,
       onlyPluginIds: ["demo"],
     });
+  });
+
+  it("resolves plugin config env placeholders for raw configs that opt into resolution", () => {
+    const rawConfig = {
+      env: {
+        vars: {
+          PIONEER_API_KEY: "resolved-from-config",
+        },
+      },
+      plugins: {
+        entries: {
+          pioneer: {
+            enabled: true,
+            config: {
+              apiKey: "${PIONEER_API_KEY}",
+            },
+          },
+        },
+      },
+    };
+
+    applyPluginAutoEnableMock.mockImplementation((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: rawConfig,
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      resolveRawConfigEnvVars: true,
+    });
+
+    const options = buildPluginRuntimeLoadOptions(context);
+    expect(context.env.PIONEER_API_KEY).toBe("resolved-from-config");
+    expect(context.config.plugins?.entries?.pioneer?.config).toEqual({
+      apiKey: "resolved-from-config",
+    });
+    expect(options.resolveRawConfigEnvVars).toBeUndefined();
+    // The load options keep the raw-mode marker so the loader applies raw
+    // cache semantics (no registry reuse, redacted cache keys) without
+    // resolving a second time.
+    expect(context.rawConfigEnvVarsResolved).toBe(true);
+    expect(options.rawConfigEnvVarsResolved).toBe(true);
+  });
+
+  it("preserves $${VAR} escapes as literals when resolving a raw config", () => {
+    const rawConfig = {
+      env: {
+        vars: {
+          PIONEER_API_KEY: "resolved-from-config",
+        },
+      },
+      plugins: {
+        entries: {
+          pioneer: {
+            enabled: true,
+            config: {
+              apiKey: "$${PIONEER_API_KEY}",
+            },
+          },
+        },
+      },
+    };
+
+    applyPluginAutoEnableMock.mockImplementation((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: rawConfig,
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      resolveRawConfigEnvVars: true,
+    });
+
+    expect(context.config.plugins?.entries?.pioneer?.config).toEqual({
+      apiKey: "${PIONEER_API_KEY}",
+    });
+  });
+
+  it("never re-resolves prepared configs, so escaped literals survive runtime loads", () => {
+    // A prepared config already went through the single substitution pass, so
+    // an escaped $${VAR} arrives here as the literal ${VAR}. Resolving again
+    // would turn that literal into the real env value.
+    const preparedConfig = {
+      env: {
+        vars: {
+          PIONEER_API_KEY: "real-secret",
+        },
+      },
+      plugins: {
+        entries: {
+          pioneer: {
+            enabled: true,
+            config: {
+              apiKey: "${PIONEER_API_KEY}",
+            },
+          },
+        },
+      },
+    };
+
+    applyPluginAutoEnableMock.mockImplementation((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: preparedConfig,
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(context.config.plugins?.entries?.pioneer?.config).toEqual({
+      apiKey: "${PIONEER_API_KEY}",
+    });
+    expect(context.activationSourceConfig).toBe(preparedConfig);
+    expect(context.rawConfigEnvVarsResolved).toBe(false);
+    expect(buildPluginRuntimeLoadOptions(context).rawConfigEnvVarsResolved).toBeUndefined();
   });
 });
