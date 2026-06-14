@@ -219,6 +219,9 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
     ...(item.kind === "queued" || item.kind === "steered" ? { kind: item.kind } : {}),
     ...(attachments.length ? { attachments: attachments as ChatAttachment[] } : {}),
     ...(typeof item.refreshSessions === "boolean" ? { refreshSessions: item.refreshSessions } : {}),
+    ...(typeof item.resetChatAfterCompletion === "boolean"
+      ? { resetChatAfterCompletion: item.resetChatAfterCompletion }
+      : {}),
     ...(item.localCommandArgs ? { localCommandArgs: item.localCommandArgs } : {}),
     ...(item.localCommandName ? { localCommandName: item.localCommandName } : {}),
     ...(item.sessionKey ? { sessionKey: item.sessionKey } : {}),
@@ -262,6 +265,10 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
   const refreshSessions = normalizeOptionalBoolean(entry.refreshSessions);
   if (refreshSessions !== undefined) {
     item.refreshSessions = refreshSessions;
+  }
+  const resetChatAfterCompletion = normalizeOptionalBoolean(entry.resetChatAfterCompletion);
+  if (resetChatAfterCompletion !== undefined) {
+    item.resetChatAfterCompletion = resetChatAfterCompletion;
   }
   if (entry.sendState === "failed" || entry.sendState === "waiting-reconnect") {
     item.sendState = entry.sendState;

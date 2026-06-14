@@ -177,6 +177,10 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResultTerminalRuns?: Set<string>;
 };
 
+type GatewayHostWithResettableChatView = GatewayHostWithSideResults & {
+  chatMessages: unknown[];
+};
+
 const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
 const DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS = 250;
 const DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS = 10_000;
@@ -1005,6 +1009,21 @@ function handleTerminalChatEvent(
         ...createChatSessionsLoadOverrides(host),
         ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
       });
+      if (refreshTarget.resetChatAfterCompletion) {
+        const resetHost = host as GatewayHostWithResettableChatView;
+        resetHost.chatMessages = [];
+        resetHost.chatSideResult = null;
+        resetHost.chatSideResultTerminalRuns?.clear();
+        const completedRunId = runId;
+        void Promise.resolve(loadChatHistory(host as unknown as ChatState)).finally(() => {
+          if (completedRunId && host.chatRunId && host.chatRunId !== completedRunId) {
+            return;
+          }
+          resetToolStream(toolHost);
+          flushQueue();
+        });
+        return true;
+      }
     }
   }
   // Reload history when tools were used only if the terminal event did not carry

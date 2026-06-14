@@ -1357,7 +1357,7 @@ describe("handleSendChat", () => {
     vi.stubGlobal("confirm", confirm);
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
-        return { status: "started" };
+        return { runId: "run-reset", status: "started" };
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -1377,6 +1377,10 @@ describe("handleSendChat", () => {
     );
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe("/reset");
+    expect(host.refreshSessionsAfterChat.get("run-reset")).toMatchObject({
+      sessionKey: "agent:main",
+      resetChatAfterCompletion: true,
+    });
     expect(host.chatMessage).toBe("");
   });
 
@@ -1402,7 +1406,7 @@ describe("handleSendChat", () => {
     vi.stubGlobal("confirm", confirm);
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
-        return { status: "started" };
+        return { runId: "run-soft-reset", status: "started" };
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -1422,6 +1426,12 @@ describe("handleSendChat", () => {
     );
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe(expected);
+    expect(host.refreshSessionsAfterChat.get("run-soft-reset")).toMatchObject({
+      sessionKey: "agent:main",
+    });
+    expect(host.refreshSessionsAfterChat.get("run-soft-reset")?.resetChatAfterCompletion).toBe(
+      undefined,
+    );
     expect(host.chatMessage).toBe("");
   });
 

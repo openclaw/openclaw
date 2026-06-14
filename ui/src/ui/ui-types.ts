@@ -20,6 +20,7 @@ export type ChatQueueItem = {
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
+  resetChatAfterCompletion?: boolean;
   localCommandArgs?: string;
   localCommandName?: string;
   pendingRunId?: string;
@@ -37,6 +38,7 @@ export type ChatQueueItem = {
 export type ChatSessionRefreshTarget = {
   sessionKey: string;
   agentId?: string;
+  resetChatAfterCompletion?: boolean;
 };
 
 export const CRON_CHANNEL_LAST = "last";
