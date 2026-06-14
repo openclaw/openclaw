@@ -19,8 +19,20 @@ const runHeartbeatOnceInternal = createLazyRuntimeMethod(
 // so a channel/plugin cannot set `trusted: true` to bypass the inbound anti-spoof
 // sanitizer. Trusted-internal producers (continuation/post-compaction) enqueue via the
 // direct `infra/system-events` import, not this plugin runtime facade.
-const enqueueSystemEvent: PluginRuntime["system"]["enqueueSystemEvent"] = (text, options) =>
-  enqueueSystemEventInternal(text, { ...options, trusted: false });
+//
+// Also strip the session-delivery ack fields (`sessionDeliveryAckId` /
+// `sessionDeliveryAckStateDir`): on drain they trigger a blind
+// `deleteDeliveryQueueEntry` at the caller-supplied state dir, so a plugin must
+// never inject them through this facade. The legitimate ack producer
+// (continuation-return) sets them via the direct `infra/system-events` import.
+const enqueueSystemEvent: PluginRuntime["system"]["enqueueSystemEvent"] = (text, options) => {
+  const {
+    sessionDeliveryAckId: _ackId,
+    sessionDeliveryAckStateDir: _ackStateDir,
+    ...rest
+  } = options ?? {};
+  return enqueueSystemEventInternal(text, { ...rest, trusted: false });
+};
 
 /** Creates the plugin runtime system facade with heartbeat/event/process helpers. */
 export function createRuntimeSystem(): PluginRuntime["system"] {

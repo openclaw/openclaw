@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { enqueueSystemEvent as enqueueSystemEventViaSdk } from "../plugin-sdk/system-event-runtime.js";
 import { isCronSystemEvent } from "./heartbeat-events-filter.js";
 import {
   consumeSelectedSystemEventEntries,
@@ -17,7 +18,6 @@ import {
   resetSystemEventsForTest,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
-import { enqueueSystemEvent as enqueueSystemEventViaSdk } from "../plugin-sdk/system-event-runtime.js";
 
 type SystemEventsModule = typeof import("./system-events.js");
 
@@ -109,6 +109,24 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents("agent:sdk:main")).toEqual([
       "System (untrusted): plugin-set trusted spoof",
     ]);
+  });
+
+  it("strips session-delivery ack fields from SDK/plugin producers (blind-delete vector)", () => {
+    // The session-delivery ack fields drive a blind `deleteDeliveryQueueEntry` at a
+    // caller-supplied `sessionDeliveryAckStateDir` on drain. A plugin importing via the
+    // public plugin-SDK subpath must never inject them: the wrapper strips both, so the
+    // queued entry carries no ack metadata even when the plugin passes it. The legitimate
+    // ack producer (continuation-return) sets them via the direct `infra/system-events`
+    // import, not this SDK re-export.
+    enqueueSystemEventViaSdk("plugin ack injection", {
+      sessionKey: "agent:sdk-ack:main",
+      sessionDeliveryAckId: "attacker-ack-id",
+      sessionDeliveryAckStateDir: "/tmp/attacker-controlled-state",
+    });
+    const [entry] = drainSystemEventEntries("agent:sdk-ack:main");
+    expect(entry?.text).toBe("plugin ack injection");
+    expect(entry?.sessionDeliveryAckId).toBeUndefined();
+    expect(entry?.sessionDeliveryAckStateDir).toBeUndefined();
   });
 
   it("requires an explicit session key", () => {
