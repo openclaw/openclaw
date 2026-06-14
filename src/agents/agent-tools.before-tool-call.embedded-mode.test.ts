@@ -408,8 +408,8 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   it("blocks skill_workshop lifecycle actions when no approval route is available", async () => {
-    // ClawSweeper P1 pushback on #89590: apply/reject/quarantine all mutate
-    // the live skill set, so falling back to ALLOW_ONCE on no-route would
+    // apply/reject/quarantine all mutate the live skill set, so falling
+    // back to ALLOW_ONCE on no-route would
     // bypass the operator-intended pending-approval default. The default
     // (block with "Plugin approval unavailable" reason) is the safer
     // contract; the model sees the block immediately rather than a

@@ -496,11 +496,11 @@ async function requestPluginToolApproval(params: {
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
       if (decision === null) {
-        // No approval route is available. ClawSweeper P1 finding on #89590:
-        // a plugin-supplied `unavailableBehavior: "allow"` would weaken the
-        // operator approval boundary by turning a missing route into an
-        // ALLOW_ONCE. The hook-types contract narrows `unavailableBehavior`
-        // to "deny" only; the runtime always fails closed here. Operators
+        // No approval route is available. Fail closed: a plugin-supplied
+        // `unavailableBehavior: "allow"` would weaken the operator approval
+        // boundary by turning a missing route into an ALLOW_ONCE. The
+        // hook-types contract narrows `unavailableBehavior` to "deny" only;
+        // the runtime always fails closed here. Operators
         // who need a tool to run without a route should configure approval
         // routing (Telegram/Discord approvers, etc.) rather than rely on
         // plugin-side allow.
