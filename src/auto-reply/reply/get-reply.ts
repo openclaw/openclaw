@@ -11,7 +11,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -30,7 +30,10 @@ import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { resolveDefaultModel } from "./directive-handling.defaults.js";
+import {
+  resolveDefaultModel,
+  resolveSubagentSessionDefaultModel,
+} from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
@@ -327,7 +330,10 @@ export async function getReplyFromConfig(
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
-  const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(
+  // `let` (not `const`) because the subagent-default block below reassigns these
+  // when a spawned subagent should boot on its configured `subagents.model`
+  // chain instead of the parent agent's primary model.
+  let { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(
     "reply.resolve_default_model",
     () =>
       resolveDefaultModel({
@@ -550,6 +556,29 @@ export async function getReplyFromConfig(
     }
   }
 
+  // Subagent sessions should boot on their configured `subagents.model` chain,
+  // not the parent agent's primary. Without this, the Pi runtime starts on the
+  // parent's primary and post-run persistence clobbers `entry.model` over the
+  // value `resolveSubagentSpawnModelSelection` wrote at spawn time.
+  if (!hasResolvedHeartbeatModelOverride) {
+    const subagentDefault = resolveSubagentSessionDefaultModel({
+      cfg,
+      agentId,
+      sessionEntry,
+      defaultProvider,
+    });
+    if (subagentDefault) {
+      defaultProvider = subagentDefault.provider;
+      defaultModel = subagentDefault.model;
+      provider = subagentDefault.provider;
+      model = subagentDefault.model;
+      // Rebuild the alias index against the subagent provider so downstream
+      // bare-alias resolution (channel overrides, stored overrides, reset
+      // overrides, dispatch) resolves under the subagent provider instead of
+      // the now-stale parent provider.
+      aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+    }
+  }
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({

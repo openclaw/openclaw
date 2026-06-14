@@ -2829,7 +2829,7 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     );
   });
 
-  it("still prefers agent subagents.model over the agent primary model", () => {
+  it("still prefers agent subagents.model over the global subagent default", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -2849,6 +2849,36 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
       "google/gemini-2.5-pro",
     );
+  });
+
+  it("falls back to the agent primary model when no subagent default is configured", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-opus-4-6" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
+      "anthropic/claude-opus-4-6",
+    );
+  });
+
+  it("returns undefined when no subagent default and no agent model are configured", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "research" }],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBeUndefined();
   });
 
   it("keeps runtime policy attached to the configured default subagent model", () => {
