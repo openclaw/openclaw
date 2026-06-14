@@ -172,16 +172,37 @@ function formatTextPreview(texts: string[], maxChars = 800): string {
   return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
 }
 
+function extractAssistantTexts(messages: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if ((entry as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractVisibleMessageText(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
 async function waitForTrajectoryExportInstructionText(params: {
+  client: GatewayClient;
   events: EventFrame[];
+  eventStartIndex: number;
   expectedText: string;
   runId: string;
+  sessionKey: string;
   timeoutMs: number;
 }): Promise<string> {
   const deadline = Date.now() + params.timeoutMs;
   let finalTexts: string[] = [];
   while (Date.now() < deadline) {
-    finalTexts = params.events
+    const newEvents = params.events.slice(params.eventStartIndex);
+    finalTexts = newEvents
       .map((event) => extractChatFinalText(event, params.runId))
       .filter((text): text is string => typeof text === "string" && text.trim().length > 0);
     const matchedText = finalTexts.find((text) => text.includes(params.expectedText));
@@ -192,9 +213,23 @@ async function waitForTrajectoryExportInstructionText(params: {
       setTimeout(resolve, 500);
     });
   }
+  let assistantTexts: string[];
+  try {
+    const history = (await params.client.request(
+      "chat.history",
+      {
+        sessionKey: params.sessionKey,
+        limit: 24,
+      },
+      { timeoutMs: 10_000 },
+    )) as { messages?: unknown[] };
+    assistantTexts = extractAssistantTexts(history.messages ?? []);
+  } catch {
+    assistantTexts = [];
+  }
   throw new Error(
     `timed out waiting for trajectory export instruction text for ${params.runId}; ` +
-      `events=${params.events.length}; finalTexts=${formatTextPreview(finalTexts)}`,
+      `events=${params.events.length}; finalTexts=${formatTextPreview(finalTexts)}; assistantTexts=${formatTextPreview(assistantTexts)}`,
   );
 }
 
@@ -210,6 +245,10 @@ function extractChatFinalText(event: EventFrame, runId: string): string | undefi
   if (record.runId !== runId || record.state !== "final") {
     return undefined;
   }
+  return extractChatFinalRecordText(record);
+}
+
+function extractChatFinalRecordText(record: Record<string, unknown>): string | undefined {
   const message = record.message;
   if (!message || typeof message !== "object") {
     return undefined;
@@ -395,6 +434,7 @@ describeLive("gateway live trajectory export", () => {
       const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
       const beforeExport = new Set(await listDirectoryNames(tempDir));
       const exportRunId = `chat-export-${randomUUID()}`;
+      const exportEventStartIndex = gatewayEvents.length;
       logLiveStep("export:start", { bundleDir, exportRunId });
       const exportResponse = (await client.request(
         "chat.send",
@@ -415,9 +455,12 @@ describeLive("gateway live trajectory export", () => {
         typeof exportResponse?.message === "object"
           ? extractVisibleMessageText(exportResponse.message)
           : await waitForTrajectoryExportInstructionText({
+              client,
               events: gatewayEvents,
+              eventStartIndex: exportEventStartIndex,
               expectedText: "Trajectory exports can include",
               runId: exportRunId,
+              sessionKey,
               timeoutMs: 60_000,
             });
       expect(finalText).toContain("Trajectory exports can include");

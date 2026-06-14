@@ -93,8 +93,12 @@ fi
 
 credential_source="$(resolve_credential_source)"
 credential_role="$(resolve_credential_role)"
-if [ -z "$credential_role" ] && [ -n "${CI:-}" ] && [ "$credential_source" = "convex" ]; then
-  credential_role="ci"
+if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then
+  if [ -n "${CI:-}" ]; then
+    credential_role="ci"
+  else
+    credential_role="maintainer"
+  fi
 fi
 
 validate_credential_preflight() {
@@ -205,7 +209,6 @@ for key in \
   OPENCLAW_QA_ALLOW_INSECURE_HTTP \
   OPENCLAW_QA_REDACT_PUBLIC_METADATA \
   OPENCLAW_QA_PACKAGE_SOURCE_SHA \
-  OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT \
   OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS \
   OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS \
   OPENCLAW_QA_SUITE_PROGRESS \
@@ -213,6 +216,10 @@ for key in \
   OPENCLAW_NPM_TELEGRAM_MODEL \
   OPENCLAW_NPM_TELEGRAM_ALT_MODEL \
   OPENCLAW_NPM_TELEGRAM_SCENARIOS \
+  OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES \
+  OPENCLAW_NPM_TELEGRAM_RTT_CHECKS \
+  OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS \
+  OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES \
   OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH \
   OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT \
   OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES; do

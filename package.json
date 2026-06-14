@@ -1666,7 +1666,6 @@
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
     "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
     "release:prep": "node scripts/release-preflight.mjs --fix",
-    "rtt": "node --import tsx scripts/rtt.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
     "start": "node openclaw.mjs",
