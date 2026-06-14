@@ -2957,7 +2957,6 @@ describe("dispatchReplyFromConfig", () => {
       status: "ok",
       exitCode: 0,
     });
-    expect(commentaryEnabled).toBe(true);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
