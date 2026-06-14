@@ -1585,6 +1585,95 @@ describe("anthropic transport stream", () => {
     ]);
   });
 
+  it("replaces a completed thinking-only turn when the current request disables thinking", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "private reasoning",
+                thinkingSignature: "sig_1",
+              },
+              {
+                type: "thinking",
+                thinking: "[Reasoning redacted]",
+                thinkingSignature: "opaque_1",
+                redacted: true,
+              },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    const assistantMessage = findRecord(payload.messages, (record) => record.role === "assistant");
+    expect(payload.thinking).toEqual({ type: "disabled" });
+    expect(assistantMessage.content).toEqual([
+      { type: "text", text: "[assistant reasoning omitted]" },
+    ]);
+  });
+
+  it("preserves signed thinking for an active tool turn when new thinking is disabled", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [
+          { role: "user", content: "look it up" },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "call lookup",
+                thinkingSignature: "sig_tool",
+              },
+              { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "42" }],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(assistantMessage.content).toEqual([
+      { type: "thinking", thinking: "call lookup", signature: "sig_tool" },
+      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+    ]);
+  });
+
   it("backfills empty reasoning_content thinking blocks for compatible Anthropic tool-use replays", async () => {
     await runTransportStream(
       makeAnthropicTransportModel({

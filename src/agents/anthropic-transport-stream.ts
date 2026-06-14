@@ -6,6 +6,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
+import {
+  ANTHROPIC_OMITTED_REASONING_TEXT,
+  findActiveAnthropicToolTurnAssistantIndex,
+} from "../llm/providers/anthropic-thinking-replay.js";
 import type { AnthropicOptions } from "../llm/providers/anthropic.js";
 import type {
   AssistantMessageDiagnostic,
@@ -372,11 +376,18 @@ function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
-  options?: { allowReasoningContentReplay?: boolean },
+  options?: {
+    allowReasoningContentReplay?: boolean;
+    replayThinkingEnabled?: boolean;
+  },
 ) {
   const params: Array<Record<string, unknown>> = [];
   const allowReasoningContentReplay = options?.allowReasoningContentReplay === true;
+  const replayThinkingEnabled = options?.replayThinkingEnabled !== false;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
+  const activeToolTurnAssistantIndex = replayThinkingEnabled
+    ? -1
+    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
     if (msg.role === "user") {
@@ -428,6 +439,7 @@ function convertAnthropicMessages(
     if (msg.role === "assistant") {
       const blocks: Array<Record<string, unknown>> = [];
       const reasoningContent: string[] = [];
+      let omittedThinking = false;
       for (const block of msg.content) {
         if (block.type === "text") {
           if (block.text.trim().length > 0) {
@@ -439,6 +451,12 @@ function convertAnthropicMessages(
           continue;
         }
         if (block.type === "thinking") {
+          const thinkingSignature = block.thinkingSignature?.trim();
+          const isReasoningContent = thinkingSignature === "reasoning_content";
+          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex && !isReasoningContent) {
+            omittedThinking = true;
+            continue;
+          }
           if (block.redacted) {
             blocks.push({
               type: "redacted_thinking",
@@ -446,9 +464,7 @@ function convertAnthropicMessages(
             });
             continue;
           }
-          const thinkingSignature = block.thinkingSignature?.trim();
-          const hasNativeThinkingSignature =
-            Boolean(thinkingSignature) && thinkingSignature !== "reasoning_content";
+          const hasNativeThinkingSignature = Boolean(thinkingSignature) && !isReasoningContent;
           if (block.thinking.trim().length === 0 && !hasNativeThinkingSignature) {
             continue;
           }
@@ -489,6 +505,9 @@ function convertAnthropicMessages(
             input: coerceTransportToolCallArguments(block.arguments),
           });
         }
+      }
+      if (blocks.length === 0 && omittedThinking) {
+        blocks.push({ type: "text", text: ANTHROPIC_OMITTED_REASONING_TEXT });
       }
       if (blocks.length > 0) {
         const assistantMsg: Record<string, unknown> = { role: "assistant", content: blocks };
@@ -899,6 +918,8 @@ function buildAnthropicParams(
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
 ) {
+  const fable5 = usesClaudeFable5MessagesContract(model);
+  const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
   const maxTokens = resolveAnthropicMessagesMaxTokens({
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
@@ -920,6 +941,7 @@ function buildAnthropicParams(
     messages: ensureNonEmptyAnthropicMessages(
       convertAnthropicMessages(context.messages, model, isOAuthToken, {
         allowReasoningContentReplay: supportsReasoningContentReplay(model),
+        replayThinkingEnabled,
       }),
     ),
     max_tokens: maxTokens,
@@ -961,7 +983,6 @@ function buildAnthropicParams(
   if (context.tools) {
     params.tools = convertAnthropicTools(context.tools, isOAuthToken);
   }
-  const fable5 = usesClaudeFable5MessagesContract(model);
   if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
     if (fable5 || options?.thinkingEnabled) {
       if (supportsAdaptiveThinking(model)) {
