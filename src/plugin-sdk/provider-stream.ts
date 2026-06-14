@@ -34,7 +34,6 @@ export {
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
   createMoonshotThinkingWrapper,
-  createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
