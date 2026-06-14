@@ -160,6 +160,20 @@ describe("ExternalMmrReranker", () => {
   });
 
   describe("endpointPath override", () => {
+    it("strips trailing slash from baseUrl before joining endpointPath", async () => {
+      const mock = mockOkGuard([{ index: 0, relevance_score: 0.8 }]);
+
+      const reranker = new ExternalMmrReranker(
+        { provider: "cohere", model: "rerank-v3.5" },
+        makeTestConfig({ cohere: { baseUrl: "https://api.cohere.ai/" } }),
+      );
+
+      const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
+      await reranker.rerank({ query: "test", documents: docs, limit: 5 });
+
+      expect(guardCallOpts(mock).url).toBe("https://api.cohere.ai/v1/rerank");
+    });
+
     it("uses custom endpointPath instead of /v1/rerank", async () => {
       const mock = mockOkGuard([{ index: 0, relevance_score: 0.8 }]);
 

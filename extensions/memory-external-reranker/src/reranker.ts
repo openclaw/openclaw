@@ -155,9 +155,12 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
     });
     const errors: Error[] = [];
 
+    const normalizedBase = providerEntry.baseUrl.replace(/\/+$/, "");
+    const normalizedPath = endpointPath.startsWith("/") ? endpointPath : `/${endpointPath}`;
+
     for (const modelId of candidates) {
       const candidate = `${providerId}/${modelId}`;
-      const url = `${providerEntry.baseUrl}${endpointPath}`;
+      const url = `${normalizedBase}${normalizedPath}`;
       console.debug(
         `[memory-external-reranker] candidate=${candidate} model=${modelId} url=${url} topN=${topN} documents=${documents.length}`,
       );
