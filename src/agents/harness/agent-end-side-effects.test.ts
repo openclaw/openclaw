@@ -90,6 +90,40 @@ describe("agent end side effects", () => {
     resolveCapture?.();
   });
 
+  it("waits for Skill Research auto-capture when awaiting side effects", async () => {
+    let resolveCapture: (() => void) | undefined;
+    mockAutoCapture.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveCapture = resolve;
+      }),
+    );
+
+    let resolved = false;
+    const run = awaitAgentEndSideEffects({
+      event: {
+        messages: [],
+        success: true,
+      },
+      ctx: {
+        runId: "run-1",
+        workspaceDir: "/workspace",
+      },
+    }).then(() => {
+      resolved = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(mockAutoCapture).toHaveBeenCalledTimes(1);
+    });
+    expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    resolveCapture?.();
+    await expect(run).resolves.toBeUndefined();
+    expect(resolved).toBe(true);
+  });
+
   it("still runs agent_end hooks when Skill Research auto-capture fails", async () => {
     mockAutoCapture.mockRejectedValueOnce(new Error("capture failed"));
 
