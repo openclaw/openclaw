@@ -1,0 +1,41 @@
+{
+  "id": "capability-manifest-verifier",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Capability Manifest Verifier",
+  "description": "Enforces broker-issued capability manifest grants before tool execution.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "manifestJwtEnv": {
+        "type": "string",
+        "default": "OPENCLAW_CAPABILITY_MANIFEST_JWT"
+      },
+      "manifestPath": {
+        "type": "string"
+      },
+      "manifestSecretEnv": {
+        "type": "string",
+        "default": "OPENCLAW_CAPABILITY_MANIFEST_SECRET"
+      },
+      "agentId": {
+        "type": "string"
+      },
+      "defaultDecision": {
+        "type": "string",
+        "enum": ["allow", "deny"],
+        "default": "deny"
+      },
+      "approvalTitle": {
+        "type": "string",
+        "default": "Capability manifest approval required"
+      }
+    }
+  }
+}
