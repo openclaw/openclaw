@@ -3,7 +3,6 @@ import { isValueToken } from "../../infra/cli-root-options.js";
 import {
   getCommandPositionalsWithRootOptions,
   getFlagValue,
-  getPositiveIntFlagValue,
   getVerboseFlag,
   hasFlag,
 } from "../argv.js";
@@ -74,7 +73,8 @@ export function parseHealthRouteArgs(argv: string[]) {
   if (rawTimeout === null) {
     return null;
   }
-  const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
+  const timeoutMs =
+    rawTimeout === undefined ? undefined : parseStrictPositiveIntOrUndefined(rawTimeout);
   if (rawTimeout !== undefined && timeoutMs === undefined) {
     return null;
   }
@@ -94,7 +94,8 @@ export function parseStatusRouteArgs(argv: string[]) {
   if (rawTimeout === null) {
     return null;
   }
-  const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
+  const timeoutMs =
+    rawTimeout === undefined ? undefined : parseStrictPositiveIntOrUndefined(rawTimeout);
   if (rawTimeout !== undefined && timeoutMs === undefined) {
     return null;
   }
