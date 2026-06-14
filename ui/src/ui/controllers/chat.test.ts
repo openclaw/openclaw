@@ -3382,3 +3382,86 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatThinkingLevel).toBeNull();
   });
 });
+
+describe("loadChatHistory in-flight run adoption", () => {
+  it("restores a buffered in-flight assistant stream on reconnect", async () => {
+    // Reconnect after switching away: only the committed user turn is persisted,
+    // and the gateway reports the still-streaming assistant run as inFlightRun.
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "Do the thing" }] }],
+      inFlightRun: { runId: "run-live", text: "Partial assistant repl" },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-live");
+    expect(state.chatStream).toBe("Partial assistant repl");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+    expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("adopts an empty-text in-flight run so the thread shows streaming, not idle", async () => {
+    // Runtimes that only deliver assistant text at completion (e.g. Codex) report
+    // an inFlightRun with no buffered text; the client must still adopt the run so
+    // the status is streaming and a reading indicator renders (chatStream === "").
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "Run it" }] }],
+      inFlightRun: { runId: "run-codex", text: "" },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-codex");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+  });
+
+  it("ignores inFlightRun without a run id", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      inFlightRun: { text: "orphan partial" },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("does not adopt inFlightRun when a fresher local run is already streaming", async () => {
+    // A live local run started/continued during the reload must win over a stale
+    // history snapshot's inFlightRun; reconciliation keeps the local run id, so
+    // adoption must be skipped.
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "newer turn" }] }],
+      inFlightRun: { runId: "run-stale", text: "stale partial" },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatRunId: "run-fresh",
+      chatStream: "fresh live text",
+      chatStreamStartedAt: 999,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-fresh");
+    expect(state.chatStream).toBe("fresh live text");
+  });
+});
