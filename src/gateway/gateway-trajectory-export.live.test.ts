@@ -32,10 +32,12 @@ const DEFAULT_CODEX_MODEL = "openai/gpt-5.5";
 type TrajectoryExportApprovalEntry = {
   id?: string;
   command?: string;
+  commandArgv?: string[];
   commandText?: string;
   commandPreview?: string;
   request?: {
     command?: string;
+    commandArgv?: string[];
     commandText?: string;
     commandPreview?: string;
   };
@@ -44,6 +46,11 @@ type TrajectoryExportApprovalEntry = {
 type TrajectoryExportApprovalSummary = {
   id?: string;
   hasTrajectoryExportCommand: boolean;
+};
+
+type TrajectoryExportSignal = {
+  approvalId?: string;
+  instructionText: string;
 };
 
 function logLiveStep(step: string, details?: Record<string, unknown>): void {
@@ -212,9 +219,11 @@ function extractAssistantTexts(messages: unknown[]): string[] {
 function getTrajectoryExportApprovalCommands(entry: TrajectoryExportApprovalEntry): string[] {
   return [
     entry.request?.command,
+    entry.request?.commandArgv?.join(" "),
     entry.request?.commandText,
     entry.request?.commandPreview,
     entry.command,
+    entry.commandArgv?.join(" "),
     entry.commandText,
     entry.commandPreview,
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
@@ -238,7 +247,7 @@ function summarizeTrajectoryExportApproval(
   return summary;
 }
 
-async function waitForTrajectoryExportInstructionText(params: {
+async function waitForTrajectoryExportSignal(params: {
   client: GatewayClient;
   events: EventFrame[];
   eventStartIndex: number;
@@ -246,10 +255,11 @@ async function waitForTrajectoryExportInstructionText(params: {
   runId: string;
   sessionKey: string;
   timeoutMs: number;
-}): Promise<string> {
+}): Promise<TrajectoryExportSignal> {
   const deadline = Date.now() + params.timeoutMs;
-  let finalTexts: string[] = [];
-  let assistantTexts: string[] = [];
+  let finalTexts: string[] | undefined;
+  let assistantTexts: string[] | undefined;
+  let approvalId: string | undefined;
   let nextHistoryPollAt = 0;
   while (Date.now() < deadline) {
     const newEvents = params.events.slice(params.eventStartIndex);
@@ -258,7 +268,7 @@ async function waitForTrajectoryExportInstructionText(params: {
       .filter((text): text is string => typeof text === "string" && text.trim().length > 0);
     const matchedText = finalTexts.find((text) => text.includes(params.expectedText));
     if (matchedText) {
-      return matchedText;
+      return { ...(approvalId ? { approvalId } : {}), instructionText: matchedText };
     }
     if (Date.now() >= nextHistoryPollAt) {
       try {
@@ -275,11 +285,22 @@ async function waitForTrajectoryExportInstructionText(params: {
           text.includes(params.expectedText),
         );
         if (matchedHistoryText) {
-          return matchedHistoryText;
+          return { ...(approvalId ? { approvalId } : {}), instructionText: matchedHistoryText };
         }
       } catch {
         assistantTexts = [];
       }
+      try {
+        const approvals = (await params.client.request(
+          "exec.approval.list",
+          {},
+          { timeoutMs: 10_000 },
+        )) as TrajectoryExportApprovalEntry[];
+        const approval = approvals.find(isTrajectoryExportApproval);
+        if (approval && !approvalId) {
+          approvalId = await approveTrajectoryExport(params.client, approval);
+        }
+      } catch {}
       nextHistoryPollAt = Date.now() + 2_000;
     }
     await new Promise((resolve) => {
@@ -299,7 +320,7 @@ async function waitForTrajectoryExportInstructionText(params: {
   }
   throw new Error(
     `timed out waiting for trajectory export instruction text for ${params.runId}; ` +
-      `events=${params.events.length}; finalTexts=${formatTextPreview(finalTexts)}; assistantTexts=${formatTextPreview(assistantTexts)}; approvals=${JSON.stringify(approvalSummaries)}`,
+      `events=${params.events.length}; approved=${approvalId ?? "<none>"}; finalTexts=${formatTextPreview(finalTexts ?? [])}; assistantTexts=${formatTextPreview(assistantTexts ?? [])}; approvals=${JSON.stringify(approvalSummaries)}`,
   );
 }
 
@@ -353,11 +374,14 @@ function extractVisibleMessageText(message: unknown): string | undefined {
   return text || undefined;
 }
 
-async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
+async function approveTrajectoryExport(
+  client: GatewayClient,
+  existingApproval?: TrajectoryExportApprovalEntry,
+): Promise<string> {
   const startedAt = Date.now();
-  let approval: TrajectoryExportApprovalEntry | undefined;
+  let approval: TrajectoryExportApprovalEntry | undefined = existingApproval;
   let lastApprovalSummaries: TrajectoryExportApprovalSummary[] = [];
-  while (Date.now() - startedAt < 60_000) {
+  while (!approval && Date.now() - startedAt < 60_000) {
     const approvals = (await client.request(
       "exec.approval.list",
       {},
@@ -504,10 +528,10 @@ describeLive("gateway live trajectory export", () => {
           exportResponse?.status === "ok" ||
           exportResponse?.status === "started",
       ).toBe(true);
-      const finalText =
+      const exportSignal: TrajectoryExportSignal =
         typeof exportResponse?.message === "object"
-          ? extractVisibleMessageText(exportResponse.message)
-          : await waitForTrajectoryExportInstructionText({
+          ? { instructionText: extractVisibleMessageText(exportResponse.message) ?? "" }
+          : await waitForTrajectoryExportSignal({
               client,
               events: gatewayEvents,
               eventStartIndex: exportEventStartIndex,
@@ -516,13 +540,13 @@ describeLive("gateway live trajectory export", () => {
               sessionKey,
               timeoutMs: TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS,
             });
-      expect(finalText).toContain("Trajectory exports can include");
-      expect(finalText).toContain("through exec approval");
-      expect(finalText).toContain("Approve once");
-      const approvalId = await approveTrajectoryExport(client);
+      expect(exportSignal.instructionText).toContain("Trajectory exports can include");
+      expect(exportSignal.instructionText).toContain("through exec approval");
+      expect(exportSignal.instructionText).toContain("Approve once");
+      const approvalId = exportSignal.approvalId ?? (await approveTrajectoryExport(client));
       logLiveStep("export:approved", { approvalId });
       await waitForPath(path.join(bundleDir, "events.jsonl"), 60_000);
-      logLiveStep("export:done", { approvalId, finalText });
+      logLiveStep("export:done", { approvalId, finalText: exportSignal.instructionText });
       const bundleNames = await listDirectoryNames(bundleDir);
       for (const expectedName of [
         "artifacts.json",
