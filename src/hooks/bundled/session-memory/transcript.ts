@@ -31,6 +31,8 @@ export async function getRecentSessionContent(
     const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];
+    let lastAssistantText: string | undefined;
+
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
@@ -47,7 +49,11 @@ export async function getRecentSessionContent(
             }
             const text = extractTextMessageContent(msg.content);
             if (text && !text.startsWith("/")) {
+              if (role === "assistant" && text === lastAssistantText) {
+                continue;
+              }
               allMessages.push(`${role}: ${text}`);
+              lastAssistantText = role === "assistant" ? text : undefined;
             }
           }
         }
