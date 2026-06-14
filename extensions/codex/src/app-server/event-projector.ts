@@ -681,6 +681,16 @@ export class CodexAppServerEventProjector {
     if (usage) {
       this.tokenUsage = usage;
     }
+    const cachedTokens = readNumber(current, "cached_tokens") ?? readNumber(current, "cachedTokens");
+    const inputTokens = readNumber(current, "input_tokens") ?? readNumber(current, "inputTokens");
+    if (cachedTokens !== undefined || inputTokens !== undefined) {
+      embeddedAgentLog.debug("codex app-server token usage snapshot", {
+        threadId: this.threadId,
+        cachedTokens,
+        inputTokens,
+        outputTokens: readNumber(current, "output_tokens") ?? readNumber(current, "outputTokens"),
+      });
+    }
   }
 
   private handleGuardianReviewNotification(method: string, params: JsonObject): void {
