@@ -73,6 +73,13 @@ const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
   "WINDIR",
 ] as const;
 
+const PATH_OVERRIDE_ENV_KEYS = [
+  "OPENCLAW_AGENT_DIR",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_OAUTH_DIR",
+  "PI_CODING_AGENT_DIR",
+] as const;
+
 async function writeEnvFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, contents, "utf8");
@@ -91,23 +98,13 @@ function expectEnvUndefined(keys: readonly string[]) {
 }
 
 async function withIsolatedEnvAndCwd(run: () => Promise<void>) {
-  const prevEnv = { ...process.env };
+  const prevEnv = process.env;
+  process.env = { ...prevEnv };
   try {
     await run();
   } finally {
     vi.restoreAllMocks();
-    for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) {
-        delete process.env[key];
-      }
-    }
-    for (const [key, value] of Object.entries(prevEnv)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    process.env = prevEnv;
   }
 }
 
@@ -216,6 +213,24 @@ describe("loadDotEnv", () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
         await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+      });
+    });
+  });
+
+  it("skips workspace .env and still loads global env when cwd was deleted", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+            code: "ENOENT",
+          });
+        });
         delete process.env.FOO;
 
         loadDotEnv({ quiet: true });
@@ -453,17 +468,11 @@ describe("loadDotEnv", () => {
           ].join("\n"),
         );
 
-        delete process.env.OPENCLAW_AGENT_DIR;
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.OPENCLAW_OAUTH_DIR;
-        delete process.env.PI_CODING_AGENT_DIR;
+        clearEnv(PATH_OVERRIDE_ENV_KEYS);
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
-        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+        expectEnvUndefined(PATH_OVERRIDE_ENV_KEYS);
       });
     });
   });
@@ -686,6 +695,24 @@ describe("loadCliDotEnv", () => {
 
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
+      });
+    });
+  });
+
+  it("still loads global CLI env when cwd was deleted", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ stateDir }) => {
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        vi.spyOn(process, "cwd").mockImplementation(() => {
+          throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+            code: "ENOENT",
+          });
+        });
+        delete process.env.FOO;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
       });
     });
   });

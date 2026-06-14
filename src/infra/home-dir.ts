@@ -1,6 +1,7 @@
 // Resolves OpenClaw home and platform-specific config directories.
 import os from "node:os";
 import path from "node:path";
+import { resolveProcessCwdOrFallback } from "./safe-cwd.js";
 
 function normalize(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -75,7 +76,9 @@ export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  return (
+    resolveEffectiveHomeDir(env, homedir) ?? path.resolve(resolveProcessCwdOrFallback(os.tmpdir()))
+  );
 }
 
 /** Resolves the OS home or falls back to cwd when no OS home source exists. */
@@ -83,7 +86,7 @@ export function resolveRequiredOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveOsHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  return resolveOsHomeDir(env, homedir) ?? path.resolve(resolveProcessCwdOrFallback(os.tmpdir()));
 }
 
 /** Expands leading `~`, `~/`, or `~\` with the effective home when one is known. */
