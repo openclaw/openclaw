@@ -1,4 +1,5 @@
 // Diagnostics Otel tests cover service plugin behavior.
+import crypto from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const telemetryState = vi.hoisted(() => {
@@ -219,13 +220,20 @@ type OtelContextFlags = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  sessionAttribute?: boolean;
   captureContent?: NonNullable<
     NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
   >["captureContent"];
 };
 function createOtelContext(
   endpoint: string,
-  { traces = false, metrics = false, logs = false, captureContent }: OtelContextFlags = {},
+  {
+    traces = false,
+    metrics = false,
+    logs = false,
+    sessionAttribute,
+    captureContent,
+  }: OtelContextFlags = {},
 ): OpenClawPluginServiceContext {
   return {
     config: {
@@ -238,6 +246,7 @@ function createOtelContext(
           traces,
           metrics,
           logs,
+          ...(sessionAttribute !== undefined ? { sessionAttribute } : {}),
           ...(captureContent !== undefined ? { captureContent } : {}),
         },
       },
@@ -4556,6 +4565,64 @@ describe("diagnostics-otel service", () => {
     expect(String(attrs?.["openclaw.reason"])).not.toContain(
       "ghp_abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
     );
+    await service.stop?.(ctx);
+  });
+
+  test("exports langfuse.session.id on harness.run span when sessionAttribute is enabled", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      sessionAttribute: true,
+    });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "harness.run.started",
+      runId: "run-1",
+      sessionKey: "test-session-key-123",
+      sessionId: "session-1",
+      harnessId: "codex",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "qa",
+    });
+    await flushDiagnosticEvents();
+
+    const harnessCall = startedSpanCall("openclaw.harness.run");
+    expect(harnessCall).toBeDefined();
+    const attrs = harnessCall?.[1]?.attributes as Record<string, unknown> | undefined;
+    expect(attrs?.["langfuse.session.id"]).toBe(
+      crypto.createHash("sha256").update("test-session-key-123").digest("hex"),
+    );
+    expect(Object.hasOwn(attrs ?? {}, "openclaw.sessionKey")).toBe(false);
+
+    await service.stop?.(ctx);
+  });
+
+  test("does not export langfuse.session.id when sessionAttribute is disabled", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      sessionAttribute: false,
+    });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "harness.run.started",
+      runId: "run-2",
+      sessionKey: "another-key",
+      sessionId: "session-2",
+      harnessId: "codex",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "qa",
+    });
+    await flushDiagnosticEvents();
+
+    const harnessOptions = startedSpanOptions("openclaw.harness.run");
+    expect(harnessOptions).toBeDefined();
+    expect(Object.hasOwn(harnessOptions?.attributes ?? {}, "langfuse.session.id")).toBe(false);
+
     await service.stop?.(ctx);
   });
 });

@@ -1,4 +1,5 @@
 // Diagnostics Otel plugin module implements service behavior.
+import crypto from "node:crypto";
 import {
   context as otelContextApi,
   metrics,
@@ -2333,6 +2334,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         const spanAttrs: Record<string, string | number | boolean> = {};
         addRunAttrs(spanAttrs, evt);
+        if (otel?.sessionAttribute && evt.sessionKey) {
+          spanAttrs["langfuse.session.id"] = crypto
+            .createHash("sha256")
+            .update(evt.sessionKey)
+            .digest("hex");
+        }
         const span = trackTrustedSpan(
           evt,
           metadata,
@@ -2653,10 +2660,19 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (!tracesEnabled || !metadata.trusted) {
           return;
         }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          ...harnessRunMetricAttrs(evt),
+        };
+        if (otel?.sessionAttribute && evt.sessionKey) {
+          spanAttrs["langfuse.session.id"] = crypto
+            .createHash("sha256")
+            .update(evt.sessionKey)
+            .digest("hex");
+        }
         trackTrustedSpan(
           evt,
           metadata,
-          spanWithDuration("openclaw.harness.run", harnessRunMetricAttrs(evt), undefined, {
+          spanWithDuration("openclaw.harness.run", spanAttrs, undefined, {
             parentContext: activeTrustedParentContext(evt, metadata),
             startTimeMs: evt.ts,
           }),

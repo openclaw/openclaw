@@ -323,6 +323,13 @@ export type DiagnosticsOtelConfig = {
         systemPrompt?: boolean;
         toolDefinitions?: boolean;
       };
+  /**
+   * Opt-in export of a hashed session identifier as `langfuse.session.id`
+   * on root spans (harness.run), enabling Langfuse session grouping.
+   * The raw session key is never exposed — only a SHA-256 hash is emitted.
+   * Default: false.
+   */
+  sessionAttribute?: boolean;
 };
 
 export type DiagnosticsCacheTraceConfig = {
