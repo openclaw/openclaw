@@ -1971,7 +1971,7 @@
   overflow-y: auto;
 }
 
-.chat-session-picker__option {
+button.chat-session-picker__option {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1988,15 +1988,98 @@
   cursor: pointer;
 }
 
-.chat-session-picker__option:hover,
-.chat-session-picker__option:focus-visible {
+button.chat-session-picker__option:hover,
+button.chat-session-picker__option:focus-visible {
   background: var(--bg-hover);
   border-color: color-mix(in srgb, var(--border) 78%, transparent);
 }
 
-.chat-session-picker__option--selected {
+button.chat-session-picker__option--selected {
   background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
   border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+div.chat-session-picker__option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+div.chat-session-picker__option--selected {
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+div.chat-session-picker__option--editing {
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.chat-session-picker__option-button {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-session-picker__option-button:hover,
+.chat-session-picker__option-button:focus-visible {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+}
+
+div.chat-session-picker__option--selected .chat-session-picker__option-button:hover,
+div.chat-session-picker__option--selected .chat-session-picker__option-button:focus-visible {
+  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-hover));
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.chat-session-picker__rename-field {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-session-picker__rename-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.chat-session-picker__rename-field input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+}
+
+.chat-session-picker__option-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
 }
 
 .chat-session-picker__option-main {
