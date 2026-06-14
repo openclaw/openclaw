@@ -3150,6 +3150,16 @@ export const registerTelegramHandlers = ({
     if (normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
       return;
     }
+    // Drop messages authored by other bots when configured to do so. Bot API 10.0
+    // Bot-to-Bot Communication Mode can deliver messages from any other bot once
+    // both sides opt in via BotFather, and the upstream gateway has no other way
+    // to refuse them structurally.
+    if (normalizedMsg.from?.is_bot === true && telegramCfg.botMessagePolicy === "ignore") {
+      logVerbose(
+        `telegram: ignoring message ${normalizedMsg.message_id} from bot ${normalizedMsg.from.username ?? normalizedMsg.from.id} (botMessagePolicy=ignore)`,
+      );
+      return;
+    }
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, normalizedMsg),

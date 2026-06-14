@@ -197,6 +197,16 @@ export type TelegramAccountConfig = {
    */
   reactionNotifications?: "off" | "own" | "all";
   /**
+   * Controls how inbound messages authored by other bots are handled. Telegram
+   * Bot API 10.0 (2026-05-08) added Bot-to-Bot Communication Mode, which can
+   * expose a bot to messages from other bots once both sides opt in via
+   * BotFather (`/setbot2bot`).
+   * - "allow" (default): deliver bot-authored messages like any other inbound
+   * - "ignore": drop inbound messages where `from.is_bot=true` (self-echoes
+   *   are already filtered separately)
+   */
+  botMessagePolicy?: "allow" | "ignore";
+  /**
    * Controls agent's reaction capability:
    * - "off": agent cannot react
    * - "ack" (default): bot sends acknowledgment reactions (👀 while processing)
