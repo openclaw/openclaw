@@ -14,7 +14,6 @@ import {
   buildRunId,
   createHarnessEnv,
   extractRtt,
-  readTelegramSummary,
   resolveTelegramSummaryPath,
   safeRunLabel,
   validateOpenClawPackageSpec,

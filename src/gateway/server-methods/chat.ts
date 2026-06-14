@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -98,6 +99,8 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
 } from "../../utils/directive-tags.js";
@@ -761,13 +764,20 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       }
       const parts = resolveSendableOutboundReplyParts(payload);
       const lines: string[] = [];
-      const replyToId = sanitizeReplyDirectiveId(payload.replyToId);
+      const parsedText = payload.text?.includes("[[")
+        ? parseInlineDirectives(payload.text)
+        : undefined;
+      const replyToId =
+        sanitizeReplyDirectiveId(payload.replyToId) ??
+        sanitizeReplyDirectiveId(parsedText?.replyToExplicitId);
       if (replyToId) {
         lines.push(`[[reply_to:${replyToId}]]`);
-      } else if (payload.replyToCurrent) {
+      } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
         lines.push("[[reply_to_current]]");
       }
-      const text = payload.text?.trim();
+      const text = payload.text
+        ? stripInlineDirectiveTagsForDelivery(payload.text).text.trim()
+        : "";
       if (text && !isSuppressedControlReplyText(text)) {
         lines.push(text);
       }
@@ -780,7 +790,10 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
           lines.push(`Attachment: ${trimmed}`);
         }
       }
-      if (payload.audioAsVoice && parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))) {
+      if (
+        (payload.audioAsVoice || parsedText?.audioAsVoice) &&
+        parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))
+      ) {
         lines.push("[[audio_as_voice]]");
       }
       return lines.join("\n").trim();
@@ -3533,6 +3546,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
       };
+      const isInternalTextSlashCommandTurn =
+        ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
       if (mediaPathOffloadPaths.length > 0) {
         // Inject offloads via the same MsgContext fields the channel
         // path uses so buildInboundMediaNote renders a real `[media attached:
@@ -3938,12 +3953,271 @@ export const chatHandlers: GatewayRequestHandlers = {
                     agentId,
                   });
                 } else {
-                  await persistGatewayUserTurnTranscriptBestEffort();
+                  const finalPayloadEntries = deliveredReplies.filter(
+                    (entryItem) => entryItem.kind === "final",
+                  );
+                  const parseReplyInlineDirectives = (payload: ReplyPayload) =>
+                    typeof payload.text === "string" && payload.text.includes("[[")
+                      ? parseInlineDirectives(payload.text)
+                      : undefined;
+                  const shouldFoldCommandBlocks = isInternalTextSlashCommandTurn;
+                  const commandBlockPayloadEntries = shouldFoldCommandBlocks
+                    ? deliveredReplies.filter((entryItem) => entryItem.kind === "block")
+                    : [];
+                  const replyMediaUrls = (payload: ReplyPayload) =>
+                    resolveSendableOutboundReplyParts(payload).mediaUrls;
+                  const normalizeCommandMediaDedupeKey = (value: string): string => {
+                    const trimmed = value.trim();
+                    if (!trimmed) {
+                      return "";
+                    }
+                    if (!trimmed.toLowerCase().startsWith("file://")) {
+                      return path.isAbsolute(trimmed) ? path.normalize(trimmed) : trimmed;
+                    }
+                    try {
+                      const parsed = new URL(trimmed);
+                      if (parsed.protocol === "file:") {
+                        return path.normalize(fileURLToPath(parsed));
+                      }
+                    } catch {
+                      // Keep malformed file URL-like values comparable with the fallback below.
+                    }
+                    return trimmed.replace(/^file:\/\//iu, "");
+                  };
+                  const replyMediaDedupeKeys = (payload: ReplyPayload) =>
+                    replyMediaUrls(payload).map((mediaUrl) =>
+                      normalizeCommandMediaDedupeKey(mediaUrl),
+                    );
+                  const canonicalizeReplyMedia = (payload: ReplyPayload): ReplyPayload => {
+                    const mediaUrls = replyMediaUrls(payload);
+                    return {
+                      ...payload,
+                      mediaUrl: undefined,
+                      mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+                    };
+                  };
+                  const mergeDefinedReplySemantics = (
+                    target: ReplyPayload,
+                    source: ReplyPayload,
+                  ): ReplyPayload => {
+                    const sourceInlineDirectives = parseReplyInlineDirectives(source);
+                    const sourceReplyToId =
+                      sanitizeReplyDirectiveId(source.replyToId) ??
+                      sanitizeReplyDirectiveId(sourceInlineDirectives?.replyToExplicitId);
+                    return {
+                      ...target,
+                      ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
+                        ? { trustedLocalMedia: true }
+                        : {}),
+                      ...(source.sensitiveMedia === true || target.sensitiveMedia === true
+                        ? { sensitiveMedia: true }
+                        : {}),
+                      ...(source.presentation !== undefined
+                        ? { presentation: source.presentation }
+                        : {}),
+                      ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
+                      ...(source.interactive !== undefined
+                        ? { interactive: source.interactive }
+                        : {}),
+                      ...(sourceReplyToId !== undefined ? { replyToId: sourceReplyToId } : {}),
+                      ...(source.replyToTag === true || target.replyToTag === true
+                        ? { replyToTag: true }
+                        : {}),
+                      ...(source.replyToCurrent === true ||
+                      sourceInlineDirectives?.replyToCurrent === true ||
+                      target.replyToCurrent === true
+                        ? { replyToCurrent: true }
+                        : {}),
+                      ...(source.audioAsVoice === true ||
+                      sourceInlineDirectives?.audioAsVoice === true ||
+                      target.audioAsVoice === true
+                        ? { audioAsVoice: true }
+                        : {}),
+                      ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
+                      ...(source.ttsSupplement !== undefined
+                        ? { ttsSupplement: source.ttsSupplement }
+                        : {}),
+                      ...(source.isError === true || target.isError === true
+                        ? { isError: true }
+                        : {}),
+                      ...(source.channelData !== undefined
+                        ? { channelData: source.channelData }
+                        : {}),
+                    };
+                  };
+                  const mergeMediaReplySemantics = (
+                    target: ReplyPayload,
+                    source: ReplyPayload,
+                  ): ReplyPayload => {
+                    const sourceInlineDirectives = parseReplyInlineDirectives(source);
+                    return {
+                      ...target,
+                      ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
+                        ? { trustedLocalMedia: true }
+                        : {}),
+                      ...(source.sensitiveMedia === true || target.sensitiveMedia === true
+                        ? { sensitiveMedia: true }
+                        : {}),
+                      ...(source.audioAsVoice === true ||
+                      sourceInlineDirectives?.audioAsVoice === true ||
+                      target.audioAsVoice === true
+                        ? { audioAsVoice: true }
+                        : {}),
+                    };
+                  };
+                  const hasMergeableReplySemantics = (payload: ReplyPayload): boolean => {
+                    const inlineDirectives = parseReplyInlineDirectives(payload);
+                    return Boolean(
+                      payload.trustedLocalMedia !== undefined ||
+                      payload.sensitiveMedia !== undefined ||
+                      payload.presentation ||
+                      payload.delivery ||
+                      payload.interactive ||
+                      payload.replyToId ||
+                      payload.replyToTag !== undefined ||
+                      payload.replyToCurrent !== undefined ||
+                      payload.audioAsVoice !== undefined ||
+                      inlineDirectives?.hasReplyTag ||
+                      inlineDirectives?.hasAudioTag ||
+                      payload.spokenText ||
+                      payload.ttsSupplement ||
+                      payload.isError !== undefined ||
+                      payload.channelData,
+                    );
+                  };
+                  const hasUnmergedReplySemantics = (payload: ReplyPayload): boolean =>
+                    Boolean(
+                      payload.isReasoning ||
+                      payload.isReasoningSnapshot ||
+                      payload.isCompactionNotice ||
+                      payload.isFallbackNotice ||
+                      payload.isStatusNotice ||
+                      payload.btw,
+                    );
+                  const hasReplySemantics = (payload: ReplyPayload): boolean =>
+                    hasMergeableReplySemantics(payload) || hasUnmergedReplySemantics(payload);
+                  const mediaSetsMatch = (
+                    leftMediaUrls: readonly string[],
+                    rightMediaUrls: readonly string[],
+                  ): boolean => {
+                    if (leftMediaUrls.length !== rightMediaUrls.length) {
+                      return false;
+                    }
+                    return leftMediaUrls.every(
+                      (mediaUrl, index) => mediaUrl === rightMediaUrls[index],
+                    );
+                  };
+                  const replyDisplayText = (payload: ReplyPayload): string =>
+                    sanitizeAssistantDisplayText(payload.text) ?? "";
+                  const commandBlockPayloadEntriesForDelivery = commandBlockPayloadEntries.map(
+                    (entryItem) => ({
+                      kind: entryItem.kind,
+                      payload: canonicalizeReplyMedia(entryItem.payload),
+                    }),
+                  );
+                  const sensitiveMediaDedupeKeys = new Set(
+                    finalPayloadEntries.flatMap((entryItem) =>
+                      entryItem.payload.sensitiveMedia === true
+                        ? replyMediaDedupeKeys(entryItem.payload).filter(Boolean)
+                        : [],
+                    ),
+                  );
+                  if (sensitiveMediaDedupeKeys.size > 0) {
+                    for (const entryItem of commandBlockPayloadEntriesForDelivery) {
+                      if (
+                        replyMediaDedupeKeys(entryItem.payload).some((key) =>
+                          sensitiveMediaDedupeKeys.has(key),
+                        )
+                      ) {
+                        entryItem.payload = { ...entryItem.payload, sensitiveMedia: true };
+                      }
+                    }
+                  }
+                  const finalPayloadEntriesForDelivery = shouldFoldCommandBlocks
+                    ? finalPayloadEntries.flatMap((entryItem) => {
+                        const finalMediaUrls = replyMediaUrls(entryItem.payload);
+                        const finalMediaKeys = replyMediaDedupeKeys(entryItem.payload);
+                        const finalDisplayText = replyDisplayText(entryItem.payload);
+                        const matchingMediaBlockEntry =
+                          finalMediaUrls.length > 0
+                            ? commandBlockPayloadEntriesForDelivery.find((candidate) =>
+                                mediaSetsMatch(
+                                  replyMediaDedupeKeys(candidate.payload),
+                                  finalMediaKeys,
+                                ),
+                              )
+                            : undefined;
+                        const matchingTextBlockEntry = finalDisplayText
+                          ? commandBlockPayloadEntriesForDelivery.find(
+                              (candidate) =>
+                                replyDisplayText(candidate.payload) === finalDisplayText,
+                            )
+                          : undefined;
+                        const matchingMediaAndTextBlockEntry =
+                          finalMediaUrls.length > 0 && finalDisplayText
+                            ? commandBlockPayloadEntriesForDelivery.find(
+                                (candidate) =>
+                                  replyDisplayText(candidate.payload) === finalDisplayText &&
+                                  mediaSetsMatch(
+                                    replyMediaDedupeKeys(candidate.payload),
+                                    finalMediaKeys,
+                                  ),
+                              )
+                            : undefined;
+                        const duplicateBlockEntry =
+                          finalMediaUrls.length > 0
+                            ? finalDisplayText
+                              ? matchingMediaAndTextBlockEntry
+                              : matchingMediaBlockEntry
+                            : finalMediaUrls.length === 0
+                              ? matchingTextBlockEntry
+                              : undefined;
+                        if (duplicateBlockEntry) {
+                          duplicateBlockEntry.payload = mergeDefinedReplySemantics(
+                            duplicateBlockEntry.payload,
+                            entryItem.payload,
+                          );
+                        } else if (matchingMediaBlockEntry) {
+                          matchingMediaBlockEntry.payload = mergeMediaReplySemantics(
+                            matchingMediaBlockEntry.payload,
+                            entryItem.payload,
+                          );
+                        }
+                        const remainingFinalMediaUrls = matchingMediaBlockEntry
+                          ? []
+                          : finalMediaUrls;
+                        if (
+                          remainingFinalMediaUrls.length === 0 &&
+                          ((duplicateBlockEntry && !hasUnmergedReplySemantics(entryItem.payload)) ||
+                            (!duplicateBlockEntry &&
+                              !finalDisplayText &&
+                              !hasReplySemantics(entryItem.payload)))
+                        ) {
+                          return [];
+                        }
+                        return [
+                          {
+                            ...entryItem,
+                            payload: {
+                              ...entryItem.payload,
+                              mediaUrl: undefined,
+                              mediaUrls:
+                                remainingFinalMediaUrls.length > 0
+                                  ? remainingFinalMediaUrls
+                                  : undefined,
+                            },
+                          },
+                        ];
+                      })
+                    : finalPayloadEntries;
+                  // Non-agent command paths can enqueue only block replies. If no visible final
+                  // supersedes them, fold those blocks into the final WebChat message.
                   const rawFinalPayloads = appendedWebchatAgentMedia
                     ? []
-                    : deliveredReplies
-                        .filter((entryItem) => entryItem.kind === "final")
-                        .map((entryCandidate) => entryCandidate.payload);
+                    : [
+                        ...commandBlockPayloadEntriesForDelivery,
+                        ...finalPayloadEntriesForDelivery,
+                      ].map((entryCandidate) => entryCandidate.payload);
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
                     cfg,
                     sessionKey,
@@ -4034,16 +4308,23 @@ export const chatHandlers: GatewayRequestHandlers = {
                   const displayReply =
                     extractAssistantDisplayTextFromContent(assistantContent) ??
                     buildTranscriptReplyText(finalPayloads);
+                  const transcriptDisplayReply = displayReply
+                    ? stripInlineDirectiveTagsForDisplay(displayReply).text.trim()
+                    : "";
                   const transcriptReply =
                     mediaMessage?.transcriptText ||
                     buildTranscriptReplyText(finalPayloads) ||
-                    displayReply;
+                    transcriptDisplayReply;
                   let message: Record<string, unknown> | undefined;
-                  if (
-                    transcriptReply ||
-                    persistedContentForAppend?.length ||
-                    assistantContent?.length
-                  ) {
+                  const shouldAppendAssistantTranscript = Boolean(
+                    transcriptReply || persistedContentForAppend?.length,
+                  );
+                  if (shouldAppendAssistantTranscript) {
+                    await persistGatewayUserTurnTranscriptBestEffort();
+                  } else {
+                    await persistGatewayUserTurnTranscriptBestEffort();
+                  }
+                  if (shouldAppendAssistantTranscript) {
                     const appended = await appendAssistantTranscriptMessage({
                       sessionKey,
                       message: transcriptReply,
@@ -4097,6 +4378,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                         usage: { input: 0, output: 0, totalTokens: 0 },
                       };
                     }
+                  } else if (broadcastAssistantContent?.length) {
+                    message = {
+                      role: "assistant",
+                      content: broadcastAssistantContent,
+                      text: extractAssistantDisplayText(broadcastAssistantContent) ?? "",
+                      timestamp: Date.now(),
+                      stopReason: "stop",
+                      usage: { input: 0, output: 0, totalTokens: 0 },
+                    };
                   }
                   if (hasVisibleAssistantFinalMessage(message)) {
                     emitFirstAssistantServerTiming();

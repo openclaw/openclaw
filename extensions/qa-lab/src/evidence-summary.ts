@@ -199,8 +199,7 @@ type QaEvidenceLiveTransportCheckInput = {
   rttMeasurement?: {
     finalMatchedReplyRttMs?: number;
   };
-  // Here "standard" means a taxonomy-backed requirement standard, not the default lane.
-  standardId?: string;
+  coverageIds?: readonly string[];
   artifactPaths?: Readonly<Record<string, string>>;
 };
 
@@ -263,8 +262,8 @@ function buildQaEvidenceRefs(params: {
 }
 
 function buildQaEvidenceCoverage(params: {
-  primaryIds?: readonly string[];
-  secondaryIds?: readonly string[];
+  primaryCoverageIds?: readonly string[];
+  secondaryCoverageIds?: readonly string[];
   surfaceIds?: readonly string[];
   categoryIds?: readonly string[];
 }) {
@@ -277,8 +276,12 @@ function buildQaEvidenceCoverage(params: {
     categoryIds: role === "primary" ? categoryIds : [],
   });
   return [
-    ...uniqueSortedStrings(params.primaryIds ?? []).map((id) => buildCoverage(id, "primary")),
-    ...uniqueSortedStrings(params.secondaryIds ?? []).map((id) => buildCoverage(id, "secondary")),
+    ...uniqueSortedStrings(params.primaryCoverageIds ?? []).map((id) =>
+      buildCoverage(id, "primary"),
+    ),
+    ...uniqueSortedStrings(params.secondaryCoverageIds ?? []).map((id) =>
+      buildCoverage(id, "secondary"),
+    ),
   ];
 }
 
@@ -506,8 +509,8 @@ export function buildQaSuiteEvidenceSummary(
       mapping: {
         profile,
         coverage: buildQaEvidenceCoverage({
-          primaryIds: primaryCoverageIds,
-          secondaryIds: coverageIds.filter(
+          primaryCoverageIds,
+          secondaryCoverageIds: coverageIds.filter(
             (coverageId) => !primaryCoverageIds.includes(coverageId),
           ),
           surfaceIds,
@@ -579,8 +582,8 @@ function buildTestRunnerEvidenceSummary(
       mapping: {
         profile,
         coverage: buildQaEvidenceCoverage({
-          primaryIds: target?.primaryCoverageIds ?? [],
-          secondaryIds: target?.secondaryCoverageIds ?? [],
+          primaryCoverageIds: target?.primaryCoverageIds ?? [],
+          secondaryCoverageIds: target?.secondaryCoverageIds ?? [],
           surfaceIds: target?.surfaceIds ?? [],
           categoryIds: target?.categoryIds ?? [],
         }),
@@ -648,25 +651,25 @@ export function buildLiveTransportEvidenceSummary(
   }) ?? { id: "native" };
   const entries = params.checks.map((check): QaEvidenceSummaryEntry => {
     const testId = check.id;
-    const standardCoverageId = check.standardId
-      ? `channels.${params.transportId}.${check.standardId}`
-      : undefined;
+    const liveCoverageId = `channels.${params.transportId}.live`;
+    const channelSurfaceId = `channels.${params.transportId}`;
+    const categoryIds = [liveCoverageId];
     const coverage = [
       {
-        id: `channels.${params.transportId}.live`,
+        id: liveCoverageId,
         role: "live-transport",
-        surfaceIds: [`channels.${params.transportId}`],
-        categoryIds: [`channels.${params.transportId}.live`],
+        surfaceIds: [channelSurfaceId],
+        categoryIds,
       },
+      ...uniqueSortedStrings(check.coverageIds ?? [])
+        .filter((coverageId) => coverageId !== liveCoverageId)
+        .map((coverageId) => ({
+          id: coverageId,
+          role: "live-transport-coverage",
+          surfaceIds: [channelSurfaceId],
+          categoryIds,
+        })),
     ];
-    if (standardCoverageId) {
-      coverage.push({
-        id: standardCoverageId,
-        role: "live-transport-standard",
-        surfaceIds: [`channels.${params.transportId}`],
-        categoryIds: [`channels.${params.transportId}.live`],
-      });
-    }
     const timing = timingForRttResult(check);
     return {
       test: {

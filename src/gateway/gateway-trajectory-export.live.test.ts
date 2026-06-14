@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -165,24 +164,7 @@ async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> 
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
-function extractAssistantTexts(messages: unknown[]): string[] {
-  const texts: string[] = [];
-  for (const entry of messages) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    if ((entry as { role?: unknown }).role !== "assistant") {
-      continue;
-    }
-    const text = extractFirstTextBlock(entry);
-    if (typeof text === "string" && text.trim().length > 0) {
-      texts.push(text);
-    }
-  }
-  return texts;
-}
-
-function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
+function formatTextPreview(texts: string[], maxChars = 800): string {
   const combined = texts.join("\n\n").trim();
   if (!combined) {
     return "<none>";
@@ -191,40 +173,20 @@ function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
 }
 
 async function waitForTrajectoryExportInstructionText(params: {
-  client: GatewayClient;
   events: EventFrame[];
   expectedText: string;
   runId: string;
-  sessionKey: string;
   timeoutMs: number;
 }): Promise<string> {
   const deadline = Date.now() + params.timeoutMs;
-  let lastAssistantTexts: string[] = [];
+  let finalTexts: string[] = [];
   while (Date.now() < deadline) {
-    const eventText = params.events
+    finalTexts = params.events
       .map((event) => extractChatFinalText(event, params.runId))
-      .find(Boolean);
-    if (eventText) {
-      return eventText;
-    }
-    const sessionEventText = params.events
-      .map((event) => extractChatFinalTextForSession(event, params.sessionKey))
-      .find((text) => text?.includes(params.expectedText));
-    if (sessionEventText) {
-      return sessionEventText;
-    }
-    const history: { messages?: unknown[] } = await params.client.request(
-      "chat.history",
-      {
-        sessionKey: params.sessionKey,
-        limit: 24,
-      },
-      { timeoutMs: 10_000 },
-    );
-    lastAssistantTexts = extractAssistantTexts(history.messages ?? []);
-    const historyText = lastAssistantTexts.find((text) => text.includes(params.expectedText));
-    if (historyText) {
-      return historyText;
+      .filter((text): text is string => typeof text === "string" && text.trim().length > 0);
+    const matchedText = finalTexts.find((text) => text.includes(params.expectedText));
+    if (matchedText) {
+      return matchedText;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 500);
@@ -232,7 +194,7 @@ async function waitForTrajectoryExportInstructionText(params: {
   }
   throw new Error(
     `timed out waiting for trajectory export instruction text for ${params.runId}; ` +
-      `events=${params.events.length}; assistantTexts=${formatAssistantTextPreview(lastAssistantTexts)}`,
+      `events=${params.events.length}; finalTexts=${formatTextPreview(finalTexts)}`,
   );
 }
 
@@ -248,41 +210,38 @@ function extractChatFinalText(event: EventFrame, runId: string): string | undefi
   if (record.runId !== runId || record.state !== "final") {
     return undefined;
   }
-  return extractChatFinalRecordText(record);
-}
-
-function extractChatFinalTextForSession(event: EventFrame, sessionKey: string): string | undefined {
-  if (event.event !== "chat") {
-    return undefined;
-  }
-  const payload = event.payload;
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const record = payload as Record<string, unknown>;
-  if (record.sessionKey !== sessionKey || record.state !== "final") {
-    return undefined;
-  }
-  return extractChatFinalRecordText(record);
-}
-
-function extractChatFinalRecordText(record: Record<string, unknown>): string | undefined {
   const message = record.message;
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  const messageRecord = message as Record<string, unknown>;
-  if (typeof messageRecord.text === "string" && messageRecord.text.trim()) {
-    return messageRecord.text;
+  return extractVisibleMessageText(message);
+}
+
+function extractVisibleMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
   }
-  const content = Array.isArray(messageRecord.content) ? messageRecord.content : [];
-  return content
-    .map((entry) =>
-      entry && typeof entry === "object" ? (entry as Record<string, unknown>).text : undefined,
-    )
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .join("\n")
-    .trim();
+  const record = message as { text?: unknown; content?: unknown };
+  if (typeof record.text === "string" && record.text.trim()) {
+    return record.text;
+  }
+  if (typeof record.content === "string" && record.content.trim()) {
+    return record.content;
+  }
+  if (!Array.isArray(record.content)) {
+    return undefined;
+  }
+  const text = record.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const entry = block as { type?: unknown; text?: unknown };
+      return entry.type === "text" && typeof entry.text === "string" ? entry.text : "";
+    })
+    .filter((value) => value.trim())
+    .join("\n");
+  return text || undefined;
 }
 
 async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
@@ -295,6 +254,7 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
         };
       }
     | undefined;
+  let lastApprovalSummaries: Array<{ id?: string; hasTrajectoryExportCommand: boolean }> = [];
   while (Date.now() - startedAt < 60_000) {
     const approvals = (await client.request(
       "exec.approval.list",
@@ -306,6 +266,12 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
         command?: string;
       };
     }>;
+    lastApprovalSummaries = approvals.map((entry) => ({
+      ...(entry.id ? { id: entry.id } : {}),
+      hasTrajectoryExportCommand: Boolean(
+        entry.request?.command?.includes("sessions export-trajectory"),
+      ),
+    }));
     approval = approvals.find((entry) =>
       entry.request?.command?.includes("sessions export-trajectory"),
     );
@@ -316,11 +282,12 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
       setTimeout(resolve, 500);
     });
   }
-  expect(typeof approval?.id).toBe("string");
-  expect(approval?.request?.command).toContain("sessions export-trajectory");
   if (!approval?.id) {
-    throw new Error("expected trajectory export approval id");
+    throw new Error(
+      `expected trajectory export approval id; approvals=${JSON.stringify(lastApprovalSummaries)}`,
+    );
   }
+  expect(approval.request?.command).toContain("sessions export-trajectory");
   await client.request(
     "exec.approval.resolve",
     { id: approval.id, decision: "allow-once" },
@@ -446,22 +413,20 @@ describeLive("gateway live trajectory export", () => {
       ).toBe(true);
       const finalText =
         typeof exportResponse?.message === "object"
-          ? extractFirstTextBlock(exportResponse.message)
+          ? extractVisibleMessageText(exportResponse.message)
           : await waitForTrajectoryExportInstructionText({
-              client,
               events: gatewayEvents,
               expectedText: "Trajectory exports can include",
               runId: exportRunId,
-              sessionKey,
               timeoutMs: 60_000,
             });
       expect(finalText).toContain("Trajectory exports can include");
       expect(finalText).toContain("through exec approval");
+      expect(finalText).toContain("Approve once");
       const approvalId = await approveTrajectoryExport(client);
       logLiveStep("export:approved", { approvalId });
       await waitForPath(path.join(bundleDir, "events.jsonl"), 60_000);
-      logLiveStep("export:done", { finalText });
-      expect(finalText).toContain("Approve once");
+      logLiveStep("export:done", { approvalId, finalText });
       const bundleNames = await listDirectoryNames(bundleDir);
       for (const expectedName of [
         "artifacts.json",
