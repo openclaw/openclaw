@@ -5,6 +5,10 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import {
+  assistantCallsSessionsYield,
+  isSessionsYieldToolResult,
+} from "../agents/subagent-yield-output.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromText } from "../chat/canvas-render.js";
@@ -40,6 +44,37 @@ type PendingMessageToolVisibleReply = {
   succeeded: boolean;
 };
 
+type SessionsYieldVisibleReply = {
+  toolCallId?: string;
+  text: string;
+  anchor: Record<string, unknown>;
+};
+
+const SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX = ":sessions_yield_mirror";
+
+export function resolveSessionsYieldMirrorMessageId(sourceMessageId: string): string {
+  return sourceMessageId.endsWith(SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX)
+    ? sourceMessageId
+    : `${sourceMessageId}${SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX}`;
+}
+
+export function resolveSessionsYieldMirrorSourceMessageId(messageId: string): string | undefined {
+  return messageId.endsWith(SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX)
+    ? messageId.slice(0, -SESSIONS_YIELD_MIRROR_MESSAGE_ID_SUFFIX.length)
+    : undefined;
+}
+
+type PendingSessionsYieldCall = {
+  assistantIndex?: number;
+  text?: string;
+};
+
+type ProjectChatDisplayOptions = {
+  maxChars?: number;
+  stripEnvelope?: boolean;
+  mirrorSessionsYieldToolResults?: boolean;
+};
+
 /** Resolve the text cap used when projecting chat history for display. */
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
@@ -72,6 +107,8 @@ export function isToolHistoryBlockType(type: unknown): boolean {
     normalized === "tool_call" ||
     normalized === "tooluse" ||
     normalized === "tool_use" ||
+    normalized === "functioncall" ||
+    normalized === "function_call" ||
     normalized === "toolresult" ||
     normalized === "tool_result"
   );
@@ -668,6 +705,20 @@ function readToolBlockCallId(block: Record<string, unknown>): string | undefined
   );
 }
 
+function readYieldToolBlockCallId(
+  block: Record<string, unknown>,
+  normalizedType: string,
+): string | undefined {
+  if (normalizedType === "functioncall") {
+    return (
+      normalizeOptionalString(block.call_id) ??
+      normalizeOptionalString(block.callId) ??
+      readToolBlockCallId(block)
+    );
+  }
+  return readToolBlockCallId(block);
+}
+
 function readToolBlockArguments(block: Record<string, unknown>): Record<string, unknown> {
   for (const key of ["arguments", "input", "args", "params"] as const) {
     const args = readMaybeJsonRecord(block[key]);
@@ -782,6 +833,31 @@ function extractMessageToolVisibleReplies(
   return replies;
 }
 
+function extractSessionsYieldToolCallIds(message: Record<string, unknown>): string[] {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return [];
+  }
+  const callIds: string[] = [];
+  for (const block of message.content) {
+    const record = readRecord(block);
+    if (!record) {
+      continue;
+    }
+    const type = normalizeToolHistoryType(record.type);
+    if (type !== "toolcall" && type !== "tooluse" && type !== "functioncall") {
+      continue;
+    }
+    if (readToolBlockName(record)?.toLowerCase() !== "sessions_yield") {
+      continue;
+    }
+    const toolCallId = readYieldToolBlockCallId(record, type);
+    if (toolCallId) {
+      callIds.push(toolCallId);
+    }
+  }
+  return callIds;
+}
+
 function isAssistantSilentControlReplyOnly(message: Record<string, unknown>): boolean {
   const text = extractAssistantTextForSilentCheck(message);
   return (
@@ -795,6 +871,42 @@ function isRenderableAssistantDisplayMessage(message: Record<string, unknown>): 
   }
   const text = extractAssistantTextForSilentCheck(message);
   return text !== undefined && !isSuppressedControlReplyText(text);
+}
+
+function isSessionsYieldToolCallBlock(block: unknown): boolean {
+  const record = readRecord(block);
+  if (!record) {
+    return false;
+  }
+  const type = normalizeToolHistoryType(record.type);
+  return (
+    (type === "toolcall" || type === "tooluse" || type === "functioncall") &&
+    readToolBlockName(record)?.toLowerCase() === "sessions_yield"
+  );
+}
+
+function isSessionsYieldToolCallOnlyMessage(message: Record<string, unknown>): boolean {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return false;
+  }
+  let hasSessionsYieldCall = false;
+  for (const block of message.content) {
+    const record = readRecord(block);
+    if (!record) {
+      return false;
+    }
+    if (record.type === "text") {
+      if (typeof record.text === "string" && record.text.trim()) {
+        return false;
+      }
+      continue;
+    }
+    if (!isSessionsYieldToolCallBlock(record)) {
+      return false;
+    }
+    hasSessionsYieldCall = true;
+  }
+  return hasSessionsYieldCall;
 }
 
 function readMessageToolResultName(message: Record<string, unknown>): string | undefined {
@@ -1064,6 +1176,296 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     }
     next.push(message);
     flushSelectedMirrors(flushAfterCurrentMessage);
+  }
+
+  return changed ? next : messages;
+}
+
+function readSessionsYieldPayloadMessage(value: unknown): string | undefined {
+  const record = readMaybeJsonRecord(value);
+  if (record) {
+    const status = normalizeOptionalString(record.status)?.toLowerCase();
+    const message = normalizeOptionalString(record.message);
+    if (status === "yielded" && message) {
+      return stripInlineDirectiveTagsForDisplay(message).text;
+    }
+    for (const key of ["details", "result", "output", "content", "text"] as const) {
+      const nested = readSessionsYieldPayloadMessage(record[key]);
+      if (nested) {
+        return nested;
+      }
+    }
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  for (const block of value) {
+    const nested = readSessionsYieldPayloadMessage(block);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function readSessionsYieldToolResultMessage(
+  message: Record<string, unknown>,
+  previousAssistantCalledYield: boolean,
+): string | undefined {
+  if (!isSessionsYieldToolResult(message, previousAssistantCalledYield)) {
+    return undefined;
+  }
+  return readSessionsYieldPayloadMessage(message);
+}
+
+function readAssistantSessionsYieldVisibleText(
+  message: Record<string, unknown>,
+): string | undefined {
+  if (message.role !== "assistant") {
+    return undefined;
+  }
+  const text = extractProjectedText(message.content ?? message.text);
+  const stripped = stripInlineDirectiveTagsForDisplay(text).text.trim();
+  if (!stripped || isSuppressedControlReplyText(stripped)) {
+    return undefined;
+  }
+  return stripped;
+}
+
+function buildSessionsYieldVisibleReplyMirror(
+  reply: SessionsYieldVisibleReply,
+): Record<string, unknown> {
+  const mirror: Record<string, unknown> = {
+    role: "assistant",
+    content: [{ type: "text", text: reply.text }],
+    openclawSessionsYieldMirror: {
+      toolName: "sessions_yield",
+      ...(reply.toolCallId ? { toolCallId: reply.toolCallId } : {}),
+    },
+  };
+  for (const field of ["timestamp", "createdAt", "agentId"] as const) {
+    if (reply.anchor[field] !== undefined) {
+      mirror[field] = reply.anchor[field];
+    }
+  }
+  const transcriptMeta = readRecord(reply.anchor["__openclaw"]);
+  if (transcriptMeta) {
+    const sourceMessageId = normalizeOptionalString(transcriptMeta.id);
+    mirror["__openclaw"] = {
+      ...transcriptMeta,
+      ...(sourceMessageId
+        ? {
+            id: resolveSessionsYieldMirrorMessageId(sourceMessageId),
+            sourceId: sourceMessageId,
+          }
+        : {}),
+    };
+  }
+  return mirror;
+}
+
+function markSessionsYieldVisibleReplyMirror(
+  message: unknown,
+  reply: SessionsYieldVisibleReply,
+): unknown {
+  const record = readRecord(message);
+  if (!record) {
+    return message;
+  }
+  return {
+    ...record,
+    openclawSessionsYieldMirror: {
+      toolName: "sessions_yield",
+      ...(reply.toolCallId ? { toolCallId: reply.toolCallId } : {}),
+      duplicateAssistantText: true,
+    },
+  };
+}
+
+function markSessionsYieldPendingReplyMirror(
+  message: unknown,
+  reply: { toolCallId?: string },
+): unknown {
+  const record = readRecord(message);
+  if (!record) {
+    return message;
+  }
+  return {
+    ...record,
+    openclawSessionsYieldMirror: {
+      toolName: "sessions_yield",
+      ...(reply.toolCallId ? { toolCallId: reply.toolCallId } : {}),
+      pendingToolResult: true,
+    },
+  };
+}
+
+function readSessionsYieldPendingMirrorToolCallId(
+  message: Record<string, unknown>,
+): string | undefined {
+  const marker = readRecord(message.openclawSessionsYieldMirror);
+  if (!marker || marker.toolName !== "sessions_yield" || marker.pendingToolResult !== true) {
+    return undefined;
+  }
+  return normalizeOptionalString(marker.toolCallId);
+}
+
+function mirrorSessionsYieldToolResults(messages: unknown[]): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  if (!messages.some((message) => readRecord(message))) {
+    return messages;
+  }
+
+  let changed = false;
+  const next: unknown[] = [];
+  let previousAssistantCalledYield = false;
+  let previousAssistantYieldText: string | undefined;
+  let previousAssistantVisibleText: string | undefined;
+  let previousAssistantIndex: number | undefined;
+  const pendingYieldCalls = new Map<string, PendingSessionsYieldCall>();
+  let pendingYieldWithoutCallId: PendingSessionsYieldCall | undefined;
+
+  for (const message of messages) {
+    const record = readRecord(message);
+    if (!record) {
+      next.push(message);
+      previousAssistantCalledYield = false;
+      previousAssistantYieldText = undefined;
+      previousAssistantVisibleText = undefined;
+      previousAssistantIndex = undefined;
+      continue;
+    }
+
+    const resultCallId = readMessageToolResultCallId(record);
+    const resultToolName = readMessageToolResultName(record)?.toLowerCase();
+    const resultIsExplicitSessionsYield = resultToolName === "sessions_yield";
+    const resultIsExplicitNonYieldTool =
+      resultToolName !== undefined && !resultIsExplicitSessionsYield;
+    let pendingYieldCallId: string | undefined;
+    let pendingYieldCall: PendingSessionsYieldCall | undefined;
+    if (resultCallId !== undefined) {
+      pendingYieldCallId = resultCallId;
+      pendingYieldCall = pendingYieldCalls.get(resultCallId);
+    } else if (pendingYieldWithoutCallId !== undefined) {
+      pendingYieldCall = pendingYieldWithoutCallId;
+    } else if (resultIsExplicitSessionsYield || pendingYieldCalls.size === 1) {
+      const [firstPendingCallId, firstPendingCall] = pendingYieldCalls.entries().next().value ?? [];
+      pendingYieldCallId =
+        typeof firstPendingCallId === "string" && firstPendingCallId ? firstPendingCallId : undefined;
+      pendingYieldCall = firstPendingCall;
+    }
+    const hasYieldContext =
+      !resultIsExplicitNonYieldTool &&
+      (pendingYieldCall !== undefined ||
+        (previousAssistantCalledYield &&
+          resultCallId === undefined &&
+          pendingYieldCalls.size === 0 &&
+          pendingYieldWithoutCallId === undefined));
+    const yieldText = hasYieldContext
+      ? readSessionsYieldToolResultMessage(record, true)
+      : undefined;
+    if (yieldText?.trim()) {
+      const normalizedYieldText = yieldText.trim();
+      const pendingYieldAssistantIndex =
+        pendingYieldCall?.text === normalizedYieldText
+          ? pendingYieldCall.assistantIndex
+          : undefined;
+      const previousAssistantMatchesYieldText =
+        (previousAssistantCalledYield && previousAssistantYieldText === normalizedYieldText) ||
+        previousAssistantVisibleText === normalizedYieldText;
+      const duplicatesPreviousAssistantText =
+        previousAssistantMatchesYieldText || pendingYieldCall?.text === normalizedYieldText;
+      if (!duplicatesPreviousAssistantText) {
+        next.push(message);
+        next.push(
+          buildSessionsYieldVisibleReplyMirror({
+            text: normalizedYieldText,
+            anchor: record,
+            ...(pendingYieldCallId ? { toolCallId: pendingYieldCallId } : {}),
+          }),
+        );
+      } else {
+        const mirrorAssistantIndex = previousAssistantMatchesYieldText
+          ? previousAssistantIndex
+          : pendingYieldAssistantIndex;
+        if (mirrorAssistantIndex !== undefined) {
+          next[mirrorAssistantIndex] = markSessionsYieldVisibleReplyMirror(
+            next[mirrorAssistantIndex],
+            {
+              text: normalizedYieldText,
+              anchor: record,
+              ...(pendingYieldCallId ? { toolCallId: pendingYieldCallId } : {}),
+            },
+          );
+        }
+        next.push(message);
+      }
+      changed = true;
+      if (pendingYieldCallId) {
+        pendingYieldCalls.delete(pendingYieldCallId);
+      } else {
+        pendingYieldWithoutCallId = undefined;
+      }
+      previousAssistantCalledYield = false;
+      previousAssistantYieldText = undefined;
+      previousAssistantVisibleText = undefined;
+      previousAssistantIndex = undefined;
+      continue;
+    }
+
+    const nextIndex = next.length;
+    next.push(message);
+    if (record.role === "assistant") {
+      const assistantText = readAssistantSessionsYieldVisibleText(record);
+      const yieldCallIds = extractSessionsYieldToolCallIds(record);
+      const pendingMirrorToolCallId = readSessionsYieldPendingMirrorToolCallId(record);
+      const assistantHasYieldCall = assistantCallsSessionsYield(record) || yieldCallIds.length > 0;
+      const pendingYieldContext = {
+        ...(assistantText ? { text: assistantText } : {}),
+        assistantIndex: nextIndex,
+      };
+      for (const callId of yieldCallIds) {
+        pendingYieldCalls.set(callId, pendingYieldContext);
+      }
+      if (pendingMirrorToolCallId) {
+        pendingYieldCalls.set(pendingMirrorToolCallId, pendingYieldContext);
+      }
+      if (
+        assistantHasYieldCall &&
+        yieldCallIds.length === 0 &&
+        pendingMirrorToolCallId === undefined
+      ) {
+        pendingYieldWithoutCallId = pendingYieldContext;
+      }
+      previousAssistantCalledYield =
+        assistantHasYieldCall || pendingMirrorToolCallId !== undefined;
+      previousAssistantYieldText = previousAssistantCalledYield ? assistantText : undefined;
+      previousAssistantVisibleText = assistantText;
+      previousAssistantIndex = nextIndex;
+      if (assistantHasYieldCall && assistantText) {
+        next[nextIndex] = markSessionsYieldPendingReplyMirror(
+          record,
+          yieldCallIds[0] ? { toolCallId: yieldCallIds[0] } : {},
+        );
+        changed = true;
+      }
+    } else if (record.role === "user") {
+      pendingYieldCalls.clear();
+      pendingYieldWithoutCallId = undefined;
+      previousAssistantCalledYield = false;
+      previousAssistantYieldText = undefined;
+      previousAssistantVisibleText = undefined;
+      previousAssistantIndex = undefined;
+    } else if (record.role === "toolResult" || record.role === "tool") {
+      previousAssistantCalledYield = false;
+      previousAssistantYieldText = undefined;
+      previousAssistantVisibleText = undefined;
+      previousAssistantIndex = undefined;
+    }
   }
 
   return changed ? next : messages;
@@ -1425,6 +1827,9 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (isProjectedSessionsSendForwardedMessage(message)) {
     return false;
   }
+  if (isSessionsYieldToolCallOnlyMessage(message)) {
+    return true;
+  }
   const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
     return false;
@@ -1597,10 +2002,14 @@ function projectSessionsSendInterSessionMessages(
 
 export function projectChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: ProjectChatDisplayOptions,
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
-  const mirrored = mirrorMessageToolVisibleReplies(source);
+  const mirroredMessageReplies = mirrorMessageToolVisibleReplies(source);
+  const mirrored =
+    options?.mirrorSessionsYieldToolResults === false
+      ? mirroredMessageReplies
+      : mirrorSessionsYieldToolResults(mirroredMessageReplies);
   const projectedForwarded = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
       projectSessionsSendInterSessionMessages(
@@ -1628,7 +2037,7 @@ function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
 
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
+  options?: ProjectChatDisplayOptions & { maxMessages?: number },
 ): Array<Record<string, unknown>> {
   return limitChatDisplayMessages(
     projectChatDisplayMessages(messages, options),
@@ -1638,7 +2047,10 @@ export function projectRecentChatDisplayMessages(
 
 export function projectChatDisplayMessage(
   message: unknown,
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: ProjectChatDisplayOptions,
 ): Record<string, unknown> | undefined {
-  return projectChatDisplayMessages([message], options)[0];
+  return projectChatDisplayMessages([message], {
+    ...options,
+    mirrorSessionsYieldToolResults: false,
+  })[0];
 }

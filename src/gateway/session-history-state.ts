@@ -180,6 +180,7 @@ export class SessionHistorySseState {
   private readonly limit: number | undefined;
   private readonly cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
+  private rawMessages: SessionHistoryMessage[];
   private rawTranscriptSeq: number;
 
   static fromRawSnapshot(params: {
@@ -224,6 +225,7 @@ export class SessionHistorySseState {
         ? { totalRawMessages: params.totalRawMessages }
         : {}),
     });
+    this.rawMessages = toSessionHistoryMessages(params.initialRawMessages);
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
   }
@@ -256,11 +258,16 @@ export class SessionHistorySseState {
     // Projection can split, drop, or rewrite raw transcript messages. When one
     // raw append changes multiple visible rows, callers must refresh instead of
     // emitting a misleading single SSE item.
+    const rawMessages = toSessionHistoryMessages([...this.rawMessages, nextMessage]);
     const projectedMessages = toSessionHistoryMessages(
-      projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
+      projectChatDisplayMessages(rawMessages, {
         maxChars: this.maxChars,
       }),
     );
+    // Some transcript records are intentionally hidden but still carry context
+    // for the following record, such as sessions_yield tool calls before their
+    // yielded tool result. Keep that raw tail even when no SSE item is emitted.
+    this.rawMessages = rawMessages;
     if (projectedMessages.length > this.sentHistory.messages.length) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
       if (addedMessages.length > 1) {
@@ -326,6 +333,7 @@ export class SessionHistorySseState {
     const rawSnapshot = await this.readRawSnapshotAsync();
     const snapshot = this.buildSnapshot(rawSnapshot);
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
+    this.rawMessages = toSessionHistoryMessages(rawSnapshot.rawMessages);
     this.sentHistory = snapshot.history;
     return snapshot.history;
   }
