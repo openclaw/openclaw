@@ -107,14 +107,25 @@ export function scanEmptyAllowlistPolicyWarnings(
     const allAccountsHaveOwnAllowFrom =
       accounts &&
       Object.keys(accounts).length > 0 &&
-      Object.keys(accounts).every((id) => {
-        if (isDisabledRecord(accounts[id])) return true;
-        const acct = accounts[id] as DoctorAccountRecord;
-        return hasAllowFromEntries(
-          (acct.groupAllowFrom as DoctorAllowFromList | undefined) ??
-            (acct.allowFrom as DoctorAllowFromList | undefined),
-        );
-      });
+      (() => {
+        let hasEnabledAccount = false;
+        for (const id of Object.keys(accounts)) {
+          if (isDisabledRecord(accounts[id])) {
+            continue;
+          }
+          hasEnabledAccount = true;
+          const acct = accounts[id] as DoctorAccountRecord;
+          if (
+            !hasAllowFromEntries(
+              (acct.groupAllowFrom as DoctorAllowFromList | undefined) ??
+                (acct.allowFrom as DoctorAllowFromList | undefined),
+            )
+          ) {
+            return false;
+          }
+        }
+        return hasEnabledAccount;
+      })();
 
     checkAccount(
       channelConfig,
