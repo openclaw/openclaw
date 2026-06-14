@@ -78,6 +78,11 @@ type TelegramEditMessageCaptionParams = Parameters<TelegramApi["editMessageCapti
 type TelegramCreateForumTopicParams = NonNullable<Parameters<TelegramApi["createForumTopic"]>[2]>;
 type TelegramThreadScopedParams = {
   message_thread_id?: number;
+  reply_parameters?: unknown;
+  reply_to_message_id?: number;
+  allow_sending_without_reply?: true;
+  reply_markup?: unknown;
+  disable_notification?: boolean;
 };
 const InputFileCtor = grammy.InputFile;
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
@@ -623,31 +628,59 @@ export async function sendMessageTelegram(
     text: string;
   };
 
+  const withSilentParam = <T extends Record<string, unknown> | undefined>(params: T) => ({
+    ...params,
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  });
+
+  const optionalParams = <T extends Record<string, unknown>>(params: T): T | undefined =>
+    Object.keys(params).length > 0 ? params : undefined;
+
   const sendTelegramTextChunk = async (
     chunk: TelegramTextChunk,
-    params?: TelegramRichMessageContextParams,
+    index: number,
+    isLastChunk: boolean,
   ) => {
     const richRawApi = getTelegramRichRawApi(api);
-    const richParams = {
-      ...params,
-      ...(opts.silent === true ? { disable_notification: true } : {}),
+    const richParams = withSilentParam(buildRichTextParams(isLastChunk));
+    const plainParams = withSilentParam(buildPlainTextParams(isLastChunk));
+    const result = await withTelegramHtmlParseFallback({
+      label: index === 0 ? "richMessage" : `richMessage-${index + 1}`,
+      verbose: opts.verbose,
+      requestHtml: (retryLabel) =>
+        requestWithChatNotFound(
+          () =>
+            richRawApi.sendRichMessage({
+              chat_id: chatId,
+              rich_message: buildRichMessage(chunk.text),
+              ...richParams,
+            }),
+          retryLabel,
+        ),
+      requestPlain: (retryLabel) =>
+        requestWithChatNotFound(
+          () => api.sendMessage(chatId, chunk.text, optionalParams(plainParams)),
+          retryLabel,
+        ),
+    });
+    return {
+      result,
+      acceptedParams: optionalParams(plainParams),
     };
-    const result = await requestWithChatNotFound(
-      () =>
-        richRawApi.sendRichMessage({
-          chat_id: chatId,
-          rich_message: buildRichMessage(chunk.text),
-          ...richParams,
-        }),
-      "richMessage",
-    );
-    return { result, acceptedParams: params };
   };
 
-  const buildTextParams = (isLastChunk: boolean) =>
+  const buildRichTextParams = (isLastChunk: boolean) =>
     hasRichThreadParams || (isLastChunk && replyMarkup)
       ? {
           ...richThreadParams,
+          ...(isLastChunk && replyMarkup ? { reply_markup: replyMarkup } : {}),
+        }
+      : undefined;
+
+  const buildPlainTextParams = (isLastChunk: boolean) =>
+    hasThreadParams || (isLastChunk && replyMarkup)
+      ? {
+          ...threadParams,
           ...(isLastChunk && replyMarkup ? { reply_markup: replyMarkup } : {}),
         }
       : undefined;
@@ -667,7 +700,8 @@ export async function sendMessageTelegram(
       }
       const { result: res, acceptedParams } = await sendTelegramTextChunk(
         chunk,
-        buildTextParams(index === chunks.length - 1),
+        index,
+        index === chunks.length - 1,
       );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);

@@ -947,6 +947,33 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("falls back to original markdown when rich parsing fails near opening links", async () => {
+    const markdown = [
+      "Вот что я бы ему рекомендовал, если задача именно понять, есть ли превышения, и при этом по возможности завести данные в HA.",
+      "",
+      "**Рекомендация клиенту**",
+      "",
+      "Если нужен реально доказательный вариант для контроля рядом с вышкой: **[Narda AMS-8061](https://www.narda-sts.com/en/products/emf-monitors/ams-8061/)** или **[Wavecontrol MonitEM-IoT](https://wavecontrol.cn/en/products/monitem-iot/)**.",
+    ].join("\n");
+    botRawApi.sendRichMessage.mockRejectedValueOnce(
+      new Error("400: Bad Request: can't parse entities"),
+    );
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 46, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: { markdown },
+    });
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", markdown, undefined);
+    expect(botApi.sendMessage.mock.calls[0]?.[1]).toMatch(/^Вот что я бы ему рекомендовал/);
+    expect(botApi.sendMessage.mock.calls[0]?.[1]).not.toMatch(/^n\/products\/monitem-iot/);
+  });
+
   it("keeps markdown media syntax on the text-only rich path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
 
