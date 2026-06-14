@@ -18,6 +18,7 @@ import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import type { PluginHostedMediaResolverRegistration } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
@@ -99,9 +100,44 @@ async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | nu
   }
 }
 
-async function resolveHostedPluginMediaUrl(mediaUrl: string): Promise<string | null> {
+type HostedMediaResolverEntry = {
+  pluginId?: string;
+  resolver: PluginHostedMediaResolverRegistration["resolver"];
+};
+
+function listHostedMediaResolvers(): HostedMediaResolverEntry[] {
   const registry = getActivePluginRegistry();
-  for (const entry of registry?.hostedMediaResolvers ?? []) {
+  let registrations: unknown;
+  try {
+    registrations = registry?.hostedMediaResolvers;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(registrations)) {
+    return [];
+  }
+  const resolvers: HostedMediaResolverEntry[] = [];
+  for (const registration of registrations) {
+    try {
+      const entry = registration as Partial<PluginHostedMediaResolverRegistration>;
+      const resolver = entry.resolver;
+      if (typeof resolver !== "function") {
+        continue;
+      }
+      const pluginId =
+        typeof entry.pluginId === "string" && entry.pluginId.trim()
+          ? entry.pluginId.trim()
+          : undefined;
+      resolvers.push(pluginId ? { pluginId, resolver } : { resolver });
+    } catch {
+      continue;
+    }
+  }
+  return resolvers;
+}
+
+async function resolveHostedPluginMediaUrl(mediaUrl: string): Promise<string | null> {
+  for (const entry of listHostedMediaResolvers()) {
     try {
       const resolved = await entry.resolver(mediaUrl);
       if (typeof resolved === "string" && resolved.trim()) {
