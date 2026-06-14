@@ -549,7 +549,6 @@ describe("before_tool_call loop detection behavior", () => {
     { status: "killed" },
     { status: "invalid" },
     { status: "unknown" },
-    { status: "ok", result: { status: "failed" } },
     { status: "ok", result: { dryRun: true } },
   ])("marks returned failure details as failed replay-safety observations", async (details) => {
     const onToolOutcome = vi.fn();
@@ -575,6 +574,40 @@ describe("before_tool_call loop detection behavior", () => {
         failed: true,
       }),
     );
+  });
+
+  it.each([
+    { status: "ok", result: { status: "failed", error: "historical failure" } },
+    { status: "ok", results: [{ status: "failed", error: "historical failure" }] },
+  ])("does not infer execution failure from nested arbitrary tool data", async (details) => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "listed historical runs" }],
+      details,
+    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "list_runs",
+        execute,
+        terminalResultFallback: { mode: "safe_text", prefix: "Result:" },
+      } as unknown as AnyAgentTool,
+      {
+        ...enabledLoopDetectionContext,
+        runId: "run-nested-historical-failure-observer",
+        onToolOutcome,
+      },
+    );
+
+    await expectUnblockedToolExecution(tool, "list-runs-with-historical-failure", {});
+
+    const observation = onToolOutcome.mock.calls.at(-1)?.[0];
+    expect(observation).toEqual(
+      expect.objectContaining({
+        toolName: "list_runs",
+        resultText: "listed historical runs",
+      }),
+    );
+    expect(observation).not.toHaveProperty("failed");
   });
 
   it("does not retain terminal fallback evidence from a dry-run result", async () => {

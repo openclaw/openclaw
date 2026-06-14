@@ -96,7 +96,11 @@ import {
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
-import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import {
+  createAudioAsVoiceBuffer,
+  createBlockReplyContentKey,
+  createBlockReplyPipeline,
+} from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import {
   createCompactionNoticePayload,
@@ -262,6 +266,20 @@ function hasSuccessfulDirectBlockReplyDelivery(payloads?: ReplyPayload[]): boole
   );
 }
 
+function hasSuccessfulDirectFinalBlockReplyDelivery(params: {
+  directlySentBlockKeys?: Set<string>;
+  finalPayloads?: ReplyPayload[];
+}): boolean {
+  return (
+    params.finalPayloads?.some(
+      (payload) =>
+        !isReplyPayloadStatusNotice(payload) &&
+        hasVisibleReplyShape(payload) &&
+        params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)),
+    ) ?? false
+  );
+}
+
 export const testing = {
   hasSuccessfulDirectBlockReplyDelivery,
 };
@@ -283,7 +301,7 @@ function hasSuccessfulSourceReplyDelivery(params: {
 }
 
 function hasFallbackSuppressingSideEffectDelivery(params: {
-  directlySentBlockPayloads?: ReplyPayload[];
+  hasSuccessfulDirectFinalBlockReplyDelivery: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
@@ -292,7 +310,7 @@ function hasFallbackSuppressingSideEffectDelivery(params: {
   committedMessagingToolSourceReplyDelivery?: boolean;
 }): boolean {
   return (
-    hasSuccessfulDirectBlockReplyDelivery(params.directlySentBlockPayloads) ||
+    params.hasSuccessfulDirectFinalBlockReplyDelivery ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasVisibleMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
@@ -2007,7 +2025,10 @@ export async function runReplyAgent(params: {
       runResult.didDeliverSourceReplyViaMessageTool === true ||
       hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
     const fallbackSuppressingSideEffectDelivery = hasFallbackSuppressingSideEffectDelivery({
-      directlySentBlockPayloads,
+      hasSuccessfulDirectFinalBlockReplyDelivery: hasSuccessfulDirectFinalBlockReplyDelivery({
+        directlySentBlockKeys,
+        finalPayloads: payloadArray,
+      }),
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,

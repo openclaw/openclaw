@@ -1685,6 +1685,62 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("surfaces a configured backend failure after only unmatched direct progress", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({
+        text: "Checking status...",
+        presentation: { title: "Checking status...", blocks: [] },
+      });
+      return {
+        payloads: [],
+        meta: {},
+      };
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai", "gpt-5.5"),
+          provider: "openai",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: false,
+        opts: { onBlockReply },
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+      });
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Checking status...",
+        }),
+      );
+      expect(payload?.isError).toBe(true);
+      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
+      expect(payload?.text).toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
   it("does not count empty or status-only direct block payloads as successful deliveries", async () => {
     const { testing } = await import("./agent-runner.js");
 

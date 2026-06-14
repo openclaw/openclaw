@@ -8,13 +8,13 @@ import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
 } from "../logging/diagnostic-session-state.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { recordAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.js";
 import {
   readAdjustedParamsForToolCall,
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -416,7 +416,6 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     { ok: false },
     { success: false },
     { ok: true, dryRun: true },
-    { status: "ok", result: { status: "failed" } },
   ])("does not increment successfulCronAdds for non-committed result details", async (details) => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(
@@ -441,6 +440,37 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
+  it("increments successfulCronAdds when a successful result lists historical failures", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-cron-historical-failure",
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-cron-historical-failure",
+        isError: false,
+        result: {
+          details: {
+            status: "ok",
+            results: [{ status: "failed", error: "historical run failed" }],
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(1);
   });
 
   it("emits current attempt delivery and side-effect state after tool completion", async () => {

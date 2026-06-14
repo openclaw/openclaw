@@ -33,13 +33,19 @@ export function isToolResultFailureStatus(value: unknown): boolean {
   return normalized ? TOOL_RESULT_FAILURE_STATUSES.has(normalized) : false;
 }
 
-export function hasToolResultDryRunOrFailureEvidence(value: unknown, depth = 0): boolean {
-  if (Array.isArray(value)) {
-    return (
-      depth < 3 && value.some((entry) => hasToolResultDryRunOrFailureEvidence(entry, depth + 1))
-    );
-  }
+function hasNestedToolResultDryRunEvidence(value: unknown, depth: number): boolean {
   if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.dryRun === true) {
+    return true;
+  }
+  return depth < 3 && hasNestedToolResultDryRunEvidence(record.result, depth + 1);
+}
+
+export function hasToolResultDryRunOrFailureEvidence(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
   const record = value as Record<string, unknown>;
@@ -57,10 +63,5 @@ export function hasToolResultDryRunOrFailureEvidence(value: unknown, depth = 0):
   ) {
     return true;
   }
-  if (depth >= 3) {
-    return false;
-  }
-  return [record.result, record.results, record.payloadOutcomes].some((entry) =>
-    hasToolResultDryRunOrFailureEvidence(entry, depth + 1),
-  );
+  return hasNestedToolResultDryRunEvidence(record.result, 1);
 }
