@@ -88,6 +88,7 @@ The bundled fallback catalog includes current Chutes refs:
 | ----------------------------------------------------- |
 | `chutes/zai-org/GLM-4.7-TEE`                          |
 | `chutes/zai-org/GLM-5-TEE`                            |
+| `chutes/zai-org/GLM-5.1-TEE`                          |
 | `chutes/deepseek-ai/DeepSeek-V3.2-TEE`                |
 | `chutes/deepseek-ai/DeepSeek-R1-0528-TEE`             |
 | `chutes/moonshotai/Kimi-K2.5-TEE`                     |
