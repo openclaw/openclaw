@@ -11,13 +11,29 @@ import {
   unwrapExpression,
 } from "./lib/ts-guard-utils.mjs";
 
-const legacyReaderNames = new Set(["loadSessionStore", "readSessionEntries"]);
+const legacyReaderNames = new Set([
+  "loadSessionStore",
+  "readSessionEntries",
+  "readSessionEntry",
+  "readSessionStoreReadOnly",
+  "resolveSessionStoreEntry",
+]);
 
 export const migratedSessionAccessorFiles = new Set([
+  "src/commands/export-trajectory.ts",
+  "src/commands/health.ts",
+  "src/commands/sandbox-explain.ts",
+  "src/commands/sessions-tail.ts",
+  "src/commands/sessions.ts",
+  "src/commands/status.agent-local.ts",
+  "src/commands/status.summary.ts",
   "src/config/sessions/combined-store-gateway.ts",
+  "src/cron/isolated-agent/delivery-target.ts",
+  "src/cron/service/timer.ts",
   "src/gateway/session-utils.ts",
   "src/gateway/sessions-resolve.ts",
   "src/gateway/server-methods/sessions.ts",
+  "src/infra/outbound/message-action-tts.ts",
 ]);
 
 function normalizeRelativePath(filePath) {
@@ -119,7 +135,13 @@ export function findSessionAccessorBoundaryViolations(content, fileName = "sourc
 
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
-  const sourceRoots = resolveSourceRoots(repoRoot, ["src/config/sessions", "src/gateway"]);
+  const sourceRoots = resolveSourceRoots(repoRoot, [
+    "src/commands",
+    "src/config/sessions",
+    "src/cron",
+    "src/gateway",
+    "src/infra",
+  ]);
   const violations = await collectFileViolations({
     repoRoot,
     sourceRoots,
