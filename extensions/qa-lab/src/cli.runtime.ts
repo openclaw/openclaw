@@ -73,6 +73,7 @@ import {
   type QaScorecardCategoryMappingReport,
 } from "./scorecard-taxonomy.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
+import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -640,14 +641,25 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   const scenarioBySourcePath = new Map(
     scenarioPack.scenarios.map((scenario) => [scenario.sourcePath, scenario] as const),
   );
-  const scenarios = uniqueStrings(categories.flatMap((category) => category.scenarioRefs))
+  const taxonomyScenarios = uniqueStrings(categories.flatMap((category) => category.scenarioRefs))
     .map((scenarioRef) => scenarioBySourcePath.get(scenarioRef))
     .filter((scenario): scenario is NonNullable<typeof scenario> => scenario !== undefined);
+  const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
+  const normalizedProviderMode = normalizeQaProviderMode(providerMode);
+  const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(normalizedProviderMode);
+  const scenarios = taxonomyScenarios.filter((scenario) =>
+    scenarioMatchesQaProviderLane({
+      scenario,
+      providerMode: normalizedProviderMode,
+      primaryModel,
+    }),
+  );
   if (scenarios.length === 0) {
-    throw new Error(`qa run --profile ${profile} did not resolve any executable QA scenarios.`);
+    throw new Error(
+      `qa run --profile ${profile} did not resolve any executable QA scenarios for provider mode ${normalizedProviderMode}.`,
+    );
   }
 
-  const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
   process.stdout.write(
     `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
   );

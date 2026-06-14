@@ -377,6 +377,7 @@ describe("qa cli runtime", () => {
         concurrency: 2,
       });
       expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
+      expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
     } finally {
