@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -26,7 +25,26 @@ const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
 const LIVE_TIMEOUT_MS = 420_000;
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
 const AGENT_REQUEST_TIMEOUT_MS = 180_000;
+// Keep this below LIVE_TIMEOUT_MS so timeout diagnostics win over Vitest's generic cap.
+const TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS = 120_000;
 const DEFAULT_CODEX_MODEL = "openai/gpt-5.5";
+
+type TrajectoryExportApprovalEntry = {
+  id?: string;
+  command?: string;
+  commandText?: string;
+  commandPreview?: string;
+  request?: {
+    command?: string;
+    commandText?: string;
+    commandPreview?: string;
+  };
+};
+
+type TrajectoryExportApprovalSummary = {
+  id?: string;
+  hasTrajectoryExportCommand: boolean;
+};
 
 function logLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CODEX_HARNESS_DEBUG) {
@@ -78,9 +96,10 @@ async function writeLiveGatewayConfig(params: {
       port: params.port,
       auth: { mode: "token", token: params.token },
     },
+    commands: { ownerAllowFrom: ["*"] },
     plugins: { allow: ["codex"] },
     agents: {
-      list: [{ id: "dev", default: true }],
+      list: [{ id: "dev", default: true, tools: { exec: { host: "node" } } }],
       defaults: {
         workspace: params.workspace,
         skipBootstrap: true,
@@ -165,6 +184,14 @@ async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> 
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
+function formatTextPreview(texts: string[], maxChars = 800): string {
+  const combined = texts.join("\n\n").trim();
+  if (!combined) {
+    return "<none>";
+  }
+  return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
+}
+
 function extractAssistantTexts(messages: unknown[]): string[] {
   const texts: string[] = [];
   for (const entry of messages) {
@@ -174,7 +201,7 @@ function extractAssistantTexts(messages: unknown[]): string[] {
     if ((entry as { role?: unknown }).role !== "assistant") {
       continue;
     }
-    const text = extractFirstTextBlock(entry);
+    const text = extractVisibleMessageText(entry);
     if (typeof text === "string" && text.trim().length > 0) {
       texts.push(text);
     }
@@ -182,57 +209,97 @@ function extractAssistantTexts(messages: unknown[]): string[] {
   return texts;
 }
 
-function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
-  const combined = texts.join("\n\n").trim();
-  if (!combined) {
-    return "<none>";
+function getTrajectoryExportApprovalCommands(entry: TrajectoryExportApprovalEntry): string[] {
+  return [
+    entry.request?.command,
+    entry.request?.commandText,
+    entry.request?.commandPreview,
+    entry.command,
+    entry.commandText,
+    entry.commandPreview,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+function isTrajectoryExportApproval(entry: TrajectoryExportApprovalEntry): boolean {
+  return getTrajectoryExportApprovalCommands(entry).some((command) =>
+    command.includes("sessions export-trajectory"),
+  );
+}
+
+function summarizeTrajectoryExportApproval(
+  entry: TrajectoryExportApprovalEntry,
+): TrajectoryExportApprovalSummary {
+  const summary: TrajectoryExportApprovalSummary = {
+    hasTrajectoryExportCommand: isTrajectoryExportApproval(entry),
+  };
+  if (entry.id) {
+    summary.id = entry.id;
   }
-  return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
+  return summary;
 }
 
 async function waitForTrajectoryExportInstructionText(params: {
   client: GatewayClient;
   events: EventFrame[];
+  eventStartIndex: number;
   expectedText: string;
   runId: string;
   sessionKey: string;
   timeoutMs: number;
 }): Promise<string> {
   const deadline = Date.now() + params.timeoutMs;
-  let lastAssistantTexts: string[] = [];
+  let finalTexts: string[] = [];
+  let assistantTexts: string[] = [];
+  let nextHistoryPollAt = 0;
   while (Date.now() < deadline) {
-    const eventText = params.events
+    const newEvents = params.events.slice(params.eventStartIndex);
+    finalTexts = newEvents
       .map((event) => extractChatFinalText(event, params.runId))
-      .find(Boolean);
-    if (eventText) {
-      return eventText;
+      .filter((text): text is string => typeof text === "string" && text.trim().length > 0);
+    const matchedText = finalTexts.find((text) => text.includes(params.expectedText));
+    if (matchedText) {
+      return matchedText;
     }
-    const sessionEventText = params.events
-      .map((event) => extractChatFinalTextForSession(event, params.sessionKey))
-      .find((text) => text?.includes(params.expectedText));
-    if (sessionEventText) {
-      return sessionEventText;
-    }
-    const history: { messages?: unknown[] } = await params.client.request(
-      "chat.history",
-      {
-        sessionKey: params.sessionKey,
-        limit: 24,
-      },
-      { timeoutMs: 10_000 },
-    );
-    lastAssistantTexts = extractAssistantTexts(history.messages ?? []);
-    const historyText = lastAssistantTexts.find((text) => text.includes(params.expectedText));
-    if (historyText) {
-      return historyText;
+    if (Date.now() >= nextHistoryPollAt) {
+      try {
+        const history = (await params.client.request(
+          "chat.history",
+          {
+            sessionKey: params.sessionKey,
+            limit: 24,
+          },
+          { timeoutMs: 10_000 },
+        )) as { messages?: unknown[] };
+        assistantTexts = extractAssistantTexts(history.messages ?? []);
+        const matchedHistoryText = assistantTexts.find((text) =>
+          text.includes(params.expectedText),
+        );
+        if (matchedHistoryText) {
+          return matchedHistoryText;
+        }
+      } catch {
+        assistantTexts = [];
+      }
+      nextHistoryPollAt = Date.now() + 2_000;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 500);
     });
   }
+  let approvalSummaries: TrajectoryExportApprovalSummary[];
+  try {
+    const approvals = (await params.client.request(
+      "exec.approval.list",
+      {},
+      { timeoutMs: 10_000 },
+    )) as TrajectoryExportApprovalEntry[];
+    approvalSummaries = approvals.map(summarizeTrajectoryExportApproval);
+  } catch {
+    approvalSummaries = [];
+  }
   throw new Error(
     `timed out waiting for trajectory export instruction text for ${params.runId}; ` +
-      `events=${params.events.length}; assistantTexts=${formatAssistantTextPreview(lastAssistantTexts)}`,
+      `events=${params.events.length}; finalTexts=${formatTextPreview(finalTexts)}; assistantTexts=${formatTextPreview(assistantTexts)}; approvals=${JSON.stringify(approvalSummaries)}`,
   );
 }
 
@@ -251,64 +318,53 @@ function extractChatFinalText(event: EventFrame, runId: string): string | undefi
   return extractChatFinalRecordText(record);
 }
 
-function extractChatFinalTextForSession(event: EventFrame, sessionKey: string): string | undefined {
-  if (event.event !== "chat") {
-    return undefined;
-  }
-  const payload = event.payload;
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const record = payload as Record<string, unknown>;
-  if (record.sessionKey !== sessionKey || record.state !== "final") {
-    return undefined;
-  }
-  return extractChatFinalRecordText(record);
-}
-
 function extractChatFinalRecordText(record: Record<string, unknown>): string | undefined {
   const message = record.message;
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  const messageRecord = message as Record<string, unknown>;
-  if (typeof messageRecord.text === "string" && messageRecord.text.trim()) {
-    return messageRecord.text;
+  return extractVisibleMessageText(message);
+}
+
+function extractVisibleMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
   }
-  const content = Array.isArray(messageRecord.content) ? messageRecord.content : [];
-  return content
-    .map((entry) =>
-      entry && typeof entry === "object" ? (entry as Record<string, unknown>).text : undefined,
-    )
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .join("\n")
-    .trim();
+  const record = message as { text?: unknown; content?: unknown };
+  if (typeof record.text === "string" && record.text.trim()) {
+    return record.text;
+  }
+  if (typeof record.content === "string" && record.content.trim()) {
+    return record.content;
+  }
+  if (!Array.isArray(record.content)) {
+    return undefined;
+  }
+  const text = record.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const entry = block as { type?: unknown; text?: unknown };
+      return entry.type === "text" && typeof entry.text === "string" ? entry.text : "";
+    })
+    .filter((value) => value.trim())
+    .join("\n");
+  return text || undefined;
 }
 
 async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
   const startedAt = Date.now();
-  let approval:
-    | {
-        id?: string;
-        request?: {
-          command?: string;
-        };
-      }
-    | undefined;
+  let approval: TrajectoryExportApprovalEntry | undefined;
+  let lastApprovalSummaries: TrajectoryExportApprovalSummary[] = [];
   while (Date.now() - startedAt < 60_000) {
     const approvals = (await client.request(
       "exec.approval.list",
       {},
       { timeoutMs: 10_000 },
-    )) as Array<{
-      id?: string;
-      request?: {
-        command?: string;
-      };
-    }>;
-    approval = approvals.find((entry) =>
-      entry.request?.command?.includes("sessions export-trajectory"),
-    );
+    )) as TrajectoryExportApprovalEntry[];
+    lastApprovalSummaries = approvals.map(summarizeTrajectoryExportApproval);
+    approval = approvals.find(isTrajectoryExportApproval);
     if (approval) {
       break;
     }
@@ -316,11 +372,14 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
       setTimeout(resolve, 500);
     });
   }
-  expect(typeof approval?.id).toBe("string");
-  expect(approval?.request?.command).toContain("sessions export-trajectory");
   if (!approval?.id) {
-    throw new Error("expected trajectory export approval id");
+    throw new Error(
+      `expected trajectory export approval id; approvals=${JSON.stringify(lastApprovalSummaries)}`,
+    );
   }
+  expect(getTrajectoryExportApprovalCommands(approval).join("\n")).toContain(
+    "sessions export-trajectory",
+  );
   await client.request(
     "exec.approval.resolve",
     { id: approval.id, decision: "allow-once" },
@@ -428,6 +487,7 @@ describeLive("gateway live trajectory export", () => {
       const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
       const beforeExport = new Set(await listDirectoryNames(tempDir));
       const exportRunId = `chat-export-${randomUUID()}`;
+      const exportEventStartIndex = gatewayEvents.length;
       logLiveStep("export:start", { bundleDir, exportRunId });
       const exportResponse = (await client.request(
         "chat.send",
@@ -446,22 +506,23 @@ describeLive("gateway live trajectory export", () => {
       ).toBe(true);
       const finalText =
         typeof exportResponse?.message === "object"
-          ? extractFirstTextBlock(exportResponse.message)
+          ? extractVisibleMessageText(exportResponse.message)
           : await waitForTrajectoryExportInstructionText({
               client,
               events: gatewayEvents,
+              eventStartIndex: exportEventStartIndex,
               expectedText: "Trajectory exports can include",
               runId: exportRunId,
               sessionKey,
-              timeoutMs: 60_000,
+              timeoutMs: TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS,
             });
       expect(finalText).toContain("Trajectory exports can include");
       expect(finalText).toContain("through exec approval");
+      expect(finalText).toContain("Approve once");
       const approvalId = await approveTrajectoryExport(client);
       logLiveStep("export:approved", { approvalId });
       await waitForPath(path.join(bundleDir, "events.jsonl"), 60_000);
-      logLiveStep("export:done", { finalText });
-      expect(finalText).toContain("Approve once");
+      logLiveStep("export:done", { approvalId, finalText });
       const bundleNames = await listDirectoryNames(bundleDir);
       for (const expectedName of [
         "artifacts.json",

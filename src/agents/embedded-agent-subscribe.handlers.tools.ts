@@ -1166,8 +1166,21 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
-  const isToolError = isError || isToolResultError(result);
+  const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const approvalUnavailable =
+    isExecToolName(toolName) &&
+    readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
+  const isToolError = observerIsError && !approvalUnavailable;
+  try {
+    ctx.params.onAgentToolResult?.({
+      toolName,
+      result: sanitizedResult,
+      isError: observerIsError,
+    });
+  } catch (error) {
+    ctx.log.warn(`onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`);
+  }
   const eventResult = isExecToolName(toolName)
     ? capLiveExecResult(sanitizedResult)
     : sanitizedResult;

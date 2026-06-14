@@ -30,7 +30,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
@@ -137,7 +137,10 @@ import {
   type PostCompactionGuardObservation,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
-import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./run/assistant-failover.js";
+import {
+  handleAssistantFailover,
+  isShortWindowRateLimitMessage,
+} from "./run/assistant-failover.js";
 import {
   createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
@@ -418,10 +421,26 @@ function createScopedAuthProfileStore(
       return credential ? [[profileId, credential] as const] : [];
     }),
   );
+  const scopedRuntimeExternalProfileIds = (store.runtimeExternalProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
+  const scopedRuntimePersistedProfileIds = (store.runtimePersistedProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
   return Object.keys(scopedProfiles).length > 0
     ? {
         version: store.version,
         profiles: scopedProfiles,
+        ...(scopedRuntimePersistedProfileIds.length > 0
+          ? { runtimePersistedProfileIds: scopedRuntimePersistedProfileIds }
+          : {}),
+        ...(scopedRuntimeExternalProfileIds.length > 0 ||
+        store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIds: scopedRuntimeExternalProfileIds }
+          : {}),
+        ...(store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIdsAuthoritative: true }
+          : {}),
       }
     : createEmptyAuthProfileStore();
 }
@@ -567,12 +586,38 @@ async function runEmbeddedAgentInternal(
       },
       laneTaskTimeoutMs,
     );
+  const withRunLaneWait = (opts?: CommandQueueEnqueueOptions) => {
+    if (!opts?.onWait && !params.onLaneWait) {
+      return opts;
+    }
+    return {
+      ...opts,
+      onWait: (waitMs, queuedAhead) => {
+        opts?.onWait?.(waitMs, queuedAhead);
+        params.onLaneWait?.({ waitMs, queuedAhead, waiting: true });
+      },
+    } satisfies CommandQueueEnqueueOptions;
+  };
+  const noteLaneWaitIfBusy = (lane: string) => {
+    if (!params.onLaneWait) {
+      return;
+    }
+    const snapshot = getCommandLaneSnapshot(lane);
+    if (snapshot.queuedCount > 0 || snapshot.activeCount >= snapshot.maxConcurrent) {
+      params.onLaneWait({
+        waitMs: 0,
+        queuedAhead: snapshot.queuedCount + snapshot.activeCount,
+        waiting: true,
+      });
+    }
+  };
   const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
     };
     const taskWithCurrentLifecycle = () => {
+      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       throwIfAborted();
       const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
       const existingContext = getAgentRunContext(params.runId);
@@ -599,15 +644,27 @@ async function runEmbeddedAgentInternal(
       });
       return withAgentRunLifecycleGeneration(lifecycleGeneration, task);
     };
-    return params.enqueue
-      ? params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(globalOpts))
-      : enqueueCommandInLane(globalLane, taskWithCurrentLifecycle, withLaneTimeout(globalOpts));
+    if (params.enqueue) {
+      return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
+    }
+    noteLaneWaitIfBusy(globalLane);
+    return enqueueCommandInLane(
+      globalLane,
+      taskWithCurrentLifecycle,
+      withLaneTimeout(withRunLaneWait(globalOpts)),
+    );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
-    return params.enqueue
-      ? params.enqueue(task, sessionOpts)
-      : enqueueCommandInLane(sessionLane, task, sessionOpts);
+    const taskWithLaneAdmission = () => {
+      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+      return task();
+    };
+    if (params.enqueue) {
+      return params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+    }
+    noteLaneWaitIfBusy(sessionLane);
+    return enqueueCommandInLane(sessionLane, taskWithLaneAdmission, withRunLaneWait(sessionOpts));
   };
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
@@ -1792,6 +1849,7 @@ async function runEmbeddedAgentInternal(
             onReasoningStream: params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
+            onAgentToolResult: params.onAgentToolResult,
             onAgentEvent: params.onAgentEvent,
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
@@ -2697,8 +2755,7 @@ async function runEmbeddedAgentInternal(
               {
                 providerStarted: promptErrorSource === "prompt",
                 transientRateLimit:
-                  promptFailoverReason === "rate_limit" &&
-                  isShortWindowRateLimitMessage(errorText),
+                  promptFailoverReason === "rate_limit" && isShortWindowRateLimitMessage(errorText),
               },
             );
             const promptFailoverFailure =

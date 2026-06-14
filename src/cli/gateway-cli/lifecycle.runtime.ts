@@ -30,6 +30,16 @@ export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.j
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 export {
+  advanceCronActiveJobGeneration,
+  resetCronActiveJobs,
+  waitForActiveCronJobs,
+} from "../../cron/active-jobs.js";
+export {
+  abortActiveCronTaskRuns,
+  retireActiveCronTaskRunTracking,
+  waitForActiveCronTaskRuns,
+} from "../../tasks/cron-task-cancel.js";
+export {
   getActiveTaskCount,
   markGatewayDraining,
   resetAllLanes,
