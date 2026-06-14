@@ -888,6 +888,57 @@ describe("web search runtime", () => {
     ).rejects.toThrow("google aborted");
   });
 
+  it("uses plugin provider discovery when an explicit provider is missing from runtime providers", async () => {
+    const staleProvider = createWebSearchTestProvider({
+      pluginId: "stale-search",
+      id: "stale",
+      credentialPath: "",
+      autoDetectOrder: 1,
+      requiresCredential: false,
+    });
+    const customProvider = createCustomSearchProvider({
+      requiresCredential: false,
+      createTool: () => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          provider: "custom",
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([staleProvider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([customProvider, staleProvider]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "custom",
+              },
+            },
+          },
+        },
+        runtimeWebSearch: {
+          providerConfigured: "stale",
+          selectedProvider: "stale",
+          providerSource: "configured",
+          diagnostics: [],
+        },
+        preferRuntimeProviders: true,
+        args: { query: "explicit-custom" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: {
+        query: "explicit-custom",
+        provider: "custom",
+      },
+    });
+  });
+
   it("fails fast when an explicit provider cannot create a tool", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
@@ -920,7 +971,7 @@ describe("web search runtime", () => {
     ).rejects.toThrow('Unknown web_search provider "missing-id".');
   });
 
-  it("still falls back when config names an unknown provider id", async () => {
+  it("fails fast when config names an unknown provider id", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
         createTool: () => {
@@ -930,22 +981,20 @@ describe("web search runtime", () => {
       createDuckDuckGoSearchProvider(),
     ]);
 
-    const result = await runWebSearch({
-      config: {
-        tools: {
-          web: {
-            search: {
-              provider: "missing-id",
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "missing-id",
+              },
             },
           },
         },
-      },
-      args: { query: "config-typo" },
-    });
-    expect(result.provider).toBe("duckduckgo");
-    const searchResult = requireRecord(result.result);
-    expect(searchResult.provider).toBe("duckduckgo");
-    expect(searchResult.query).toBe("config-typo");
+        args: { query: "config-typo" },
+      }),
+    ).rejects.toThrow('Unknown web_search provider "missing-id".');
   });
 
   it("honors preferRuntimeProviders during execution", async () => {
