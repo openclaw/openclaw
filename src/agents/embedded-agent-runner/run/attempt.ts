@@ -100,6 +100,11 @@ import {
   toToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
 import {
+  detectToolHookExternalContentProvenance,
+  mergeToolHookExternalContentProvenance,
+  type HookContext,
+} from "../../agent-tools.before-tool-call.js";
+import {
   createOpenClawCodingTools,
   resolveProcessToolScopeKey,
   resolveToolLoopDetectionConfig,
@@ -1608,7 +1613,8 @@ export async function runEmbeddedAttempt(
     });
     const uncompactedEffectiveTools = [...uncompactedToolSchemaProjection.tools];
     let effectiveTools = uncompactedEffectiveTools;
-    const catalogToolHookContext = {
+    const initialToolHookExternalContent = detectToolHookExternalContentProvenance([params.prompt]);
+    const catalogToolHookContext: HookContext = {
       agentId: sessionAgentId,
       config: params.config,
       cwd: effectiveCwd,
@@ -1621,6 +1627,9 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         agentId: sessionAgentId,
       }),
+      ...(initialToolHookExternalContent
+        ? { externalContent: initialToolHookExternalContent }
+        : {}),
       onToolOutcome: params.onToolOutcome,
     };
     const codeModeTools = codeModeControlsEnabledForRun
@@ -3784,6 +3793,17 @@ export async function runEmbeddedAttempt(
         const promptBeforePromptBuildHooks = effectivePrompt;
         const promptBuildPrependContext = hookResult?.prependContext;
         const promptBuildAppendContext = hookResult?.appendContext;
+        const promptBuildExternalContent = detectToolHookExternalContentProvenance([
+          promptBuildPrependContext,
+          promptBuildAppendContext,
+          hookResult?.systemPrompt,
+          hookResult?.prependSystemContext,
+          hookResult?.appendSystemContext,
+        ]);
+        catalogToolHookContext.externalContent = mergeToolHookExternalContentProvenance(
+          catalogToolHookContext.externalContent,
+          promptBuildExternalContent,
+        );
         const hasPromptBuildContext =
           Boolean(promptBuildPrependContext?.trim()) || Boolean(promptBuildAppendContext?.trim());
         {
@@ -4076,6 +4096,18 @@ export async function runEmbeddedAttempt(
               ? { currentUserTimestamp: preparedUserTurnMessage.timestamp }
               : {}),
           });
+          const currentPromptExternalContent = detectToolHookExternalContentProvenance([
+            promptForModel,
+            messagesForCurrentPrompt,
+            hookMessagesForCurrentPrompt,
+          ]);
+          const mergedPromptExternalContent = mergeToolHookExternalContentProvenance(
+            catalogToolHookContext.externalContent,
+            currentPromptExternalContent,
+          );
+          if (mergedPromptExternalContent) {
+            catalogToolHookContext.externalContent = mergedPromptExternalContent;
+          }
           if (systemPromptReport) {
             systemPromptReport.currentTurn = {
               ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
