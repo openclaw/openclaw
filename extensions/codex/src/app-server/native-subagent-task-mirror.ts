@@ -137,9 +137,6 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const runId = codexNativeSubagentRunId(threadId);
-    if (this.authoritativeRunIds.has(runId)) {
-      return;
-    }
     if (this.terminalRunIds.has(runId) && statusType !== "systemError") {
       return;
     }
@@ -281,7 +278,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const runId = codexNativeSubagentRunId(threadId);
-    if (this.authoritativeRunIds.has(runId)) {
+    if (this.authoritativeRunIds.has(runId) && normalizedStatus === "completed") {
       return;
     }
     if (this.terminalRunIds.has(runId) && isNonTerminalAgentStateStatus(normalizedStatus)) {

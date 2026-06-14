@@ -298,6 +298,42 @@ describe("CodexNativeSubagentMonitor", () => {
     );
   });
 
+  it("allows later system errors to correct native completion results", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify(
+      nativeCompletionNotification({
+        agentPath: "child-thread",
+        statusLabel: "completed",
+        result: "child final result",
+      }),
+    );
+
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "systemError" },
+      },
+    });
+
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        status: "failed",
+      }),
+    );
+  });
+
   it("delivers parent wakeups from Codex-native subagent completion notifications", async () => {
     const client = createClient();
     const runtime = createRuntime();
