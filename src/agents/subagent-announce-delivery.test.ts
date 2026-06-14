@@ -1084,6 +1084,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
       },
     );
@@ -1986,6 +1987,66 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("requires requester assistant acknowledgement when completion direct failure fallback-steers", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "Tests passed and the PR is ready for review." }],
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: "Slack send failed: channel not found",
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "no_active_run",
+      true,
+    ]);
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-4",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-delivery-fallback-steer-ack",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "steered",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
+      2,
+      "requester-session-4",
+      "child done",
+      {
+        debounceMs: 500,
+        deliveryTimeoutMs: 120_000,
+        steeringMode: "all",
+        waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
+      },
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("does not raw-send grouped child results when requester-agent output is empty", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -2092,6 +2153,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
       },
     );
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
@@ -2330,6 +2392,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
         deliveryTimeoutMs: 10,
       },
     );
@@ -3938,6 +4001,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
       },
     );

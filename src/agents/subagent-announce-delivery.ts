@@ -281,6 +281,7 @@ async function resolveActiveWakeWithRetries(
     ) {
       const bestEffortOptions = { ...currentOptions };
       delete bestEffortOptions.waitForTranscriptCommit;
+      delete bestEffortOptions.waitForAssistantResponseAfterTranscriptCommit;
       currentOptions = bestEffortOptions;
       outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
       continue;
@@ -599,6 +600,7 @@ async function maybeSteerSubagentAnnounce(params: {
   deliveryTimeoutMs?: number;
   requesterSessionKey: string;
   steerMessage: string;
+  expectsCompletionMessage: boolean;
   signal?: AbortSignal;
 }): Promise<
   { status: "steered"; deliveredAt?: number; enqueuedAt?: number } | { status: "none" | "dropped" }
@@ -629,6 +631,9 @@ async function maybeSteerSubagentAnnounce(params: {
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
+    ...(params.expectsCompletionMessage
+      ? { waitForAssistantResponseAfterTranscriptCommit: true }
+      : {}),
   };
   const queueOutcome = await resolveActiveWakeWithRetries(
     sessionId,
@@ -1358,6 +1363,7 @@ async function sendSubagentAnnounceDirectly(params: {
           ? { debounceMs: requesterQueueSettings.debounceMs }
           : {}),
         waitForTranscriptCommit: true,
+        waitForAssistantResponseAfterTranscriptCommit: true,
       };
       // Reuse the shared active-wake retry helper so the generated-completion
       // wake also waits through compaction (and best-effort transcript retry)
@@ -1686,6 +1692,7 @@ export async function deliverSubagentAnnouncement(params: {
         ),
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
+        expectsCompletionMessage: params.expectsCompletionMessage,
         signal: params.signal,
       }),
     direct: async () =>
