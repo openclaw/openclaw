@@ -43,6 +43,9 @@ export type SessionStdin = {
 export interface ProcessSession {
   id: string;
   command: string;
+  /** Opaque hash of the resolved exec request that created this process. */
+  executionKey?: string;
+  execReuseKey?: string;
   scopeKey?: string;
   sessionKey?: string;
   /** `session.mainKey` from the runtime config, snapshotted at exec start.
@@ -321,6 +324,52 @@ export function listRunningSessions() {
 /** Lists retained finished background sessions. */
 export function listFinishedSessions() {
   return Array.from(finishedSessions.values());
+}
+
+export function findMatchingRunningBackgroundSession(params: {
+  command: string;
+  cwd?: string;
+  executionKey?: string;
+  reuseKey?: string;
+  scopeKey?: string;
+  sessionKey?: string;
+}) {
+  const executionKey = params.executionKey?.trim() || undefined;
+  const reuseKey = params.reuseKey?.trim() || undefined;
+  const scopeKey = params.scopeKey?.trim() || undefined;
+  const sessionKey = params.sessionKey?.trim() || undefined;
+
+  if (!executionKey || !reuseKey || (!scopeKey && !sessionKey)) {
+    return undefined;
+  }
+
+  // Duplicate exec retries should resolve to the session the process tool can manage.
+  // Require a scoped identity so unscoped ad hoc runs cannot collapse unrelated work.
+  for (const session of runningSessions.values()) {
+    if (!session.backgrounded || session.exited) {
+      continue;
+    }
+    if (session.command !== params.command) {
+      continue;
+    }
+    if (session.cwd !== params.cwd) {
+      continue;
+    }
+    if ((session.executionKey?.trim() || undefined) !== executionKey) {
+      continue;
+    }
+    if ((session.execReuseKey?.trim() || undefined) !== reuseKey) {
+      continue;
+    }
+    if (scopeKey && (session.scopeKey?.trim() || undefined) !== scopeKey) {
+      continue;
+    }
+    if (sessionKey && (session.sessionKey?.trim() || undefined) !== sessionKey) {
+      continue;
+    }
+    return session;
+  }
+  return undefined;
 }
 
 /** Clears retained finished sessions without touching running processes. */

@@ -51,7 +51,11 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
-import { markBackgrounded } from "./bash-process-registry.js";
+import {
+  findMatchingRunningBackgroundSession,
+  markBackgrounded,
+  type ProcessSession,
+} from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
@@ -63,6 +67,7 @@ import {
   type ExecProcessOutcome,
   applyPathPrepend,
   applyShellPath,
+  buildExecSessionExecutionKey,
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
@@ -1730,11 +1735,62 @@ export function createExecTool(
       const effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
+      const buildRunningResult = (session: ProcessSession): AgentToolResult<ExecToolDetails> => ({
+        content: [
+          {
+            type: "text",
+            text: `${getWarningText()}Command still running (session ${session.id}, pid ${
+              session.pid ?? "n/a"
+            }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
+          },
+        ],
+        details: {
+          status: "running",
+          sessionId: session.id,
+          pid: session.pid ?? undefined,
+          startedAt: session.startedAt,
+          cwd: session.cwd,
+          tail: session.tail,
+        },
+      });
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
       if (!shouldSkipExecScriptPreflight({ host, security, ask })) {
         await validateScriptFileForShellBleed({ command: params.command, workdir });
+      }
+
+      const executionKey = buildExecSessionExecutionKey({
+        command: params.command,
+        execCommand: execCommandOverride,
+        workdir,
+        env,
+        pathPrepend: defaultPathPrepend,
+        sandbox,
+        containerWorkdir,
+        usePty,
+        timeoutSec: effectiveTimeout,
+      });
+
+      const execReuseKey = backgroundRequested
+        ? "explicit-background"
+        : yieldRequested
+          ? "explicit-yield"
+          : allowBackground && yieldWindow !== null
+            ? "default-yield"
+            : undefined;
+      if (workdir && execReuseKey) {
+        const matchingSession = findMatchingRunningBackgroundSession({
+          command: params.command,
+          cwd: workdir,
+          executionKey,
+          reuseKey: execReuseKey,
+          scopeKey: defaults?.scopeKey,
+          sessionKey: notifySessionKey,
+        });
+        if (matchingSession) {
+          return buildRunningResult(matchingSession);
+        }
       }
 
       const run = await runExecProcess({
@@ -1758,6 +1814,9 @@ export function createExecTool(
         eventRouting: defaults?.eventRouting,
         notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
+        executionKey,
+        execReuseKey,
+        initialBackgrounded: backgroundRequested && allowBackground,
         onUpdate,
       });
 
@@ -1802,24 +1861,7 @@ export function createExecTool(
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
         const resolveRunning = () => {
           cleanupToolRunListeners();
-          resolve({
-            content: [
-              {
-                type: "text",
-                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                  run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
-              },
-            ],
-            details: {
-              status: "running",
-              sessionId: run.session.id,
-              pid: run.session.pid ?? undefined,
-              startedAt: run.startedAt,
-              cwd: run.session.cwd,
-              tail: run.session.tail,
-            },
-          });
+          resolve(buildRunningResult(run.session));
         };
 
         const onYieldNow = () => {

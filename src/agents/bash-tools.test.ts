@@ -21,6 +21,7 @@ import {
   addSession,
   appendOutput,
   getFinishedSession,
+  listRunningSessions,
   markBackgrounded,
   markExited,
   resetProcessRegistryForTests,
@@ -200,6 +201,7 @@ vi.mock("../process/supervisor/index.js", () => {
         const exitCode = splitCommands(unwrapSnapshotEvalCommand(command)).includes("exit 1")
           ? 1
           : 0;
+        const waitDelayMs = command.includes("openclaw-delay") ? 30 : 0;
         const stagedOutput = command.includes("after")
           ? output.replace(/after[^\n]*\n?/gu, "")
           : output;
@@ -213,8 +215,14 @@ vi.mock("../process/supervisor/index.js", () => {
           pid: 123,
           stdin: undefined,
           wait: async () => {
-            await immediate();
-            await immediate();
+            if (waitDelayMs > 0) {
+              await new Promise((resolve) => {
+                setTimeout(resolve, waitDelayMs);
+              });
+            } else {
+              await immediate();
+              await immediate();
+            }
             if (deferredOutput) {
               input.onStdout?.(deferredOutput);
             }
@@ -268,6 +276,10 @@ const OUTPUT_EXEC_COMPLETED = "Exec completed";
 const OUTPUT_EXIT_CODE_1 = "Command exited with code 1";
 const shellEcho = (message: string) => (isWin ? `Write-Output ${message}` : `echo ${message}`);
 const COMMAND_NOOP = isWin ? "$null" : ":";
+const SCOPED_BACKGROUND_COMMAND = isWin ? "Start-Sleep -Milliseconds 50" : "sleep 0.05";
+const SCOPED_AUTO_YIELD_COMMAND = isWin
+  ? "Start-Sleep -Milliseconds 50 # openclaw-delay"
+  : "sleep 0.05 # openclaw-delay";
 const COMMAND_ECHO_HELLO = shellEcho("hello");
 const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
@@ -765,6 +777,109 @@ describe("exec tool backgrounding", () => {
     const sessions = await listProcessSessions(processTool);
     expect(hasSession(sessions, sessionId)).toBe(true);
     expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe(COMMAND_ECHO_HELLO);
+  });
+
+  it("reuses a running scoped background session for identical commands", async () => {
+    const scopedTools = createScopedToolSet(SCOPE_KEY_ALPHA);
+
+    const firstResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const firstSessionId = requireRunningSessionId(firstResult);
+
+    const secondResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const secondSessionId = requireRunningSessionId(secondResult);
+
+    expect(secondSessionId).toBe(firstSessionId);
+    expect(listRunningSessions()).toHaveLength(1);
+    const sessions = await listProcessSessions(scopedTools.process);
+    expect(hasSession(sessions, firstSessionId)).toBe(true);
+  });
+
+  it("reuses a default auto-yielded scoped background session for identical commands", async () => {
+    const scopedTools = createScopedToolSet(SCOPE_KEY_ALPHA);
+
+    const firstResult = await executeExecCommand(scopedTools.exec, SCOPED_AUTO_YIELD_COMMAND);
+    const firstSessionId = requireRunningSessionId(firstResult);
+
+    const secondResult = await executeExecCommand(scopedTools.exec, SCOPED_AUTO_YIELD_COMMAND);
+    const secondSessionId = requireRunningSessionId(secondResult);
+
+    expect(secondSessionId).toBe(firstSessionId);
+    expect(listRunningSessions()).toHaveLength(1);
+  });
+
+  it("reuses an in-flight scoped background session for identical explicit background commands", async () => {
+    const scopedTools = createScopedToolSet(SCOPE_KEY_ALPHA);
+
+    const [firstResult, secondResult] = await Promise.all([
+      executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, { background: true }),
+      executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, { background: true }),
+    ]);
+
+    expect(requireRunningSessionId(secondResult)).toBe(requireRunningSessionId(firstResult));
+  });
+
+  it("does not reuse a running background session for a foreground rerun", async () => {
+    const scopedTools = createScopedToolSet(SCOPE_KEY_ALPHA);
+
+    const firstResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const firstSessionId = requireRunningSessionId(firstResult);
+    const secondResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND);
+
+    expect((secondResult.details as { sessionId?: string }).sessionId).not.toBe(firstSessionId);
+  });
+
+  it.each([
+    withLabel("env override changes", {
+      first: { env: { OPENCLAW_DUPLICATE_EXEC_TEST: "one" } },
+      second: { env: { OPENCLAW_DUPLICATE_EXEC_TEST: "two" } },
+    }),
+    withLabel("pty mode changes", {
+      first: {},
+      second: { pty: true },
+    }),
+    withLabel("timeout changes", {
+      first: { timeout: 30 },
+      second: { timeout: 31 },
+    }),
+  ])("starts a distinct scoped background session when $label", async ({ first, second }) => {
+    const scopedTools = createScopedToolSet(SCOPE_KEY_ALPHA);
+
+    const firstResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+      ...first,
+    });
+    const firstSessionId = requireRunningSessionId(firstResult);
+
+    const secondResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+      ...second,
+    });
+    const secondSessionId = requireRunningSessionId(secondResult);
+
+    expect(secondSessionId).not.toBe(firstSessionId);
+  });
+
+  it("restarts a scoped background command once the previous run completes", async () => {
+    const tool = createTestExecTool({ backgroundMs: 0, scopeKey: SCOPE_KEY_ALPHA });
+
+    const firstResult = await executeExecCommand(tool, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const firstSessionId = requireRunningSessionId(firstResult);
+    await waitForCompletion(firstSessionId);
+
+    const secondResult = await executeExecCommand(tool, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const secondSessionId = requireRunningSessionId(secondResult);
+
+    expect(secondSessionId).not.toBe(firstSessionId);
   });
 
   it.each<DisallowedElevationCase>(DISALLOWED_ELEVATION_CASES)(
