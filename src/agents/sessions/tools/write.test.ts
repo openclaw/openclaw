@@ -26,6 +26,7 @@ describe("write tool", () => {
     return {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
       writeFile,
+      appendFile: (absolutePath, content) => fs.appendFile(absolutePath, content, "utf-8"),
       readFile: (absolutePath) => fs.readFile(absolutePath),
       statFile: async (absolutePath) => {
         try {
@@ -108,6 +109,66 @@ describe("write tool", () => {
     );
 
     expect(result.content[0]?.type).toBe("text");
+  });
+
+  it("appends content when append mode is enabled", async () => {
+    const filePath = await createTempPath("append.txt");
+    await fs.writeFile(filePath, "alpha\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "beta\n", append: true },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha\nbeta\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${"beta\n".length} bytes to ${filePath}`,
+    });
+  });
+
+  it("reports success when append completes before an abort is observed", async () => {
+    const filePath = await createTempPath("append-abort.txt");
+    await fs.writeFile(filePath, "alpha\n", "utf-8");
+    const controller = new AbortController();
+    const tool = createWriteTool(tmpDir, {
+      operations: {
+        mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+        writeFile: (absolutePath, content) => fs.writeFile(absolutePath, content, "utf-8"),
+        appendFile: async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf-8");
+          controller.abort();
+        },
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "beta\n", append: true },
+      controller.signal,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha\nbeta\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${"beta\n".length} bytes to ${filePath}`,
+    });
+  });
+
+  it("rejects append mode when the backend does not support appending", async () => {
+    const filePath = await createTempPath("append-unsupported.txt");
+    const tool = createWriteTool(tmpDir, {
+      operations: {
+        mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+        writeFile: (absolutePath, content) => fs.writeFile(absolutePath, content, "utf-8"),
+      },
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "beta\n", append: true }, undefined),
+    ).rejects.toThrow("Append mode is not supported by this write tool backend");
   });
 
   it("writes file URL paths through the shared session path resolver", async () => {

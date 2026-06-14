@@ -4,6 +4,7 @@
  * Writes files through queued local or injected operations with readback/idempotency metadata.
  */
 import {
+  appendFile as fsAppendFile,
   mkdir as fsMkdir,
   readFile as fsReadFile,
   stat as fsStat,
@@ -30,6 +31,11 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 const writeSchema = Type.Object({
   path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
   content: Type.String({ description: "Content to write to the file" }),
+  append: Type.Optional(
+    Type.Boolean({
+      description: "Append content to the end of the file instead of overwriting it",
+    }),
+  ),
 });
 export type { WriteToolInput } from "./tool-contracts.js";
 
@@ -40,6 +46,8 @@ export type { WriteToolInput } from "./tool-contracts.js";
 export interface WriteOperations {
   /** Write content to a file */
   writeFile: (absolutePath: string, content: string) => Promise<void>;
+  /** Append content to a file */
+  appendFile?: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
   mkdir: (dir: string) => Promise<void>;
   /** Optional readback used to recover when a write succeeded but the tool aborted before returning */
@@ -50,6 +58,7 @@ export interface WriteOperations {
 
 const defaultWriteOperations: WriteOperations = {
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
+  appendFile: (path, content) => fsAppendFile(path, content, "utf-8"),
   mkdir: (dir) => fsMkdir(dir, { recursive: true }).then(() => {}),
   readFile: (path) => fsReadFile(path),
   statFile: async (path) => {
@@ -381,7 +390,7 @@ export function createWriteToolDefinition(
     parameters: writeSchema,
     async execute(
       toolCallId,
-      { path, content }: { path: string; content: string },
+      { path, content, append = false }: { path: string; content: string; append?: boolean },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -401,15 +410,21 @@ export function createWriteToolDefinition(
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          await ops.writeFile(absolutePath, content);
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
+          if (append) {
+            if (!ops.appendFile) {
+              throw new Error("Append mode is not supported by this write tool backend");
+            }
+            await ops.appendFile(absolutePath, content);
+          } else {
+            await ops.writeFile(absolutePath, content);
           }
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Successfully wrote ${content.length} bytes to ${path}`,
+                text: append
+                  ? `Successfully appended ${content.length} bytes to ${path}`
+                  : `Successfully wrote ${content.length} bytes to ${path}`,
               },
             ],
             details: undefined,
