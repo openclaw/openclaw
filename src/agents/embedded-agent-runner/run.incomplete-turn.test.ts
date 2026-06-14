@@ -406,6 +406,45 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it.each([
     {
+      name: "committed messaging delivery",
+      attempt: { messagingToolSentTexts: ["Already delivered."] },
+    },
+    {
+      name: "successful cron side effect",
+      attempt: { successfulCronAdds: 1 },
+    },
+  ])("does not synthesize a terminal reply after $name", ({ attempt }) => {
+    const payload = resolveTerminalToolResultReplyPayload({
+      isCronTrigger: false,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "message" }],
+        ...attempt,
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "message completed" }],
+            details: { aggregated: "message completed" },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toBeNull();
+  });
+
+  it.each([
+    {
       name: "active",
       itemLifecycle: { startedCount: 2, completedCount: 1, activeCount: 1 },
     },
@@ -4001,6 +4040,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
+  it("does not treat quoted polite action text as authorization", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: `The error says "please upload the report." What does that mean?`,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Working on it."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it.each(["I am heading out", "That was rough"])(
     "does not classify acknowledgements for conversational prompt %s as planning-only",
     (prompt) => {
@@ -4040,6 +4094,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it.each([
     { prompt: "Please be concise.", assistantText: "Okay." },
     { prompt: "Please wait.", assistantText: "Understood." },
+    { prompt: "Please take care.", assistantText: "Will do." },
+    { prompt: "Please have a nice day.", assistantText: "Will do." },
     { prompt: "I want you to know the deployment is delayed.", assistantText: "Got it." },
     { prompt: "I need you to keep replies short.", assistantText: "Understood." },
   ])(
@@ -7146,6 +7202,24 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
+  it.each(["Please commit the changes.", "Please upload the report.", "Please build the project."])(
+    "treats generic polite action request %s as actionable",
+    (prompt) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        prompt,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: ["Working on it."],
+        }),
+      });
+
+      expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    },
+  );
+
   it.each([
     "What's your plan for fixing this?",
     "What is the best approach for fixing this?",
@@ -7493,6 +7567,29 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
     });
 
     expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries after one completed replay-safe tool and progress placeholder", () => {
+    const attempt = makeAttemptWithTools(["read"], "Working on it.");
+
+    expect(
+      resolvePlanningOnlyRetryInstruction({
+        ...openaiParams,
+        prompt: "Please inspect the code and report the result.",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    expect(
+      resolvePlanningOnlyBlockedPayloadText({
+        ...openaiParams,
+        prompt: "Please inspect the code and report the result.",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
   });
 
   it("retries when a completed non-plan tool explicitly declares read-only metadata", () => {

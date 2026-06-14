@@ -100,6 +100,13 @@ type SilentToolResultAttempt = Pick<
   | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
+  | "messagingToolSentTargets"
+  | "messagingToolSourceReplyPayloads"
+  | "successfulCronAdds"
+  | "acceptedSessionSpawns"
   | "lastToolError"
   | "itemLifecycle"
   | "messagesSnapshot"
@@ -164,6 +171,8 @@ const ACTIONABLE_PROMPT_DIRECTIVE_RE =
   /^\s*(?:(?:ok(?:ay)?|please|pls)\s+)?(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE =
   /\bplease\s+(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
+const ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE =
+  /^\s*(?:(?:hey|hi|hello)\b[\s,!:-]*)?please\s+(?!(?:(?:be|wait|say|reply|respond|answer|acknowledg(?:e|ement)|confirm|keep|remember|note|consider|advise|recommend|let|do\s+not|don['’]t|not|never|avoid|refrain)\b|take\s+care\b|have\s+(?:a\s+)?(?:good|great|nice|wonderful)\b))[a-z][a-z'-]*\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:can|could|would|will)\s+you\b|\b(?:help|tell|show)\s+me\b|\bwalk me through\b/i;
 const ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE =
@@ -657,6 +666,7 @@ export function resolveTerminalToolResultReplyPayload(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
+    hasSideEffectProgressEvidence(params.attempt) ||
     hasUnsettledAttemptItems(params.attempt) ||
     (params.attempt.messagesSnapshot?.length ?? 0) === 0
   ) {
@@ -1148,6 +1158,7 @@ function isLikelyActionableUserPrompt(text: string): boolean {
     hasExplicitAdvisoryFollowUpAction(trimmed) ||
     ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE.test(trimmed) ||
+    ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed) ||
     (ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE.test(trimmed) &&
       PLANNING_ONLY_ACTION_VERB_RE.test(trimmed)) ||
@@ -1255,12 +1266,20 @@ function isReplaySafeToolMeta(toolMeta: PlanningOnlyToolMeta): boolean {
 }
 
 function hasCompletedRetrySafeNonPlanToolActivity(
-  attempt: Pick<PlanningOnlyAttempt, "itemLifecycle" | "toolMetas">,
+  attempt: Pick<PlanningOnlyAttempt, "assistantTexts" | "itemLifecycle" | "toolMetas">,
 ): boolean {
   const nonPlanTools = normalizePlanningToolMetas(attempt.toolMetas).filter(
     (entry) => entry.toolName !== "update_plan",
   );
-  if (nonPlanTools.length < 2 || (attempt.itemLifecycle?.activeCount ?? 0) > 0) {
+  if (nonPlanTools.length < 1 || (attempt.itemLifecycle?.activeCount ?? 0) > 0) {
+    return false;
+  }
+  if (
+    nonPlanTools.length === 1 &&
+    !isPlanningOnlyProgressClaim(
+      normalizePlanningOnlyClassifierText((attempt.assistantTexts ?? []).join("\n\n").trim()),
+    )
+  ) {
     return false;
   }
   const completedCount = attempt.itemLifecycle?.completedCount ?? 0;
