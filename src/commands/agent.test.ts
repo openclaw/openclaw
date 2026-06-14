@@ -90,6 +90,9 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
     persistCliTurnTranscript: vi.fn(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
     ),
+    persistUserTurnTranscript: vi.fn(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    ),
     runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
       const opts = params.opts as Record<string, unknown>;
       const runContext = params.runContext as Record<string, unknown>;
@@ -146,6 +149,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         promptMode: opts.promptMode,
         disableTools: opts.modelRun === true,
         onAgentEvent: params.onAgentEvent,
+        onUserMessagePersisted: params.onUserMessagePersisted,
       } as never);
     }),
     sessionFileHasContent: vi.fn(async () => false),
@@ -563,6 +567,34 @@ describe("agentCommand", () => {
     });
   });
 
+  it("does not mirror a CLI user turn again after the attempt already persisted it", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (args) => {
+        args.onUserMessagePersisted?.({
+          role: "user",
+          content: "hello from user",
+          timestamp: Date.now(),
+        });
+        return {
+          payloads: [{ text: "assistant-visible" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "s", provider: "claude-cli", model: "opus" },
+            executionTrace: { runner: "cli" },
+          },
+        };
+      });
+
+      await agentCommand({ message: "hello from user", agentId: "main" }, runtime);
+
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.userAlreadyPersisted).toBe(true);
+    });
+  });
+
   it("gap-fills Telegram-visible embedded replies without a runner trace", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -751,6 +783,125 @@ describe("agentCommand", () => {
       expect(prepared.sessionEntry).not.toBe(cached[sessionKey]);
       expect(prepared.sessionStore?.[sessionKey]).toBe(prepared.sessionEntry);
       expect(prepared.sessionStore?.["agent:main:other"]).toBeUndefined();
+    });
+  });
+
+  it("persists ACP user turns before the runtime turn can fail", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:acp-failure";
+      mockConfig(home, store, { models: {} });
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "acp-backed-session",
+          updatedAt: Date.now(),
+        },
+      });
+      const runTurn = vi.fn(async () => {
+        throw new Error("acp runtime failed before reply");
+      });
+      acpManagerTesting.setAcpSessionManagerForTests({
+        resolveSession: vi.fn(() => ({
+          kind: "ready",
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        })),
+        runTurn,
+      });
+
+      await expect(
+        agentCommand({ message: "please persist me", sessionKey }, runtime),
+      ).rejects.toThrow("acp runtime failed before reply");
+
+      expect(vi.mocked(attemptExecutionRuntime.persistUserTurnTranscript)).toHaveBeenCalledTimes(1);
+      expect(
+        vi.mocked(attemptExecutionRuntime.persistUserTurnTranscript).mock.calls[0]?.[0],
+      ).toMatchObject({
+        body: "please persist me",
+        transcriptBody: "please persist me",
+        sessionKey,
+      });
+    });
+  });
+
+  it("routes ACP internal user persistence to the internal transcript entry", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const visibleSessionFile = path.join(home, "visible-session.jsonl");
+      const sessionKey = "agent:main:acp-internal";
+      mockConfig(home, store, { models: {} });
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "acp-internal-session",
+          sessionFile: visibleSessionFile,
+          updatedAt: Date.now(),
+        },
+      });
+      vi.mocked(attemptExecutionRuntime.createAcpVisibleTextAccumulator).mockReturnValueOnce({
+        consume: vi.fn(() => null),
+        finalizeRaw: vi.fn(() => "assistant internal reply"),
+        finalize: vi.fn(() => "assistant internal reply"),
+      } as never);
+      vi.mocked(attemptExecutionRuntime.buildAcpResult).mockReturnValueOnce(
+        createDefaultAgentResult({
+          payloads: [{ text: "assistant internal reply" }],
+        }) as never,
+      );
+      const runTurn = vi.fn(async () => undefined);
+      acpManagerTesting.setAcpSessionManagerForTests({
+        resolveSession: vi.fn(() => ({
+          kind: "ready",
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        })),
+        runTurn,
+      });
+
+      await agentCommand(
+        {
+          message: "internal acp prompt",
+          sessionKey,
+          sessionEffects: "internal",
+        },
+        runtime,
+      );
+
+      const persistUserCall = vi.mocked(attemptExecutionRuntime.persistUserTurnTranscript).mock
+        .calls[0]?.[0];
+      const persistAcpCall = vi.mocked(attemptExecutionRuntime.persistAcpTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistUserCall).toMatchObject({
+        body: "internal acp prompt",
+        transcriptBody: "internal acp prompt",
+        sessionKey,
+        sessionStore: undefined,
+        storePath: undefined,
+      });
+      expect(persistAcpCall).toMatchObject({
+        sessionKey,
+        sessionStore: undefined,
+        storePath: undefined,
+        userAlreadyPersisted: true,
+      });
+      const userSessionFile = persistUserCall?.sessionEntry?.sessionFile;
+      const acpSessionFile = persistAcpCall?.sessionEntry?.sessionFile;
+      expect(userSessionFile).toBe(acpSessionFile);
+      expect(userSessionFile).not.toBe(visibleSessionFile);
+      expect(userSessionFile).toContain(`${path.sep}internal-agent-runs${path.sep}`);
     });
   });
 
