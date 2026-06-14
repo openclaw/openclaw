@@ -1170,6 +1170,10 @@
       "types": "./dist/plugin-sdk/memory-host-status.d.ts",
       "default": "./dist/plugin-sdk/memory-host-status.js"
     },
+    "./plugin-sdk/message-tool-delivery-hints": {
+      "types": "./dist/plugin-sdk/message-tool-delivery-hints.d.ts",
+      "default": "./dist/plugin-sdk/message-tool-delivery-hints.js"
+    },
     "./plugin-sdk/models-provider-runtime": {
       "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
       "default": "./dist/plugin-sdk/models-provider-runtime.js"

@@ -371,7 +371,7 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   ).flatMap((identityArchives) =>
     identityArchives
       .flatMap((archive) => (archive ? [archive] : []))
-      .sort(
+      .toSorted(
         (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
       )
       .slice(0, 1),
