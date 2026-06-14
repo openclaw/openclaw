@@ -108,3 +108,4 @@ struct MacNodeBrowserProxyTests {
         }
     }
 }
+
