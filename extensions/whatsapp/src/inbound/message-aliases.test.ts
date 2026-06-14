@@ -7,6 +7,53 @@ import {
 import { createAcceptedWhatsAppSendResult } from "./send-result.test-helper.js";
 import type { LegacyFlatWebInboundMessage, WebInboundCallbackMessage } from "./types.js";
 
+function createAdmission(): NonNullable<WebInboundCallbackMessage["admission"]> {
+  return {
+    accountId: "default",
+    isSelfChat: false,
+    account: {
+      accountId: "default",
+      enabled: true,
+      sendReadReceipts: true,
+    },
+    conversation: {
+      kind: "group",
+      id: "123@g.us",
+      groupSessionId: "123@g.us",
+    },
+    sender: {
+      id: "+15550000002",
+      dmSenderId: "123@g.us",
+      isSamePhone: false,
+      isDmSenderSamePhone: false,
+    },
+    ingress: {
+      admission: "dispatch",
+      decision: "allow",
+      decisiveGateId: "activation",
+      reasonCode: "activation_allowed",
+    },
+    senderAccess: {
+      allowed: true,
+      decision: "allow",
+      providerMissingFallbackApplied: false,
+      reasonCode: "group_policy_allowed",
+    },
+    commandAccess: {
+      requested: false,
+      authorized: false,
+      shouldBlockControlCommand: false,
+      reasonCode: "command_authorized",
+    },
+    activationAccess: {
+      ran: true,
+      allowed: true,
+      shouldSkip: false,
+      reasonCode: "activation_allowed",
+    },
+  };
+}
+
 function createCanonicalMessage(overrides: Partial<WebInboundCallbackMessage> = {}) {
   return withDeprecatedWebInboundMessageFlatAliases({
     event: {
@@ -107,6 +154,51 @@ describe("WhatsApp inbound flat aliases", () => {
 
     expect(Object.keys(msg)).toContain("body");
     expect(Object.keys(msg)).toContain("chatId");
+  });
+
+  it("keeps deprecated admission top-level fields aligned with admission", () => {
+    const msg = createCanonicalMessage({ admission: createAdmission() });
+
+    expect(msg.from).toBe("123@g.us");
+    msg.admission!.conversation.id = "456@g.us";
+    expect(msg.from).toBe("456@g.us");
+    expect(msg.conversationId).toBe("456@g.us");
+
+    msg.conversationId = "789@g.us";
+    expect(msg.admission?.conversation.id).toBe("789@g.us");
+    expect(msg.admission?.conversation.groupSessionId).toBe("789@g.us");
+    expect(msg.from).toBe("789@g.us");
+
+    msg.admission!.accountId = "work";
+    expect(msg.accountId).toBe("work");
+    msg.accountId = "ops";
+    expect(msg.admission?.accountId).toBe("ops");
+    expect(msg.admission?.account.accountId).toBe("ops");
+
+    msg.admission!.conversation.kind = "direct";
+    expect(msg.chatType).toBe("direct");
+    msg.chatType = "group";
+    expect(msg.admission?.conversation.kind).toBe("group");
+
+    expect(msg.accessControlPassed).toBe(true);
+    msg.admission!.ingress.decision = "block";
+    expect(msg.accessControlPassed).toBe(false);
+    msg.accessControlPassed = true;
+    expect(msg.admission?.ingress.decision).toBe("block");
+    expect(msg.accessControlPassed).toBe(false);
+  });
+
+  it("keeps deprecated admission top-level fields usable without admission", () => {
+    const msg = createCanonicalMessage();
+
+    expect(msg.from).toBe("123@g.us");
+    msg.from = "+15550000002";
+    expect(msg.from).toBe("+15550000002");
+    expect(msg.conversationId).toBe("+15550000002");
+
+    expect(msg.accessControlPassed).toBeUndefined();
+    msg.accessControlPassed = true;
+    expect(msg.accessControlPassed).toBe(true);
   });
 
   it("normalizes legacy flat messages into canonical contexts with live aliases", () => {
