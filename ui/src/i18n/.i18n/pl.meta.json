@@ -1,5 +1,8 @@
 {
   "fallbackKeys": [
+    "chat.selectors.renameFailed",
+    "chat.selectors.renamePickerRefreshFailed",
+    "chat.selectors.renameRefreshFailed",
     "chat.workspaceFiles.actions",
     "chat.workspaceFiles.artifactCount",
     "chat.workspaceFiles.artifacts",
@@ -64,12 +67,12 @@
     "workboard.unknownStatus",
     "workboard.viewDetails"
   ],
-  "generatedAt": "2026-06-14T04:03:18.642Z",
+  "generatedAt": "2026-06-14T14:46:31.595Z",
   "locale": "pl",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "cea79b090b14fca4ad1e3e07dc5dcd7f964b1f199fd028938e41054dc5167457",
-  "totalKeys": 1377,
+  "sourceHash": "911ab4b7eb8fa67b02babc8ecf4e8881ce9ad7d8d6d587d5df7f43fb7e381272",
+  "totalKeys": 1380,
   "translatedKeys": 1314,
   "workflow": 1
 }
