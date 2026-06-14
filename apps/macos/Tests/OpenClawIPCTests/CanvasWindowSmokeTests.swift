@@ -79,4 +79,59 @@ struct CanvasWindowSmokeTests {
         #expect(controller
             .shouldAutoNavigateToA2UI(lastAutoTarget: currentTarget, candidateTarget: currentTarget) == false)
     }
+
+    @Test func `capability url resolution`() {
+        let base = "https://tailscale-host/__openclaw__/cap/abc123"
+
+        // Path target
+        #expect(CanvasWindowController._testResolveCanvasUrl(
+            target: "/__openclaw__/canvas/test.html",
+            canvasPluginSurfaceUrl: base)
+            == "https://tailscale-host/__openclaw__/cap/abc123/__openclaw__/canvas/test.html")
+
+        // A2UI path
+        #expect(CanvasWindowController._testResolveCanvasUrl(
+            target: "/__openclaw__/a2ui/?platform=macos",
+            canvasPluginSurfaceUrl: base)
+            == "https://tailscale-host/__openclaw__/cap/abc123/__openclaw__/a2ui/?platform=macos")
+
+        // With query and fragment
+        #expect(CanvasWindowController._testResolveCanvasUrl(
+            target: "/__openclaw__/canvas/dash.html?q=1#section",
+            canvasPluginSurfaceUrl: base)
+            == "https://tailscale-host/__openclaw__/cap/abc123/__openclaw__/canvas/dash.html?q=1#section")
+
+        // Non-canvas path should not resolve
+        #expect(CanvasWindowController._testResolveCanvasUrl(
+            target: "/some/other/path.html",
+            canvasPluginSurfaceUrl: base) == nil)
+
+        // Full HTTP URL to canvas path should resolve
+        #expect(CanvasWindowController._testResolveCanvasUrl(
+            target: "http://other-host/__openclaw__/canvas/test.html",
+            canvasPluginSurfaceUrl: base)
+            == "https://tailscale-host/__openclaw__/cap/abc123/__openclaw__/canvas/test.html")
+
+        // No capability URL should not resolve
+        #expect(CanvasWindowController._testResolveCanvasUrl(
+            target: "/__openclaw__/canvas/test.html",
+            canvasPluginSurfaceUrl: nil) == nil)
+
+        // Invalid capability URL prefix should not resolve
+        #expect(CanvasWindowController._testResolveCanvasUrl(
+            target: "/__openclaw__/canvas/test.html",
+            canvasPluginSurfaceUrl: "https://host/other/prefix") == nil)
+
+        // Trailing slash in capability URL
+        #expect(CanvasWindowController._testResolveCanvasUrl(
+            target: "/__openclaw__/canvas/test.html",
+            canvasPluginSurfaceUrl: "https://tailscale-host/__openclaw__/cap/abc123/")
+            == "https://tailscale-host/__openclaw__/cap/abc123/__openclaw__/canvas/test.html")
+
+        // Non-default port
+        #expect(CanvasWindowController._testResolveCanvasUrl(
+            target: "/__openclaw__/canvas/test.html",
+            canvasPluginSurfaceUrl: "https://tailscale-host:8443/__openclaw__/cap/abc123")
+            == "https://tailscale-host:8443/__openclaw__/cap/abc123/__openclaw__/canvas/test.html")
+    }
 }

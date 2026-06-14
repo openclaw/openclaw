@@ -46,5 +46,9 @@ extension CanvasWindowController {
     static func _testIsLocalNetworkCanvasURL(_ url: URL) -> Bool {
         CanvasA2UIActionMessageHandler.isLocalNetworkCanvasURL(url)
     }
+
+    static func _testResolveCanvasUrl(target: String, canvasPluginSurfaceUrl: String?) -> String? {
+        Self.resolveCanvasUrl(target: target, canvasPluginSurfaceUrl: canvasPluginSurfaceUrl)?.absoluteString
+    }
 }
 #endif
