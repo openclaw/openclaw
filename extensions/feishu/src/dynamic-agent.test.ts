@@ -25,10 +25,7 @@ function createRuntime(
   const commitConfig = vi.fn();
   const mutateConfigFile = vi.fn(
     async (params: {
-      mutate: (
-        draft: OpenClawConfig,
-        context: { snapshot: never; previousHash: null },
-      ) => unknown | Promise<unknown>;
+      mutate: (draft: OpenClawConfig, context: { snapshot: never; previousHash: null }) => unknown;
     }) => {
       const draft = structuredClone(mutationCfg ?? runtimeCfg);
       const result = await params.mutate(draft, { snapshot: {} as never, previousHash: null });
