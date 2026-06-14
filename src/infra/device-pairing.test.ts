@@ -11,6 +11,7 @@ import {
   ensureDeviceToken,
   getPairedDevice,
   hasEffectivePairedDeviceRole,
+  listApprovedPairedDeviceRoles,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
   removePairedDevice,
@@ -1815,6 +1816,50 @@ describe("device pairing tokens", () => {
 
     expect(listEffectivePairedDeviceRoles(device)).toEqual(["operator"]);
     expect(hasEffectivePairedDeviceRole(device, "node")).toBe(false);
+  });
+
+  test("skips non-string entries in approved roles and scopes (regression for #90654)", () => {
+    const now = Date.now();
+    const device: PairedDevice = {
+      deviceId: "device-malformed-arrays",
+      publicKey: "pk-malformed",
+      role: "operator",
+      roles: [
+        "operator",
+        undefined as unknown as string,
+        null as unknown as string,
+        42 as unknown as string,
+        "",
+      ],
+      scopes: [
+        "read",
+        undefined as unknown as string,
+        null as unknown as string,
+        42 as unknown as string,
+        "",
+      ],
+      approvedScopes: [
+        "read",
+        undefined as unknown as string,
+        null as unknown as string,
+        42 as unknown as string,
+        "",
+      ],
+      tokens: {
+        operator: {
+          token: "operator-token",
+          role: "operator",
+          scopes: ["read"],
+          createdAtMs: now,
+        },
+      },
+      createdAtMs: now,
+      approvedAtMs: now,
+    };
+
+    expect(listApprovedPairedDeviceRoles(device)).toEqual(["operator"]);
+    expect(listEffectivePairedDeviceRoles(device)).toEqual(["operator"]);
+    expect(hasEffectivePairedDeviceRole(device, "operator")).toBe(true);
   });
 
   test("rejects rotating a token for a role that was never approved", async () => {
