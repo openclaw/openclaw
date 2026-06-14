@@ -44,6 +44,7 @@ export type ToolStreamEntry = {
   name: string;
   args?: unknown;
   output?: string;
+  progressText?: string;
   startedAt: number;
   updatedAt: number;
   message: Record<string, unknown>;
@@ -372,6 +373,13 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     name: entry.name,
     arguments: entry.args ?? {},
   });
+  if (entry.progressText) {
+    content.push({
+      type: "toolprogress",
+      name: entry.name,
+      text: entry.progressText,
+    });
+  }
   if (entry.output) {
     content.push({
       type: "toolresult",
@@ -758,6 +766,36 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  // Typed tool-progress events arrive on the "item" stream (the runtime
+  // forwards AgentToolProgress here to avoid duplicate preview lines — see
+  // src/agents/embedded-agent-subscribe.handlers.tools.ts). They complement
+  // the "tool" stream's partialResult updates: progress carries human-readable
+  // status text while the tool is still executing.
+  if (payload.stream === "item") {
+    const data = payload.data ?? {};
+    if (data.kind !== "tool" || data.phase !== "update") {
+      return;
+    }
+    const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
+    if (!toolCallId) {
+      return;
+    }
+    const progressText = toTrimmedString(data.progressText);
+    if (!progressText) {
+      return;
+    }
+    const entry = host.toolStreamById.get(toolCallId);
+    if (!entry) {
+      // The matching tool "start" event should have created the entry already.
+      return;
+    }
+    entry.progressText = progressText;
+    entry.updatedAt = Date.now();
+    entry.message = buildToolStreamMessage(entry);
+    scheduleToolStreamSync(host, false);
+    return;
+  }
+
   if (payload.stream !== "tool") {
     return;
   }
@@ -819,6 +857,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
     if (output !== undefined) {
       entry.output = output || undefined;
+    }
+    // The final result supersedes any interim progress text; clear it so a
+    // stale progress line doesn't render alongside the tool result.
+    if (phase === "result") {
+      entry.progressText = undefined;
     }
     entry.updatedAt = now;
   }

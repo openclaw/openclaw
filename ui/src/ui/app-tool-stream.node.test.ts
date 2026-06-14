@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ACTIVITY_ENTRY_LIMIT, ACTIVITY_OUTPUT_PREVIEW_LIMIT } from "./activity-model.ts";
 import {
   handleAgentEvent,
@@ -829,5 +829,186 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionClearTimer).toBeNull();
 
     vi.useRealTimers();
+  });
+});
+
+describe("stream:item toolprogress events", () => {
+  let weSetWindow = false;
+  beforeAll(() => {
+    const globalWithWindow = globalThis as typeof globalThis & {
+      window?: Window & typeof globalThis;
+    };
+    if (!globalWithWindow.window) {
+      globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+      weSetWindow = true;
+    }
+  });
+  afterAll(() => {
+    // Only clean up the window we installed; leave any pre-existing one
+    // intact so we don't disturb sibling describe blocks that may rely on it.
+    if (weSetWindow) {
+      const globalWithWindow = globalThis as typeof globalThis & {
+        window?: Window & typeof globalThis;
+      };
+      delete globalWithWindow.window;
+      weSetWindow = false;
+    }
+  });
+
+  it("updates entry.progressText when stream:item + kind:tool + progressText arrives", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "id-1",
+        name: "trading_quick",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
+        kind: "tool",
+        phase: "update",
+        toolCallId: "id-1",
+        progressText: "总进度 25% · 已用 30s",
+      }),
+    );
+    const entry = host.toolStreamById.get("id-1");
+    expect(entry?.progressText).toBe("总进度 25% · 已用 30s");
+    expect(entry?.message.content).toContainEqual(
+      expect.objectContaining({ type: "toolprogress", text: "总进度 25% · 已用 30s" }),
+    );
+  });
+
+  it("ignores stream:item events without progressText", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "id-1",
+        name: "trading_quick",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
+        kind: "tool",
+        phase: "update",
+        toolCallId: "id-1",
+      }),
+    );
+    const entry = host.toolStreamById.get("id-1");
+    // progressText stays unset; the start-created entry is otherwise intact
+    expect(entry?.progressText).toBeUndefined();
+    expect(entry?.name).toBe("trading_quick");
+    expect(entry?.message.content).not.toContainEqual(
+      expect.objectContaining({ type: "toolprogress" }),
+    );
+  });
+
+  it("ignores stream:item events for unknown toolCallId", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "item", {
+        kind: "tool",
+        phase: "update",
+        toolCallId: "never-started",
+        progressText: "总进度 25%",
+      }),
+    );
+    expect(host.toolStreamById.get("never-started")).toBeUndefined();
+    expect(host.toolStreamOrder).toHaveLength(0);
+  });
+
+  it("ignores stream:item events whose kind is not 'tool'", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "id-1",
+        name: "trading_quick",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
+        kind: "text",
+        phase: "update",
+        toolCallId: "id-1",
+        progressText: "should be ignored",
+      }),
+    );
+    const entry = host.toolStreamById.get("id-1");
+    expect(entry?.progressText).toBeUndefined();
+    expect(entry?.message.content).not.toContainEqual(
+      expect.objectContaining({ type: "toolprogress" }),
+    );
+  });
+
+  it("ignores stream:item tool events whose phase is not 'update'", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "id-1",
+        name: "trading_quick",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
+        kind: "tool",
+        phase: "start",
+        toolCallId: "id-1",
+        progressText: "should be ignored",
+      }),
+    );
+    const entry = host.toolStreamById.get("id-1");
+    expect(entry?.progressText).toBeUndefined();
+    expect(entry?.message.content).not.toContainEqual(
+      expect.objectContaining({ type: "toolprogress" }),
+    );
+  });
+
+  it("clears progressText when the final result arrives", () => {
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "id-1",
+        name: "trading_quick",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", {
+        kind: "tool",
+        phase: "update",
+        toolCallId: "id-1",
+        progressText: "总进度 90%",
+      }),
+    );
+    expect(host.toolStreamById.get("id-1")?.progressText).toBe("总进度 90%");
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "tool", {
+        phase: "result",
+        toolCallId: "id-1",
+        name: "trading_quick",
+        result: { text: "done" },
+      }),
+    );
+    const entry = host.toolStreamById.get("id-1");
+    expect(entry?.progressText).toBeUndefined();
+    expect(entry?.output).toBe("done");
+    expect(entry?.message.content).not.toContainEqual(
+      expect.objectContaining({ type: "toolprogress" }),
+    );
   });
 });

@@ -77,6 +77,7 @@ export type ToolCard = {
   args?: unknown;
   inputText?: string;
   outputText?: string;
+  progressText?: string;
   isError?: boolean;
   messageId?: string;
   preview?: {
