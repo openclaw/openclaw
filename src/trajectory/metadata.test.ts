@@ -5,6 +5,7 @@ import {
   redactPathForSupport,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -182,6 +183,53 @@ describe("trajectory metadata", () => {
     expect(plugins.entries?.map((entry) => entry.id)).toEqual(["demo-plugin"]);
     expect(skills.entries?.[0]?.id).toBe("weather");
     expect(skills.entries?.[0]?.filePath).toBe("/tmp/workspace/skills/weather/SKILL.md");
+  });
+
+  it("skips unreadable manifest rows while capturing plugin support metadata", () => {
+    const poisonedRecord = {
+      get id() {
+        throw new Error("trajectory manifest id exploded");
+      },
+    } as unknown as PluginManifestRecord;
+    loadPluginManifestRegistry.mockReturnValueOnce({
+      plugins: [
+        poisonedRecord,
+        {
+          id: "healthy-plugin",
+          name: "Healthy Plugin",
+          channels: ["healthy-channel"],
+          providers: [],
+          cliBackends: [],
+          hooks: [],
+          skills: [],
+          origin: "config",
+          rootDir: "/plugins/healthy",
+          source: "/plugins/healthy/openclaw.plugin.json",
+          manifestPath: "/plugins/healthy/openclaw.plugin.json",
+        },
+      ],
+    });
+
+    const metadata = buildTrajectoryRunMetadata({
+      workspaceDir: "/tmp/workspace",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      timeoutMs: 30_000,
+    });
+
+    const plugins = metadata.plugins as {
+      source?: string;
+      entries?: Array<{ id: string; channels?: string[] }>;
+    };
+    expect(plugins.source).toBe("manifest-registry");
+    expect(plugins.entries?.map((entry) => entry.id)).toEqual(["healthy-plugin"]);
+    expect(plugins.entries?.[0]).toMatchObject({
+      id: "healthy-plugin",
+      name: "Healthy Plugin",
+      origin: "config",
+      source: "/plugins/healthy/openclaw.plugin.json",
+      rootDir: "/plugins/healthy",
+      channels: ["healthy-channel"],
+    });
   });
 
   it("tolerates skill snapshot entries with missing name/paths (symlink-escape rejects)", () => {
