@@ -1590,7 +1590,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
       const featurePath = path.join(packageRoot, "dist", "feature");
-      const localFeaturePath = path.join(packageRoot, "dist", "Feature", "local.js");
+      const localFeaturePath = path.join(featurePath, "local.js");
       await writePackageRoot(packageRoot, "1.0.0");
       await fs.writeFile(featurePath, "export const baseline = true;\n", "utf8");
       await writePackageDistInventory(packageRoot);
@@ -1627,62 +1627,27 @@ describe("runGlobalPackageUpdateSteps", () => {
         },
       );
 
-      const realLstat = fs.lstat.bind(fs);
-      const lstatSpy = vi
-        .spyOn(fs, "lstat")
-        .mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
-          const targetPath = String(args[0]);
-          if (targetPath === localFeaturePath) {
-            const packageVersion = JSON.parse(
-              await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-            ).version;
-            if (packageVersion === "2.0.0") {
-              throw createFsError("ENOTDIR", "case-aliased ancestor is a file");
-            }
-          }
-          return await realLstat(...args);
-        });
-      const realRealpath = fs.realpath.bind(fs);
-      const realpathSpy = vi
-        .spyOn(fs, "realpath")
-        .mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
-          if (String(args[0]) === path.dirname(localFeaturePath)) {
-            const packageVersion = JSON.parse(
-              await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-            ).version;
-            if (packageVersion === "2.0.0") {
-              return (await realRealpath(featurePath)) as never;
-            }
-          }
-          return await realRealpath(...args);
-        });
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: createNpmTarget(globalRoot),
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand: createRootRunner(globalRoot),
+        runStep,
+        reapplyLocalOverrides: true,
+        timeoutMs: 1000,
+      });
 
-      try {
-        const result = await runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
-          packageName: "openclaw",
-          packageRoot,
-          runCommand: createRootRunner(globalRoot),
-          runStep,
-          reapplyLocalOverrides: true,
-          timeoutMs: 1000,
-        });
-
-        expect(runStep).not.toHaveBeenCalled();
-        expect(result.failedStep).toMatchObject({
-          name: "local overrides",
-          exitCode: 1,
-          stderrTail: expect.stringContaining("not a file"),
-        });
-        expect(result.localOverrides).toBeUndefined();
-        await expect(fs.readFile(localFeaturePath, "utf8")).resolves.toBe(
-          "export const local = true;\n",
-        );
-      } finally {
-        lstatSpy.mockRestore();
-        realpathSpy.mockRestore();
-      }
+      expect(runStep).not.toHaveBeenCalled();
+      expect(result.failedStep).toMatchObject({
+        name: "local overrides",
+        exitCode: 1,
+        stderrTail: expect.stringContaining("not a file"),
+      });
+      expect(result.localOverrides).toBeUndefined();
+      await expect(fs.readFile(localFeaturePath, "utf8")).resolves.toBe(
+        "export const local = true;\n",
+      );
     });
   });
 
@@ -3860,25 +3825,20 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(plan).not.toBeNull();
         await writePackageRoot(packageRoot, "2.0.0");
 
-        const realRealpath = fs.realpath.bind(fs);
-        let targetChanged = false;
-        const realpathSpy = vi
-          .spyOn(fs, "realpath")
-          .mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
-            const result = await realRealpath(...args);
-            const entries =
-              String(args[0]) === path.dirname(indexPath)
-                ? await fs.readdir(path.dirname(indexPath)).catch(() => [] as string[])
-                : [];
+        let cleanupFailed = false;
+        __setFsSafeTestHooksForTest({
+          beforeRootFallbackMutation: async (operation, targetPath) => {
             if (
-              !targetChanged &&
-              entries.some((entry) => entry.startsWith(".openclaw-override-next-"))
+              !cleanupFailed &&
+              operation === "remove" &&
+              targetPath.includes(`${path.sep}.openclaw-override-previous-`)
             ) {
-              targetChanged = true;
+              cleanupFailed = true;
               await fs.writeFile(indexPath, "export const concurrent = true;\n", "utf8");
+              throw createFsError("EIO", "replacement cleanup failed");
             }
-            return result;
-          });
+          },
+        });
 
         try {
           const result = await applyLocalPackageOverrides({
@@ -3887,7 +3847,7 @@ describe("runGlobalPackageUpdateSteps", () => {
             reapply: true,
           });
 
-          expect(targetChanged).toBe(true);
+          expect(cleanupFailed).toBe(true);
           expect(result.status).toBe("error");
           expect(result.applied).toBe(0);
           expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "rollback-failed" }]);
@@ -3904,7 +3864,7 @@ describe("runGlobalPackageUpdateSteps", () => {
             fs.readFile(path.join(recoveryDir, rollbackDir ?? "", "dist/index.js"), "utf8"),
           ).resolves.toBe("export {};\n");
         } finally {
-          realpathSpy.mockRestore();
+          __setFsSafeTestHooksForTest(undefined);
         }
       },
     );

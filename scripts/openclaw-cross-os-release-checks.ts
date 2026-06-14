@@ -803,6 +803,25 @@ function assertNoPackagedDistSymlinks(packageRoot, inventory) {
   throw new Error(`unsafe package dist symlink: ${symlinks.join(", ")}`);
 }
 
+function assertSafePackageDistInventoryWriteRoots(packageRoot) {
+  // npm can omit a symlinked dist root from its dry-run inventory. Recheck the
+  // write roots so generated inventories cannot follow it outside sourceDir.
+  const packageRootStats = lstatSync(packageRoot);
+  if (packageRootStats.isSymbolicLink() || !packageRootStats.isDirectory()) {
+    throw new Error("unsafe package inventory write root");
+  }
+  try {
+    const distRootStats = lstatSync(join(packageRoot, "dist"));
+    if (distRootStats.isSymbolicLink() || !distRootStats.isDirectory()) {
+      throw new Error("unsafe package dist inventory write root");
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
 function isPackagedDistPath(relativePath) {
   if (!relativePath.startsWith("dist/")) {
     return false;
@@ -847,6 +866,7 @@ function buildPackageDistContentInventory(packageRoot, inventory) {
 }
 
 export async function writePackageDistInventoryForCandidate(params) {
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
@@ -873,9 +893,12 @@ export async function writePackageDistInventoryForCandidate(params) {
     .toSorted((left, right) => left.localeCompare(right));
   assertNoPackagedDistSymlinks(params.sourceDir, inventory);
   const inventoryPath = join(params.sourceDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   mkdirSync(dirname(inventoryPath), { recursive: true });
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
   const contentInventoryPath = join(params.sourceDir, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   writeFileSync(
     contentInventoryPath,
     `${JSON.stringify(buildPackageDistContentInventory(params.sourceDir, inventory), null, 2)}\n`,
