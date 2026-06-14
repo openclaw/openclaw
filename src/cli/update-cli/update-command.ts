@@ -3363,7 +3363,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       canResolveRegistryVersionForPackageTarget(tag) &&
       !fallbackToLatest &&
       currentVersion != null &&
-      (targetVersion == null || (cmp != null && cmp > 0));
+      (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
     packageInstallSpec = resolveGlobalInstallSpec({
       packageName: DEFAULT_PACKAGE_NAME,
       tag,
