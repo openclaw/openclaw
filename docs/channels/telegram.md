@@ -795,10 +795,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     The Telegram provider reads scope from `messages.ackReactionScope` (default `"group-mentions"`). There is no Telegram-account or Telegram-channel-level override today.
 
-    Values: `"all"` (DMs + groups), `"direct"` (DMs only), `"group-all"` (every group message, no DMs), `"group-mentions"` (groups when the bot is mentioned; **no DMs** — this is the default), `"off"` / `"none"` (disabled).
+    Values: `"all"` (DMs + groups, including ambient room events), `"direct"` (DMs only), `"group-all"` (every group message, no DMs), `"group-mentions"` (groups when the bot is mentioned; **no DMs**, default), `"off"` / `"none"` (disabled).
 
     <Note>
-    The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. To get an ack reaction on inbound Telegram DMs, set `messages.ackReactionScope` to `"direct"` or `"all"`. The value is read at Telegram provider startup, so a gateway restart is needed for the change to take effect.
+    The default scope (`"group-mentions"`) does not fire ack reactions in direct messages or ambient room events. To get an ack reaction on inbound Telegram DMs and quiet room events, set `messages.ackReactionScope` to `"all"`. The value is read at Telegram provider startup, so a gateway restart is needed for the change to take effect.
     </Note>
 
   </Accordion>
