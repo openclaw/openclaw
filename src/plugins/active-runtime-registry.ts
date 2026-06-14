@@ -11,6 +11,8 @@ import {
 
 export type ActiveRuntimePluginRegistrySurface = "active" | "channel" | "http-route";
 
+const UNREADABLE_RUNTIME_PLUGIN_STATUS = "__openclaw_unreadable__";
+
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
 }
@@ -32,11 +34,28 @@ export function registryContainsRuntimePluginIds(
   const present = new Set<string>();
   const loaded = new Set<string>();
   const pluginStatusById = new Map<string, string | undefined>();
+  let hasUnreadableRuntimeEntry = false;
   for (const plugin of registry.plugins ?? []) {
-    present.add(plugin.id);
-    pluginStatusById.set(plugin.id, plugin.status);
-    if (plugin.status === undefined || plugin.status === "loaded") {
-      loaded.add(plugin.id);
+    let pluginId: unknown;
+    try {
+      pluginId = plugin.id;
+    } catch {
+      hasUnreadableRuntimeEntry = true;
+      continue;
+    }
+    if (typeof pluginId === "string" && pluginId.length > 0) {
+      present.add(pluginId);
+      let status: string | undefined;
+      try {
+        status = plugin.status;
+      } catch {
+        pluginStatusById.set(pluginId, UNREADABLE_RUNTIME_PLUGIN_STATUS);
+        continue;
+      }
+      pluginStatusById.set(pluginId, status);
+      if (status === undefined || status === "loaded") {
+        loaded.add(pluginId);
+      }
     }
   }
   for (const [key, value] of Object.entries(registry)) {
@@ -47,20 +66,26 @@ export function registryContainsRuntimePluginIds(
       continue;
     }
     for (const entry of value) {
-      if (entry && typeof entry === "object" && "pluginId" in entry) {
-        const pluginId = entry.pluginId;
-        if (typeof pluginId === "string" && pluginId.length > 0) {
-          present.add(pluginId);
-          const status = pluginStatusById.get(pluginId);
-          if (status === undefined || status === "loaded") {
-            loaded.add(pluginId);
-          }
+      let pluginId: unknown;
+      try {
+        if (entry && typeof entry === "object" && "pluginId" in entry) {
+          pluginId = entry.pluginId;
+        }
+      } catch {
+        hasUnreadableRuntimeEntry = true;
+        continue;
+      }
+      if (typeof pluginId === "string" && pluginId.length > 0) {
+        present.add(pluginId);
+        const status = pluginStatusById.get(pluginId);
+        if (status === undefined || status === "loaded") {
+          loaded.add(pluginId);
         }
       }
     }
   }
   if (pluginIds.length === 0) {
-    return present.size === 0;
+    return present.size === 0 && !hasUnreadableRuntimeEntry;
   }
   return pluginIds.every((pluginId) => loaded.has(pluginId));
 }
