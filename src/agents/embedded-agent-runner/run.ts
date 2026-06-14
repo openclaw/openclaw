@@ -1917,6 +1917,48 @@ async function runEmbeddedAgentInternal(
           EmbeddedAgentRunResult["acceptedSessionSpawns"]
         > = [];
         let accumulatedSuccessfulCronAdds = 0;
+        const buildAccumulatedTerminalEvidence = (options?: {
+          currentAttempt?: EmbeddedRunAttemptForRunner;
+          includeCurrentAttempt?: boolean;
+        }) => {
+          const currentAttempt = options?.includeCurrentAttempt
+            ? options.currentAttempt
+            : undefined;
+          return {
+            didSendViaMessagingTool:
+              accumulatedDidSendViaMessagingTool ||
+              currentAttempt?.didSendViaMessagingTool === true,
+            didDeliverSourceReplyViaMessageTool:
+              accumulatedDidDeliverSourceReplyViaMessageTool ||
+              currentAttempt?.didDeliverSourceReplyViaMessageTool === true,
+            didSendDeterministicApprovalPrompt:
+              accumulatedDidSendDeterministicApprovalPrompt ||
+              currentAttempt?.didSendDeterministicApprovalPrompt === true,
+            messagingToolSentTexts: [
+              ...accumulatedMessagingToolSentTexts,
+              ...(currentAttempt?.messagingToolSentTexts ?? []),
+            ],
+            messagingToolSentMediaUrls: [
+              ...accumulatedMessagingToolSentMediaUrls,
+              ...(currentAttempt?.messagingToolSentMediaUrls ?? []),
+            ],
+            messagingToolSentTargets: [
+              ...accumulatedMessagingToolSentTargets,
+              ...(currentAttempt?.messagingToolSentTargets ?? []),
+            ],
+            messagingToolSourceReplyPayloads: [
+              ...accumulatedMessagingToolSourceReplyPayloads,
+              ...(currentAttempt?.messagingToolSourceReplyPayloads ?? []),
+            ],
+            heartbeatToolResponse: options?.currentAttempt?.heartbeatToolResponse,
+            successfulCronAdds:
+              accumulatedSuccessfulCronAdds + (currentAttempt?.successfulCronAdds ?? 0),
+            acceptedSessionSpawns: [
+              ...accumulatedAcceptedSessionSpawns,
+              ...(currentAttempt?.acceptedSessionSpawns ?? []),
+            ],
+          };
+        };
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
@@ -1934,26 +1976,29 @@ async function runEmbeddedAgentInternal(
               fallbackConfigured,
               failoverReason: lastRetryFailoverReason,
             });
-            return handleRetryLimitExhaustion({
-              message,
-              decision: retryLimitDecision,
-              provider,
-              model: modelId,
-              profileId: lastProfileId,
-              durationMs: Date.now() - started,
-              agentMeta: buildErrorAgentMeta({
-                sessionId: activeSessionId,
-                sessionFile: activeSessionFile,
+            return {
+              ...handleRetryLimitExhaustion({
+                message,
+                decision: retryLimitDecision,
                 provider,
-                model: model.id,
-                contextTokens: ctxInfo.tokens,
-                usageAccumulator,
-                lastRunPromptUsage,
-                lastTurnTotal,
+                model: modelId,
+                profileId: lastProfileId,
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: activeSessionId,
+                  sessionFile: activeSessionFile,
+                  provider,
+                  model: model.id,
+                  contextTokens: ctxInfo.tokens,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastTurnTotal,
+                }),
+                replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
+                livenessState: "blocked",
               }),
-              replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
-              livenessState: "blocked",
-            });
+              ...buildAccumulatedTerminalEvidence(),
+            };
           }
           runLoopIterations += 1;
           const priorAttemptsHadPotentialSideEffects =
@@ -2448,26 +2493,32 @@ async function runEmbeddedAgentInternal(
               fallbackConfigured,
               failoverReason: lastRetryFailoverReason,
             });
-            return handleRetryLimitExhaustion({
-              message: breakerMessage,
-              decision: breakerDecision,
-              provider,
-              model: modelId,
-              profileId: lastProfileId,
-              durationMs: Date.now() - started,
-              agentMeta: buildErrorAgentMeta({
-                sessionId: activeSessionId,
-                sessionFile: activeSessionFile,
+            return {
+              ...handleRetryLimitExhaustion({
+                message: breakerMessage,
+                decision: breakerDecision,
                 provider,
-                model: model.id,
-                contextTokens: ctxInfo.tokens,
-                usageAccumulator,
-                lastRunPromptUsage,
-                lastTurnTotal,
+                model: modelId,
+                profileId: lastProfileId,
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: activeSessionId,
+                  sessionFile: activeSessionFile,
+                  provider,
+                  model: model.id,
+                  contextTokens: ctxInfo.tokens,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastTurnTotal,
+                }),
+                replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
+                livenessState: "blocked",
               }),
-              replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
-              livenessState: "blocked",
-            });
+              ...buildAccumulatedTerminalEvidence({
+                currentAttempt: attempt,
+                includeCurrentAttempt: true,
+              }),
+            };
           }
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
@@ -3642,15 +3693,14 @@ async function runEmbeddedAgentInternal(
             toolResultFormat: resolvedToolResultFormat,
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
-            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-            didDeliverSourceReplyViaMessageTool:
-              attempt.didDeliverSourceReplyViaMessageTool === true,
-            messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+            didSendViaMessagingTool: accumulatedDidSendViaMessagingTool,
+            didDeliverSourceReplyViaMessageTool: accumulatedDidDeliverSourceReplyViaMessageTool,
+            messagingToolSourceReplyPayloads: accumulatedMessagingToolSourceReplyPayloads,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             agentId: params.agentId,
             runId: params.runId,
             runAborted: aborted,
-            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+            didSendDeterministicApprovalPrompt: accumulatedDidSendDeterministicApprovalPrompt,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
           });
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
@@ -3689,6 +3739,7 @@ async function runEmbeddedAgentInternal(
               ? resolvePlanningOnlyTerminalPayloadText({
                   provider: activeErrorContext.provider,
                   modelId: activeErrorContext.model,
+                  executionContract,
                   prompt: params.prompt,
                   aborted: false,
                   timedOut: false,
@@ -3821,17 +3872,7 @@ async function runEmbeddedAgentInternal(
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
-              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didDeliverSourceReplyViaMessageTool:
-                attempt.didDeliverSourceReplyViaMessageTool === true,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-              messagingToolSentTexts: attempt.messagingToolSentTexts,
-              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-              messagingToolSentTargets: attempt.messagingToolSentTargets,
-              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-              heartbeatToolResponse: attempt.heartbeatToolResponse,
-              successfulCronAdds: attempt.successfulCronAdds,
-              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+              ...buildAccumulatedTerminalEvidence({ currentAttempt: attempt }),
             };
           }
 
@@ -4129,23 +4170,14 @@ async function runEmbeddedAgentInternal(
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
-              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didDeliverSourceReplyViaMessageTool:
-                attempt.didDeliverSourceReplyViaMessageTool === true,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-              messagingToolSentTexts: attempt.messagingToolSentTexts,
-              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-              messagingToolSentTargets: attempt.messagingToolSentTargets,
-              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-              heartbeatToolResponse: attempt.heartbeatToolResponse,
-              successfulCronAdds: attempt.successfulCronAdds,
-              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+              ...buildAccumulatedTerminalEvidence({ currentAttempt: attempt }),
             };
           }
           const nonRetryablePlanningOnlyText = terminalPathHasPlanningOnlyText
             ? resolvePlanningOnlyBlockedPayloadText({
                 provider: activeErrorContext.provider,
                 modelId: activeErrorContext.model,
+                executionContract,
                 prompt,
                 aborted,
                 timedOut,
@@ -4210,17 +4242,7 @@ async function runEmbeddedAgentInternal(
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
-              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didDeliverSourceReplyViaMessageTool:
-                attempt.didDeliverSourceReplyViaMessageTool === true,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-              messagingToolSentTexts: attempt.messagingToolSentTexts,
-              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-              messagingToolSentTargets: attempt.messagingToolSentTargets,
-              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-              heartbeatToolResponse: attempt.heartbeatToolResponse,
-              successfulCronAdds: attempt.successfulCronAdds,
-              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+              ...buildAccumulatedTerminalEvidence({ currentAttempt: attempt }),
             };
           }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
@@ -4283,17 +4305,7 @@ async function runEmbeddedAgentInternal(
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
-              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didDeliverSourceReplyViaMessageTool:
-                attempt.didDeliverSourceReplyViaMessageTool === true,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-              messagingToolSentTexts: attempt.messagingToolSentTexts,
-              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-              messagingToolSentTargets: attempt.messagingToolSentTargets,
-              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-              heartbeatToolResponse: attempt.heartbeatToolResponse,
-              successfulCronAdds: attempt.successfulCronAdds,
-              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+              ...buildAccumulatedTerminalEvidence({ currentAttempt: attempt }),
             };
           }
           if (
@@ -4441,17 +4453,7 @@ async function runEmbeddedAgentInternal(
                 ...(failureSignal ? { failureSignal } : {}),
                 agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
-              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didDeliverSourceReplyViaMessageTool:
-                attempt.didDeliverSourceReplyViaMessageTool === true,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-              messagingToolSentTexts: attempt.messagingToolSentTexts,
-              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-              messagingToolSentTargets: attempt.messagingToolSentTargets,
-              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-              heartbeatToolResponse: attempt.heartbeatToolResponse,
-              successfulCronAdds: attempt.successfulCronAdds,
-              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+              ...buildAccumulatedTerminalEvidence({ currentAttempt: attempt }),
             };
           }
 
@@ -4566,6 +4568,7 @@ async function runEmbeddedAgentInternal(
             ? resolvePlanningOnlyTerminalPayloadText({
                 provider: activeErrorContext.provider,
                 modelId: activeErrorContext.model,
+                executionContract,
                 prompt,
                 aborted,
                 timedOut,
@@ -4759,17 +4762,7 @@ async function runEmbeddedAgentInternal(
               contextManagement:
                 autoCompactionCount > 0 ? { lastTurnCompactions: autoCompactionCount } : undefined,
             },
-            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-            didDeliverSourceReplyViaMessageTool:
-              attempt.didDeliverSourceReplyViaMessageTool === true,
-            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-            messagingToolSentTexts: attempt.messagingToolSentTexts,
-            messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-            messagingToolSentTargets: attempt.messagingToolSentTargets,
-            messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-            heartbeatToolResponse: attempt.heartbeatToolResponse,
-            successfulCronAdds: attempt.successfulCronAdds,
-            acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            ...buildAccumulatedTerminalEvidence({ currentAttempt: attempt }),
           };
         }
       } finally {

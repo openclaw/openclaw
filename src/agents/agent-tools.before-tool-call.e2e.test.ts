@@ -660,11 +660,21 @@ describe("before_tool_call loop detection behavior", () => {
       onToolOutcome,
     });
 
-    await expectUnblockedToolExecution(tool, "message-id-only-content-receipt", {
-      action: "send",
-      to: "channel:123",
-      content: "delivered",
-    });
+    const result = await tool.execute(
+      "message-id-only-content-receipt",
+      {
+        action: "send",
+        to: "channel:123",
+        content: "delivered",
+      },
+      undefined,
+      undefined,
+    );
+    const record = requireRecord(result, "tool result");
+    expect(requireArray(record.content, "tool result content")).toEqual([
+      { type: "text", text: '{"messageId":"message-1"}' },
+    ]);
+    expect(record.details).toBeUndefined();
 
     expect(onToolOutcome).toHaveBeenCalledWith(
       expect.objectContaining({

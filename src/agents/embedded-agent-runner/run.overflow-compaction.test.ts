@@ -2534,6 +2534,27 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         return makeAttemptResult({
           assistantTexts: [],
           promptError: makeOverflowError(),
+          didSendViaMessagingTool: true,
+          didDeliverSourceReplyViaMessageTool: true,
+          didSendDeterministicApprovalPrompt: true,
+          messagingToolSentTexts: ["sent before compaction"],
+          messagingToolSentMediaUrls: ["file:///tmp/sent-before-compaction.png"],
+          messagingToolSentTargets: [
+            {
+              tool: "message",
+              provider: "discord",
+              to: "channel-1",
+              text: "sent before compaction",
+            },
+          ],
+          messagingToolSourceReplyPayloads: [{ text: "sent before compaction" }],
+          successfulCronAdds: 1,
+          acceptedSessionSpawns: [
+            {
+              runId: "run-child",
+              childSessionKey: "agent:qa:subagent:child",
+            },
+          ],
           toolMetas: [{ toolName: "write", mutatingAction: true }],
           replayMetadata: {
             hadPotentialSideEffects: true,
@@ -2582,6 +2603,27 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(JSON.stringify(result.payloads)).not.toContain("Status:");
     expect(result.meta.replayInvalid).toBe(true);
     expect(result.meta.livenessState).toBe("blocked");
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.didSendDeterministicApprovalPrompt).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["sent before compaction"]);
+    expect(result.messagingToolSentMediaUrls).toEqual(["file:///tmp/sent-before-compaction.png"]);
+    expect(result.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "discord",
+        to: "channel-1",
+        text: "sent before compaction",
+      },
+    ]);
+    expect(result.messagingToolSourceReplyPayloads).toEqual([{ text: "sent before compaction" }]);
+    expect(result.successfulCronAdds).toBe(1);
+    expect(result.acceptedSessionSpawns).toEqual([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:qa:subagent:child",
+      },
+    ]);
   });
 
   it("normalizes abort-wrapped prompt errors before handing off to model fallback", async () => {

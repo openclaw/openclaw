@@ -7204,6 +7204,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "endpoint results now",
     "channel proof after the restart",
     "When you have a moment, can you check the scheduler?",
+    `The log says "Can you delete the file?" Please inspect the log.`,
     "I need you to check the scheduler",
     "I want you to inspect the scheduler",
     "We would like you to review the config",
@@ -7260,6 +7261,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Can you help me decide whether to delete old backups?",
     "Please help me plan deleting old backups.",
     "Please help me decide whether to delete old backups.",
+    `The log says "Can you delete the file?" What does that mean?`,
+    "The log says `Please delete the file.` What does that mean?",
+    "The log says:\n> Can you delete the file?\nWhat does that mean?",
   ])("does not retry when the user explicitly asked only for a plan: %s", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
@@ -7465,6 +7469,52 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(blockedText).toBeNull();
+  });
+
+  it("honors strict-agentic contracts at custom-provider planning exits", () => {
+    const toolMetas = [{ toolName: "write", mutatingAction: true }];
+    const replayUnsafeAttempt = {
+      ...makeAttemptResult({
+        assistantTexts: ["Verifying the file now."],
+        toolMetas,
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+      }),
+      toolMetas,
+      replayMetadata: buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        successfulCronAdds: 0,
+      }),
+    };
+    const baseParams = {
+      provider: "custom-provider",
+      modelId: "custom-model",
+      executionContract: "strict-agentic",
+      prompt: "Please update the file and verify it.",
+      aborted: false,
+      timedOut: false,
+    };
+
+    expect(
+      resolvePlanningOnlyBlockedPayloadText({
+        ...baseParams,
+        attempt: replayUnsafeAttempt,
+      }),
+    ).toBe(PLANNING_ONLY_REPLAY_UNSAFE_BLOCKED_TEXT);
+    expect(
+      resolvePlanningOnlyTerminalPayloadText({
+        ...baseParams,
+        attempt: makeAttemptResult({
+          assistantTexts: ["I'll update the file and verify it."],
+        }),
+      }),
+    ).toBe(PLANNING_ONLY_BLOCKED_TEXT);
   });
 
   it("does not misclassify a direct answer that says 'i'm not going to' as planning-only", () => {

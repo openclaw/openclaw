@@ -172,7 +172,7 @@ const ACTIONABLE_PROMPT_DIRECTIVE_RE =
 const ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE =
   /\bplease\s+(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE =
-  /^\s*(?:(?:hey|hi|hello)\b[\s,!:-]*)?please\s+(?:commit|upload|build|delete|create|move|rename|copy|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|ship)\b/i;
+  /^\s*(?:(?:hey|hi|hello)\b[\s,!:-]*)?please\s+(?!(?:(?:be|wait|say|reply|respond|answer|acknowledg(?:e|ement)|confirm|keep|remember|note|consider|advise|recommend|help|let|do\s+not|don['’]t|not|never|avoid|refrain)\b|take\s+care\b|have\s+(?:a\s+)?(?:good|great|nice|wonderful)\b))[a-z][a-z'-]*\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:(?:can|could|would|will)\s+you(?:\s+please)?|help\s+me(?:\s+please)?)\s+(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|delete|create|move|rename|copy|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|review|commit|upload|build|explain|summari(?:s|z)e|analy(?:s|z)e|tell|show|restart|deploy|ship|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE =
@@ -314,6 +314,9 @@ const EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE =
   /\b(?:plan|approach|outline|steps|strategy)\b[^.!?\n]{0,200}(?:[,;]\s*(?:(?:and(?:\s+then)?|then)\s+)?|\s+(?:and(?:\s+then)?|then)\s+)(?:execute|implement|apply|perform|run|fix|update|change|edit|write|add|remove|delete|create|move|rename|install|uninstall|enable|disable|configure|reset|archive|cancel|stop|test|verify|start|launch|send|deploy|ship|migrate)\b/i;
 const NON_ACTIONABLE_CONTEXT_UPDATE_RE =
   /^\s*(?:i|we)\b(?!.{0,120}\b(?:need|want|would like)\s+you\b).{0,180}\b(?:haven't|have not|am not|ain't|haven’t)\b.{0,120}\b(?:yet|though|fyi|heads up)\b/i;
+const QUOTED_USER_PROMPT_SEGMENT_RE =
+  /`[^`\n]*(?:`|(?=\n|$))|"[^"\n]*(?:"|(?=\n|$))|“[^”\n]*(?:”|(?=\n|$))|‘[^’\n]*(?:’|(?=\n|$))/gu;
+const QUOTED_USER_PROMPT_LINE_RE = /^[ \t]*>.*$/gmu;
 const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([
   "cool",
   "great",
@@ -1070,6 +1073,10 @@ function normalizeAckPrompt(text: string): string {
   return normalizeLowercaseStringOrEmpty(normalized);
 }
 
+function stripQuotedUserPromptSegments(text: string): string {
+  return text.replace(QUOTED_USER_PROMPT_SEGMENT_RE, " ").replace(QUOTED_USER_PROMPT_LINE_RE, " ");
+}
+
 export function isLikelyExecutionAckPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 80 || trimmed.includes("\n") || trimmed.includes("?")) {
@@ -1094,10 +1101,11 @@ function isLikelyNonActionableUserPrompt(text: string): boolean {
 
 function isExplicitPlanningOnlyUserPrompt(text: string): boolean {
   const trimmed = text.trim();
+  const actionableText = stripQuotedUserPromptSegments(trimmed);
   return (
     trimmed.length > 0 &&
-    !EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(trimmed) &&
-    !hasExplicitAdvisoryFollowUpAction(trimmed) &&
+    !EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(actionableText) &&
+    !hasExplicitAdvisoryFollowUpAction(actionableText) &&
     (EXPLICIT_PLANNING_REQUEST_RE.test(trimmed) ||
       EXPLICIT_PLAN_DESCRIPTION_REQUEST_RE.test(trimmed) ||
       EXPLICIT_PLAN_CREATION_REQUEST_RE.test(trimmed) ||
@@ -1112,9 +1120,11 @@ function isExplicitAcknowledgementRequestPrompt(text: string): boolean {
 
 function isDirectAnswerQuestionPrompt(text: string): boolean {
   const trimmed = text.trim();
+  const actionableText = stripQuotedUserPromptSegments(trimmed);
   const hasActionRequest =
-    SECOND_PERSON_REQUEST_PROMPT_RE.test(trimmed) &&
-    (PLANNING_ONLY_ACTION_VERB_RE.test(trimmed) || GENERIC_ACTION_REQUEST_RE.test(trimmed));
+    SECOND_PERSON_REQUEST_PROMPT_RE.test(actionableText) &&
+    (PLANNING_ONLY_ACTION_VERB_RE.test(actionableText) ||
+      GENERIC_ACTION_REQUEST_RE.test(actionableText));
   return trimmed.length > 0 && !hasActionRequest && DIRECT_ANSWER_QUESTION_PROMPT_RE.test(trimmed);
 }
 
@@ -1123,15 +1133,16 @@ function isPlanningOnlyProgressClaim(text: string): boolean {
 }
 
 function hasExplicitAdvisoryFollowUpAction(text: string): boolean {
-  if (EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(text)) {
+  const actionableText = stripQuotedUserPromptSegments(text);
+  if (EXPLICIT_ADVISORY_FOLLOW_UP_ACTION_RE.test(actionableText)) {
     return true;
   }
-  const conjunction = /\band\s+(?:then\s+)?(?:please\s+)?/i.exec(text);
-  if (!conjunction || !NON_AUTHORIZING_ADVISORY_PROMPT_RE.test(text)) {
+  const conjunction = /\band\s+(?:then\s+)?(?:please\s+)?/i.exec(actionableText);
+  if (!conjunction || !NON_AUTHORIZING_ADVISORY_PROMPT_RE.test(actionableText)) {
     return false;
   }
-  const advisoryText = text.slice(0, conjunction.index);
-  const actionText = text.slice(conjunction.index + conjunction[0].length);
+  const advisoryText = actionableText.slice(0, conjunction.index);
+  const actionText = actionableText.slice(conjunction.index + conjunction[0].length);
   return (
     !/\bhow\s+to\b/i.test(advisoryText) &&
     !/^(?:how|why|what|which|when|where|whether)\b/i.test(actionText) &&
@@ -1144,6 +1155,7 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   if (!trimmed) {
     return false;
   }
+  const actionableText = stripQuotedUserPromptSegments(trimmed);
   if (
     isLikelyNonActionableUserPrompt(trimmed) ||
     isExplicitPlanningOnlyUserPrompt(trimmed) ||
@@ -1154,15 +1166,15 @@ function isLikelyActionableUserPrompt(text: string): boolean {
     return false;
   }
   return (
-    EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(trimmed) ||
-    hasExplicitAdvisoryFollowUpAction(trimmed) ||
-    ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) ||
-    ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE.test(trimmed) ||
-    ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE.test(trimmed) ||
-    ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed) ||
-    (ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE.test(trimmed) &&
-      PLANNING_ONLY_ACTION_VERB_RE.test(trimmed)) ||
-    ACTIONABLE_PROMPT_TERSE_REQUEST_RE.test(trimmed)
+    EXPLICIT_PLAN_AND_EXECUTE_REQUEST_RE.test(actionableText) ||
+    hasExplicitAdvisoryFollowUpAction(actionableText) ||
+    ACTIONABLE_PROMPT_DIRECTIVE_RE.test(actionableText) ||
+    ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE.test(actionableText) ||
+    ACTIONABLE_PROMPT_GENERIC_POLITE_REQUEST_RE.test(actionableText) ||
+    ACTIONABLE_PROMPT_REQUEST_RE.test(actionableText) ||
+    (ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE.test(actionableText) &&
+      PLANNING_ONLY_ACTION_VERB_RE.test(actionableText)) ||
+    ACTIONABLE_PROMPT_TERSE_REQUEST_RE.test(actionableText)
   );
 }
 
@@ -1506,6 +1518,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
 export function resolvePlanningOnlyBlockedPayloadText(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   prompt?: string;
   aborted: boolean;
   timedOut: boolean;
@@ -1515,6 +1528,7 @@ export function resolvePlanningOnlyBlockedPayloadText(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      executionContract: params.executionContract,
     }) ||
     hasUnsettledAttemptItems(params.attempt)
   ) {
@@ -1546,6 +1560,7 @@ export function resolvePlanningOnlyBlockedPayloadText(params: {
 export function resolvePlanningOnlyTerminalPayloadText(params: {
   provider?: string;
   modelId?: string;
+  executionContract?: string;
   prompt?: string;
   aborted: boolean;
   timedOut: boolean;
@@ -1554,6 +1569,7 @@ export function resolvePlanningOnlyTerminalPayloadText(params: {
   return shouldApplyPlanningOnlyRetryGuard({
     provider: params.provider,
     modelId: params.modelId,
+    executionContract: params.executionContract,
   }) &&
     !hasUnsettledAttemptItems(params.attempt) &&
     resolvePlanningOnlyTurnClassification(params)
