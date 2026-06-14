@@ -12,9 +12,9 @@ read_when:
 The default runtime template is:
 
 ```markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Keep this file empty (or with only comments) to skip heartbeat API calls
 
-# Add tasks below when you want the agent to check something periodically.
+# Add tasks below when you want the agent to check something periodically
 ```
 
 Add short tasks below the comments only when you want the agent to check something periodically. Keep heartbeat instructions small because they are read during recurring wakes.

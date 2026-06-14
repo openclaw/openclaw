@@ -671,10 +671,10 @@ describe("ensureAgentWorkspace", () => {
     const heartbeat = await fs.readFile(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8");
     expect(heartbeat).not.toContain("```");
     expect(heartbeat).toContain(
-      "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
+      "# Keep this file empty (or with only comments) to skip heartbeat API calls",
     );
     expect(heartbeat).toContain(
-      "# Add tasks below when you want the agent to check something periodically.",
+      "# Add tasks below when you want the agent to check something periodically",
     );
   });
 });

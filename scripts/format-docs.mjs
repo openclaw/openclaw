@@ -13,13 +13,28 @@ const OXFMT_BIN = path.join(ROOT, "node_modules", "oxfmt", "bin", "oxfmt");
 const OXFMT_CONFIG = path.join(ROOT, ".oxfmtrc.jsonc");
 
 function docsFiles() {
-  const output = execFileSync("git", ["ls-files", "docs/**/*.md", "docs/**/*.mdx", "README.md"], {
-    cwd: ROOT,
-    encoding: "utf8",
-  });
+  const output = execFileSync(
+    "git",
+    ["ls-files", "-s", "docs/**/*.md", "docs/**/*.mdx", "README.md"],
+    {
+      cwd: ROOT,
+      encoding: "utf8",
+    },
+  );
+
   return output
     .split("\n")
     .filter(Boolean)
+    .map((line) => {
+      const tabIndex = line.indexOf("\t");
+      const metadata = line.slice(0, tabIndex);
+      const relativePath = line.slice(tabIndex + 1);
+      const mode = metadata.split(" ")[0];
+
+      return { mode, relativePath };
+    })
+    .filter(({ mode }) => mode !== "120000")
+    .map(({ relativePath }) => relativePath)
     .filter((relativePath) => fs.existsSync(path.join(ROOT, relativePath)));
 }
 
