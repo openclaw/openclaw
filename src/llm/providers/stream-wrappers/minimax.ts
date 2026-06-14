@@ -121,7 +121,7 @@ export function createMinimaxThinkingDisabledWrapper(
             if (thinkingLevel === undefined && isDisabledThinkingPayload(payloadObj.thinking)) {
               delete payloadObj.thinking;
             } else if (
-              thinkingLevel !== "off" &&
+              thinkingLevel === "adaptive" &&
               (isEnabledThinkingPayload(payloadObj.thinking) ||
                 isDisabledThinkingPayload(payloadObj.thinking))
             ) {

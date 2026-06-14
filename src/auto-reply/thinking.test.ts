@@ -647,10 +647,10 @@ describe("listThinkingLevels", () => {
     ).toBe("high");
   });
 
-  it("does not map budget requests to adaptive-only profiles", () => {
+  it("does not use adaptive as a fallback for budget requests", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
       ({ provider, context }) =>
-        provider === "minimax-portal" && context.modelId === "MiniMax-M3"
+        provider === "demo" && context.modelId === "adaptive-only"
           ? {
               levels: [{ id: "off" }, { id: "adaptive" }],
               defaultLevel: "adaptive",
@@ -660,15 +660,15 @@ describe("listThinkingLevels", () => {
 
     expect(
       resolveSupportedThinkingLevel({
-        provider: "minimax-portal",
-        model: "MiniMax-M3",
+        provider: "demo",
+        model: "adaptive-only",
         level: "medium",
       }),
     ).toBe("off");
     expect(
       resolveSupportedThinkingLevel({
-        provider: "minimax-portal",
-        model: "MiniMax-M3",
+        provider: "demo",
+        model: "adaptive-only",
         level: "adaptive",
       }),
     ).toBe("adaptive");
