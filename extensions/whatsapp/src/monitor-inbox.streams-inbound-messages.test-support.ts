@@ -14,6 +14,7 @@ import {
   type InboxMonitorOptions,
   buildNotifyMessageUpsert,
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_WEB_INBOX_CONFIG,
   failNextWhatsAppPluginStateRegisterIfAbsent,
   getAuthDir,
   getSock,
@@ -24,6 +25,7 @@ import {
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
+import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const { imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
   imageOps: {
@@ -810,6 +812,127 @@ describe("web monitor inbox", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
 
     await listener.close();
+  });
+
+  it("lets configured slow socket sends complete beyond thirty seconds", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      cfg: {
+        ...DEFAULT_WEB_INBOX_CONFIG,
+        web: { whatsapp: { defaultQueryTimeoutMs: 45_000 } },
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      sock.sendMessage.mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            setTimeout(() => resolve({ key: { id: "slow-success" } }), 40_000);
+          }),
+      );
+
+      let settled = false;
+      const sendPromise = listener.sendMessage("+1555", "hello").finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(sendPromise).resolves.toMatchObject({ messageId: "slow-success" });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+    }
+  });
+
+  it("times out stalled socket sends at the default Baileys query timeout", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    vi.useFakeTimers();
+    try {
+      sock.sendMessage.mockImplementationOnce(async () => await new Promise(() => {}));
+
+      const sendPromise = listener.sendMessage("+1555", "hello");
+      const sendRejection = expect(sendPromise).rejects.toMatchObject({
+        name: "WhatsAppSocketOperationTimeoutError",
+        operation: "sendMessage",
+        timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+
+      await sendRejection;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+    }
+  });
+
+  it("does not retry or clear the socket after the local socket send timeout", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const socketRef = createSocketRef();
+    const { listener, sock, inbound } = await primeInboundReplyHandle({
+      onMessage,
+      socketRef,
+      upsertId: "local-timeout-terminal",
+      retryPolicy: {
+        initialMs: 1,
+        maxMs: 1,
+        factor: 1,
+        jitter: 0,
+        maxAttempts: 2,
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      sock.sendMessage.mockImplementationOnce(async () => await new Promise(() => {}));
+
+      const replyPromise = inbound.platform.reply("pong");
+      const replyRejection = expect(replyPromise).rejects.toMatchObject({
+        name: "WhatsAppSocketOperationTimeoutError",
+        operation: "sendMessage",
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+
+      await replyRejection;
+      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+      expect(socketRef.current).toBe(sock);
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+    }
+  });
+
+  it("times out stalled send-api presence updates", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    vi.useFakeTimers();
+    try {
+      sock.sendPresenceUpdate.mockClear();
+      sock.sendPresenceUpdate.mockImplementationOnce(async () => await new Promise(() => {}));
+
+      const presencePromise = listener.sendComposingTo("+1555");
+      const presenceRejection = expect(presencePromise).rejects.toMatchObject({
+        name: "WhatsAppSocketOperationTimeoutError",
+        operation: "sendPresenceUpdate",
+        timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+
+      await presenceRejection;
+      expect(sock.sendPresenceUpdate).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      await listener.close();
+    }
   });
 
   it("bounds reconnect-gap retries even when reconnect attempts are unlimited", async () => {

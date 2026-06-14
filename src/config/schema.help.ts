@@ -512,7 +512,7 @@ export const FIELD_HELP: Record<string, string> = {
   "web.whatsapp.connectTimeoutMs":
     "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
   "web.whatsapp.defaultQueryTimeoutMs":
-    "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
+    "Default Baileys query timeout and OpenClaw outbound send/presence operation bound in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows socket operations need longer.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
