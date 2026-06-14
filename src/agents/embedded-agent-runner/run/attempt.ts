@@ -1165,12 +1165,13 @@ export async function runEmbeddedAttempt(
         forceMessageTool: forceDirectMessageTool,
       },
     );
+    const toolsEnabled = supportsModelTools(params.model);
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,
       isRawModelRun,
+      toolsEnabled,
       toolsAllow: toolsAllowWithForcedRuntimeTools,
     });
-    const toolsEnabled = supportsModelTools(params.model);
     const codeModeConfig = resolveCodeModeConfig(params.config, sessionAgentId);
     const toolSearchRuntimeConfig = forceDirectMessageTool
       ? params.config

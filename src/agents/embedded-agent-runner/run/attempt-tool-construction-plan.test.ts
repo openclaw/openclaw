@@ -206,6 +206,28 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     });
   });
 
+  it("short-circuits all local tool construction when the model disables tools", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({
+        toolsEnabled: false,
+        toolsAllow: ["message"],
+        forceMessageTool: true,
+      }),
+      {
+        constructTools: false,
+        includeCoreTools: false,
+        runtimeToolAllowlist: undefined,
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      },
+    );
+  });
+
   it("constructs message tool for forced message delivery on explicit no-tools runs", () => {
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [], forceMessageTool: true }),
