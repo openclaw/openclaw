@@ -13,6 +13,7 @@ import {
 import {
   freshLaneTimeoutMs,
   NpmUpdateSmoke,
+  parseArgs,
   spawnLoggedCommand,
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
@@ -70,6 +71,17 @@ afterEach(() => {
 });
 
 describe("parallels npm update smoke", () => {
+  it("accepts one prepared tarball target for update and fresh install", () => {
+    expect(parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz"])).toMatchObject({
+      targetTarball: "/tmp/openclaw-candidate.tgz",
+      updateTarget: "",
+      freshTargetSpec: undefined,
+    });
+    expect(() =>
+      parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz", "--update-target", "beta"]),
+    ).toThrow("--target-tarball cannot be combined");
+  });
+
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
     let stopCalls = 0;
     const server: HostServer = {
@@ -118,6 +130,18 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("this.options.freshTargetSpec = `openclaw@${version}`");
     expect(script).toContain("runFreshTargetInstalls");
     expect(script).toContain("freshTargetStatus");
+  });
+
+  it("host-serves a prepared candidate tarball for both proof phases", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("--target-tarball <path>");
+    expect(script).toContain('label: "prepared candidate tgz"');
+    expect(script).toContain("await copyFile(this.targetTarballPath, hostedTarballPath)");
+    expect(script).toContain("dir: this.tgzDir");
+    expect(script).toContain("this.updateTargetEffective = targetUrl");
+    expect(script).toContain("this.freshTargetSpec = targetUrl");
+    expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
   });
 
   it("guards beta validation against cross-version harness checkouts", () => {
