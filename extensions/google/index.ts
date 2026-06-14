@@ -12,7 +12,7 @@ import type {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
-import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
+import { buildGoogleAntigravityCliBackend, buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import {
   createGoogleMusicGenerationProviderMetadata,
@@ -341,6 +341,7 @@ export default definePluginEntry({
   description: "Bundled Google plugin",
   register(api) {
     api.registerCliBackend(buildGoogleGeminiCliBackend());
+    api.registerCliBackend(buildGoogleAntigravityCliBackend());
     registerGoogleGeminiCliProvider(api);
     registerGoogleProvider(api);
     api.registerMemoryEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
