@@ -3021,14 +3021,21 @@ async function maybeResolveActiveRecall(params: {
     resolvedModelRef?.provider,
     resolvedModelRef?.model,
   );
-  let timeoutCleanupRecorded = false;
-  const recordTimeoutAndScheduleCleanup = () => {
-    if (timeoutCleanupRecorded) {
+  let timeoutCleanupScheduled = false;
+  const scheduleTimeoutCleanup = () => {
+    if (timeoutCleanupScheduled) {
       return;
     }
-    timeoutCleanupRecorded = true;
-    recordCircuitBreakerTimeout(cbKey);
+    timeoutCleanupScheduled = true;
     scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
+  };
+  let circuitBreakerTimeoutRecorded = false;
+  const recordRecallTimeout = () => {
+    if (!circuitBreakerTimeoutRecorded) {
+      circuitBreakerTimeoutRecorded = true;
+      recordCircuitBreakerTimeout(cbKey);
+    }
+    scheduleTimeoutCleanup();
   };
   if (
     isCircuitBreakerOpen(
@@ -3076,6 +3083,9 @@ async function maybeResolveActiveRecall(params: {
   let recallTimedOut = false;
   const watchdogTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
+    if (params.abortSignal?.aborted) {
+      return;
+    }
     recallTimedOut = true;
     controller.abort(new Error(`active-memory timeout after ${watchdogTimeoutMs}ms`));
   }, watchdogTimeoutMs);
@@ -3136,8 +3146,10 @@ async function maybeResolveActiveRecall(params: {
     }
 
     if (raceResult === TIMEOUT_SENTINEL) {
-      if (recallTimedOut || (params.abortSignal?.aborted && recallInFlight)) {
-        recordTimeoutAndScheduleCleanup();
+      if (recallTimedOut) {
+        recordRecallTimeout();
+      } else if (params.abortSignal?.aborted && recallInFlight) {
+        scheduleTimeoutCleanup();
       }
       const elapsedMs = Date.now() - startedAt;
       const result: ActiveRecallResult = fallbackHasUsableMemoryResult
@@ -3234,14 +3246,16 @@ async function maybeResolveActiveRecall(params: {
     return result;
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      if (recallTimedOut || recallInFlight) {
-        recordTimeoutAndScheduleCleanup();
+      if (recallTimedOut) {
+        recordRecallTimeout();
+      } else if (recallInFlight) {
+        scheduleTimeoutCleanup();
       }
       params.abortSignal.throwIfAborted();
     }
     if (controller.signal.aborted) {
       if (recallTimedOut) {
-        recordTimeoutAndScheduleCleanup();
+        recordRecallTimeout();
       }
       const partialTimeoutData = readPartialTimeoutData(error);
       const result = await buildTimeoutRecallResult({

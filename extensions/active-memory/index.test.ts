@@ -4060,6 +4060,12 @@ describe("active-memory plugin", () => {
     await expect(resultPromise).resolves.toBeUndefined();
     await vi.runOnlyPendingTimersAsync();
     expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalled();
+    const circuitBreakerKey = testing.buildCircuitBreakerKey(
+      "main",
+      "github-copilot",
+      "gpt-5.4-mini",
+    );
+    expect(testing.isCircuitBreakerOpen(circuitBreakerKey, 1, 60_000)).toBe(false);
   });
 
   it("rejects completed output after a memory search returns no recall evidence", async () => {
