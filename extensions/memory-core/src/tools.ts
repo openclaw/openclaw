@@ -393,10 +393,13 @@ export function createMemorySearchTool(options: {
         });
         const cooldown =
           requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(cooldownKey);
-        let activeUnavailablePhase: "memory" | "supplement" | undefined;
-        let failedUnavailablePhase: "memory" | "supplement" | undefined;
+        // Only the memory/sessions branch feeds this tracker; the wiki branch
+        // runs concurrently (see below) and a second writer would make the
+        // corpus=all cooldown attribution race on last-writer-wins.
+        let activeUnavailablePhase: "memory" | undefined;
+        let failedUnavailablePhase: "memory" | undefined;
         const runUnavailablePhase = async <T>(
-          phase: "memory" | "supplement",
+          phase: "memory",
           task: () => Promise<T>,
         ): Promise<T> => {
           activeUnavailablePhase = phase;
@@ -430,6 +433,23 @@ export function createMemorySearchTool(options: {
               return context;
             };
             try {
+              // Run the wiki/supplement branch concurrently with memory/sessions:
+              // corpus=all previously awaited them sequentially under one 15s
+              // deadline, so two individually-fast searches summed past it and
+              // returned nothing (#92633). It stays outside runUnavailablePhase so
+              // the cooldown's memory-failure attribution is unaffected by the
+              // wiki branch; .catch absorbs the rejection on the rare paused-index
+              // early return that skips the await below.
+              const supplementResultsPromise: Promise<MemoryCorpusSearchResult[]> =
+                shouldQuerySupplements
+                  ? searchMemoryCorpusSupplements({
+                      query,
+                      maxResults,
+                      agentSessionKey: options.agentSessionKey,
+                      corpus: requestedCorpus,
+                    })
+                  : Promise.resolve([]);
+              supplementResultsPromise.catch(() => undefined);
               const memory = shouldQueryMemory
                 ? await runUnavailablePhase("memory", async () =>
                     trackMemoryManager(
@@ -599,18 +619,7 @@ export function createMemorySearchTool(options: {
                   );
                 }
               }
-              const supplementResults = shouldQuerySupplements
-                ? await runUnavailablePhase(
-                    "supplement",
-                    async () =>
-                      await searchMemoryCorpusSupplements({
-                        query,
-                        maxResults,
-                        agentSessionKey: options.agentSessionKey,
-                        corpus: requestedCorpus,
-                      }),
-                  )
-                : [];
+              const supplementResults = await supplementResultsPromise;
               // Wiki and memory scores use incomparable scales, so corpus=all first
               // balances candidate selection and then backfills any unused slots.
               const effectiveMax = Math.max(1, maxResults ?? 10);
