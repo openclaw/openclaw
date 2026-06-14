@@ -496,6 +496,7 @@ describe("memory tools", () => {
   });
 
   it("does not cooldown primary memory when a corpus=all wiki supplement stalls", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.useFakeTimers();
     try {
       let searchCalls = 0;
@@ -518,17 +519,22 @@ describe("memory tools", () => {
       });
 
       const tool = createMemorySearchToolOrThrow();
+      // Per-supplement timeout (default 10s, see #77897) lets the stalled
+      // wiki supplement be discarded as a rejected outcome while preserving
+      // sibling memory results. The all-mode call should now return memory
+      // results successfully instead of tripping the global 15s deadline.
       const stalledAllResultPromise = tool.execute("call_all_stalled_wiki", {
         query: "alpha",
         corpus: "all",
       });
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       const stalledAllResult = await stalledAllResultPromise;
-      expectUnavailableMemorySearchDetails(stalledAllResult.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
-      });
+      const stalledDetails = stalledAllResult.details as {
+        results: Array<{ corpus: string; path: string }>;
+      };
+      expect(stalledDetails.results.map((entry) => [entry.corpus, entry.path])).toEqual([
+        ["memory", "MEMORY.md"],
+      ]);
 
       const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
         query: "alpha",
@@ -540,6 +546,7 @@ describe("memory tools", () => {
       expect(searchCalls).toBe(2);
     } finally {
       vi.useRealTimers();
+      warnSpy.mockRestore();
     }
   });
 
@@ -591,6 +598,54 @@ describe("memory tools", () => {
       expect(searchCalls).toBe(1);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("preserves sibling supplement results when one corpus=all supplement rejects (#77897)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      registerMemoryCorpusSupplement("healthy-wiki", {
+        search: async () => [
+          {
+            corpus: "wiki",
+            path: "entities/healthy.md",
+            title: "Healthy",
+            kind: "entity",
+            score: 1.1,
+            snippet: "Healthy supplement result",
+          },
+        ],
+        get: async () => null,
+      });
+      registerMemoryCorpusSupplement("broken-wiki", {
+        search: async () => {
+          throw new Error("corpus backend unavailable");
+        },
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const result = await tool.execute("call_all_partial_supplement_failure", {
+        query: "healthy",
+        corpus: "all",
+        maxResults: 3,
+      });
+      const details = result.details as { results: Array<{ corpus: string; path: string }> };
+
+      expect(details.results.map((entry) => [entry.corpus, entry.path])).toContainEqual([
+        "wiki",
+        "entities/healthy.md",
+      ]);
+      expect(details.results.map((entry) => [entry.corpus, entry.path])).toContainEqual([
+        "memory",
+        "MEMORY.md",
+      ]);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
+      expect(message).toContain('corpus supplement "broken-wiki" search failed');
+      expect(message).toContain("corpus backend unavailable");
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 
