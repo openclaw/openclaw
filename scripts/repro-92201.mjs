@@ -30,7 +30,7 @@ const streamFn = () => {
 
 const wrapped = wrapAnthropicStreamWithRecovery(streamFn, META);
 try {
-  const result = await wrapped({}, { messages: [] }, {});
+  await wrapped({}, { messages: [] }, {});
   console.log("=== Stream completed without error ===");
   if (META.recoveredAnthropicThinking) {
     console.log("\n✅ SUCCESS: Recovery wrapper correctly detected thinking block signature error");
