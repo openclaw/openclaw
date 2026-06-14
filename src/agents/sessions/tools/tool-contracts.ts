@@ -80,4 +80,6 @@ export interface ReadToolDetails {
 export interface WriteToolInput {
   path: string;
   content: string;
+  /** Append content to the existing file instead of overwriting it. */
+  append?: boolean;
 }
