@@ -250,7 +250,7 @@ command runs. It receives:
 - `event.toolName`, currently always `"exec"`
 - `event.host`, one of `"gateway"`, `"sandbox"`, or `"node"`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`,
-  `ctx.messageProvider`, and `ctx.channelId`
+  `ctx.messageProvider`, `ctx.channelId`, and `ctx.accountId`
 
 Return a `Record<string, string>` to merge into the exec environment. Handlers
 run in priority order, and later hook results override earlier hook results for
@@ -321,7 +321,8 @@ job.
 For channel-originated runs, `ctx.messageProvider` is the provider surface such
 as `discord` or `telegram`, while `ctx.channelId` is the conversation target
 identifier when OpenClaw can derive one from the session key or delivery
-metadata.
+metadata. Multi-account channel deployments also expose `ctx.accountId`, the
+channel-account identifier the turn belongs to, when the run carries one.
 
 `agent_end` is an observation hook. Gateway and persistent harness paths run it
 fire-and-forget after the turn, while short-lived one-shot CLI paths wait for the

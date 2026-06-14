@@ -1328,6 +1328,7 @@ export function createExecTool(
         sessionKey: defaults?.sessionKey ?? context?.hookContext?.sessionKey,
         messageProvider: defaults?.messageProvider,
         channelId: defaults?.currentChannelId ?? context?.hookContext?.channelId,
+        accountId: defaults?.accountId ?? context?.hookContext?.accountId,
       },
     );
     const pluginEnv = filterPluginExecEnv(rawPluginEnv);
