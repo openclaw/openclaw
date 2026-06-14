@@ -218,6 +218,17 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
   }
 }
 
+/** Result of {@link stopSlackStream}. */
+export type StopSlackStreamResult = {
+  /**
+   * The Slack `ts` of the finalized streamed message, when `chat.stopStream`
+   * reports it. Used to populate `MessageSentEvent.messageId` for the
+   * streaming reply path. Undefined when the stream was already stopped or
+   * Slack omitted the timestamp.
+   */
+  messageId?: string;
+};
+
 /**
  * Stop (finalize) a Slack stream.
  *
@@ -235,13 +246,18 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
  * text so the caller can deliver it through the normal Slack reply path.
  *
  * All other errors propagate unchanged.
+ *
+ * On success, returns the finalized message's Slack `ts` (when reported) so the
+ * caller can emit the `message_sent` hook with a populated `messageId`.
  */
-export async function stopSlackStream(params: StopSlackStreamParams): Promise<void> {
+export async function stopSlackStream(
+  params: StopSlackStreamParams,
+): Promise<StopSlackStreamResult> {
   const { session, text, chunks, metadata } = params;
 
   if (session.stopped) {
     logVerbose("slack-stream: stream already stopped, ignoring duplicate stop");
-    return;
+    return {};
   }
 
   session.stopped = true;
@@ -256,7 +272,7 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
   );
 
   try {
-    await session.streamer.stop(
+    const stopResponse = await session.streamer.stop(
       text || chunks?.length || metadata
         ? {
             ...(text ? { markdown_text: text } : {}),
@@ -267,6 +283,11 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
     );
     session.delivered = true;
     session.pendingText = "";
+    logVerbose("slack-stream: stream stopped");
+    // `chat.stopStream` reports the finalized message `ts` at the top level
+    // (and on `message.ts`); prefer the former and fall back to the latter.
+    const messageId = stopResponse?.ts ?? stopResponse?.message?.ts;
+    return messageId ? { messageId } : {};
   } catch (err) {
     if (isBenignSlackFinalizeError(err)) {
       const code = extractSlackErrorCode(err) ?? "unknown";
@@ -279,13 +300,11 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
         logVerbose(
           `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
         );
-        return;
+        return {};
       }
     }
     throw err;
   }
-
-  logVerbose("slack-stream: stream stopped");
 }
 
 // ---------------------------------------------------------------------------
@@ -334,10 +353,12 @@ export function extractSlackErrorCode(err: unknown): string | undefined {
 }
 
 export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
-  const hadNativeDelivery = session.delivered;
+  const nativeStreamWasStarted = session.delivered;
   session.pendingText = "";
-  session.delivered = true;
-  if (!hadNativeDelivery) {
-    session.stopped = true;
-  }
+  // @slack/web-api 7.16.0 retains its private buffer after a failed flush.
+  // Clear fallback-owned text before retrying stop(), or the SDK resends it.
+  (session.streamer as unknown as { buffer: string }).buffer = "";
+  // A visible native stream still needs stop() to leave streaming state. If no
+  // native call succeeded, there is no Slack stream to finalize.
+  session.stopped = !nativeStreamWasStarted;
 }

@@ -18,6 +18,7 @@ export type EmbeddedAgentSessionOptions = {
   sessionManager: unknown;
   settingsManager: unknown;
   resourceLoader: unknown;
+  resolveDeferredTool?: CreateAgentSessionOptions["resolveDeferredTool"];
   withSessionWriteLock?: CreateAgentSessionOptions["withSessionWriteLock"];
 };
 

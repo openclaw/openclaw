@@ -39,8 +39,10 @@ let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntime
 let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
+let abortActiveReplyRunsForTest: typeof import("./reply-run-registry.js").abortActiveReplyRuns;
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
+let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -462,8 +464,13 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
-  ({ createReplyOperation: createReplyOperationForTest, testing: replyRunTestingForTest } =
-    await import("./reply-run-registry.js"));
+  ({
+    abortActiveReplyRuns: abortActiveReplyRunsForTest,
+    createReplyOperation: createReplyOperationForTest,
+    testing: replyRunTestingForTest,
+  } = await import("./reply-run-registry.js"));
+  ({ setReplyPayloadMetadata: setReplyPayloadMetadataForTest } =
+    await import("../reply-payload.js"));
 }
 
 function setFastFollowupCliBackendDeps(): void {
@@ -1030,6 +1037,8 @@ describe("createFollowupRunner runtime config", () => {
           provider: "anthropic",
           model: "claude-opus-4-7",
           messageProvider: "telegram",
+          senderId: "sender-42",
+          senderIsOwner: true,
           cwd: "/tmp/task-repo",
           inputProvenance: {
             kind: "internal_system",
@@ -1051,6 +1060,8 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentChannelId).toBe("telegram:-100123:topic:42");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-42");
+    expect(call.senderId).toBe("sender-42");
+    expect(call.senderIsOwner).toBe(true);
     expect(call).toMatchObject({
       sessionId: "session-cli-followup",
       sessionKey: "main",
@@ -1128,6 +1139,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.persistAssistantTranscript).toBe(false);
     expect(call.currentInboundAudio).toBe(true);
     expect(call.suppressNextUserMessagePersistence).toBe(true);
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
@@ -1305,6 +1317,7 @@ describe("createFollowupRunner runtime config", () => {
       typing: createMockTypingController(),
       typingMode: "instant",
       sessionKey: "main",
+      storePath: "/tmp/sessions.json",
       defaultModel: "anthropic/claude-opus-4-7",
     });
 
@@ -1321,8 +1334,59 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(mediaCall.persistAssistantTranscript).toBe(true);
+    expect(mediaCall.storePath).toBe("/tmp/sessions.json");
     const recorder = requireRecord(mediaCall.userTurnTranscriptRecorder, "cli user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
+  });
+
+  it("disables routed delivery mirrors for CLI-owned followup payloads", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [
+        setReplyPayloadMetadataForTest(
+          { text: "persisted CLI followup" },
+          { assistantTranscriptOwned: true },
+        ),
+      ],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingTo: "telegram:-100123",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "persisted CLI followup" },
+        mirror: false,
+      }),
+    );
   });
 
   it("keeps queued CLI tool progress quiet when verbose progress is disabled", async () => {
@@ -1401,12 +1465,7 @@ describe("createFollowupRunner runtime config", () => {
     };
     const onItemEvent = vi.fn(async () => {});
     runCliAgentMock.mockImplementationOnce(
-      async (params: {
-        runId: string;
-        classifyCommentaryText?: boolean;
-        emitCommentaryText?: boolean;
-      }) => {
-        expect(params.classifyCommentaryText).toBe(true);
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
         expect(params.emitCommentaryText).toBe(true);
         realAgentEvents.emitAgentEvent({
           runId: params.runId,
@@ -1542,6 +1601,86 @@ describe("createFollowupRunner runtime config", () => {
     const embeddedCall = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
     expect(lifecyclePhases).toEqual(["start", "start", "end"]);
+  });
+
+  it("suppresses deferred CLI success after restart cancellation", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecycleEvents: Array<Record<string, unknown>> = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        lifecycleEvents.push(evt.data);
+      }
+    });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    let resolveCli: (() => void) | undefined;
+    runCliAgentMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCli = () =>
+            resolve({
+              payloads: [{ text: "completed after restart" }],
+              meta: {
+                agentMeta: {
+                  provider: "claude-cli",
+                  model: "claude-opus-4-7",
+                },
+              },
+            });
+        }),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      const pending = runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          run: {
+            config: runtimeConfig,
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+      });
+      expect(abortActiveReplyRunsForTest({ mode: "all" })).toBe(true);
+      resolveCli?.();
+      await pending;
+    } finally {
+      unsubscribe();
+    }
+
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "error",
+          aborted: true,
+          stopReason: "restart",
+        }),
+      ]),
+    );
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {
@@ -2852,6 +2991,82 @@ describe("createFollowupRunner compaction", () => {
     expect(observedRunId).toBeDefined();
     expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe("new-session");
     realAgentEvents.resetAgentRunContextForTest();
+  });
+
+  it("captures follow-up lifecycle ownership before asynchronous preflight", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+    const initialGeneration = realAgentEvents.getAgentEventLifecycleGeneration();
+    let releasePreflight: (() => void) | undefined;
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: { sessionEntry?: SessionEntry }) => {
+        await new Promise<void>((resolve) => {
+          releasePreflight = resolve;
+        });
+        return params.sessionEntry;
+      },
+    );
+    let observedLifecycleGeneration: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { lifecycleGeneration?: string }) => {
+        observedLifecycleGeneration = params.lifecycleGeneration;
+        if (params.lifecycleGeneration !== realAgentEvents.getAgentEventLifecycleGeneration()) {
+          const error = new Error("Agent run belongs to a stale gateway lifecycle");
+          error.name = "AbortError";
+          throw error;
+        }
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: {
+        sessionId: "preflight-session",
+        updatedAt: Date.now(),
+      },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      const pending = runner(
+        createQueuedRun({
+          run: {
+            sessionId: "preflight-session",
+            sessionKey: "main",
+            provider: "anthropic",
+            model: "claude",
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledTimes(1);
+      });
+      const [registeredRun] = realAgentEvents.listAgentRunsForSession({
+        sessionKey: "main",
+        sessionId: "preflight-session",
+      });
+      expect(registeredRun).toEqual(
+        expect.objectContaining({
+          lifecycleGeneration: initialGeneration,
+        }),
+      );
+
+      realAgentEvents.rotateAgentEventLifecycleGeneration();
+      releasePreflight?.();
+      await pending;
+
+      expect(observedLifecycleGeneration).toBe(initialGeneration);
+      expect(realAgentEvents.getAgentRunContext(registeredRun?.runId ?? "")).toBeUndefined();
+    } finally {
+      realAgentEvents.resetAgentRunContextForTest();
+    }
   });
 });
 

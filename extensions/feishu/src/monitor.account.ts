@@ -143,6 +143,7 @@ export async function resolveReactionSyntheticEvent(
     },
     message: {
       message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      typing_target_message_id: messageId,
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",

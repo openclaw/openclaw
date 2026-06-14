@@ -2436,6 +2436,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         maxMessages: limit,
         maxLines: limit * 20 + 20,
+        allowResetArchiveFallback: true,
       },
     );
     respond(true, { messages }, undefined);

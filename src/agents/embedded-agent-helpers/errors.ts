@@ -77,6 +77,10 @@ const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
+const MODEL_NOT_FOUND_USER_TEXT =
+  "The selected model was not found by the provider. Check the model id or choose a different model.";
+const MAX_FAILOVER_DETAIL_CANDIDATES = 12;
+const MAX_FAILOVER_DETAIL_CHARS = 1_000;
 
 /** Detect provider errors that require reasoning to stay enabled. */
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
@@ -276,6 +280,7 @@ export type FailoverSignal = {
   errorType?: string;
   message?: string;
   provider?: string;
+  details?: readonly string[];
 };
 
 export type FailoverClassification =
@@ -286,6 +291,87 @@ export type FailoverClassification =
   | {
       kind: "context_overflow";
     };
+
+// Provider SDKs often keep semantic error fields outside Error.message.
+// These bounded candidates feed classification only; user-facing copy still
+// comes from the normal sanitized formatter path.
+function normalizeFailoverDetailString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length > MAX_FAILOVER_DETAIL_CHARS
+    ? trimmed.slice(0, MAX_FAILOVER_DETAIL_CHARS)
+    : trimmed;
+}
+
+function appendFailoverDetailCandidate(candidates: string[], value: unknown): void {
+  const normalized =
+    typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+      ? normalizeFailoverDetailString(String(value))
+      : undefined;
+  if (!normalized || candidates.includes(normalized)) {
+    return;
+  }
+  candidates.push(normalized);
+}
+
+function collectFailoverDetailCandidates(
+  value: unknown,
+  candidates: string[],
+  seen: Set<object>,
+): void {
+  if (
+    candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES ||
+    value === undefined ||
+    value === null
+  ) {
+    return;
+  }
+  if (typeof value === "string") {
+    appendFailoverDetailCandidate(candidates, value);
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return;
+    }
+    try {
+      collectFailoverDetailCandidates(JSON.parse(trimmed) as unknown, candidates, seen);
+    } catch {
+      // Non-JSON detail strings are still useful as direct classifier candidates.
+    }
+    return;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    appendFailoverDetailCandidate(candidates, value);
+    return;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return;
+  }
+  if (seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "param", "code", "type", "error", "detail", "body"]) {
+    collectFailoverDetailCandidates(record[key], candidates, seen);
+    if (candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES) {
+      return;
+    }
+  }
+}
+
+export function extractFailoverSignalDetails(...values: unknown[]): string[] | undefined {
+  const candidates: string[] = [];
+  const seen = new Set<object>();
+  for (const value of values) {
+    collectFailoverDetailCandidates(value, candidates, seen);
+    if (candidates.length >= MAX_FAILOVER_DETAIL_CANDIDATES) {
+      break;
+    }
+  }
+  return candidates.length > 0 ? candidates : undefined;
+}
 
 export type ProviderRuntimeFailureKind =
   | "auth_scope"
@@ -302,6 +388,7 @@ export type ProviderRuntimeFailureKind =
   | "rate_limit"
   | "dns"
   | "timeout"
+  | "model_not_found"
   | "schema"
   | "sandbox_blocked"
   | "replay_invalid"
@@ -1009,6 +1096,49 @@ function classifyFailoverClassificationFromMessage(
   return null;
 }
 
+function classificationReason(
+  classification: FailoverClassification | null,
+): FailoverReason | undefined {
+  return classification?.kind === "reason" ? classification.reason : undefined;
+}
+
+function classifyFailoverDetailCandidates(
+  details: readonly string[] | undefined,
+  provider: string | undefined,
+  includeProviderPluginHooks: boolean,
+): FailoverClassification | null {
+  for (const detail of details ?? []) {
+    const classification = classifyFailoverClassificationFromMessage(detail, provider, {
+      includeProviderPluginHooks,
+    });
+    if (classification) {
+      return classification;
+    }
+  }
+  return null;
+}
+
+function mergeMessageAndDetailClassification(
+  messageClassification: FailoverClassification | null,
+  detailClassification: FailoverClassification | null,
+): FailoverClassification | null {
+  if (!messageClassification) {
+    return detailClassification;
+  }
+  if (!detailClassification) {
+    return messageClassification;
+  }
+  if (messageClassification.kind === "context_overflow") {
+    return messageClassification;
+  }
+  if (detailClassification.kind === "context_overflow") {
+    return detailClassification;
+  }
+  return classificationReason(messageClassification) === "format"
+    ? detailClassification
+    : messageClassification;
+}
+
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
@@ -1029,6 +1159,11 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
         includeProviderPluginHooks: !hasStructuredProviderSignal,
       })
     : null;
+  const detailClassification = classifyFailoverDetailCandidates(
+    signal.details,
+    signal.provider,
+    !hasStructuredProviderSignal,
+  );
   const providerPluginReason =
     hasStructuredProviderSignal &&
     signal.provider &&
@@ -1043,7 +1178,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
       : null;
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
-    : messageClassification;
+    : mergeMessageAndDetailClassification(messageClassification, detailClassification);
   const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
@@ -1110,6 +1245,12 @@ export function classifyProviderRuntimeFailureKind(
   if (failoverClassification?.kind === "reason" && failoverClassification.reason === "rate_limit") {
     return "rate_limit";
   }
+  if (
+    failoverClassification?.kind === "reason" &&
+    failoverClassification.reason === "model_not_found"
+  ) {
+    return "model_not_found";
+  }
   if (message && isDnsTransportErrorMessage(message)) {
     return "dns";
   }
@@ -1155,6 +1296,32 @@ export function classifyProviderRuntimeFailureKind(
   return "unclassified";
 }
 
+function buildAssistantFailoverSignal(
+  msg: AssistantMessage,
+  opts?: { provider?: string },
+): FailoverSignal {
+  return {
+    status: extractLeadingHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
+    code: msg.errorCode,
+    errorType: msg.errorType,
+    message: msg.errorMessage?.trim() || undefined,
+    provider: opts?.provider ?? msg.provider,
+    details: extractFailoverSignalDetails(msg.errorBody),
+  };
+}
+
+export function classifyAssistantFailoverReason(
+  msg: AssistantMessage | undefined,
+  opts?: { provider?: string },
+): FailoverReason | null {
+  if (!msg || msg.stopReason !== "error") {
+    return null;
+  }
+  return failoverReasonFromClassification(
+    classifyFailoverSignal(buildAssistantFailoverSignal(msg, opts)),
+  );
+}
+
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
@@ -1169,9 +1336,8 @@ export function formatAssistantErrorText(
   }
 
   const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind({
-    status: extractLeadingHttpStatus(raw)?.code,
+    ...buildAssistantFailoverSignal(msg, { provider: opts?.provider }),
     message: raw,
-    provider: opts?.provider ?? msg.provider,
   });
 
   const unknownTool =
@@ -1262,6 +1428,10 @@ export function formatAssistantErrorText(
 
   if (providerRuntimeFailureKind === "proxy") {
     return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
+  }
+
+  if (providerRuntimeFailureKind === "model_not_found") {
+    return MODEL_NOT_FOUND_USER_TEXT;
   }
 
   if (isContextOverflowError(raw)) {
@@ -1580,8 +1750,5 @@ export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }
 }
 
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") {
-    return false;
-  }
-  return isFailoverErrorMessage(msg.errorMessage ?? "", { provider: msg.provider });
+  return classifyAssistantFailoverReason(msg) !== null;
 }

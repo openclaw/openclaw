@@ -161,6 +161,7 @@ export type EmbeddedAgentSubscribeState = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
+  messageToolOnlySourceReplyDelivered: boolean;
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -270,12 +271,14 @@ type ToolHandlerParams = Pick<
   | "onAgentEvent"
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
+  | "onAgentToolResult"
   | "onToolResult"
   | "sessionKey"
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
   | "toolProgressDetail"
+  | "sourceReplyDeliveryMode"
 >;
 
 type ToolHandlerState = Pick<
@@ -302,6 +305,7 @@ type ToolHandlerState = Pick<
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
+  | "messageToolOnlySourceReplyDelivered"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"

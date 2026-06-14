@@ -39,6 +39,7 @@ import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { isDeliveredMessageToolOnlySourceReplyResult } from "./embedded-agent-message-tool-source-reply.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
@@ -1165,8 +1166,21 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
-  const isToolError = isError || isToolResultError(result);
+  const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const approvalUnavailable =
+    isExecToolName(toolName) &&
+    readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
+  const isToolError = observerIsError && !approvalUnavailable;
+  try {
+    ctx.params.onAgentToolResult?.({
+      toolName,
+      result: sanitizedResult,
+      isError: observerIsError,
+    });
+  } catch (error) {
+    ctx.log.warn(`onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`);
+  }
   const eventResult = isExecToolName(toolName)
     ? capLiveExecResult(sanitizedResult)
     : sanitizedResult;
@@ -1274,6 +1288,17 @@ export async function handleToolExecutionEnd(
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
+    }
+    if (
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+        toolName,
+        args: startArgs,
+        result,
+        isError: isToolError,
+      })
+    ) {
+      ctx.state.messageToolOnlySourceReplyDelivered = true;
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {

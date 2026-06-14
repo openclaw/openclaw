@@ -13,6 +13,7 @@ import {
   type ChannelRouteTargetInput,
 } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 /** Removes text payloads already sent by message tools. */
@@ -84,7 +85,8 @@ export function filterMessagingToolMediaDuplicates(params: {
       continue;
     }
 
-    const nextPayload = Object.assign({}, payload, {
+    const nextPayload = copyReplyPayloadMetadata(payload, {
+      ...payload,
       mediaUrl: stripSingle ? undefined : mediaUrl,
       mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
     });

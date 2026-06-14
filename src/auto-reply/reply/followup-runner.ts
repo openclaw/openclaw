@@ -17,6 +17,10 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import {
+  isAgentRunRestartAbortReason,
+  resolveAgentRunAbortLifecycleFields,
+} from "../../agents/run-termination.js";
+import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
@@ -24,12 +28,21 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  captureAgentRunLifecycleGeneration,
+  clearAgentRunContext,
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  registerAgentRunContext,
+} from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   clearDroppedCliSessionBinding,
@@ -383,6 +396,10 @@ export function createFollowupRunner(params: {
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
+        const payloadMetadata = getReplyPayloadMetadata(payload);
+        const hasTranscriptOwner =
+          payloadMetadata?.assistantMessageIndex !== undefined ||
+          payloadMetadata?.assistantTranscriptOwned === true;
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -395,7 +412,7 @@ export function createFollowupRunner(params: {
           requesterSenderE164: queued.run.senderE164,
           threadId: queued.originatingThreadId,
           cfg: runtimeConfig,
-          mirror: options.mirror,
+          mirror: hasTranscriptOwner ? false : options.mirror,
           replyKind,
           runId: options.runId,
         });
@@ -629,6 +646,16 @@ export function createFollowupRunner(params: {
             );
           }
         : undefined;
+      let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
+      if (run.sessionKey) {
+        registerAgentRunContext(runId, {
+          sessionKey: run.sessionKey,
+          ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+          lifecycleGeneration,
+          verboseLevel: run.verboseLevel,
+          isControlUiVisible: shouldSurfaceToControlUi,
+        });
+      }
       try {
         activeSessionEntry = await runPreflightCompactionIfNeeded({
           cfg: runtimeConfig,
@@ -645,6 +672,7 @@ export function createFollowupRunner(params: {
           onCompactionNotice: notifyPreflightCompaction,
         });
       } catch (err) {
+        clearAgentRunContext(runId, lifecycleGeneration);
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
         const preflightCompactionFailureText = buildPreflightCompactionFailureText(message, {
@@ -672,6 +700,7 @@ export function createFollowupRunner(params: {
         registerAgentRunContext(runId, {
           sessionKey: run.sessionKey,
           ...(owningSessionId ? { sessionId: owningSessionId } : {}),
+          lifecycleGeneration,
           verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,
         });
@@ -774,6 +803,7 @@ export function createFollowupRunner(params: {
             resolveSessionRuntimeOverrideForProvider({
               provider,
               entry: activeSessionEntry,
+              cfg: runtimeConfig,
             }),
           prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
             await ensureSelectedAgentHarnessPlugin({
@@ -808,6 +838,7 @@ export function createFollowupRunner(params: {
             const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
               provider,
               entry: activeSessionEntry,
+              cfg: runtimeConfig,
             });
             const cliExecutionProvider =
               (sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
@@ -872,6 +903,7 @@ export function createFollowupRunner(params: {
                 });
                 const result = await runCliAgentWithLifecycle({
                   runId,
+                  lifecycleGeneration,
                   provider: cliExecutionProvider,
                   startedAt: cliLifecycleStartedAt,
                   emitLifecycleTerminal: false,
@@ -931,6 +963,10 @@ export function createFollowupRunner(params: {
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                     userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,
+                    persistAssistantTranscript:
+                      queued.currentInboundEventKind !== "room_event" &&
+                      run.suppressTranscriptOnlyAssistantPersistence !== true,
+                    storePath,
                     currentInboundEventKind: queued.currentInboundEventKind,
                     currentInboundAudio: queued.currentInboundAudio,
                     currentInboundContext: queued.currentInboundContext,
@@ -940,7 +976,6 @@ export function createFollowupRunner(params: {
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                       config: runtimeConfig,
                     }),
-                    classifyCommentaryText: opts?.commentaryProgressEnabled !== undefined,
                     thinkLevel: run.thinkLevel,
                     timeoutMs: run.timeoutMs,
                     runTimeoutOverrideMs: run.runTimeoutOverrideMs,
@@ -973,6 +1008,8 @@ export function createFollowupRunner(params: {
                         : undefined,
                     currentMessageId: followupCurrentMessageId,
                     agentAccountId: run.agentAccountId,
+                    senderId: run.senderId,
+                    senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
                   },
@@ -995,6 +1032,7 @@ export function createFollowupRunner(params: {
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
               const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
+                lifecycleGeneration,
                 replyOperation,
                 sessionId: run.sessionId,
                 sessionKey: run.sessionKey,
@@ -1059,6 +1097,11 @@ export function createFollowupRunner(params: {
                 runTimeoutOverrideMs: run.runTimeoutOverrideMs,
                 runId,
                 abortSignal: runAbortSignal,
+                onExecutionStarted: (info) => {
+                  if (info?.lifecycleGeneration) {
+                    lifecycleGeneration = info.lifecycleGeneration;
+                  }
+                },
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
@@ -1112,6 +1155,9 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (isAgentRunRestartAbortReason(runAbortSignal.reason)) {
+          throw runAbortSignal.reason;
+        }
         if (
           pendingDeferredCliTerminal &&
           pendingDeferredCliTerminal.provider === fallbackProvider &&
@@ -1119,11 +1165,13 @@ export function createFollowupRunner(params: {
         ) {
           emitAgentEvent({
             runId,
+            lifecycleGeneration,
             stream: "lifecycle",
             data: {
               phase: "end",
               startedAt: pendingDeferredCliTerminal.startedAt,
               endedAt: Date.now(),
+              ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
             },
           });
         }
@@ -1138,15 +1186,20 @@ export function createFollowupRunner(params: {
         if (pendingDeferredCliTerminal) {
           emitAgentEvent({
             runId,
+            lifecycleGeneration,
             stream: "lifecycle",
             data: {
               phase: "error",
               startedAt: pendingDeferredCliTerminal.startedAt,
               endedAt: Date.now(),
               error: message,
+              ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
             },
           });
           pendingDeferredCliTerminal = undefined;
+        }
+        if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+          clearAgentRunContext(runId, lifecycleGeneration);
         }
         await drainProgressDeliveries();
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);

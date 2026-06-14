@@ -1,6 +1,7 @@
 // Tests follow-up reply delivery and route preservation.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -26,6 +27,22 @@ describe("resolveFollowupDeliveryPayloads", () => {
         payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "/tmp/image.png" }],
       }),
     ).toEqual([{ text: "", mediaUrl: "/tmp/image.png" }]);
+  });
+
+  it("preserves transcript ownership when stripping heartbeat text", () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "HEARTBEAT_OK still working" },
+      { assistantTranscriptOwned: true },
+    );
+
+    const [resolved] = resolveFollowupDeliveryPayloads({
+      cfg: baseConfig,
+      payloads: [payload],
+    });
+
+    expect(getReplyPayloadMetadata(resolved ?? {})).toEqual({
+      assistantTranscriptOwned: true,
+    });
   });
 
   it("drops text payloads already sent via messaging tool", () => {

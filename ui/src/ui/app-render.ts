@@ -680,6 +680,7 @@ const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notif
 type ChatWorkspaceFilesState = {
   activeName: string | null;
   agentId: string;
+  collapsed: boolean;
   error: string | null;
   list: AgentsFilesListResult | null;
   loading: boolean;
@@ -700,6 +701,7 @@ function getChatWorkspaceFilesState(state: AppViewState, agentId: string): ChatW
   const next = {
     activeName: null,
     agentId,
+    collapsed: true,
     error: null,
     list: null,
     loading: false,
@@ -2098,6 +2100,7 @@ export function renderApp(state: AppViewState) {
   };
   if (
     isChat &&
+    !chatWorkspaceFiles.collapsed &&
     state.connected &&
     state.agentsList &&
     !chatWorkspaceFiles.loading &&
@@ -2106,6 +2109,13 @@ export function renderApp(state: AppViewState) {
   ) {
     loadChatWorkspaceFiles();
   }
+  const toggleChatWorkspaceFilesCollapsed = () => {
+    chatWorkspaceFiles.collapsed = !chatWorkspaceFiles.collapsed;
+    if (!chatWorkspaceFiles.collapsed && chatWorkspaceFiles.list?.agentId !== chatAgentId) {
+      loadChatWorkspaceFiles();
+    }
+    requestHostUpdate?.();
+  };
   const refreshChatWorkspaceFiles = () => {
     loadChatWorkspaceFiles({ force: true });
   };
@@ -3534,6 +3544,7 @@ export function renderApp(state: AppViewState) {
                   sessions: state.sessionsResult,
                   composerControls: renderGuardedChatControls(state),
                   workspaceFiles: {
+                    collapsed: chatWorkspaceFiles.collapsed,
                     agentId: chatAgentId,
                     list:
                       chatWorkspaceFiles.list?.agentId === chatAgentId
@@ -3542,6 +3553,7 @@ export function renderApp(state: AppViewState) {
                     loading: chatWorkspaceFiles.loading,
                     error: chatWorkspaceFiles.error,
                     activeName: chatWorkspaceFiles.activeName,
+                    onToggleCollapsed: toggleChatWorkspaceFilesCollapsed,
                     onRefresh: refreshChatWorkspaceFiles,
                     onOpenFile: openChatWorkspaceFile,
                   },

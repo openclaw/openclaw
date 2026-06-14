@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 
 vi.hoisted(() => {
   vi.resetModules();
@@ -515,6 +516,7 @@ async function persistModelDirectiveForTest(params: {
   cfg?: OpenClawConfig;
   aliasIndex?: ModelAliasIndex;
   allowedModelKeys: string[];
+  allowedModelCatalog?: ModelCatalogEntry[];
   sessionEntry?: SessionEntry;
   provider?: string;
   model?: string;
@@ -541,6 +543,7 @@ async function persistModelDirectiveForTest(params: {
     defaultModel: "claude-opus-4-6",
     aliasIndex: params.aliasIndex ?? baseAliasIndex(),
     allowedModelKeys: new Set(params.allowedModelKeys),
+    modelCatalog: params.allowedModelCatalog,
     provider: params.provider ?? "anthropic",
     model: params.model ?? "claude-opus-4-6",
     initialModelLabel:
@@ -1302,6 +1305,32 @@ describe("/model chat UX", () => {
     expect(persisted.provider).toBe("openai");
     expect(persisted.model).toBe("gpt-5.5");
     expect(persisted.contextTokens).toBe(1_000_000);
+  });
+
+  it("caps a cold model switch with the selected catalog row", async () => {
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-5.5 hello",
+      allowedModelKeys: ["openai/gpt-5.5"],
+      allowedModelCatalog: [
+        {
+          provider: "openai",
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          contextWindow: 1_000_000,
+          contextTokens: 272_000,
+        },
+      ],
+      cfg: {
+        ...baseConfig(),
+        agents: {
+          defaults: {
+            contextTokens: 1_000_000,
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(persisted.contextTokens).toBe(272_000);
   });
 
   it("clears runtime overrides when the model directive asks for default runtime", async () => {
