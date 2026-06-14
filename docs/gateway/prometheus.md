@@ -53,6 +53,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
         ```
       </Tab>
     </Tabs>
+
+    <Warning>
+    `plugins.allow` is **strict-mode**: when set, only listed plugins are eligible to load. The example above is intended for clean installs. If your gateway already has other plugins configured, enumerate **all** of their ids in `allow` — or omit `allow` entirely. Setting `allow: ["diagnostics-prometheus"]` on a multi-plugin gateway will disable every other configured plugin, including `memory-core`, `active-memory`, channel plugins, and more. The startup warning `plugins.allow is empty; discovered non-bundled plugins may auto-load` does not require this key; trust to non-bundled plugins is governed by separate mechanisms (see [#75575](https://github.com/openclaw/openclaw/issues/75575) for related discussion).
+    </Warning>
+
   </Step>
   <Step title="Restart the Gateway">
     The HTTP route is registered at plugin startup, so reload after enabling.
