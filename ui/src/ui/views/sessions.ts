@@ -725,7 +725,7 @@ export function renderSessions(props: SessionsProps) {
                     : nothing}
                 </th>
                 ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
-                <th>${t("sessionsView.label")}</th>
+                <th class="session-label-col">${t("sessionsView.label")}</th>
                 ${sortHeader("kind", t("sessionsView.kind"))}
                 <th class="session-status-col">${t("sessionsView.status")}</th>
                 <th>${t("agents.context.runtime")}</th>
@@ -932,12 +932,12 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             : nothing}
         </div>
       </td>
-      <td>
+      <td class="session-label-col">
         <input
+          class="session-label-input"
           .value=${row.label ?? ""}
           ?disabled=${props.loading}
           placeholder=${t("sessionsView.optionalPlaceholder")}
-          style="width: 100%; max-width: 140px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);"
           @change=${(e: Event) => {
             const value = normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
             props.onPatch(row.key, { label: value });
