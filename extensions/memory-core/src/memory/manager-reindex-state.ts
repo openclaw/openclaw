@@ -1,4 +1,5 @@
 // Memory Core plugin module implements manager reindex state behavior.
+import { DEFAULT_LOCAL_MODEL } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import {
   hashText,
   normalizeExtraMemoryPaths,
@@ -29,6 +30,57 @@ export type MemoryIndexIdentityState =
       status: "mismatched";
       reason: string;
     };
+
+const LOCAL_EMBEDDING_PROVIDER_ID = "local";
+const DEFAULT_LOCAL_MODEL_FILE_NAME =
+  DEFAULT_LOCAL_MODEL.split(/[\\/]/).at(-1) ?? DEFAULT_LOCAL_MODEL;
+
+function resolveModelFileName(model: string): string {
+  return model.trim().split(/[\\/]/).filter(Boolean).at(-1) ?? model.trim();
+}
+
+function isDefaultLocalModelPath(model: string): boolean {
+  const trimmed = model.trim();
+  return (
+    trimmed !== DEFAULT_LOCAL_MODEL &&
+    !trimmed.startsWith("hf:") &&
+    /[\\/]/.test(trimmed) &&
+    resolveModelFileName(trimmed) === DEFAULT_LOCAL_MODEL_FILE_NAME
+  );
+}
+
+function areLocalDefaultModelIdentitiesCompatible(params: {
+  metaProvider: string;
+  expectedProvider: string;
+  metaModel: string;
+  expectedModel: string;
+}): boolean {
+  if (
+    params.metaProvider !== LOCAL_EMBEDDING_PROVIDER_ID ||
+    params.expectedProvider !== LOCAL_EMBEDDING_PROVIDER_ID
+  ) {
+    return false;
+  }
+  return (
+    (params.metaModel === DEFAULT_LOCAL_MODEL && isDefaultLocalModelPath(params.expectedModel)) ||
+    (params.expectedModel === DEFAULT_LOCAL_MODEL && isDefaultLocalModelPath(params.metaModel))
+  );
+}
+
+function localProviderKey(model: string): string {
+  return hashText(JSON.stringify({ provider: LOCAL_EMBEDDING_PROVIDER_ID, model }));
+}
+
+function areLocalDefaultProviderKeysCompatible(params: {
+  meta: MemoryIndexMeta;
+  expectedModel: string;
+  expectedProviderKey?: string;
+}): boolean {
+  return (
+    params.meta.providerKey === localProviderKey(params.meta.model) &&
+    params.expectedProviderKey === localProviderKey(params.expectedModel)
+  );
+}
 
 export function resolveConfiguredSourcesForMeta(sources: Iterable<MemorySource>): MemorySource[] {
   const normalized = Array.from(sources)
@@ -121,20 +173,37 @@ export function resolveMemoryIndexIdentityState(params: {
     return { status: "missing", reason: "index metadata is missing" };
   }
   const expectedModel = params.provider ? params.provider.model : "fts-only";
-  if (meta.model !== expectedModel) {
+  const expectedProvider = params.provider ? params.provider.id : "none";
+  const localDefaultModelCompatible = areLocalDefaultModelIdentitiesCompatible({
+    metaProvider: meta.provider,
+    expectedProvider,
+    metaModel: meta.model,
+    expectedModel,
+  });
+  if (meta.model !== expectedModel && !localDefaultModelCompatible) {
     return {
       status: "mismatched",
       reason: `index was built for model ${meta.model}, expected ${expectedModel}`,
     };
   }
-  const expectedProvider = params.provider ? params.provider.id : "none";
   if (meta.provider !== expectedProvider) {
     return {
       status: "mismatched",
       reason: `index was built for provider ${meta.provider}, expected ${expectedProvider}`,
     };
   }
-  if (params.providerKeyKnown !== false && meta.providerKey !== params.providerKey) {
+  if (
+    params.providerKeyKnown !== false &&
+    meta.providerKey !== params.providerKey &&
+    !(
+      localDefaultModelCompatible &&
+      areLocalDefaultProviderKeysCompatible({
+        meta,
+        expectedModel,
+        expectedProviderKey: params.providerKey,
+      })
+    )
+  ) {
     return {
       status: "mismatched",
       reason: "index provider settings changed",
