@@ -94,20 +94,11 @@ function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime
   return runtimePromise;
 }
 
-// Context lookup ensures the model context window cache is populated before
-// resolving tokens for the status command. Discovery is local-only (filesystem
-// I/O, ~10-50ms) and the load promise is deduplicated, so concurrent calls
-// share one discovery pass and subsequent calls are near-instant.
-async function resolveStatusRuntimeContextTokens(params: {
+function resolveStatusRuntimeContextTokens(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
-}): Promise<number | undefined> {
-  try {
-    await ensureContextWindowCacheLoaded();
-  } catch {
-    // Cache unavailable — proceed without it; resolution will use fallback values.
-  }
+}): number | undefined {
   return resolveContextTokensForModel({
     cfg: params.cfg,
     provider: params.provider,
