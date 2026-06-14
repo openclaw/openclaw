@@ -40,6 +40,11 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
+import {
+  clearSlackThreadMute,
+  isSlackThreadMutedWithPersistence,
+  recordSlackThreadMute,
+} from "../../muted-thread-cache.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
@@ -65,6 +70,7 @@ import {
 } from "../context.js";
 import { resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
+import { detectSlackMuteIntent } from "../mute-detection.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackThreadStarter, type SlackThreadStarter } from "../thread.js";
@@ -843,6 +849,56 @@ export async function prepareSlackMessage(params: {
               threadTs: message.thread_ts,
             }),
           );
+  }
+
+  // Thread mute gate. Only relevant for non-DM threads. An explicit @mention or
+  // app_mention clears any prior mute (the user is re-engaging the bot). If the
+  // bot would otherwise respond and the text asks the bot to be quiet, record
+  // the mute and drop silently with an emoji ack instead of replying.
+  const muteKey =
+    !isDirectMessage && message.thread_ts
+      ? {
+          accountId: account.accountId,
+          channelId: message.channel,
+          threadTs: message.thread_ts,
+        }
+      : null;
+  if (muteKey) {
+    const isExplicitReEngagement = wasMentioned || opts.source === "app_mention";
+    const wouldRespond = isExplicitReEngagement || implicitMentionKinds.length > 0;
+    if (wouldRespond && detectSlackMuteIntent(messageText)) {
+      recordSlackThreadMute(muteKey);
+      if (message.ts) {
+        try {
+          await reactSlackMessage(message.channel, message.ts, "zipper_mouth_face", {
+            token: ctx.botToken,
+            client: ctx.app.client,
+          });
+        } catch (err) {
+          logVerbose(
+            `slack mute ack react failed for channel ${message.channel}: ${formatSlackError(err)}`,
+          );
+        }
+      }
+      logInboundDrop({
+        log: logVerbose,
+        channel: "slack",
+        reason: "thread muted by user request",
+        target: message.channel,
+      });
+      return null;
+    }
+    if (isExplicitReEngagement) {
+      await clearSlackThreadMute(muteKey);
+    } else if (await isSlackThreadMutedWithPersistence(muteKey)) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "slack",
+        reason: "thread muted",
+        target: message.channel,
+      });
+      return null;
+    }
   }
 
   let resolvedSenderName = normalizeOptionalString(message.username);
