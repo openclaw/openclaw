@@ -3897,6 +3897,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "Running version 2.0.",
     "Checking the scheduler returned 3 jobs.",
     "Running the query showed no errors.",
+    "Checking the scheduler failed: permission denied.",
+    "Checking the scheduler is unavailable.",
   ])("does not classify result-style progress text %s as planning-only", (assistantText) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
