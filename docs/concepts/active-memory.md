@@ -858,7 +858,7 @@ confirm `config.toolsAllow` names the tools that plugin actually registers.
   </Accordion>
 </AccordionGroup>
 
-## Related pages
+## Related
 
 - [Memory Search](/concepts/memory-search)
 - [Memory configuration reference](/reference/memory-config)
