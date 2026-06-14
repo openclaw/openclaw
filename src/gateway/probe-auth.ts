@@ -199,8 +199,7 @@ async function resolveLocalProbeFailureReason(
   // probeGateway resolves itself via the device-identity path. Don't
   // fail-fast when that path can still succeed, otherwise the caller
   // returns `{ok: false, error: <missing local auth>}` before probeGateway
-  // gets a chance to attach the cached device token. ClawSweeper P1 finding
-  // on #68280: existing paired local installs would lose their probe path.
+  // gets a chance to attach the cached device token.
   if (await hasCachedPairedDeviceToken(params.env)) {
     return undefined;
   }
