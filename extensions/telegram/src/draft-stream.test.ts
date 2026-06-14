@@ -2,6 +2,7 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { TELEGRAM_LEGACY_TEXT_LIMIT } from "./rich-message.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
@@ -580,6 +581,65 @@ describe("createTelegramDraftStream", () => {
       message_id: 17,
       rich_message: { html: "<i>hello again</i>" },
     });
+  });
+
+  it("falls back to message previews when rich previews are unsupported", async () => {
+    const api = createMockDraftApi();
+    api.raw.sendRichMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Call to 'sendRichMessage' failed! (404: Not Found)"), {
+        error_code: 404,
+      }),
+    );
+    const warn = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      warn,
+      renderText: (text) => ({ text: `<i>${text}</i>`, richMessage: { html: `<i>${text}</i>` } }),
+    });
+
+    stream.update("hello");
+    await stream.flush();
+    stream.update("hello again");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>hello</i>", { parse_mode: "HTML" });
+    expect(api.raw.editMessageText).not.toHaveBeenCalled();
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<i>hello again</i>", {
+      parse_mode: "HTML",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "telegram rich stream preview unavailable; retrying with message preview: Call to 'sendRichMessage' failed! (404: Not Found)",
+    );
+  });
+
+  it("caps legacy message previews to Telegram's legacy text limit", async () => {
+    const api = createMockDraftApi();
+    api.raw.sendRichMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Call to 'sendRichMessage' failed! (404: Not Found)"), {
+        error_code: 404,
+      }),
+    );
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      renderText: (text) => ({ text: `<i>${text}</i>`, richMessage: { html: `<i>${text}</i>` } }),
+    });
+    const text = "A".repeat(TELEGRAM_LEGACY_TEXT_LIMIT + 100);
+
+    stream.update(text);
+    await stream.flush();
+    stream.update(`${text}B`);
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    const sendMessageCalls = api.sendMessage.mock.calls as unknown as Array<
+      [unknown, unknown, unknown?]
+    >;
+    expect(String(sendMessageCalls[0]?.[1]).length).toBeLessThanOrEqual(4_096);
+    expect(api.editMessageText).toHaveBeenCalledTimes(1);
+    expect(String(api.editMessageText.mock.calls[0]?.[2]).length).toBeLessThanOrEqual(4_096);
   });
 
   it("keeps rich rendered previews above the old text-message limit", async () => {
