@@ -809,6 +809,7 @@ export function createFollowupRunner(params: {
             resolveSessionRuntimeOverrideForProvider({
               provider,
               entry: activeSessionEntry,
+              cfg: runtimeConfig,
             }),
           prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
             await ensureSelectedAgentHarnessPlugin({
@@ -843,6 +844,7 @@ export function createFollowupRunner(params: {
             const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
               provider,
               entry: activeSessionEntry,
+              cfg: runtimeConfig,
             });
             const cliExecutionProvider =
               (sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)

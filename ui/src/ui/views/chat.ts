@@ -1034,13 +1034,13 @@ function renderWorkspaceFileRail(
     return html`
       <aside
         class="chat-workspace-rail chat-workspace-rail--collapsed"
-        aria-label="Workspace files"
+        aria-label=${t("chat.workspaceFiles.label")}
       >
         <button
           type="button"
           class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-          title="Expand workspace files"
-          aria-label="Expand workspace files"
+          title=${t("chat.workspaceFiles.expand")}
+          aria-label=${t("chat.workspaceFiles.expand")}
           aria-expanded="false"
           @click=${workspaceFiles.onToggleCollapsed}
         >
@@ -1054,18 +1054,18 @@ function renderWorkspaceFileRail(
   }
   const files = workspaceFiles.list?.files ?? [];
   return html`
-    <aside class="chat-workspace-rail" aria-label="Workspace files">
+    <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
       <div class="chat-workspace-rail__header">
         <div class="chat-workspace-rail__title">
-          <span class="chat-workspace-rail__eyebrow">Workspace</span>
-          <strong>Files</strong>
+          <span class="chat-workspace-rail__eyebrow">${t("chat.workspaceFiles.workspace")}</span>
+          <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
           <button
             class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
             type="button"
-            title="Refresh files"
-            aria-label="Refresh files"
+            title=${t("chat.workspaceFiles.refresh")}
+            aria-label=${t("chat.workspaceFiles.refresh")}
             ?disabled=${workspaceFiles.loading}
             @click=${workspaceFiles.onRefresh}
           >
@@ -1074,8 +1074,8 @@ function renderWorkspaceFileRail(
           <button
             type="button"
             class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-            title="Collapse workspace files"
-            aria-label="Collapse workspace files"
+            title=${t("chat.workspaceFiles.collapse")}
+            aria-label=${t("chat.workspaceFiles.collapse")}
             aria-expanded="true"
             @click=${workspaceFiles.onToggleCollapsed}
           >
@@ -1095,9 +1095,9 @@ function renderWorkspaceFileRail(
             ${workspaceFiles.error}
           </div>`
         : workspaceFiles.loading && files.length === 0
-          ? html`<div class="chat-workspace-rail__state">Loading files...</div>`
+          ? html`<div class="chat-workspace-rail__state">${t("chat.workspaceFiles.loading")}</div>`
           : files.length === 0
-            ? html`<div class="chat-workspace-rail__state">No workspace files</div>`
+            ? html`<div class="chat-workspace-rail__state">${t("chat.workspaceFiles.empty")}</div>`
             : html`
                 <div class="chat-workspace-rail__list" role="list">
                   ${files.map((file) => {
@@ -1121,7 +1121,9 @@ function renderWorkspaceFileRail(
                             : nothing}
                         </span>
                         ${file.missing
-                          ? html`<span class="chat-workspace-rail__file-badge">Missing</span>`
+                          ? html`<span class="chat-workspace-rail__file-badge"
+                              >${t("chat.workspaceFiles.missing")}</span
+                            >`
                           : nothing}
                       </button>
                     `;
@@ -2061,107 +2063,115 @@ export function renderChat(props: ChatProps) {
       @dragover=${(e: DragEvent) => e.preventDefault()}
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
-      ${props.error
-        ? html`
-            <div class="callout danger callout--dismissible" role="alert">
-              <span class="callout__content">${props.error}</span>
-              ${props.onDismissError
-                ? html`
-                    <button
-                      class="callout__dismiss"
-                      type="button"
-                      @click=${props.onDismissError}
-                      aria-label="Dismiss error"
-                      title="Dismiss error"
-                    >
-                      ${icons.x}
-                    </button>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
-      ${props.focusMode && props.onToggleFocusMode
-        ? html`
-            <button
-              class="chat-focus-exit"
-              type="button"
-              @click=${props.onToggleFocusMode}
-              aria-label="Exit focus mode"
-              title="Exit focus mode"
-            >
-              ${icons.x}
-            </button>
-          `
-        : nothing}
+      ${
+        props.error
+          ? html`
+              <div class="callout danger callout--dismissible" role="alert">
+                <span class="callout__content">${props.error}</span>
+                ${props.onDismissError
+                  ? html`
+                      <button
+                        class="callout__dismiss"
+                        type="button"
+                        @click=${props.onDismissError}
+                        aria-label="Dismiss error"
+                        title="Dismiss error"
+                      >
+                        ${icons.x}
+                      </button>
+                    `
+                  : nothing}
+              </div>
+            `
+          : nothing
+      }
+      ${
+        props.focusMode && props.onToggleFocusMode
+          ? html`
+              <button
+                class="chat-focus-exit"
+                type="button"
+                @click=${props.onToggleFocusMode}
+                aria-label="Exit focus mode"
+                title="Exit focus mode"
+              >
+                ${icons.x}
+              </button>
+            `
+          : nothing
+      }
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
       <div
-        class="chat-workbench ${props.workspaceFiles?.collapsed
-          ? "chat-workbench--workspace-collapsed"
-          : ""}"
+        class="chat-workbench ${
+          props.workspaceFiles?.collapsed ? "chat-workbench--workspace-collapsed" : ""
+        }"
       >
-        <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
-          <div
-            class="chat-main"
-            style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
-          >
-            ${thread}
+        ${renderWorkspaceFileRail(props.workspaceFiles)}
+        <div class="chat-workbench__main">
+          <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
+            <div
+              class="chat-main"
+              style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
+            >
+              ${thread}
+            </div>
+
+            ${
+              sidebarOpen
+                ? html`
+                    <resizable-divider
+                      .splitRatio=${splitRatio}
+                      .label=${t("nav.resize")}
+                      @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
+                    ></resizable-divider>
+                    <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
+                      ${renderMarkdownSidebar({
+                        content: props.sidebarContent ?? null,
+                        error: props.sidebarError ?? null,
+                        canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+                        embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                        allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                        onClose: props.onCloseSidebar!,
+                        onViewRawText: () => {
+                          if (!props.onOpenSidebar) {
+                            return;
+                          }
+                          const rawContent = buildRawSidebarContent(props.sidebarContent);
+                          if (rawContent) {
+                            props.onOpenSidebar(rawContent);
+                          }
+                        },
+                      })}
+                    </div>
+                  `
+                : nothing
+            }
           </div>
 
-          ${sidebarOpen
-            ? html`
-                <resizable-divider
-                  .splitRatio=${splitRatio}
-                  .label=${t("nav.resize")}
-                  @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
-                ></resizable-divider>
-                <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
-                  ${renderMarkdownSidebar({
-                    content: props.sidebarContent ?? null,
-                    error: props.sidebarError ?? null,
-                    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                    embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                    onClose: props.onCloseSidebar!,
-                    onViewRawText: () => {
-                      if (!props.onOpenSidebar) {
-                        return;
-                      }
-                      const rawContent = buildRawSidebarContent(props.sidebarContent);
-                      if (rawContent) {
-                        props.onOpenSidebar(rawContent);
-                      }
-                    },
-                  })}
-                </div>
-              `
-            : nothing}
-        </div>
-        ${renderWorkspaceFileRail(props.workspaceFiles)}
-      </div>
+          ${renderChatQueue({
+            queue: props.queue,
+            canAbort: showAbortableUi,
+            onQueueRetry: props.onQueueRetry,
+            onQueueSteer: props.onQueueSteer,
+            onQueueRemove: props.onQueueRemove,
+          })}
+          ${renderSideResult(props.sideResult, props.onDismissSideResult)}
+          ${
+            props.showNewMessages
+              ? html`
+                  <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
+                    ${icons.arrowDown} New messages
+                  </button>
+                `
+              : nothing
+          }
 
-      ${renderChatQueue({
-        queue: props.queue,
-        canAbort: showAbortableUi,
-        onQueueRetry: props.onQueueRetry,
-        onQueueSteer: props.onQueueSteer,
-        onQueueRemove: props.onQueueRemove,
-      })}
-      ${renderSideResult(props.sideResult, props.onDismissSideResult)}
-      ${props.showNewMessages
-        ? html`
-            <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
-              ${icons.arrowDown} New messages
-            </button>
-          `
-        : nothing}
-
-      <!-- Input bar -->
-      <div
-        class="agent-chat__input"
-        @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
-      >
+          <!-- Input bar -->
+          <div
+            class="agent-chat__input"
+            @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
+          >
         ${renderSlashMenu(requestUpdate, props, visibleDraft)} ${renderAttachmentPreview(props)}
         <div class="agent-chat__composer-status-stack">
           ${renderFallbackIndicator(props.fallbackStatus)}
@@ -2183,21 +2193,23 @@ export function renderChat(props: ChatProps) {
         />
 
         ${renderRealtimeTalkOptions(props)}
-        ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
-          ? html`
-              <div class="agent-chat__stt-interim agent-chat__talk-status">
-                ${props.realtimeTalkDetail ??
-                ((props.realtimeTalkConversation?.length ?? 0) === 0
-                  ? props.realtimeTalkTranscript
-                  : null) ??
-                (props.realtimeTalkStatus === "thinking"
-                  ? "Asking OpenClaw..."
-                  : props.realtimeTalkStatus === "connecting"
-                    ? "Connecting Talk..."
-                    : "Talk live")}
-              </div>
-            `
-          : nothing}
+        ${
+          props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+            ? html`
+                <div class="agent-chat__stt-interim agent-chat__talk-status">
+                  ${props.realtimeTalkDetail ??
+                  ((props.realtimeTalkConversation?.length ?? 0) === 0
+                    ? props.realtimeTalkTranscript
+                    : null) ??
+                  (props.realtimeTalkStatus === "thinking"
+                    ? "Asking OpenClaw..."
+                    : props.realtimeTalkStatus === "connecting"
+                      ? "Connecting Talk..."
+                      : "Talk live")}
+                </div>
+              `
+            : nothing
+        }
 
         <div class="agent-chat__composer-combobox">
           <textarea
@@ -2245,54 +2257,60 @@ export function renderChat(props: ChatProps) {
               <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
             </button>
 
-            ${props.onToggleRealtimeTalk
-              ? html`
-                  <button
-                    class="agent-chat__input-btn ${props.realtimeTalkActive
-                      ? "agent-chat__input-btn--talk"
-                      : ""}"
-                    @click=${props.onToggleRealtimeTalk}
-                    title=${props.realtimeTalkActive
-                      ? t("chat.composer.stopTalk")
-                      : t("chat.composer.startTalk")}
-                    aria-label=${props.realtimeTalkActive
-                      ? t("chat.composer.stopTalk")
-                      : t("chat.composer.startTalk")}
-                    ?disabled=${!props.connected}
-                  >
-                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
-                    <span class="agent-chat__control-label"
-                      >${props.realtimeTalkActive
+            ${
+              props.onToggleRealtimeTalk
+                ? html`
+                    <button
+                      class="agent-chat__input-btn ${props.realtimeTalkActive
+                        ? "agent-chat__input-btn--talk"
+                        : ""}"
+                      @click=${props.onToggleRealtimeTalk}
+                      title=${props.realtimeTalkActive
                         ? t("chat.composer.stopTalk")
-                        : t("chat.composer.startTalk")}</span
+                        : t("chat.composer.startTalk")}
+                      aria-label=${props.realtimeTalkActive
+                        ? t("chat.composer.stopTalk")
+                        : t("chat.composer.startTalk")}
+                      ?disabled=${!props.connected}
                     >
-                  </button>
-                `
-              : nothing}
-            ${props.onToggleRealtimeTalkOptions
-              ? html`
-                  <button
-                    class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
-                      ? "agent-chat__input-btn--talk"
-                      : ""}"
-                    @click=${props.onToggleRealtimeTalkOptions}
-                    title="Talk settings"
-                    aria-label="Talk settings"
-                    aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
-                    ?disabled=${!props.connected || props.realtimeTalkActive}
-                  >
-                    ${icons.settings}
-                    <span class="agent-chat__control-label">Talk settings</span>
-                  </button>
-                `
-              : nothing}
+                      ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
+                      <span class="agent-chat__control-label"
+                        >${props.realtimeTalkActive
+                          ? t("chat.composer.stopTalk")
+                          : t("chat.composer.startTalk")}</span
+                      >
+                    </button>
+                  `
+                : nothing
+            }
+            ${
+              props.onToggleRealtimeTalkOptions
+                ? html`
+                    <button
+                      class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
+                        ? "agent-chat__input-btn--talk"
+                        : ""}"
+                      @click=${props.onToggleRealtimeTalkOptions}
+                      title="Talk settings"
+                      aria-label="Talk settings"
+                      aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
+                      ?disabled=${!props.connected || props.realtimeTalkActive}
+                    >
+                      ${icons.settings}
+                      <span class="agent-chat__control-label">Talk settings</span>
+                    </button>
+                  `
+                : nothing
+            }
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
             ${renderChatRunStatusIndicator(composerRunStatus)}
           </div>
 
-          ${composerControls && composerControls !== nothing
-            ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
-            : nothing}
+          ${
+            composerControls && composerControls !== nothing
+              ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
+              : nothing
+          }
           ${renderChatRunControls({
             canAbort: showAbortableUi,
             connected: props.connected,
@@ -2307,6 +2325,7 @@ export function renderChat(props: ChatProps) {
             onStoreDraft: () => {},
             showSecondary: false,
           })}
+        </div>
         </div>
       </div>
     </section>
