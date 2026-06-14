@@ -20,6 +20,7 @@ import type {
 import {
   normalizeRuntimeOptions,
   normalizeText,
+  sanitizeRuntimeOptionsForAcpAgent,
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
 
@@ -44,9 +45,10 @@ export async function runManagerInitializeSession(params: {
     ...input.runtimeOptions,
     ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
   });
-  const requestedCwd = initialRuntimeOptions.cwd;
-  const requestedModel = initialRuntimeOptions.model;
-  const requestedThinking = initialRuntimeOptions.thinking;
+  const safeInitialRuntimeOptions = sanitizeRuntimeOptionsForAcpAgent(initialRuntimeOptions, agent);
+  const requestedCwd = safeInitialRuntimeOptions.cwd;
+  const requestedModel = safeInitialRuntimeOptions.model;
+  const requestedThinking = safeInitialRuntimeOptions.thinking;
   params.enforceConcurrentSessionLimit({
     cfg: input.cfg,
     sessionKey,
@@ -67,7 +69,7 @@ export async function runManagerInitializeSession(params: {
   });
   const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
   const effectiveRuntimeOptions = normalizeRuntimeOptions({
-    ...initialRuntimeOptions,
+    ...safeInitialRuntimeOptions,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
   });
 
@@ -122,6 +124,14 @@ export async function runManagerInitializeSession(params: {
     mode: input.mode,
     cwd: effectiveCwd,
     configSignature: resolveRuntimeConfigCacheKey(input.cfg),
+    // ensureSession applied only model/thinking/cwd; seed those as already-applied so the
+    // first turn pushes the remaining controls (timeout/permission/mode/extras) without
+    // resending startup model/thinking through set_config_option backends may not support.
+    appliedRuntimeOptions: normalizeRuntimeOptions({
+      ...(requestedModel ? { model: requestedModel } : {}),
+      ...(requestedThinking ? { thinking: requestedThinking } : {}),
+      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+    }),
   });
   return {
     runtime,

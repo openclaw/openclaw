@@ -1,6 +1,9 @@
 /** Tests runtime config-option serialization against advertised backend keys. */
 import { describe, expect, it } from "vitest";
-import { buildRuntimeConfigOptionPairs } from "./runtime-options.js";
+import {
+  buildRuntimeConfigOptionPairs,
+  retainUnchangedAppliedRuntimeOptions,
+} from "./runtime-options.js";
 
 describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
   it("omits the timeout pair when advertised keys exclude every timeout alias", () => {
@@ -39,5 +42,54 @@ describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
       ["model", "claude-sonnet-4.6"],
       ["thinking", "high"],
     ]);
+  });
+});
+
+describe("retainUnchangedAppliedRuntimeOptions", () => {
+  it("keeps the startup baseline when a later update only adds post-start controls", () => {
+    const retained = retainUnchangedAppliedRuntimeOptions({
+      applied: {
+        model: "deepseek/deepseek-v4-pro",
+        thinking: "high",
+        cwd: "/work",
+      },
+      persisted: {
+        model: "deepseek/deepseek-v4-pro",
+        thinking: "high",
+        cwd: "/work",
+        permissionProfile: "strict",
+        timeoutSeconds: 120,
+      },
+    });
+    expect(retained).toEqual({
+      model: "deepseek/deepseek-v4-pro",
+      thinking: "high",
+      cwd: "/work",
+    });
+  });
+
+  it("drops entries whose persisted value changed so the next turn reapplies them", () => {
+    const retained = retainUnchangedAppliedRuntimeOptions({
+      applied: { model: "old-model", thinking: "high" },
+      persisted: { model: "new-model", thinking: "high" },
+    });
+    expect(retained).toEqual({ thinking: "high" });
+  });
+
+  it("retains only backend extras whose values still match", () => {
+    const retained = retainUnchangedAppliedRuntimeOptions({
+      applied: { backendExtras: { kept: "1", changed: "old", removed: "x" } },
+      persisted: { backendExtras: { kept: "1", changed: "new" } },
+    });
+    expect(retained).toEqual({ backendExtras: { kept: "1" } });
+  });
+
+  it("returns an empty baseline when nothing was applied yet", () => {
+    expect(
+      retainUnchangedAppliedRuntimeOptions({
+        applied: undefined,
+        persisted: { permissionProfile: "strict" },
+      }),
+    ).toEqual({});
   });
 });

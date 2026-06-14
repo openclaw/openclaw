@@ -955,6 +955,46 @@ describe("spawnAcpDirect", () => {
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
   });
 
+  it("strips chat model and thinking options from managed Claude ACP startup", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        allowedAgents: ["claude"],
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["claude"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "claude",
+        model: "openai/gpt-5.5",
+        thinking: "off",
+        runTimeoutSeconds: 45,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({
+      agent: "claude",
+      runtimeOptions: {
+        timeoutSeconds: 45,
+      },
+    });
+  });
+
   it("applies existing subagent model and model-profile thinking defaults to ACP runtime options", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),

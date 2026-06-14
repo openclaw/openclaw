@@ -112,6 +112,94 @@ describe("AcpSessionManager runtime config", () => {
     });
   });
 
+  it("does not resend startup model/thinking after a post-start runtime option update", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    const sessionKey = "agent:opencode:acp:session-startup";
+    let currentMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, currentMeta ? { acp: currentMeta } : undefined);
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey,
+      agent: "opencode",
+      mode: "persistent",
+      runtimeOptions: {
+        model: "deepseek/deepseek-v4-pro",
+        thinking: "high",
+      },
+    });
+
+    // Persist a post-start permission/timeout update before the first turn; this must keep the
+    // startup model/thinking baseline so the turn only reconciles the new post-start controls.
+    await manager.updateSessionRuntimeOptions({
+      cfg: baseCfg,
+      sessionKey,
+      patch: {
+        permissionProfile: "strict",
+        timeoutSeconds: 120,
+      },
+    });
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      model: "deepseek/deepseek-v4-pro",
+      thinking: "high",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "model",
+      value: "deepseek/deepseek-v4-pro",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "thinking",
+      value: "high",
+    });
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "approval_policy",
+      value: "strict",
+    });
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "timeout",
+      value: "120",
+    });
+  });
+
   it("reconciles persisted ACP session identifiers from runtime status after a turn", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockResolvedValue({
@@ -419,11 +507,15 @@ describe("AcpSessionManager runtime config", () => {
     expectMockCallFields(runtimeState.setMode, {
       mode: "plan",
     });
-    expectMockCallFields(runtimeState.setConfigOption, {
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      model: "openai/gpt-5.4",
+      thinking: "high",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "model",
       value: "openai/gpt-5.4",
     });
-    expectMockCallFields(runtimeState.setConfigOption, {
+    expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "thinking",
       value: "high",
     });
@@ -521,13 +613,13 @@ describe("AcpSessionManager runtime config", () => {
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 
-  it("fails turns when adapters reject required runtime config", async () => {
+  it("fails turns when adapters reject required post-start runtime config", async () => {
     const runtimeState = createRuntime();
     runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
-      if (input.key === "model") {
+      if (input.key === "approval_policy") {
         throw new AcpRuntimeError(
           "ACP_TURN_FAILED",
-          'Agent rejected session/set_config_option for "model": ACP -32602 Invalid params',
+          'Agent rejected session/set_config_option for "approval_policy": ACP -32602 Invalid params',
         );
       }
     });
@@ -541,7 +633,7 @@ describe("AcpSessionManager runtime config", () => {
       acp: {
         ...readySessionMeta({ agent: "opencode" }),
         runtimeOptions: {
-          model: "opencode/gpt-5.4",
+          permissionProfile: "strict",
         },
       },
     });
@@ -563,7 +655,7 @@ describe("AcpSessionManager runtime config", () => {
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 
-  it("maps persisted thinking runtime options to advertised effort config keys before running turns", async () => {
+  it("does not remap startup thinking runtime options to advertised effort config keys", async () => {
     const runtimeState = createRuntime();
     runtimeState.getCapabilities.mockResolvedValue({
       controls: ["session/set_mode", "session/set_config_option", "session/status"],
@@ -593,7 +685,8 @@ describe("AcpSessionManager runtime config", () => {
       requestId: "run-1",
     });
 
-    expectMockCallFields(runtimeState.setConfigOption, {
+    expect(mockCallArg(runtimeState.ensureSession)).not.toHaveProperty("thinking");
+    expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "effort",
       value: "high",
     });
@@ -635,7 +728,15 @@ describe("AcpSessionManager runtime config", () => {
       requestId: "run-1",
     });
 
-    expectMockCallFields(runtimeState.setConfigOption, {
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      model: "gemini-3-flash-preview",
+      thinking: "high",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
+      key: "model",
+      value: "gemini-3-flash-preview",
+    });
+    expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "thought_level",
       value: "high",
     });
