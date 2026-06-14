@@ -1573,7 +1573,9 @@ export const th: TranslationMap = {
       webhookHelp: "ส่งสรุปผลการทำงานไปยังปลายทาง webhook",
       to: "ถึง",
       toPlaceholder: "+1555... หรือ chat id",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "ตัวเลือกแทนที่ผู้รับ (chat id, โทรศัพท์ หรือ user id)",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "ขั้นสูง",
       advancedHelp: "ตัวเลือกแทนที่สำหรับการรับประกันการส่ง, schedule jitter และการควบคุมโมเดล",
       deleteAfterRun: "ลบหลังทำงาน",
@@ -1647,6 +1649,8 @@ export const th: TranslationMap = {
       timeoutInvalid: "หากกำหนดค่าไว้ timeout ต้องมากกว่า 0 วินาที",
       webhookUrlRequired: "ต้องระบุ Webhook URL",
       webhookUrlInvalid: "Webhook URL ต้องขึ้นต้นด้วย http:// หรือ https://",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "เวลารันไม่ถูกต้อง",
       invalidIntervalAmount: "จำนวนช่วงเวลาไม่ถูกต้อง",
       cronExprRequiredShort: "ต้องระบุ Cron expression",

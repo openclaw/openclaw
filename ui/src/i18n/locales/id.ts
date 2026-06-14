@@ -1605,7 +1605,9 @@ export const id: TranslationMap = {
       webhookHelp: "Kirim ringkasan proses ke endpoint webhook.",
       to: "Ke",
       toPlaceholder: "+1555... atau ID chat",
+      toPlaceholderTelegram: "-1001234567890 or @channel",
       toHelp: "Penggantian penerima opsional (ID chat, telepon, atau ID pengguna).",
+      toHelpTelegram: "Telegram chat.id (e.g. -1001234567890), @username, or t.me link.",
       advanced: "Lanjutan",
       advancedHelp:
         "Penggantian opsional untuk jaminan pengiriman, jitter jadwal, dan kontrol model.",
@@ -1680,6 +1682,8 @@ export const id: TranslationMap = {
       timeoutInvalid: "Jika diatur, batas waktu harus lebih besar dari 0 detik.",
       webhookUrlRequired: "URL Webhook wajib diisi.",
       webhookUrlInvalid: "URL Webhook harus diawali dengan http:// atau https://.",
+      telegramChatIdInvalid:
+        "Telegram To must be a chat.id (e.g. -1001234567890), @username, or t.me link (optional :topicId).",
       invalidRunTime: "Waktu proses tidak valid.",
       invalidIntervalAmount: "Jumlah interval tidak valid.",
       cronExprRequiredShort: "Ekspresi cron wajib diisi.",
