@@ -3,6 +3,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
@@ -25,6 +27,21 @@ const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolea
 vi.mock("../../plugins/tools.js", () => ({
   buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
     JSON.stringify([pluginId, toolName]),
+  buildReadablePluginToolMetadataMap: (entries: readonly unknown[] | undefined) => {
+    const map = new Map<string, unknown>();
+    for (const entry of entries ?? []) {
+      try {
+        const pluginId = (entry as { pluginId?: unknown }).pluginId;
+        const metadata = (entry as { metadata?: { toolName?: unknown } }).metadata;
+        if (typeof pluginId === "string" && typeof metadata?.toolName === "string") {
+          map.set(JSON.stringify([pluginId, metadata.toolName]), metadata);
+        }
+      } catch {
+        // Malformed plugin-owned rows are isolated per entry.
+      }
+    }
+    return map;
+  },
   ensureStandalonePluginToolRegistryLoaded: vi.fn(),
   resolvePluginTools: vi.fn(() => [
     { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
@@ -111,6 +128,7 @@ describe("tools.catalog handler", () => {
     pluginToolMetaState.clear();
     pluginToolMetaState.set("voice_call", { pluginId: "voice-call", optional: true });
     pluginToolMetaState.set("matrix_room", { pluginId: "matrix", optional: false });
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("rejects invalid params", async () => {
@@ -155,6 +173,51 @@ describe("tools.catalog handler", () => {
       risk: undefined,
       tags: undefined,
       defaultProfiles: [],
+    });
+  });
+
+  it("skips unreadable plugin tool metadata rows", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.toolMetadata = [
+      {
+        pluginId: "bad",
+        pluginName: "Bad",
+        source: "fixture",
+        get metadata() {
+          throw new Error("unreadable tool metadata");
+        },
+      } as never,
+      {
+        pluginId: "voice-call",
+        pluginName: "Voice Call",
+        source: "fixture",
+        metadata: {
+          toolName: "voice_call",
+          displayName: "Voice Call",
+          description: "Call through the voice plugin.",
+          risk: "medium",
+          tags: ["voice", "call"],
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const { respond, invoke } = createInvokeParams({});
+
+    await invoke();
+
+    const payload = expectCatalogPayload(respond);
+    const voiceCall = payload.groups
+      .filter((group) => group.source === "plugin")
+      .flatMap((group) => group.tools)
+      .find((tool) => tool.id === "voice_call");
+    expect(voiceCall).toMatchObject({
+      id: "voice_call",
+      label: "Voice Call",
+      description: "Call through the voice plugin.",
+      source: "plugin",
+      pluginId: "voice-call",
+      risk: "medium",
+      tags: ["voice", "call"],
     });
   });
 

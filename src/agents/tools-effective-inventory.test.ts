@@ -64,6 +64,21 @@ vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: (tool: { name: string }) => effectiveInventoryState.pluginMeta[tool.name],
   buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
     JSON.stringify([pluginId, toolName]),
+  buildReadablePluginToolMetadataMap: (entries: readonly unknown[] | undefined) => {
+    const map = new Map<string, unknown>();
+    for (const entry of entries ?? []) {
+      try {
+        const pluginId = (entry as { pluginId?: unknown }).pluginId;
+        const metadata = (entry as { metadata?: { toolName?: unknown } }).metadata;
+        if (typeof pluginId === "string" && typeof metadata?.toolName === "string") {
+          map.set(JSON.stringify([pluginId, metadata.toolName]), metadata);
+        }
+      } catch {
+        // Malformed plugin-owned rows are isolated per entry.
+      }
+    }
+    return map;
+  },
 }));
 
 vi.mock("./channel-tools.js", () => ({
@@ -285,6 +300,14 @@ describe("resolveEffectiveToolInventory", () => {
   it("projects plugin tool metadata into the effective inventory", async () => {
     const registry = createEmptyPluginRegistry();
     registry.toolMetadata = [
+      {
+        pluginId: "bad",
+        pluginName: "Bad",
+        source: "fixture",
+        get metadata() {
+          throw new Error("unreadable tool metadata");
+        },
+      } as never,
       {
         pluginId: "docs",
         pluginName: "Docs",

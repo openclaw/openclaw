@@ -33,6 +33,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
 let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
+let buildReadablePluginToolMetadataMap: typeof import("./tools.js").buildReadablePluginToolMetadataMap;
 let getPluginToolMeta: typeof import("./tools.js").getPluginToolMeta;
 let resetPluginToolFactoryCache: typeof import("./tools.js").resetPluginToolFactoryCache;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
@@ -2901,7 +2902,8 @@ describe("resolvePluginTools optional tools", () => {
 
 describe("buildPluginToolMetadataKey", () => {
   beforeAll(async () => {
-    ({ buildPluginToolMetadataKey } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey, buildReadablePluginToolMetadataMap } =
+      await import("./tools.js"));
   });
 
   it("does not collide when ids or names contain separator-like characters", () => {
@@ -2911,5 +2913,43 @@ describe("buildPluginToolMetadataKey", () => {
     expect(buildPluginToolMetadataKey("plugin", "a\u0000b")).not.toBe(
       buildPluginToolMetadataKey("plugin\u0000a", "b"),
     );
+  });
+
+  it("builds readable plugin tool metadata maps row-locally", () => {
+    const unreadableRow = {
+      pluginId: "bad",
+      get metadata() {
+        throw new Error("unreadable metadata");
+      },
+    };
+    const unreadableFieldRow = {
+      pluginId: "docs",
+      metadata: {
+        toolName: "docs_lookup",
+        get displayName() {
+          throw new Error("unreadable display name");
+        },
+      },
+    };
+    const healthyRow = {
+      pluginId: "docs",
+      metadata: {
+        toolName: "docs_lookup",
+        displayName: "Docs Search",
+        description: "Curated docs lookup.",
+        risk: "low",
+        tags: ["docs"],
+      },
+    };
+
+    const map = buildReadablePluginToolMetadataMap([unreadableRow, unreadableFieldRow, healthyRow]);
+
+    expect(map.get(buildPluginToolMetadataKey("docs", "docs_lookup"))).toEqual({
+      toolName: "docs_lookup",
+      displayName: "Docs Search",
+      description: "Curated docs lookup.",
+      risk: "low",
+      tags: ["docs"],
+    });
   });
 });
