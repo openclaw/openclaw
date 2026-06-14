@@ -25,6 +25,15 @@ function expireCompactionTimeoutResultAcceptance(reason: unknown): void {
   }
 }
 
+function rejectAfterTimeoutCommitWindow(reject: (reason?: unknown) => void, reason: Error): void {
+  queueMicrotask(() => {
+    queueMicrotask(() => {
+      expireCompactionTimeoutResultAcceptance(reason);
+      reject(reason);
+    });
+  });
+}
+
 export function isCompactionTimeoutResultAccepted(reason: unknown): boolean {
   return (
     reason instanceof Error &&
@@ -135,10 +144,7 @@ export async function compactWithSafetyTimeout<T>(
           timeout = setTimeout(() => {
             timeoutController.abort(timeoutError);
             cancel(timeoutError);
-            queueMicrotask(() => {
-              expireCompactionTimeoutResultAcceptance(timeoutError);
-              reject(timeoutError);
-            });
+            rejectAfterTimeoutCommitWindow(reject, timeoutError);
           }, resolvedTimeoutMs);
           timeout.unref?.();
         }),
