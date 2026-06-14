@@ -492,6 +492,22 @@ describe("provider attribution", () => {
       supportsResponsesStoreField: true,
       shouldStripResponsesPromptCache: true,
     });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "openai-gpt",
+        api: "openai-responses",
+        baseUrl: "https://aigateway.chat/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "custom",
+      allowsOpenAIServiceTier: false,
+      allowsResponsesStore: false,
+      supportsResponsesStoreField: true,
+      shouldStripResponsesPromptCache: false,
+    });
   });
 
   it("resolves shared compat families and native streaming-usage gates", () => {

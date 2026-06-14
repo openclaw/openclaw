@@ -11,6 +11,7 @@ let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
 let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
 let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
 let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinkingDefaultForModel;
+let supportsXHighThinking: typeof import("./thinking.js").supportsXHighThinking;
 
 async function loadFreshThinkingModuleForTest() {
   vi.resetModules();
@@ -36,6 +37,7 @@ beforeEach(async () => {
     normalizeReasoningLevel,
     normalizeThinkLevel,
     resolveThinkingDefaultForModel,
+    supportsXHighThinking,
   } = await loadFreshThinkingModuleForTest());
 });
 
@@ -102,6 +104,11 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
   });
 
+  it("includes xhigh for OpenAI-compatible third-party providers that preserve GPT-5.x ids", () => {
+    expect(listThinkingLevels("openai-gpt", "gpt-5.4")).toContain("xhigh");
+    expect(listThinkingLevels("tokenx24", "gpt-5.4")).toContain("xhigh");
+  });
+
   it("excludes xhigh for non-codex models", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
   });
@@ -109,6 +116,18 @@ describe("listThinkingLevels", () => {
   it("always includes adaptive", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).toContain("adaptive");
     expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("adaptive");
+  });
+});
+
+describe("supportsXHighThinking", () => {
+  it("accepts GPT-5.x ids on OpenAI-compatible third-party providers", () => {
+    expect(supportsXHighThinking("openai-gpt", "gpt-5.4")).toBe(true);
+    expect(supportsXHighThinking("tokenx24", "gpt-5.4")).toBe(true);
+  });
+
+  it("does not over-match unrelated providers or models", () => {
+    expect(supportsXHighThinking("moonshot", "kimi-k2")).toBe(false);
+    expect(supportsXHighThinking("demo", "gpt-4.1-mini")).toBe(false);
   });
 });
 

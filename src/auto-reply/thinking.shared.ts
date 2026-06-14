@@ -31,6 +31,10 @@ const OPENAI_CODEX_XHIGH_MODEL_IDS = [
 ] as const;
 const GITHUB_COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 
+function supportsCompatibleOpenAIXHighThinking(modelId: string): boolean {
+  return matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS);
+}
+
 export function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
     return "";
@@ -66,6 +70,10 @@ export function supportsBuiltInXHighThinking(
   }
   if (providerId === "github-copilot") {
     return GITHUB_COPILOT_XHIGH_MODEL_IDS.includes(modelId as never);
+  }
+  // Allow OpenAI-compatible third-party providers that preserve GPT-5.x model ids.
+  if (supportsCompatibleOpenAIXHighThinking(modelId)) {
+    return true;
   }
   return false;
 }

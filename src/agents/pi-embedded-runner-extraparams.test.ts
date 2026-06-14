@@ -3355,4 +3355,24 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.prompt_cache_key).toBe("session-default");
     expect(payload.prompt_cache_retention).toBe("24h");
   });
+
+  it("keeps prompt cache fields for allowlisted OpenAI-compatible proxy hosts", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai-gpt",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai-gpt",
+        id: "gpt-5.4",
+        baseUrl: "https://aigateway.chat",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-aigateway",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-aigateway");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
 });

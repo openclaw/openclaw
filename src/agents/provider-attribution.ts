@@ -112,6 +112,7 @@ const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
 ]);
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
+const OPENAI_RESPONSES_PROMPT_CACHE_COMPAT_HOSTS = new Set(["aigateway.chat"]);
 const MOONSHOT_COMPAT_PROVIDERS = new Set(["moonshot", "kimi"]);
 
 function formatOpenClawUserAgent(version: string): string {
@@ -496,6 +497,9 @@ export function resolveProviderRequestCapabilities(
   const api = input.api?.trim().toLowerCase();
   const normalizedModelId = input.modelId?.trim().toLowerCase();
   const endpointClass = policy.endpointClass;
+  const endpointHost = resolveProviderEndpoint(input.baseUrl).hostname;
+  const allowsCompatPromptCacheHost =
+    endpointHost !== undefined && OPENAI_RESPONSES_PROMPT_CACHE_COMPAT_HOSTS.has(endpointHost);
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||
     endpointClass === "github-copilot-native" ||
@@ -543,7 +547,10 @@ export function resolveProviderRequestCapabilities(
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       policy.usesKnownNativeOpenAIEndpoint,
     shouldStripResponsesPromptCache:
-      api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
+      api !== undefined &&
+      OPENAI_RESPONSES_APIS.has(api) &&
+      policy.usesExplicitProxyLikeEndpoint &&
+      !allowsCompatPromptCacheHost,
     supportsNativeStreamingUsageCompat:
       (provider === "moonshot" && endpointClass === "moonshot-native") ||
       (provider === "modelstudio" && endpointClass === "modelstudio-native"),
