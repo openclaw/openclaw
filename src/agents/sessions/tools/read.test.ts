@@ -4,10 +4,14 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -99,5 +103,63 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+  });
+
+  it("decodes GBK-encoded files on Windows instead of returning mojibake", async () => {
+    // "GBK 编码测试" in GBK bytes
+    const gbkBytes = Buffer.from([
+      0x47, 0x42, 0x4b, 0x20, 0xb1, 0xe0, 0xc2, 0xeb, 0xb2, 0xe2, 0xca, 0xd4,
+    ]);
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => gbkBytes,
+      },
+    });
+
+    const windowsEncoding = await import("../../../infra/windows-encoding.js");
+    const original = windowsEncoding.decodeWindowsOutputBuffer;
+    vi.spyOn(windowsEncoding, "decodeWindowsOutputBuffer").mockImplementation((params) =>
+      original({ ...params, platform: "win32", windowsEncoding: "gbk" }),
+    );
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "gbk_test.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toContain("GBK 编码测试");
+  });
+
+  it("decodes valid UTF-8 content unchanged on Windows with GBK codepage", async () => {
+    const utf8Content = "中文测试内容\n第二行";
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => Buffer.from(utf8Content, "utf-8"),
+      },
+    });
+
+    const windowsEncoding = await import("../../../infra/windows-encoding.js");
+    const original = windowsEncoding.decodeWindowsOutputBuffer;
+    vi.spyOn(windowsEncoding, "decodeWindowsOutputBuffer").mockImplementation((params) =>
+      original({ ...params, platform: "win32", windowsEncoding: "gbk" }),
+    );
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "utf8_test.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toContain("中文测试内容");
+    expect(textContent(result)).toContain("第二行");
   });
 });
