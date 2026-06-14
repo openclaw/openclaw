@@ -16,7 +16,9 @@ export function installCommandRuntime(
   currentConfig: OpenClawConfig,
   writes: OpenClawConfig[],
 ): void {
+  let activeConfig = currentConfig;
   const replaceConfigFile: ReplaceConfigFile = async (params) => {
+    activeConfig = params.nextConfig;
     writes.push(params.nextConfig);
     return undefined as unknown as ReplaceConfigFileResult;
   };
@@ -26,7 +28,7 @@ export function installCommandRuntime(
     pluginVersion: "0.0.0-test",
     approveRuntimeGetter: () => ({
       config: {
-        current: () => currentConfig,
+        current: () => activeConfig,
         replaceConfigFile,
       },
     }),

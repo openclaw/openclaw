@@ -155,6 +155,25 @@ function applyRequireMentionUpdate(
     const groups = (qqbot.groups ?? {}) as Record<string, Record<string, unknown>>;
     groups[groupOpenid] = { ...groups[groupOpenid], requireMention: requireMentionBool };
     qqbot.groups = groups;
+    const accounts = (qqbot.accounts ?? {}) as Record<string, Record<string, unknown>>;
+    const defaultAccount = accounts.default;
+    if (defaultAccount) {
+      const accountGroups = (defaultAccount.groups ?? {}) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      accounts.default = {
+        ...defaultAccount,
+        groups: {
+          ...accountGroups,
+          [groupOpenid]: {
+            ...accountGroups[groupOpenid],
+            requireMention: requireMentionBool,
+          },
+        },
+      };
+      qqbot.accounts = accounts;
+    }
   }
 }
 

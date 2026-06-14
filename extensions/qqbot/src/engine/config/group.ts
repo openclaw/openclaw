@@ -1,7 +1,7 @@
 // Qqbot plugin module implements group behavior.
 import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asOptionalObjectRecord as asRecord } from "../utils/string-normalize.js";
-import { resolveAccountBase } from "./resolve.js";
+import { DEFAULT_ACCOUNT_ID, resolveAccountBase } from "./resolve.js";
 
 interface GroupConfig {
   requireMention: boolean;
@@ -23,12 +23,58 @@ const DEFAULT_GROUP_CONFIG: Readonly<Omit<GroupConfig, "prompt">> = {
   historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
 };
 
+function mergeGroupMaps(
+  baseGroups: Record<string, unknown> | undefined,
+  overrideGroups: Record<string, unknown> | undefined,
+): Record<string, Record<string, unknown>> | undefined {
+  if (!baseGroups && !overrideGroups) {
+    return undefined;
+  }
+  const merged: Record<string, Record<string, unknown>> = {};
+  for (const groupId of new Set([
+    ...Object.keys(baseGroups ?? {}),
+    ...Object.keys(overrideGroups ?? {}),
+  ])) {
+    const baseGroup = asRecord(baseGroups?.[groupId]) ?? {};
+    const overrideGroup = asRecord(overrideGroups?.[groupId]) ?? {};
+    merged[groupId] = { ...baseGroup, ...overrideGroup };
+  }
+  return merged;
+}
+
+function resolveEffectiveAccountConfig(
+  cfg: Record<string, unknown>,
+  accountId?: string | null,
+): Record<string, unknown> {
+  const account = resolveAccountBase(cfg, accountId);
+  if (account.accountId !== DEFAULT_ACCOUNT_ID) {
+    return account.config;
+  }
+
+  const channels = asRecord(cfg.channels);
+  const qqbot = asRecord(channels?.qqbot);
+  const accounts = asRecord(qqbot?.accounts);
+  const defaultAccount = asRecord(accounts?.[DEFAULT_ACCOUNT_ID]);
+  if (!defaultAccount) {
+    return account.config;
+  }
+
+  const groups = asRecord(account.config.groups);
+  const defaultGroups = asRecord(defaultAccount.groups);
+  const mergedGroups = mergeGroupMaps(groups, defaultGroups);
+  return {
+    ...account.config,
+    ...defaultAccount,
+    ...(mergedGroups ? { groups: mergedGroups } : {}),
+  };
+}
+
 function readGroupsMap(
   cfg: Record<string, unknown>,
   accountId?: string | null,
 ): Record<string, Record<string, unknown>> {
-  const account = resolveAccountBase(cfg, accountId);
-  const groups = asRecord(account.config.groups);
+  const accountConfig = resolveEffectiveAccountConfig(cfg, accountId);
+  const groups = asRecord(accountConfig.groups);
   if (!groups) {
     return {};
   }
@@ -64,14 +110,14 @@ export function resolveGroupConfig(
   groupOpenid?: string | null,
   accountId?: string | null,
 ): GroupConfig {
-  const account = resolveAccountBase(cfg, accountId);
+  const accountConfig = resolveEffectiveAccountConfig(cfg, accountId);
   const groups = readGroupsMap(cfg, accountId);
   const wildcard = groups["*"] ?? {};
   const specific = groupOpenid ? (groups[groupOpenid] ?? {}) : {};
 
   // 账户级默认值：defaultRequireMention 配置 > 默认 true
   const accountDefaultRequireMention =
-    asBoolean(account.config.defaultRequireMention) ?? DEFAULT_GROUP_CONFIG.requireMention;
+    asBoolean(accountConfig.defaultRequireMention) ?? DEFAULT_GROUP_CONFIG.requireMention;
 
   return {
     requireMention:
