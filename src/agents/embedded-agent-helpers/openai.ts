@@ -18,6 +18,9 @@ type OpenAIToolCallBlock = {
 type OpenAIReasoningSignature = {
   id: string;
   type: string;
+  content?: unknown;
+  encrypted_content?: unknown;
+  summary?: unknown;
 };
 
 type DowngradeOpenAIReasoningBlocksOptions = {
@@ -55,9 +58,32 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
     return null;
   }
   if (type === "reasoning" || type.startsWith("reasoning.")) {
-    return { id, type };
+    return {
+      id,
+      type,
+      content: (candidate as { content?: unknown }).content,
+      encrypted_content: (candidate as { encrypted_content?: unknown }).encrypted_content,
+      summary: (candidate as { summary?: unknown }).summary,
+    };
   }
   return null;
+}
+
+function hasMeaningfulThinkingText(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasReplayableResponsesReasoningState(signature: OpenAIReasoningSignature): boolean {
+  if (typeof signature.encrypted_content === "string" && signature.encrypted_content.length > 0) {
+    return true;
+  }
+  if (Array.isArray(signature.content) && signature.content.length > 0) {
+    return true;
+  }
+  if (Array.isArray(signature.summary) && signature.summary.length > 0) {
+    return true;
+  }
+  return false;
 }
 
 function hasFollowingNonThinkingBlock(
@@ -471,6 +497,14 @@ export function downgradeOpenAIReasoningBlocks(
         continue;
       }
       if (options.dropReplayableReasoning) {
+        changed = true;
+        droppedReplayableReasoning = true;
+        continue;
+      }
+      if (
+        !hasMeaningfulThinkingText(record.thinking) &&
+        !hasReplayableResponsesReasoningState(signature)
+      ) {
         changed = true;
         droppedReplayableReasoning = true;
         continue;
