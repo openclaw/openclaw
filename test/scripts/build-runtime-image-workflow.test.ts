@@ -118,6 +118,47 @@ describe("build-runtime-image rollout workflow", () => {
     expect(run).toContain("rollout exit code");
   });
 
+  it("bounds runtime image platform proof commands with timeout errors", () => {
+    const step = workflowStep(
+      readWorkflow().jobs?.build ?? {},
+      "Record runtime image platform proof",
+    );
+    const run = step.run ?? "";
+
+    for (const expected of [
+      "run_with_timeout()",
+      'timeout --kill-after=15s "${seconds}s" "$@"',
+      'echo "::error::${label} timed out after ${seconds}s" >&2',
+      'echo "::error::${label} failed with exit code ${status}" >&2',
+      "trap 'status=$?; trap - ERR;",
+      '{ echo "::group::runtime image platform proof (partial)"; cat "$proof_file"; echo "::endgroup::"; } >&2',
+      'run_with_timeout "docker rm runtime image proof container" 30 docker rm -f "$container_id" >/dev/null 2>&1 || true',
+      'docker_server="$(run_with_timeout "docker version" 30 docker version --format \'{{.Server.Version}}\')"',
+      'buildx_version="$(run_with_timeout "docker buildx version" 30 docker buildx version)"',
+      'run_with_timeout "docker buildx imagetools inspect" 120 docker buildx imagetools inspect "$RUNTIME_IMAGE_REF"',
+      'container_id="$(run_with_timeout "docker create runtime image" 120 docker create --platform "$TARGET_PLATFORM" "$RUNTIME_IMAGE_REF")"',
+      'run_with_timeout "docker cp broker binary" 60 docker cp "$container_id:/usr/local/bin/broker" "$proof_dir/broker"',
+      'run_with_timeout "file broker binary" 30 file "$proof_dir/broker"',
+      'run_with_timeout "shasum broker binary" 30 shasum -a 256 "$proof_dir/broker"',
+    ]) {
+      expect(run).toContain(expected);
+    }
+    expect(run).not.toContain('echo "docker_server=$(docker version');
+    expect(run).not.toContain('echo "buildx_version=$(docker buildx version)"');
+
+    const upload = workflowStep(
+      readWorkflow().jobs?.build ?? {},
+      "Upload runtime image platform proof",
+    );
+    expect(upload.if).toBe("always()");
+    expect(upload.uses).toBe("actions/upload-artifact@v4");
+    expect(upload.with).toMatchObject({
+      name: "runtime-image-platform-proof",
+      path: ".artifacts/runtime-image-platform/broker-platform-proof.txt",
+      "if-no-files-found": "ignore",
+    });
+  });
+
   it("writes and uploads a rollout summary artifact with retry metadata", () => {
     const job = rolloutJob();
     expect(job.env).toMatchObject({

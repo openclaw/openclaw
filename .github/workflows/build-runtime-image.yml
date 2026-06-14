@@ -213,43 +213,68 @@ jobs:
           RUNTIME_IMAGE_REF: ${{ env.FLY_IMAGE }}:${{ github.sha }}
           TARGET_PLATFORM: linux/amd64
         run: |
-          set -euo pipefail
+          set -eEuo pipefail
 
           proof_dir=".artifacts/runtime-image-platform"
           proof_file="$proof_dir/broker-platform-proof.txt"
           mkdir -p "$proof_dir"
 
+          run_with_timeout() {
+            local label="$1"
+            local seconds="$2"
+            shift 2
+
+            set +e
+            timeout --kill-after=15s "${seconds}s" "$@"
+            local status="$?"
+            set -e
+
+            if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+              echo "::error::${label} timed out after ${seconds}s" >&2
+              return "$status"
+            fi
+
+            if [ "$status" -ne 0 ]; then
+              echo "::error::${label} failed with exit code ${status}" >&2
+              return "$status"
+            fi
+          }
+
           container_id=""
           cleanup() {
             if [ -n "$container_id" ]; then
-              docker rm -f "$container_id" >/dev/null 2>&1 || true
+              run_with_timeout "docker rm runtime image proof container" 30 docker rm -f "$container_id" >/dev/null 2>&1 || true
             fi
           }
           trap cleanup EXIT
+          trap 'status=$?; trap - ERR; if [ "$status" -ne 0 ] && [ -f "$proof_file" ]; then { echo "::group::runtime image platform proof (partial)"; cat "$proof_file"; echo "::endgroup::"; } >&2; fi' ERR
+
+          docker_server="$(run_with_timeout "docker version" 30 docker version --format '{{.Server.Version}}')"
+          buildx_version="$(run_with_timeout "docker buildx version" 30 docker buildx version)"
 
           {
             echo "runtime_image=$RUNTIME_IMAGE_REF"
             echo "runner_os=${RUNNER_OS:-unknown}"
             echo "runner_arch=${RUNNER_ARCH:-unknown}"
             echo "target_platform=$TARGET_PLATFORM"
-            echo "docker_server=$(docker version --format '{{.Server.Version}}')"
-            echo "buildx_version=$(docker buildx version)"
+            echo "docker_server=$docker_server"
+            echo "buildx_version=$buildx_version"
             echo ""
             echo "## Manifest"
-            docker buildx imagetools inspect "$RUNTIME_IMAGE_REF"
+            run_with_timeout "docker buildx imagetools inspect" 120 docker buildx imagetools inspect "$RUNTIME_IMAGE_REF"
           } > "$proof_file"
 
-          container_id="$(docker create --platform "$TARGET_PLATFORM" "$RUNTIME_IMAGE_REF")"
-          docker cp "$container_id:/usr/local/bin/broker" "$proof_dir/broker"
+          container_id="$(run_with_timeout "docker create runtime image" 120 docker create --platform "$TARGET_PLATFORM" "$RUNTIME_IMAGE_REF")"
+          run_with_timeout "docker cp broker binary" 60 docker cp "$container_id:/usr/local/bin/broker" "$proof_dir/broker"
 
           {
             echo ""
             echo "## Broker binary"
-            file "$proof_dir/broker"
-            shasum -a 256 "$proof_dir/broker"
+            run_with_timeout "file broker binary" 30 file "$proof_dir/broker"
+            run_with_timeout "shasum broker binary" 30 shasum -a 256 "$proof_dir/broker"
           } >> "$proof_file"
 
-          if ! file "$proof_dir/broker" | grep -Eq 'ELF 64-bit.*(x86-64|x86_64)'; then
+          if ! run_with_timeout "file broker binary" 30 file "$proof_dir/broker" | grep -Eq 'ELF 64-bit.*(x86-64|x86_64)'; then
             echo "::error::broker binary is not linux/amd64"
             cat "$proof_file"
             exit 1
@@ -266,16 +291,18 @@ jobs:
             echo ""
             echo "### Broker binary"
             echo '```'
-            file "$proof_dir/broker"
-            shasum -a 256 "$proof_dir/broker"
+            run_with_timeout "file broker binary" 30 file "$proof_dir/broker"
+            run_with_timeout "shasum broker binary" 30 shasum -a 256 "$proof_dir/broker"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload runtime image platform proof
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: runtime-image-platform-proof
           path: .artifacts/runtime-image-platform/broker-platform-proof.txt
+          if-no-files-found: ignore
 
       - name: Summary
         run: |
