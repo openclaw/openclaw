@@ -1,0 +1,64 @@
+name: Plugin SDK impact gate
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] trusted base checkout only; no untrusted PR code execution
+    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+  issue_comment:
+    types: [created, edited, deleted]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  plugin-sdk-impact-gate:
+    name: Plugin SDK impact gate
+    if: >-
+      ${{
+        github.event_name != 'issue_comment' || github.event.issue.pull_request
+      }}
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw,rfcs
+          permission-issues: read
+          permission-members: read
+          permission-pull-requests: read
+      - uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          owner: openclaw
+          repositories: openclaw,rfcs
+          permission-issues: read
+          permission-members: read
+          permission-pull-requests: read
+      - name: Check Plugin SDK impact
+        env:
+          GH_APP_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/github/plugin-sdk-impact-check.mjs

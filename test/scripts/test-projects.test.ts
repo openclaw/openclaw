@@ -303,6 +303,14 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/real-behavior-proof-check.test.ts"],
     });
+    expect(resolveChangedTestTargetPlan(["scripts/github/plugin-sdk-impact-policy.mjs"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/plugin-sdk-impact-policy.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan(["scripts/github/plugin-sdk-impact-check.mjs"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/plugin-sdk-impact-check.test.ts"],
+    });
   });
 
   it("routes unmatched script changes to the tooling suite instead of skipping tests", () => {
@@ -507,6 +515,13 @@ describe("scripts/test-projects changed-target routing", () => {
         targets: ["test/scripts/package-acceptance-workflow.test.ts"],
       },
     );
+  });
+
+  it("keeps Plugin SDK impact gate workflow edits on workflow guard tests", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/plugin-sdk-impact-gate.yml"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-workflow-guards.test.ts"],
+    });
   });
 
   it("keeps workflow sanity script edits on workflow guard tests", () => {
