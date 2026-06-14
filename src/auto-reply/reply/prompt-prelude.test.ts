@@ -1,5 +1,7 @@
 // Tests prompt prelude construction for sender, routing, and context metadata.
 import { describe, expect, it } from "vitest";
+import { EXEC_COMPLETION_TRANSCRIPT_PROMPT } from "../heartbeat.js";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 
@@ -215,5 +217,53 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.prefixedCommandBody).toContain("re-read persona files");
     expect(envelope.transcriptCommandBody).toBe("re-read persona files");
     expect(envelope.transcriptCommandBody).not.toContain("Startup context");
+  });
+
+  it("uses exec completion transcript prompt for exec-event heartbeats", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "An async command you ran earlier has completed. Details: ...",
+      Provider: "exec-event",
+      ChatType: "direct",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "An async command you ran earlier has completed. Details: ...",
+      prefixedBody: "An async command you ran earlier has completed. Details: ...",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+      isHeartbeat: true,
+    });
+
+    expect(envelope.transcriptCommandBody).toBe(
+      `${EXEC_COMPLETION_TRANSCRIPT_PROMPT}\n\n${envelope.effectiveBaseBody}`,
+    );
+    expect(envelope.effectiveBaseBody).toContain("An async command you ran earlier has completed.");
+  });
+
+  it("uses heartbeat transcript prompt for regular heartbeats", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "Read HEARTBEAT.md if it exists.",
+      Provider: "heartbeat",
+      ChatType: "direct",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "Read HEARTBEAT.md if it exists.",
+      prefixedBody: "Read HEARTBEAT.md if it exists.",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+      isHeartbeat: true,
+    });
+
+    expect(envelope.transcriptCommandBody).toBe(HEARTBEAT_TRANSCRIPT_PROMPT);
+    expect(envelope.transcriptCommandBody).not.toContain("Read HEARTBEAT.md");
   });
 });

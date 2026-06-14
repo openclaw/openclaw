@@ -4,6 +4,7 @@ import { normalizeOptionalString as readString } from "@openclaw/normalization-c
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
+  EXEC_COMPLETION_TRANSCRIPT_PROMPT,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   HEARTBEAT_TRANSCRIPT_PROMPT,
   resolveHeartbeatPromptForResponseTool,
@@ -320,8 +321,27 @@ export function isHeartbeatUserMessage(
   ) {
     return true;
   }
+  if (isExecCompletionUserMessage(message)) {
+    return true;
+  }
   return (
     trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK)
+  );
+}
+
+/** Return whether a user message is an exec completion notification. */
+export function isExecCompletionUserMessage(message: { role: string; content?: unknown }): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+  const { text } = resolveMessageText(message.content);
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    trimmed === EXEC_COMPLETION_TRANSCRIPT_PROMPT ||
+    trimmed.startsWith(`${EXEC_COMPLETION_TRANSCRIPT_PROMPT}\n`)
   );
 }
 

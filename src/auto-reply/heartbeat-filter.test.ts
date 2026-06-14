@@ -2,10 +2,12 @@
 import { describe, expect, it } from "vitest";
 import {
   filterHeartbeatTranscriptArtifacts,
+  isExecCompletionUserMessage,
   isHeartbeatOkResponse,
   isHeartbeatUserMessage,
 } from "./heartbeat-filter.js";
 import {
+  EXEC_COMPLETION_TRANSCRIPT_PROMPT,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TRANSCRIPT_PROMPT,
@@ -44,6 +46,13 @@ describe("isHeartbeatUserMessage", () => {
       isHeartbeatUserMessage({
         role: "user",
         content: HEARTBEAT_RESPONSE_TOOL_PROMPT,
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatUserMessage({
+        role: "user",
+        content: EXEC_COMPLETION_TRANSCRIPT_PROMPT,
       }),
     ).toBe(true);
 
@@ -133,6 +142,49 @@ describe("isHeartbeatOkResponse", () => {
         },
         0,
       ),
+    ).toBe(false);
+  });
+});
+
+describe("isExecCompletionUserMessage", () => {
+  it("matches exec completion transcript prompt", () => {
+    expect(
+      isExecCompletionUserMessage({
+        role: "user",
+        content: EXEC_COMPLETION_TRANSCRIPT_PROMPT,
+      }),
+    ).toBe(true);
+  });
+
+  it("matches exec completion prompt with exec details appended", () => {
+    expect(
+      isExecCompletionUserMessage({
+        role: "user",
+        content: `${EXEC_COMPLETION_TRANSCRIPT_PROMPT}\n\nExec completed (session-id, code 0) :: done`,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects non-exec messages", () => {
+    expect(
+      isExecCompletionUserMessage({
+        role: "user",
+        content: "hello",
+      }),
+    ).toBe(false);
+
+    expect(
+      isExecCompletionUserMessage({
+        role: "user",
+        content: HEARTBEAT_TRANSCRIPT_PROMPT,
+      }),
+    ).toBe(false);
+
+    expect(
+      isExecCompletionUserMessage({
+        role: "assistant",
+        content: EXEC_COMPLETION_TRANSCRIPT_PROMPT,
+      }),
     ).toBe(false);
   });
 });
@@ -988,5 +1040,25 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
       messages,
     );
+  });
+
+  it("removes exec completion pairs alongside heartbeat pairs", () => {
+    const messages = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi!" },
+      { role: "user", content: EXEC_COMPLETION_TRANSCRIPT_PROMPT },
+      { role: "assistant", content: "HEARTBEAT_OK" },
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+      { role: "assistant", content: "HEARTBEAT_OK" },
+      { role: "user", content: "What time is it?" },
+      { role: "assistant", content: "3pm." },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi!" },
+      { role: "user", content: "What time is it?" },
+      { role: "assistant", content: "3pm." },
+    ]);
   });
 });

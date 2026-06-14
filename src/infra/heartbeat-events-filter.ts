@@ -146,9 +146,20 @@ export function buildExecEventPrompt(
         "Do not mention, summarize, or reuse command output."
       );
     }
+    if (hasMissingOutputFailure) {
+      return (
+        "An async command you ran earlier completed without captured stdout/stderr. The completion details are:\n\n" +
+        eventText +
+        "\n\n" +
+        "User delivery is disabled for this run. Handle the result internally. Continue the task based on the exit status if applicable. " +
+        "Do not ask the user to provide missing logs, and do not try to retrieve logs from an exec/session id."
+      );
+    }
     return (
-      "An async command completion event was triggered, but user delivery is disabled for this run. " +
-      "Handle the result internally and reply HEARTBEAT_OK only. Do not mention, summarize, or reuse command output."
+      "An async command you ran earlier has completed. The completion details are:\n\n" +
+      eventText +
+      "\n\n" +
+      "User delivery is disabled for this run. Handle the result internally. Continue the task based on the result if needed."
     );
   }
   if (hasMissingOutputFailure) {
