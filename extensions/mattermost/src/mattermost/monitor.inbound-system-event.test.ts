@@ -496,6 +496,8 @@ describe("mattermost inbound user posts", () => {
         progressText: "done",
       });
       await params.replyOptions?.onReasoningStream?.({ text: "Thinking" });
+      await params.replyOptions?.onReasoningEnd?.();
+      await params.replyOptions?.onReasoningStream?.({ text: "Checking" });
       await params.replyOptions?.onItemEvent?.({
         itemId: "tool-read",
         kind: "tool",
@@ -545,6 +547,8 @@ describe("mattermost inbound user posts", () => {
     expect(updates.at(-1)).toContain("Read");
     expect(updates.at(-1)).toContain("Exec");
     expect(updates.at(-1)).toContain("done");
+    expect(updates.at(-1)).toContain("Checking");
+    expect(updates.at(-1)).not.toContain("ThinkingChecking");
   });
 
   it("does not drop inline command-looking group text from non-command-authorized senders", async () => {

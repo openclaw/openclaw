@@ -1912,12 +1912,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           },
                           onAssistantMessageStart: () => {
                             lastPartialText = "";
+                            progressDraft.resetReasoningProgress();
                             if (account.streamingMode !== "progress") {
                               progressDraft.reset();
                             }
                           },
                           onReasoningEnd: () => {
                             lastPartialText = "";
+                            progressDraft.resetReasoningProgress();
                             if (account.streamingMode !== "progress") {
                               progressDraft.reset();
                             }
