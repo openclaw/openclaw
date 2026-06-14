@@ -11,18 +11,12 @@ import {
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
 
-function createPayloadCapture(opts?: {
-  initialReasoning?: unknown;
-  initialReasoningEffort?: string;
-}) {
+function createPayloadCapture(opts?: { initialReasoning?: unknown }) {
   const payloads: Array<Record<string, unknown>> = [];
   const baseStreamFn: StreamFn = (model, context, options) => {
     const payload: Record<string, unknown> = { model: model.id };
     if (opts?.initialReasoning !== undefined) {
       payload.reasoning = structuredClone(opts.initialReasoning);
-    }
-    if (opts?.initialReasoningEffort !== undefined) {
-      payload.reasoning_effort = opts.initialReasoningEffort;
     }
     options?.onPayload?.(payload, model);
     payloads.push(structuredClone(payload));
