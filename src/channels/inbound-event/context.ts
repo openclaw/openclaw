@@ -510,6 +510,7 @@ export function buildChannelInboundEventContext(
     OriginatingChannel: params.channel,
     OriginatingTo: params.reply.originatingTo ?? params.reply.to,
     ThreadParentId: params.reply.threadParentId ?? params.conversation.parentId,
+    AgentId: params.route.agentId,
     ...params.extra,
   };
   const finalizeParams = {
