@@ -17,6 +17,7 @@ import {
   createMsteamsRealtimeCall,
   type MsteamsRealtimeDeps,
   pcm16Rms,
+  shouldSuppressEcho,
   toTileCaption,
 } from "./msteams-realtime.js";
 import { VisionBudget } from "./vision-budget.js";
@@ -161,6 +162,44 @@ describe("pcm16Rms (echo-guard loudness)", () => {
   });
 });
 
+describe("shouldSuppressEcho (allowBargeIn / opening greeting loop)", () => {
+  function tone(amplitude: number, samples = 320): Buffer {
+    const buf = Buffer.alloc(samples * 2);
+    for (let i = 0; i < samples; i += 1) {
+      buf.writeInt16LE(i % 2 === 0 ? amplitude : -amplitude, i * 2);
+    }
+    return buf;
+  }
+  const loud = tone(6000); // > 0.04 barge-in RMS
+  const quiet = tone(600); // < 0.04
+  const inWindow = Date.now() + 5000;
+  const past = Date.now() - 5000;
+
+  it("suppresses quiet echo but passes a loud barge-in during playback (default)", () => {
+    expect(shouldSuppressEcho(quiet, inWindow)).toBe(true);
+    expect(shouldSuppressEcho(loud, inWindow)).toBe(false);
+  });
+
+  it("with allowBargeIn:false (opening greeting), suppresses even LOUD in-window input", () => {
+    // The opening echo-loop fix: before the caller's first turn, loud greeting echo must not pass.
+    expect(shouldSuppressEcho(loud, inWindow, { allowBargeIn: false })).toBe(true);
+    expect(shouldSuppressEcho(quiet, inWindow, { allowBargeIn: false })).toBe(true);
+  });
+
+  it("allowBargeIn:false still passes input OUTSIDE the playback window", () => {
+    expect(shouldSuppressEcho(loud, past, { allowBargeIn: false })).toBe(false);
+  });
+
+  it("never suppresses when suppressInputDuringPlayback is disabled", () => {
+    expect(
+      shouldSuppressEcho(quiet, inWindow, {
+        suppressInputDuringPlayback: false,
+        allowBargeIn: false,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("toTileCaption", () => {
   it("collapses whitespace and trims", () => {
     expect(toTileCaption("  Here's   the\nchart  ")).toBe("Here's the chart");
@@ -234,7 +273,7 @@ describe("createMsteamsRealtimeCall", () => {
     expect(forwarded.length).toBeGreaterThan(0);
   });
 
-  it("suppresses echo-level caller audio during playback but passes a real barge-in", () => {
+  it("opening greeting: suppresses caller audio incl. loud echo until the first caller turn, then allows barge-in", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();
     const call = createMsteamsRealtimeCall({
@@ -242,10 +281,6 @@ describe("createMsteamsRealtimeCall", () => {
       deps: { provider: mock.provider, providerConfig: {} },
     });
     const req = mock.getRequest();
-
-    // The bot is speaking now (model audio) — this stamps the echo-suppression playout window.
-    req.onAudio(Buffer.alloc(960));
-    mock.sendAudio.mockClear();
 
     const tone = (amplitude: number): Buffer => {
       const buf = Buffer.alloc(640);
@@ -255,11 +290,24 @@ describe("createMsteamsRealtimeCall", () => {
       return buf;
     };
 
-    // Quiet, echo-level caller audio during playback is dropped (no self-answer).
+    // The bot's greeting is playing (model audio) — stamps the echo-suppression playout window.
+    req.onAudio(Buffer.alloc(960));
+    mock.sendAudio.mockClear();
+
+    // Before the caller has spoken, ALL in-window input is treated as echo — even a LOUD frame (the
+    // bot's own greeting echoing back on a speakerphone) — so the model can't re-greet itself in a loop.
     call.pushAudio(tone(500));
+    call.pushAudio(tone(8000));
     expect(mock.sendAudio).not.toHaveBeenCalled();
 
-    // A loud utterance (genuine barge-in) still reaches the model.
+    // The caller actually speaks once → the opening echo-only window ends; normal RMS barge-in resumes.
+    req.onTranscript?.("user", "hello", true);
+    req.onAudio(Buffer.alloc(960)); // bot speaking again
+    mock.sendAudio.mockClear();
+
+    // Quiet echo still dropped; a genuine loud barge-in now reaches the model.
+    call.pushAudio(tone(500));
+    expect(mock.sendAudio).not.toHaveBeenCalled();
     call.pushAudio(tone(8000));
     expect(mock.sendAudio).toHaveBeenCalledTimes(1);
   });
