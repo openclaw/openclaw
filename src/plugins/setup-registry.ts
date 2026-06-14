@@ -452,6 +452,21 @@ function pushSetupDescriptorDriftDiagnostics(params: {
   }
 }
 
+function normalizeSetupAutoEnableProbeReasons(raw: unknown): string[] {
+  const values = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const reasons: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const normalized = value.trim();
+    if (normalized) {
+      reasons.push(normalized);
+    }
+  }
+  return reasons;
+}
+
 export function resolvePluginSetupRegistry(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -759,16 +774,20 @@ export function resolvePluginSetupAutoEnableReasons(params: {
     pluginIds: params.pluginIds,
     manifestRegistry: params.manifestRegistry,
   }).autoEnableProbes) {
-    const raw = entry.probe({
-      config: params.config,
-      env,
-    });
-    const values = Array.isArray(raw) ? raw : raw ? [raw] : [];
-    for (const reason of values) {
-      const normalized = reason.trim();
-      if (!normalized) {
-        continue;
-      }
+    let values: string[];
+    try {
+      // Probe returns are plugin-owned hook output; normalize them before the
+      // setup registry reasons path trusts string methods.
+      values = normalizeSetupAutoEnableProbeReasons(
+        entry.probe({
+          config: params.config,
+          env,
+        }),
+      );
+    } catch {
+      continue;
+    }
+    for (const normalized of values) {
       const key = `${entry.pluginId}:${normalized}`;
       if (seen.has(key)) {
         continue;

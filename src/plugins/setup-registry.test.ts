@@ -27,6 +27,7 @@ let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePlug
 let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
+let resolvePluginSetupAutoEnableReasons: typeof import("./setup-registry.js").resolvePluginSetupAutoEnableReasons;
 let setPluginSetupRegistryModuleLoaderFactoryForTest:
   | typeof import("./setup-registry.js").setPluginSetupRegistryModuleLoaderFactoryForTest
   | undefined;
@@ -257,6 +258,7 @@ describe("setup-registry module loader", () => {
       resolvePluginSetupProvider,
       resolvePluginSetupCliBackend,
       runPluginSetupConfigMigrations,
+      resolvePluginSetupAutoEnableReasons,
       setPluginSetupRegistryModuleLoaderFactoryForTest,
     } = await import("./setup-registry.js"));
     setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
@@ -829,6 +831,54 @@ describe("setup-registry module loader", () => {
     await expectNoUnhandledRejection(() => {
       expect(resolvePluginSetupRegistry({ env: {} }).configMigrations).toHaveLength(1);
     });
+  });
+
+  it("ignores malformed setup auto-enable probe reasons", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "browser",
+          rootDir: pluginRoot,
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: { registerAutoEnableProbe: (probe: () => unknown) => void }) {
+            api.registerAutoEnableProbe(() => [
+              {},
+              "  browser config detected  ",
+              1,
+              "",
+              "browser config detected",
+            ]);
+          },
+        },
+      });
+    });
+
+    expect(
+      resolvePluginSetupAutoEnableReasons({
+        config: {
+          plugins: {
+            entries: {
+              browser: { config: {} },
+            },
+          },
+        } as never,
+        env: {},
+        pluginIds: ["browser"],
+      }),
+    ).toEqual([
+      {
+        pluginId: "browser",
+        reason: "browser config detected",
+      },
+    ]);
   });
 
   it("fails closed when multiple plugins claim the same setup provider id", () => {
