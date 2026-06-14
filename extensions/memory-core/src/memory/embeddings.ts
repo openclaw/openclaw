@@ -188,12 +188,15 @@ async function createWithAdapter(
   adapter: MemoryEmbeddingProviderAdapter,
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
+  const resolvedModel = resolveProviderModel(adapter, options.model);
   const result = await adapter.create({
     ...options,
-    model: resolveProviderModel(adapter, options.model),
+    model: resolvedModel,
   });
   return {
-    provider: result.provider,
+    provider: result.provider
+      ? { ...result.provider, model: result.provider.model || resolvedModel }
+      : null,
     requestedProvider: options.provider,
     runtime: result.runtime,
   };
