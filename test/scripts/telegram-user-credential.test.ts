@@ -61,7 +61,7 @@ async function waitForExit(
   timeoutMs: number,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   if (child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode as NodeJS.Signals | null };
+    return { code: child.exitCode, signal: child.signalCode };
   }
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {

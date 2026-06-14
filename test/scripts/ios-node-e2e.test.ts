@@ -234,7 +234,7 @@ describe("ios-node-e2e", () => {
         payload: {},
       },
     });
-    expect(report.results.every((entry) => entry.ok === false)).toBe(true);
+    expect(report.results.every((entry) => !entry.ok)).toBe(true);
     expect(invokeParams.length).toBeGreaterThan(0);
   });
 

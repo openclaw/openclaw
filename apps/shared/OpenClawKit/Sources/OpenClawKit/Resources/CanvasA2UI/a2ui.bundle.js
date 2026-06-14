@@ -1,6 +1,6 @@
 // Bundled A2UI runtime resource embedded by OpenClawKit.
-var __defProp$1 = Object.defineProperty;
-var __exportAll = (all, no_symbols) => {
+const __defProp$1 = Object.defineProperty;
+const __exportAll = (all, no_symbols) => {
 	let target = {};
 	for (var name in all) __defProp$1(target, name, {
 		get: all[name],
@@ -14,7 +14,7 @@ const eventInit = {
 	cancelable: true,
 	composed: true
 };
-var StateEvent = class StateEvent extends CustomEvent {
+const StateEvent = class StateEvent extends CustomEvent {
 	static {
 		this.eventName = "a2uiaction";
 	}
@@ -26,7 +26,7 @@ var StateEvent = class StateEvent extends CustomEvent {
 		this.payload = payload;
 	}
 };
-var guards_exports = /* @__PURE__ */ __exportAll({
+const guards_exports = /* @__PURE__ */ __exportAll({
 	isComponentArrayReference: () => isComponentArrayReference,
 	isObject: () => isObject,
 	isPath: () => isPath,
@@ -60,7 +60,7 @@ function isObject(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isComponentArrayReference(value) {
-	if (!isObject(value)) return false;
+	if (!isObject(value)) {return false;}
 	return "explicitList" in value || "template" in value;
 }
 function isStringValue(value) {
@@ -73,8 +73,8 @@ function isBooleanValue(value) {
 	return isObject(value) && ("path" in value || "literal" in value && typeof value.literal === "boolean" || "literalBoolean" in value);
 }
 function isAnyComponentNode(value) {
-	if (!isObject(value)) return false;
-	if (!("id" in value && "type" in value && "properties" in value)) return false;
+	if (!isObject(value)) {return false;}
+	if (!("id" in value && "type" in value && "properties" in value)) {return false;}
 	return true;
 }
 function isResolvedAudioPlayer(props) {
@@ -84,9 +84,9 @@ function isResolvedButton(props) {
 	return isObject(props) && "child" in props && isAnyComponentNode(props.child) && "action" in props;
 }
 function isResolvedCard(props) {
-	if (!isObject(props)) return false;
-	if (!("child" in props)) if (!("children" in props)) return false;
-	else return Array.isArray(props.children) && props.children.every(isAnyComponentNode);
+	if (!isObject(props)) {return false;}
+	if (!("child" in props)) {if (!("children" in props)) return false;
+	else return Array.isArray(props.children) && props.children.every(isAnyComponentNode);}
 	return isAnyComponentNode(props.child);
 }
 function isResolvedCheckbox(props) {
@@ -155,7 +155,7 @@ function isResolvedVideo(props) {
 /**
 * Event dispatched when an input component's validation state is updated.
 */
-var A2UIValidationEvent = class A2UIValidationEvent extends CustomEvent {
+const A2UIValidationEvent = class A2UIValidationEvent extends CustomEvent {
 	static {
 		this.EVENT_NAME = "a2ui-validation-input";
 	}
@@ -171,7 +171,7 @@ var A2UIValidationEvent = class A2UIValidationEvent extends CustomEvent {
 		});
 	}
 };
-var util;
+let util;
 (function(util) {
 	util.assertEqual = (_) => {};
 	function assertIs(_arg) {}
@@ -182,13 +182,13 @@ var util;
 	util.assertNever = assertNever;
 	util.arrayToEnum = (items) => {
 		const obj = {};
-		for (const item of items) obj[item] = item;
+		for (const item of items) {obj[item] = item;}
 		return obj;
 	};
 	util.getValidEnumValues = (obj) => {
 		const validKeys = util.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
 		const filtered = {};
-		for (const k of validKeys) filtered[k] = obj[k];
+		for (const k of validKeys) {filtered[k] = obj[k];}
 		return util.objectValues(filtered);
 	};
 	util.objectValues = (obj) => {
@@ -198,11 +198,11 @@ var util;
 	};
 	util.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object) => {
 		const keys = [];
-		for (const key in object) if (Object.prototype.hasOwnProperty.call(object, key)) keys.push(key);
+		for (const key in object) {if (Object.prototype.hasOwnProperty.call(object, key)) keys.push(key);}
 		return keys;
 	};
 	util.find = (arr, checker) => {
-		for (const item of arr) if (checker(item)) return item;
+		for (const item of arr) {if (checker(item)) return item;}
 	};
 	util.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
 	function joinValues(array, separator = " | ") {
@@ -210,11 +210,11 @@ var util;
 	}
 	util.joinValues = joinValues;
 	util.jsonStringifyReplacer = (_, value) => {
-		if (typeof value === "bigint") return value.toString();
+		if (typeof value === "bigint") {return value.toString();}
 		return value;
 	};
 })(util || (util = {}));
-var objectUtil;
+let objectUtil;
 (function(objectUtil) {
 	objectUtil.mergeShapes = (first, second) => {
 		return {
@@ -255,12 +255,12 @@ const getParsedType = (data) => {
 		case "bigint": return ZodParsedType.bigint;
 		case "symbol": return ZodParsedType.symbol;
 		case "object":
-			if (Array.isArray(data)) return ZodParsedType.array;
-			if (data === null) return ZodParsedType.null;
-			if (data.then && typeof data.then === "function" && data.catch && typeof data.catch === "function") return ZodParsedType.promise;
-			if (typeof Map !== "undefined" && data instanceof Map) return ZodParsedType.map;
-			if (typeof Set !== "undefined" && data instanceof Set) return ZodParsedType.set;
-			if (typeof Date !== "undefined" && data instanceof Date) return ZodParsedType.date;
+			if (Array.isArray(data)) {return ZodParsedType.array;}
+			if (data === null) {return ZodParsedType.null;}
+			if (data.then && typeof data.then === "function" && data.catch && typeof data.catch === "function") {return ZodParsedType.promise;}
+			if (typeof Map !== "undefined" && data instanceof Map) {return ZodParsedType.map;}
+			if (typeof Set !== "undefined" && data instanceof Set) {return ZodParsedType.set;}
+			if (typeof Date !== "undefined" && data instanceof Date) {return ZodParsedType.date;}
 			return ZodParsedType.object;
 		default: return ZodParsedType.unknown;
 	}
@@ -283,7 +283,7 @@ const ZodIssueCode = util.arrayToEnum([
 	"not_multiple_of",
 	"not_finite"
 ]);
-var ZodError = class ZodError extends Error {
+const ZodError = class ZodError extends Error {
 	get errors() {
 		return this.issues;
 	}
@@ -366,8 +366,8 @@ const errorMap = (issue, _ctx) => {
 	let message;
 	switch (issue.code) {
 		case ZodIssueCode.invalid_type:
-			if (issue.received === ZodParsedType.undefined) message = "Required";
-			else message = `Expected ${issue.expected}, received ${issue.received}`;
+			if (issue.received === ZodParsedType.undefined) {message = "Required";}
+			else {message = `Expected ${issue.expected}, received ${issue.received}`;}
 			break;
 		case ZodIssueCode.invalid_literal:
 			message = `Invalid literal value, expected ${JSON.stringify(issue.expected, util.jsonStringifyReplacer)}`;
@@ -394,30 +394,30 @@ const errorMap = (issue, _ctx) => {
 			message = `Invalid date`;
 			break;
 		case ZodIssueCode.invalid_string:
-			if (typeof issue.validation === "object") if ("includes" in issue.validation) {
+			if (typeof issue.validation === "object") {if ("includes" in issue.validation) {
 				message = `Invalid input: must include "${issue.validation.includes}"`;
 				if (typeof issue.validation.position === "number") message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;
 			} else if ("startsWith" in issue.validation) message = `Invalid input: must start with "${issue.validation.startsWith}"`;
 			else if ("endsWith" in issue.validation) message = `Invalid input: must end with "${issue.validation.endsWith}"`;
-			else util.assertNever(issue.validation);
-			else if (issue.validation !== "regex") message = `Invalid ${issue.validation}`;
-			else message = "Invalid";
+			else util.assertNever(issue.validation);}
+			else if (issue.validation !== "regex") {message = `Invalid ${issue.validation}`;}
+			else {message = "Invalid";}
 			break;
 		case ZodIssueCode.too_small:
-			if (issue.type === "array") message = `Array must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `more than`} ${issue.minimum} element(s)`;
-			else if (issue.type === "string") message = `String must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `over`} ${issue.minimum} character(s)`;
-			else if (issue.type === "number") message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
-			else if (issue.type === "bigint") message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
-			else if (issue.type === "date") message = `Date must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue.minimum))}`;
-			else message = "Invalid input";
+			if (issue.type === "array") {message = `Array must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `more than`} ${issue.minimum} element(s)`;}
+			else if (issue.type === "string") {message = `String must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `over`} ${issue.minimum} character(s)`;}
+			else if (issue.type === "number") {message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;}
+			else if (issue.type === "bigint") {message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;}
+			else if (issue.type === "date") {message = `Date must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue.minimum))}`;}
+			else {message = "Invalid input";}
 			break;
 		case ZodIssueCode.too_big:
-			if (issue.type === "array") message = `Array must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `less than`} ${issue.maximum} element(s)`;
-			else if (issue.type === "string") message = `String must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `under`} ${issue.maximum} character(s)`;
-			else if (issue.type === "number") message = `Number must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
-			else if (issue.type === "bigint") message = `BigInt must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
-			else if (issue.type === "date") message = `Date must be ${issue.exact ? `exactly` : issue.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue.maximum))}`;
-			else message = "Invalid input";
+			if (issue.type === "array") {message = `Array must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `less than`} ${issue.maximum} element(s)`;}
+			else if (issue.type === "string") {message = `String must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `under`} ${issue.maximum} character(s)`;}
+			else if (issue.type === "number") {message = `Number must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;}
+			else if (issue.type === "bigint") {message = `BigInt must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;}
+			else if (issue.type === "date") {message = `Date must be ${issue.exact ? `exactly` : issue.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue.maximum))}`;}
+			else {message = "Invalid input";}
 			break;
 		case ZodIssueCode.custom:
 			message = `Invalid input`;
@@ -437,7 +437,7 @@ const errorMap = (issue, _ctx) => {
 	}
 	return { message };
 };
-let overrideErrorMap = errorMap;
+const overrideErrorMap = errorMap;
 function getErrorMap() {
 	return overrideErrorMap;
 }
@@ -448,17 +448,17 @@ const makeIssue = (params) => {
 		...issueData,
 		path: fullPath
 	};
-	if (issueData.message !== void 0) return {
+	if (issueData.message !== void 0) {return {
 		...issueData,
 		path: fullPath,
 		message: issueData.message
-	};
+	};}
 	let errorMessage = "";
-	const maps = errorMaps.filter((m) => !!m).slice().reverse();
-	for (const map of maps) errorMessage = map(fullIssue, {
+	const maps = errorMaps.filter((m) => Boolean(m)).slice().toReversed();
+	for (const map of maps) {errorMessage = map(fullIssue, {
 		data,
 		defaultError: errorMessage
-	}).message;
+	}).message;}
 	return {
 		...issueData,
 		path: fullPath,
@@ -476,11 +476,11 @@ function addIssueToContext(ctx, issueData) {
 			ctx.schemaErrorMap,
 			overrideMap,
 			overrideMap === errorMap ? void 0 : errorMap
-		].filter((x) => !!x)
+		].filter((x) => Boolean(x))
 	});
 	ctx.common.issues.push(issue);
 }
-var ParseStatus = class ParseStatus {
+const ParseStatus = class ParseStatus {
 	constructor() {
 		this.value = "valid";
 	}
@@ -543,12 +543,12 @@ const isAborted = (x) => x.status === "aborted";
 const isDirty = (x) => x.status === "dirty";
 const isValid = (x) => x.status === "valid";
 const isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
-var errorUtil;
+let errorUtil;
 (function(errorUtil) {
 	errorUtil.errToObj = (message) => typeof message === "string" ? { message } : message || {};
 	errorUtil.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
-var ParseInputLazyPath = class {
+const ParseInputLazyPath = class {
 	constructor(parent, value, path, key) {
 		this._cachedPath = [];
 		this.parent = parent;
@@ -563,16 +563,16 @@ var ParseInputLazyPath = class {
 	}
 };
 const handleResult = (ctx, result) => {
-	if (isValid(result)) return {
+	if (isValid(result)) {return {
 		success: true,
 		data: result.value
-	};
+	};}
 	else {
-		if (!ctx.common.issues.length) throw new Error("Validation failed but no issues detected.");
+		if (!ctx.common.issues.length) {throw new Error("Validation failed but no issues detected.");}
 		return {
 			success: false,
 			get error() {
-				if (this._error) return this._error;
+				if (this._error) {return this._error;}
 				const error = new ZodError(ctx.common.issues);
 				this._error = error;
 				return this._error;
@@ -581,18 +581,18 @@ const handleResult = (ctx, result) => {
 	}
 };
 function processCreateParams(params) {
-	if (!params) return {};
+	if (!params) {return {};}
 	const { errorMap, invalid_type_error, required_error, description } = params;
-	if (errorMap && (invalid_type_error || required_error)) throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
-	if (errorMap) return {
+	if (errorMap && (invalid_type_error || required_error)) {throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);}
+	if (errorMap) {return {
 		errorMap,
 		description
-	};
+	};}
 	const customMap = (iss, ctx) => {
 		const { message } = params;
-		if (iss.code === "invalid_enum_value") return { message: message ?? ctx.defaultError };
-		if (typeof ctx.data === "undefined") return { message: message ?? required_error ?? ctx.defaultError };
-		if (iss.code !== "invalid_type") return { message: ctx.defaultError };
+		if (iss.code === "invalid_enum_value") {return { message: message ?? ctx.defaultError };}
+		if (ctx.data === undefined) {return { message: message ?? required_error ?? ctx.defaultError };}
+		if (iss.code !== "invalid_type") {return { message: ctx.defaultError };}
 		return { message: message ?? invalid_type_error ?? ctx.defaultError };
 	};
 	return {
@@ -600,7 +600,7 @@ function processCreateParams(params) {
 		description
 	};
 }
-var ZodType = class {
+const ZodType = class {
 	get description() {
 		return this._def.description;
 	}
@@ -883,7 +883,7 @@ const uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-
 const nanoidRegex = /^[a-z0-9_-]{21}$/i;
 const jwtRegex = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$/;
 const durationRegex = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
-const emailRegex = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i;
+const emailRegex = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9-]*\.)+[A-Z]{2,}$/i;
 const _emojiRegex = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`;
 let emojiRegex;
 const ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
@@ -896,8 +896,8 @@ const dateRegexSource = `((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[0246
 const dateRegex = new RegExp(`^${dateRegexSource}$`);
 function timeRegexSource(args) {
 	let secondsRegexSource = `[0-5]\\d`;
-	if (args.precision) secondsRegexSource = `${secondsRegexSource}\\.\\d{${args.precision}}`;
-	else if (args.precision == null) secondsRegexSource = `${secondsRegexSource}(\\.\\d+)?`;
+	if (args.precision) {secondsRegexSource = `${secondsRegexSource}\\.\\d{${args.precision}}`;}
+	else if (args.precision == null) {secondsRegexSource = `${secondsRegexSource}(\\.\\d+)?`;}
 	const secondsQuantifier = args.precision ? "+" : "?";
 	return `([01]\\d|2[0-3]):[0-5]\\d(:${secondsRegexSource})${secondsQuantifier}`;
 }
@@ -908,37 +908,37 @@ function datetimeRegex(args) {
 	let regex = `${dateRegexSource}T${timeRegexSource(args)}`;
 	const opts = [];
 	opts.push(args.local ? `Z?` : `Z`);
-	if (args.offset) opts.push(`([+-]\\d{2}:?\\d{2})`);
+	if (args.offset) {opts.push(`([+-]\\d{2}:?\\d{2})`);}
 	regex = `${regex}(${opts.join("|")})`;
 	return new RegExp(`^${regex}$`);
 }
 function isValidIP(ip, version) {
-	if ((version === "v4" || !version) && ipv4Regex.test(ip)) return true;
-	if ((version === "v6" || !version) && ipv6Regex.test(ip)) return true;
+	if ((version === "v4" || !version) && ipv4Regex.test(ip)) {return true;}
+	if ((version === "v6" || !version) && ipv6Regex.test(ip)) {return true;}
 	return false;
 }
 function isValidJWT(jwt, alg) {
-	if (!jwtRegex.test(jwt)) return false;
+	if (!jwtRegex.test(jwt)) {return false;}
 	try {
 		const [header] = jwt.split(".");
-		if (!header) return false;
+		if (!header) {return false;}
 		const base64 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
 		const decoded = JSON.parse(atob(base64));
-		if (typeof decoded !== "object" || decoded === null) return false;
-		if ("typ" in decoded && decoded?.typ !== "JWT") return false;
-		if (!decoded.alg) return false;
-		if (alg && decoded.alg !== alg) return false;
+		if (typeof decoded !== "object" || decoded === null) {return false;}
+		if ("typ" in decoded && decoded?.typ !== "JWT") {return false;}
+		if (!decoded.alg) {return false;}
+		if (alg && decoded.alg !== alg) {return false;}
 		return true;
 	} catch {
 		return false;
 	}
 }
 function isValidCidr(ip, version) {
-	if ((version === "v4" || !version) && ipv4CidrRegex.test(ip)) return true;
-	if ((version === "v6" || !version) && ipv6CidrRegex.test(ip)) return true;
+	if ((version === "v4" || !version) && ipv4CidrRegex.test(ip)) {return true;}
+	if ((version === "v6" || !version) && ipv6CidrRegex.test(ip)) {return true;}
 	return false;
 }
-var ZodString = class ZodString extends ZodType {
+const ZodString = class ZodString extends ZodType {
 	_parse(input) {
 		if (this._def.coerce) input.data = String(input.data);
 		if (this._getType(input) !== ZodParsedType.string) {
@@ -1508,7 +1508,7 @@ function floatSafeRemainder(val, step) {
 	const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
 	return Number.parseInt(val.toFixed(decCount).replace(".", "")) % Number.parseInt(step.toFixed(decCount).replace(".", "")) / 10 ** decCount;
 }
-var ZodNumber = class ZodNumber extends ZodType {
+const ZodNumber = class ZodNumber extends ZodType {
 	constructor() {
 		super(...arguments);
 		this.min = this.gte;
@@ -1720,7 +1720,7 @@ ZodNumber.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodBigInt = class ZodBigInt extends ZodType {
+const ZodBigInt = class ZodBigInt extends ZodType {
 	constructor() {
 		super(...arguments);
 		this.min = this.gte;
@@ -1875,7 +1875,7 @@ ZodBigInt.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodBoolean = class extends ZodType {
+const ZodBoolean = class extends ZodType {
 	_parse(input) {
 		if (this._def.coerce) input.data = Boolean(input.data);
 		if (this._getType(input) !== ZodParsedType.boolean) {
@@ -1897,7 +1897,7 @@ ZodBoolean.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodDate = class ZodDate extends ZodType {
+const ZodDate = class ZodDate extends ZodType {
 	_parse(input) {
 		if (this._def.coerce) input.data = new Date(input.data);
 		if (this._getType(input) !== ZodParsedType.date) {
@@ -1990,7 +1990,7 @@ ZodDate.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodSymbol = class extends ZodType {
+const ZodSymbol = class extends ZodType {
 	_parse(input) {
 		if (this._getType(input) !== ZodParsedType.symbol) {
 			const ctx = this._getOrReturnCtx(input);
@@ -2010,7 +2010,7 @@ ZodSymbol.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodUndefined = class extends ZodType {
+const ZodUndefined = class extends ZodType {
 	_parse(input) {
 		if (this._getType(input) !== ZodParsedType.undefined) {
 			const ctx = this._getOrReturnCtx(input);
@@ -2030,7 +2030,7 @@ ZodUndefined.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodNull = class extends ZodType {
+const ZodNull = class extends ZodType {
 	_parse(input) {
 		if (this._getType(input) !== ZodParsedType.null) {
 			const ctx = this._getOrReturnCtx(input);
@@ -2050,7 +2050,7 @@ ZodNull.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodAny = class extends ZodType {
+const ZodAny = class extends ZodType {
 	constructor() {
 		super(...arguments);
 		this._any = true;
@@ -2065,7 +2065,7 @@ ZodAny.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodUnknown = class extends ZodType {
+const ZodUnknown = class extends ZodType {
 	constructor() {
 		super(...arguments);
 		this._unknown = true;
@@ -2080,7 +2080,7 @@ ZodUnknown.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodNever = class extends ZodType {
+const ZodNever = class extends ZodType {
 	_parse(input) {
 		const ctx = this._getOrReturnCtx(input);
 		addIssueToContext(ctx, {
@@ -2097,7 +2097,7 @@ ZodNever.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodVoid = class extends ZodType {
+const ZodVoid = class extends ZodType {
 	_parse(input) {
 		if (this._getType(input) !== ZodParsedType.undefined) {
 			const ctx = this._getOrReturnCtx(input);
@@ -2117,7 +2117,7 @@ ZodVoid.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodArray = class ZodArray extends ZodType {
+const ZodArray = class ZodArray extends ZodType {
 	_parse(input) {
 		const { ctx, status } = this._processInputParams(input);
 		const def = this._def;
@@ -2236,16 +2236,16 @@ function deepPartialify(schema) {
 			...schema._def,
 			shape: () => newShape
 		});
-	} else if (schema instanceof ZodArray) return new ZodArray({
+	} else if (schema instanceof ZodArray) {return new ZodArray({
 		...schema._def,
 		type: deepPartialify(schema.element)
-	});
-	else if (schema instanceof ZodOptional) return ZodOptional.create(deepPartialify(schema.unwrap()));
-	else if (schema instanceof ZodNullable) return ZodNullable.create(deepPartialify(schema.unwrap()));
-	else if (schema instanceof ZodTuple) return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));
-	else return schema;
+	});}
+	else if (schema instanceof ZodOptional) {return ZodOptional.create(deepPartialify(schema.unwrap()));}
+	else if (schema instanceof ZodNullable) {return ZodNullable.create(deepPartialify(schema.unwrap()));}
+	else if (schema instanceof ZodTuple) {return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));}
+	else {return schema;}
 }
-var ZodObject = class ZodObject extends ZodType {
+const ZodObject = class ZodObject extends ZodType {
 	constructor() {
 		super(...arguments);
 		this._cached = null;
@@ -2489,7 +2489,7 @@ ZodObject.lazycreate = (shape, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodUnion = class extends ZodType {
+const ZodUnion = class extends ZodType {
 	_parse(input) {
 		const { ctx } = this._processInputParams(input);
 		const options = this._def.options;
@@ -2572,22 +2572,22 @@ ZodUnion.create = (types, params) => {
 	});
 };
 const getDiscriminator = (type) => {
-	if (type instanceof ZodLazy) return getDiscriminator(type.schema);
-	else if (type instanceof ZodEffects) return getDiscriminator(type.innerType());
-	else if (type instanceof ZodLiteral) return [type.value];
-	else if (type instanceof ZodEnum) return type.options;
-	else if (type instanceof ZodNativeEnum) return util.objectValues(type.enum);
-	else if (type instanceof ZodDefault) return getDiscriminator(type._def.innerType);
-	else if (type instanceof ZodUndefined) return [void 0];
-	else if (type instanceof ZodNull) return [null];
-	else if (type instanceof ZodOptional) return [void 0, ...getDiscriminator(type.unwrap())];
-	else if (type instanceof ZodNullable) return [null, ...getDiscriminator(type.unwrap())];
-	else if (type instanceof ZodBranded) return getDiscriminator(type.unwrap());
-	else if (type instanceof ZodReadonly) return getDiscriminator(type.unwrap());
-	else if (type instanceof ZodCatch) return getDiscriminator(type._def.innerType);
-	else return [];
+	if (type instanceof ZodLazy) {return getDiscriminator(type.schema);}
+	else if (type instanceof ZodEffects) {return getDiscriminator(type.innerType());}
+	else if (type instanceof ZodLiteral) {return [type.value];}
+	else if (type instanceof ZodEnum) {return type.options;}
+	else if (type instanceof ZodNativeEnum) {return util.objectValues(type.enum);}
+	else if (type instanceof ZodDefault) {return getDiscriminator(type._def.innerType);}
+	else if (type instanceof ZodUndefined) {return [void 0];}
+	else if (type instanceof ZodNull) {return [null];}
+	else if (type instanceof ZodOptional) {return [void 0, ...getDiscriminator(type.unwrap())];}
+	else if (type instanceof ZodNullable) {return [null, ...getDiscriminator(type.unwrap())];}
+	else if (type instanceof ZodBranded) {return getDiscriminator(type.unwrap());}
+	else if (type instanceof ZodReadonly) {return getDiscriminator(type.unwrap());}
+	else if (type instanceof ZodCatch) {return getDiscriminator(type._def.innerType);}
+	else {return [];}
 };
-var ZodDiscriminatedUnion = class ZodDiscriminatedUnion extends ZodType {
+const ZodDiscriminatedUnion = class ZodDiscriminatedUnion extends ZodType {
 	_parse(input) {
 		const { ctx } = this._processInputParams(input);
 		if (ctx.parsedType !== ZodParsedType.object) {
@@ -2659,10 +2659,10 @@ var ZodDiscriminatedUnion = class ZodDiscriminatedUnion extends ZodType {
 function mergeValues(a, b) {
 	const aType = getParsedType(a);
 	const bType = getParsedType(b);
-	if (a === b) return {
+	if (a === b) {return {
 		valid: true,
 		data: a
-	};
+	};}
 	else if (aType === ZodParsedType.object && bType === ZodParsedType.object) {
 		const bKeys = util.objectKeys(b);
 		const sharedKeys = util.objectKeys(a).filter((key) => bKeys.indexOf(key) !== -1);
@@ -2672,7 +2672,7 @@ function mergeValues(a, b) {
 		};
 		for (const key of sharedKeys) {
 			const sharedValue = mergeValues(a[key], b[key]);
-			if (!sharedValue.valid) return { valid: false };
+			if (!sharedValue.valid) {return { valid: false };}
 			newObj[key] = sharedValue.data;
 		}
 		return {
@@ -2680,26 +2680,26 @@ function mergeValues(a, b) {
 			data: newObj
 		};
 	} else if (aType === ZodParsedType.array && bType === ZodParsedType.array) {
-		if (a.length !== b.length) return { valid: false };
+		if (a.length !== b.length) {return { valid: false };}
 		const newArray = [];
 		for (let index = 0; index < a.length; index++) {
 			const itemA = a[index];
 			const itemB = b[index];
 			const sharedValue = mergeValues(itemA, itemB);
-			if (!sharedValue.valid) return { valid: false };
+			if (!sharedValue.valid) {return { valid: false };}
 			newArray.push(sharedValue.data);
 		}
 		return {
 			valid: true,
 			data: newArray
 		};
-	} else if (aType === ZodParsedType.date && bType === ZodParsedType.date && +a === +b) return {
+	} else if (aType === ZodParsedType.date && bType === ZodParsedType.date && Number(a) === Number(b)) {return {
 		valid: true,
 		data: a
-	};
-	else return { valid: false };
+	};}
+	else {return { valid: false };}
 }
-var ZodIntersection = class extends ZodType {
+const ZodIntersection = class extends ZodType {
 	_parse(input) {
 		const { status, ctx } = this._processInputParams(input);
 		const handleParsed = (parsedLeft, parsedRight) => {
@@ -2743,7 +2743,7 @@ ZodIntersection.create = (left, right, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodTuple = class ZodTuple extends ZodType {
+const ZodTuple = class ZodTuple extends ZodType {
 	_parse(input) {
 		const { status, ctx } = this._processInputParams(input);
 		if (ctx.parsedType !== ZodParsedType.array) {
@@ -2795,7 +2795,7 @@ var ZodTuple = class ZodTuple extends ZodType {
 	}
 };
 ZodTuple.create = (schemas, params) => {
-	if (!Array.isArray(schemas)) throw new Error("You must pass an array of schemas to z.tuple([ ... ])");
+	if (!Array.isArray(schemas)) {throw new Error("You must pass an array of schemas to z.tuple([ ... ])");}
 	return new ZodTuple({
 		items: schemas,
 		typeName: ZodFirstPartyTypeKind.ZodTuple,
@@ -2803,7 +2803,7 @@ ZodTuple.create = (schemas, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodRecord = class ZodRecord extends ZodType {
+const ZodRecord = class ZodRecord extends ZodType {
 	get keySchema() {
 		return this._def.keyType;
 	}
@@ -2849,7 +2849,7 @@ var ZodRecord = class ZodRecord extends ZodType {
 		});
 	}
 };
-var ZodMap = class extends ZodType {
+const ZodMap = class extends ZodType {
 	get keySchema() {
 		return this._def.keyType;
 	}
@@ -2913,7 +2913,7 @@ ZodMap.create = (keyType, valueType, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodSet = class ZodSet extends ZodType {
+const ZodSet = class ZodSet extends ZodType {
 	_parse(input) {
 		const { status, ctx } = this._processInputParams(input);
 		if (ctx.parsedType !== ZodParsedType.set) {
@@ -3002,7 +3002,7 @@ ZodSet.create = (valueType, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodFunction = class ZodFunction extends ZodType {
+const ZodFunction = class ZodFunction extends ZodType {
 	constructor() {
 		super(...arguments);
 		this.validate = this.implement;
@@ -3110,7 +3110,7 @@ var ZodFunction = class ZodFunction extends ZodType {
 		});
 	}
 };
-var ZodLazy = class extends ZodType {
+const ZodLazy = class extends ZodType {
 	get schema() {
 		return this._def.getter();
 	}
@@ -3130,7 +3130,7 @@ ZodLazy.create = (getter, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodLiteral = class extends ZodType {
+const ZodLiteral = class extends ZodType {
 	_parse(input) {
 		if (input.data !== this._def.value) {
 			const ctx = this._getOrReturnCtx(input);
@@ -3164,7 +3164,7 @@ function createZodEnum(values, params) {
 		...processCreateParams(params)
 	});
 }
-var ZodEnum = class ZodEnum extends ZodType {
+const ZodEnum = class ZodEnum extends ZodType {
 	_parse(input) {
 		if (typeof input.data !== "string") {
 			const ctx = this._getOrReturnCtx(input);
@@ -3221,7 +3221,7 @@ var ZodEnum = class ZodEnum extends ZodType {
 	}
 };
 ZodEnum.create = createZodEnum;
-var ZodNativeEnum = class extends ZodType {
+const ZodNativeEnum = class extends ZodType {
 	_parse(input) {
 		const nativeEnumValues = util.getValidEnumValues(this._def.values);
 		const ctx = this._getOrReturnCtx(input);
@@ -3257,7 +3257,7 @@ ZodNativeEnum.create = (values, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodPromise = class extends ZodType {
+const ZodPromise = class extends ZodType {
 	unwrap() {
 		return this._def.type;
 	}
@@ -3286,7 +3286,7 @@ ZodPromise.create = (schema, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodEffects = class extends ZodType {
+const ZodEffects = class extends ZodType {
 	innerType() {
 		return this._def.schema;
 	}
@@ -3415,7 +3415,7 @@ ZodEffects.createWithPreprocess = (preprocess, schema, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodOptional = class extends ZodType {
+const ZodOptional = class extends ZodType {
 	_parse(input) {
 		if (this._getType(input) === ZodParsedType.undefined) return OK(void 0);
 		return this._def.innerType._parse(input);
@@ -3431,7 +3431,7 @@ ZodOptional.create = (type, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodNullable = class extends ZodType {
+const ZodNullable = class extends ZodType {
 	_parse(input) {
 		if (this._getType(input) === ZodParsedType.null) return OK(null);
 		return this._def.innerType._parse(input);
@@ -3447,7 +3447,7 @@ ZodNullable.create = (type, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodDefault = class extends ZodType {
+const ZodDefault = class extends ZodType {
 	_parse(input) {
 		const { ctx } = this._processInputParams(input);
 		let data = ctx.data;
@@ -3470,7 +3470,7 @@ ZodDefault.create = (type, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodCatch = class extends ZodType {
+const ZodCatch = class extends ZodType {
 	_parse(input) {
 		const { ctx } = this._processInputParams(input);
 		const newCtx = {
@@ -3518,7 +3518,7 @@ ZodCatch.create = (type, params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodNaN = class extends ZodType {
+const ZodNaN = class extends ZodType {
 	_parse(input) {
 		if (this._getType(input) !== ZodParsedType.nan) {
 			const ctx = this._getOrReturnCtx(input);
@@ -3541,7 +3541,7 @@ ZodNaN.create = (params) => {
 		...processCreateParams(params)
 	});
 };
-var ZodBranded = class extends ZodType {
+const ZodBranded = class extends ZodType {
 	_parse(input) {
 		const { ctx } = this._processInputParams(input);
 		const data = ctx.data;
@@ -3555,7 +3555,7 @@ var ZodBranded = class extends ZodType {
 		return this._def.type;
 	}
 };
-var ZodPipeline = class ZodPipeline extends ZodType {
+const ZodPipeline = class ZodPipeline extends ZodType {
 	_parse(input) {
 		const { status, ctx } = this._processInputParams(input);
 		if (ctx.common.async) {
@@ -3604,7 +3604,7 @@ var ZodPipeline = class ZodPipeline extends ZodType {
 		});
 	}
 };
-var ZodReadonly = class extends ZodType {
+const ZodReadonly = class extends ZodType {
 	_parse(input) {
 		const result = this._def.innerType._parse(input);
 		const freeze = (data) => {
@@ -3625,7 +3625,7 @@ ZodReadonly.create = (type, params) => {
 	});
 };
 ZodObject.lazycreate;
-var ZodFirstPartyTypeKind;
+let ZodFirstPartyTypeKind;
 (function(ZodFirstPartyTypeKind) {
 	ZodFirstPartyTypeKind["ZodString"] = "ZodString";
 	ZodFirstPartyTypeKind["ZodNumber"] = "ZodNumber";
@@ -3718,10 +3718,10 @@ ZodPipeline.create;
 */
 const exactlyOneKey = (val, ctx) => {
 	const keys = Object.keys(val).filter((k) => val[k] !== void 0);
-	if (keys.length !== 1) ctx.addIssue({
+	if (keys.length !== 1) {ctx.addIssue({
 		code: ZodIssueCode.custom,
 		message: `Must define exactly one property, found ${keys.length} (${keys.join(", ")}).`
-	});
+	});}
 };
 const StringValueSchema = objectType({
 	path: stringType().optional(),
@@ -3736,14 +3736,14 @@ const DataValueMapItemSchema = lazyType(() => objectType({
 	valueMap: arrayType(DataValueMapItemSchema).optional()
 }).strict().superRefine((val, ctx) => {
 	let count = 0;
-	if (val.valueString !== void 0) count++;
-	if (val.valueNumber !== void 0) count++;
-	if (val.valueBoolean !== void 0) count++;
-	if (val.valueMap !== void 0) count++;
-	if (count !== 1) ctx.addIssue({
+	if (val.valueString !== void 0) {count++;}
+	if (val.valueNumber !== void 0) {count++;}
+	if (val.valueBoolean !== void 0) {count++;}
+	if (val.valueMap !== void 0) {count++;}
+	if (count !== 1) {ctx.addIssue({
 		code: ZodIssueCode.custom,
 		message: `Value map item must have exactly one value property (valueString, valueNumber, valueBoolean, valueMap), found ${count}.`
-	});
+	});}
 }));
 const DataValueSchema = objectType({
 	key: stringType(),
@@ -3753,14 +3753,14 @@ const DataValueSchema = objectType({
 	valueMap: arrayType(DataValueMapItemSchema).optional()
 }).strict().superRefine((val, ctx) => {
 	let count = 0;
-	if (val.valueString !== void 0) count++;
-	if (val.valueNumber !== void 0) count++;
-	if (val.valueBoolean !== void 0) count++;
-	if (val.valueMap !== void 0) count++;
-	if (count !== 1) ctx.addIssue({
+	if (val.valueString !== void 0) {count++;}
+	if (val.valueNumber !== void 0) {count++;}
+	if (val.valueBoolean !== void 0) {count++;}
+	if (val.valueMap !== void 0) {count++;}
+	if (count !== 1) {ctx.addIssue({
 		code: ZodIssueCode.custom,
 		message: `Value must have exactly one value property (valueString, valueNumber, valueBoolean, valueMap), found ${count}.`
-	});
+	});}
 }).superRefine((val, ctx) => {
 	const checkDepth = (v, currentDepth) => {
 		if (currentDepth > 5) {
@@ -3770,7 +3770,7 @@ const DataValueSchema = objectType({
 			});
 			return;
 		}
-		if (v.valueMap && Array.isArray(v.valueMap)) for (const item of v.valueMap) checkDepth(item, currentDepth + 1);
+		if (v.valueMap && Array.isArray(v.valueMap)) {for (const item of v.valueMap) checkDepth(item, currentDepth + 1);}
 	};
 	checkDepth(val, 1);
 });
@@ -3846,15 +3846,15 @@ const TabsSchema = objectType({ tabItems: arrayType(objectType({
 	}),
 	child: stringType().describe("A reference to a component instance by its unique ID.")
 }).strict().superRefine((val, ctx) => {
-	if (!val.title) ctx.addIssue({
+	if (!val.title) {ctx.addIssue({
 		code: ZodIssueCode.custom,
 		message: "Tab item is missing 'title'."
-	});
-	if (!val.child) ctx.addIssue({
+	});}
+	if (!val.child) {ctx.addIssue({
 		code: ZodIssueCode.custom,
 		message: "Tab item is missing 'child'."
-	});
-	if (val.title) exactlyOneKey(val.title, ctx);
+	});}
+	if (val.title) {exactlyOneKey(val.title, ctx);}
 })).describe("A list of tabs, each with a title and a child component ID.") });
 const DividerSchema = objectType({
 	axis: enumType(["horizontal", "vertical"]).optional().describe("The orientation."),
@@ -4013,25 +4013,25 @@ const SurfaceUpdateMessageSchema = objectType({
 	components: arrayType(ComponentInstanceSchema).min(1).describe("A list containing all UI components for the surface.")
 }).strict().superRefine((data, ctx) => {
 	const componentIds = /* @__PURE__ */ new Set();
-	for (const c of data.components) if (c.id) {
+	for (const c of data.components) {if (c.id) {
 		if (componentIds.has(c.id)) ctx.addIssue({
 			code: ZodIssueCode.custom,
 			message: `Duplicate component ID found: ${c.id}`,
 			path: ["components"]
 		});
 		componentIds.add(c.id);
-	}
+	}}
 	const checkRefs = (ids, componentId) => {
-		for (const id of ids) if (id && !componentIds.has(id)) ctx.addIssue({
+		for (const id of ids) {if (id && !componentIds.has(id)) ctx.addIssue({
 			code: ZodIssueCode.custom,
 			message: `Component '${componentId}' references non-existent component ID '${id}'.`,
 			path: ["components"]
-		});
+		});}
 	};
 	for (const component of data.components) {
-		if (!component.id || !component.component) continue;
+		if (!component.id || !component.component) {continue;}
 		const componentTypes = Object.keys(component.component);
-		if (componentTypes.length !== 1) continue;
+		if (componentTypes.length !== 1) {continue;}
 		const componentType = componentTypes[0];
 		const properties = component.component[componentType];
 		switch (componentType) {
@@ -4039,29 +4039,29 @@ const SurfaceUpdateMessageSchema = objectType({
 			case "Column":
 			case "List":
 				if (properties.children && !Array.isArray(properties.children)) {
-					const hasExplicit = !!properties.children.explicitList;
-					const hasTemplate = !!properties.children.template;
-					if (hasExplicit && hasTemplate || !hasExplicit && !hasTemplate) ctx.addIssue({
+					const hasExplicit = Boolean(properties.children.explicitList);
+					const hasTemplate = Boolean(properties.children.template);
+					if (hasExplicit && hasTemplate || !hasExplicit && !hasTemplate) {ctx.addIssue({
 						code: ZodIssueCode.custom,
 						message: `Component '${component.id}' must have either 'explicitList' or 'template' in children, but not both or neither.`
-					});
-					if (hasExplicit) checkRefs(properties.children.explicitList, component.id);
-					if (hasTemplate) checkRefs([properties.children.template?.componentId], component.id);
+					});}
+					if (hasExplicit) {checkRefs(properties.children.explicitList, component.id);}
+					if (hasTemplate) {checkRefs([properties.children.template?.componentId], component.id);}
 				}
 				break;
 			case "Card":
-				if (properties.child) checkRefs([properties.child], component.id);
+				if (properties.child) {checkRefs([properties.child], component.id);}
 				break;
 			case "Tabs":
-				if (properties.tabItems && Array.isArray(properties.tabItems)) properties.tabItems.forEach((tab) => {
+				if (properties.tabItems && Array.isArray(properties.tabItems)) {properties.tabItems.forEach((tab) => {
 					if (tab.child) checkRefs([tab.child], component.id);
-				});
+				});}
 				break;
 			case "Modal":
 				checkRefs([properties.entryPointChild, properties.contentChild], component.id);
 				break;
 			case "Button":
-				if (properties.child) checkRefs([properties.child], component.id);
+				if (properties.child) {checkRefs([properties.child], component.id);}
 				break;
 		}
 	}
@@ -4083,15 +4083,15 @@ const A2uiMessageSchema = objectType({
 		"surfaceUpdate",
 		"dataModelUpdate",
 		"deleteSurface"
-	].includes(k)).length !== 1) ctx.addIssue({
+	].includes(k)).length !== 1) {ctx.addIssue({
 		code: ZodIssueCode.custom,
 		message: "A2UI Protocol message must have exactly one of: surfaceUpdate, dataModelUpdate, beginRendering, deleteSurface."
-	});
+	});}
 }).describe("Describes a JSON payload for an A2UI (Agent to UI) message, which is used to dynamically construct and update user interfaces. A message MUST contain exactly ONE of the action properties: 'beginRendering', 'surfaceUpdate', 'dataModelUpdate', or 'deleteSurface'.");
 /**
 * Base class for all A2UI specific errors.
 */
-var A2uiError = class extends Error {
+const A2uiError = class extends Error {
 	constructor(message, code = "UNKNOWN_ERROR") {
 		super(message);
 		this.name = this.constructor.name;
@@ -4102,7 +4102,7 @@ var A2uiError = class extends Error {
 /**
 * Thrown when JSON validation fails or schemas are mismatched.
 */
-var A2uiValidationError = class extends A2uiError {
+const A2uiValidationError = class extends A2uiError {
 	constructor(message, details) {
 		super(message, "VALIDATION_ERROR");
 		this.details = details;
@@ -4111,7 +4111,7 @@ var A2uiValidationError = class extends A2uiError {
 /**
 * Thrown for structural issues in the UI tree (missing surfaces, duplicate components).
 */
-var A2uiStateError = class extends A2uiError {
+const A2uiStateError = class extends A2uiError {
 	constructor(message) {
 		super(message, "STATE_ERROR");
 	}
@@ -4120,7 +4120,7 @@ var A2uiStateError = class extends A2uiError {
 * Processes and consolidates A2UIProtocolMessage objects into a structured,
 * hierarchical model of UI surfaces.
 */
-var A2uiMessageProcessor = class A2uiMessageProcessor {
+const A2uiMessageProcessor = class A2uiMessageProcessor {
 	static {
 		this.DEFAULT_SURFACE_ID = "@default";
 	}
@@ -4607,17 +4607,17 @@ const shades = [
 ];
 function merge(...classes) {
 	const styles = {};
-	for (const clazz of classes) for (const [key, val] of Object.entries(clazz)) {
+	for (const clazz of classes) {for (const [key, val] of Object.entries(clazz)) {
 		const prefix = key.split("-").with(-1, "").join("-");
 		const existingKeys = Object.keys(styles).filter((key) => key.startsWith(prefix));
 		for (const existingKey of existingKeys) delete styles[existingKey];
 		styles[key] = val;
-	}
+	}}
 	return styles;
 }
 function appendToAll(target, exclusions, ...classes) {
 	const updatedTarget = structuredClone(target);
-	for (const clazz of classes) for (const key of Object.keys(clazz)) {
+	for (const clazz of classes) {for (const key of Object.keys(clazz)) {
 		const prefix = key.split("-").with(-1, "").join("-");
 		for (const [tagName, classesToAdd] of Object.entries(updatedTarget)) {
 			if (exclusions.includes(tagName)) continue;
@@ -4628,11 +4628,11 @@ function appendToAll(target, exclusions, ...classes) {
 			}
 			if (!found) classesToAdd.push(key);
 		}
-	}
+	}}
 	return updatedTarget;
 }
 function toProp(key) {
-	if (key.startsWith("nv")) return `--nv-${key.slice(2)}`;
+	if (key.startsWith("nv")) {return `--nv-${key.slice(2)}`;}
 	return `--${key[0]}-${key.slice(1)}`;
 }
 const color = (src) => `
@@ -4644,10 +4644,10 @@ const color = (src) => `
     ${src.map((key) => {
 	const inverseKey = getInverseKey(key);
 	const vals = [`.color-bgc-${key} { background-color: light-dark(var(${toProp(key)}), var(${toProp(inverseKey)})); }`, `.color-bbgc-${key}::backdrop { background-color: light-dark(var(${toProp(key)}), var(${toProp(inverseKey)})); }`];
-	for (let o = .1; o < 1; o += .1) vals.push(`.color-bbgc-${key}_${(o * 100).toFixed(0)}::backdrop {
+	for (let o = .1; o < 1; o += .1) {vals.push(`.color-bbgc-${key}_${(o * 100).toFixed(0)}::backdrop {
             background-color: light-dark(oklch(from var(${toProp(key)}) l c h / calc(alpha * ${o.toFixed(1)})), oklch(from var(${toProp(inverseKey)}) l c h / calc(alpha * ${o.toFixed(1)})) );
           }
-        `);
+        `);}
 	return vals.join("\n");
 }).join("\n")}
 
@@ -4658,9 +4658,9 @@ const color = (src) => `
   `;
 const getInverseKey = (key) => {
 	const match = key.match(/^([a-z]+)(\d+)$/);
-	if (!match) return key;
+	if (!match) {return key;}
 	const [, prefix, shadeStr] = match;
-	const target = 100 - parseInt(shadeStr, 10);
+	const target = 100 - Number.parseInt(shadeStr, 10);
 	return `${prefix}${shades.reduce((prev, curr) => Math.abs(curr - target) < Math.abs(prev - target) ? curr : prev)}`;
 };
 const keyFactory = (prefix) => {
@@ -5054,29 +5054,29 @@ const structuralStyles$1 = [
 	}).join("\n")}
 `
 ].flat(Infinity).join("\n");
-var __defProp = Object.defineProperty;
-var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, {
+const __defProp = Object.defineProperty;
+const __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, {
 	enumerable: true,
 	configurable: true,
 	writable: true,
 	value
 }) : obj[key] = value;
-var __publicField = (obj, key, value) => {
+const __publicField = (obj, key, value) => {
 	__defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 	return value;
 };
-var __accessCheck = (obj, member, msg) => {
+const __accessCheck = (obj, member, msg) => {
 	if (!member.has(obj)) throw TypeError("Cannot " + msg);
 };
-var __privateIn = (member, obj) => {
+const __privateIn = (member, obj) => {
 	if (Object(obj) !== obj) throw TypeError("Cannot use the \"in\" operator on this value");
 	return member.has(obj);
 };
-var __privateAdd = (obj, member, value) => {
+const __privateAdd = (obj, member, value) => {
 	if (member.has(obj)) throw TypeError("Cannot add the same private member more than once");
 	member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
 };
-var __privateMethod = (obj, member, method) => {
+const __privateMethod = (obj, member, method) => {
 	__accessCheck(obj, member, "access private method");
 	return method;
 };
@@ -5130,8 +5130,8 @@ const REACTIVE_NODE = {
 	consumerOnSignalRead: () => {}
 };
 function producerAccessed(node) {
-	if (inNotificationPhase) throw new Error(typeof ngDevMode !== "undefined" && ngDevMode ? `Assertion error: signal read during notification phase` : "");
-	if (activeConsumer === null) return;
+	if (inNotificationPhase) {throw new Error(typeof ngDevMode !== "undefined" && ngDevMode ? `Assertion error: signal read during notification phase` : "");}
+	if (activeConsumer === null) {return;}
 	activeConsumer.consumerOnSignalRead(node);
 	const idx = activeConsumer.nextProducerIndex++;
 	assertConsumerNode(activeConsumer);
@@ -5151,7 +5151,7 @@ function producerIncrementEpoch() {
 	epoch++;
 }
 function producerUpdateValueVersion(node) {
-	if (!node.dirty && node.lastCleanEpoch === epoch) return;
+	if (!node.dirty && node.lastCleanEpoch === epoch) {return;}
 	if (!node.producerMustRecompute(node) && !consumerPollProducersForChange(node)) {
 		node.dirty = false;
 		node.lastCleanEpoch = epoch;
@@ -5162,11 +5162,11 @@ function producerUpdateValueVersion(node) {
 	node.lastCleanEpoch = epoch;
 }
 function producerNotifyConsumers(node) {
-	if (node.liveConsumerNode === void 0) return;
+	if (node.liveConsumerNode === void 0) {return;}
 	const prev = inNotificationPhase;
 	inNotificationPhase = true;
 	try {
-		for (const consumer of node.liveConsumerNode) if (!consumer.dirty) consumerMarkDirty(consumer);
+		for (const consumer of node.liveConsumerNode) {if (!consumer.dirty) consumerMarkDirty(consumer);}
 	} finally {
 		inNotificationPhase = prev;
 	}
@@ -5175,7 +5175,7 @@ function producerUpdatesAllowed() {
 	return (activeConsumer == null ? void 0 : activeConsumer.consumerAllowSignalWrites) !== false;
 }
 function consumerMarkDirty(node) {
-	var _a;
+	let _a;
 	node.dirty = true;
 	producerNotifyConsumers(node);
 	(_a = node.consumerMarkedDirty) == null || _a.call(node.wrapper ?? node);
@@ -5186,8 +5186,8 @@ function consumerBeforeComputation(node) {
 }
 function consumerAfterComputation(node, prevConsumer) {
 	setActiveConsumer(prevConsumer);
-	if (!node || node.producerNode === void 0 || node.producerIndexOfThis === void 0 || node.producerLastReadVersion === void 0) return;
-	if (consumerIsLive(node)) for (let i = node.nextProducerIndex; i < node.producerNode.length; i++) producerRemoveLiveConsumerAtIndex(node.producerNode[i], node.producerIndexOfThis[i]);
+	if (!node || node.producerNode === void 0 || node.producerIndexOfThis === void 0 || node.producerLastReadVersion === void 0) {return;}
+	if (consumerIsLive(node)) {for (let i = node.nextProducerIndex; i < node.producerNode.length; i++) producerRemoveLiveConsumerAtIndex(node.producerNode[i], node.producerIndexOfThis[i]);}
 	while (node.producerNode.length > node.nextProducerIndex) {
 		node.producerNode.pop();
 		node.producerLastReadVersion.pop();
@@ -5199,31 +5199,31 @@ function consumerPollProducersForChange(node) {
 	for (let i = 0; i < node.producerNode.length; i++) {
 		const producer = node.producerNode[i];
 		const seenVersion = node.producerLastReadVersion[i];
-		if (seenVersion !== producer.version) return true;
+		if (seenVersion !== producer.version) {return true;}
 		producerUpdateValueVersion(producer);
-		if (seenVersion !== producer.version) return true;
+		if (seenVersion !== producer.version) {return true;}
 	}
 	return false;
 }
 function producerAddLiveConsumer(node, consumer, indexOfThis) {
-	var _a;
+	let _a;
 	assertProducerNode(node);
 	assertConsumerNode(node);
 	if (node.liveConsumerNode.length === 0) {
 		(_a = node.watched) == null || _a.call(node.wrapper);
-		for (let i = 0; i < node.producerNode.length; i++) node.producerIndexOfThis[i] = producerAddLiveConsumer(node.producerNode[i], node, i);
+		for (let i = 0; i < node.producerNode.length; i++) {node.producerIndexOfThis[i] = producerAddLiveConsumer(node.producerNode[i], node, i);}
 	}
 	node.liveConsumerIndexOfThis.push(indexOfThis);
 	return node.liveConsumerNode.push(consumer) - 1;
 }
 function producerRemoveLiveConsumerAtIndex(node, idx) {
-	var _a;
+	let _a;
 	assertProducerNode(node);
 	assertConsumerNode(node);
-	if (typeof ngDevMode !== "undefined" && ngDevMode && idx >= node.liveConsumerNode.length) throw new Error(`Assertion error: active consumer index ${idx} is out of bounds of ${node.liveConsumerNode.length} consumers)`);
+	if (typeof ngDevMode !== "undefined" && ngDevMode && idx >= node.liveConsumerNode.length) {throw new Error(`Assertion error: active consumer index ${idx} is out of bounds of ${node.liveConsumerNode.length} consumers)`);}
 	if (node.liveConsumerNode.length === 1) {
 		(_a = node.unwatched) == null || _a.call(node.wrapper);
-		for (let i = 0; i < node.producerNode.length; i++) producerRemoveLiveConsumerAtIndex(node.producerNode[i], node.producerIndexOfThis[i]);
+		for (let i = 0; i < node.producerNode.length; i++) {producerRemoveLiveConsumerAtIndex(node.producerNode[i], node.producerIndexOfThis[i]);}
 	}
 	const lastIdx = node.liveConsumerNode.length - 1;
 	node.liveConsumerNode[idx] = node.liveConsumerNode[lastIdx];
@@ -5238,7 +5238,7 @@ function producerRemoveLiveConsumerAtIndex(node, idx) {
 	}
 }
 function consumerIsLive(node) {
-	var _a;
+	let _a;
 	return node.consumerIsAlwaysLive || (((_a = node == null ? void 0 : node.liveConsumerNode) == null ? void 0 : _a.length) ?? 0) > 0;
 }
 function assertConsumerNode(node) {
@@ -5260,7 +5260,7 @@ function assertProducerNode(node) {
 function computedGet(node) {
 	producerUpdateValueVersion(node);
 	producerAccessed(node);
-	if (node.value === ERRORED) throw node.error;
+	if (node.value === ERRORED) {throw node.error;}
 	return node.value;
 }
 function createComputed(computation) {
@@ -5284,7 +5284,7 @@ const COMPUTED_NODE = /* @__PURE__ */ (() => {
 			return node.value === UNSET || node.value === COMPUTING;
 		},
 		producerRecomputeValue(node) {
-			if (node.value === COMPUTING) throw new Error("Detected cycle in computations.");
+			if (node.value === COMPUTING) {throw new Error("Detected cycle in computations.");}
 			const oldValue = node.value;
 			node.value = COMPUTING;
 			const prevConsumer = consumerBeforeComputation(node);
@@ -5318,7 +5318,7 @@ const COMPUTED_NODE = /* @__PURE__ */ (() => {
 function defaultThrowError() {
 	throw new Error();
 }
-let throwInvalidWriteToSignalErrorFn = defaultThrowError;
+const throwInvalidWriteToSignalErrorFn = defaultThrowError;
 function throwInvalidWriteToSignalError() {
 	throwInvalidWriteToSignalErrorFn();
 }
@@ -5344,7 +5344,7 @@ function signalGetFn() {
 	return this.value;
 }
 function signalSetFn(node, newValue) {
-	if (!producerUpdatesAllowed()) throwInvalidWriteToSignalError();
+	if (!producerUpdatesAllowed()) {throwInvalidWriteToSignalError();}
 	if (!node.equal.call(node.wrapper, node.value, newValue)) {
 		node.value = newValue;
 		signalValueChanged(node);
@@ -5379,9 +5379,9 @@ function signalValueChanged(node) {
 * limitations under the License.
 */
 const NODE = Symbol("node");
-var Signal;
+let Signal;
 ((Signal2) => {
-	var _a, _brand, _b, _brand2;
+	let _a, _brand, _b, _brand2;
 	class State {
 		constructor(initialValue, options = {}) {
 			__privateAdd(this, _brand);
@@ -5391,18 +5391,18 @@ var Signal;
 			node.wrapper = this;
 			if (options) {
 				const equals = options.equals;
-				if (equals) node.equal = equals;
+				if (equals) {node.equal = equals;}
 				node.watched = options[Signal2.subtle.watched];
 				node.unwatched = options[Signal2.subtle.unwatched];
 			}
 		}
 		get() {
-			if (!(0, Signal2.isState)(this)) throw new TypeError("Wrong receiver type for Signal.State.prototype.get");
+			if (!(0, Signal2.isState)(this)) {throw new TypeError("Wrong receiver type for Signal.State.prototype.get");}
 			return signalGetFn.call(this[NODE]);
 		}
 		set(newValue) {
-			if (!(0, Signal2.isState)(this)) throw new TypeError("Wrong receiver type for Signal.State.prototype.set");
-			if (isInNotificationPhase()) throw new Error("Writes to signals not permitted during Watcher callback");
+			if (!(0, Signal2.isState)(this)) {throw new TypeError("Wrong receiver type for Signal.State.prototype.set");}
+			if (isInNotificationPhase()) {throw new Error("Writes to signals not permitted during Watcher callback");}
 			const ref = this[NODE];
 			signalSetFn(ref, newValue);
 		}
@@ -5421,13 +5421,13 @@ var Signal;
 			node.wrapper = this;
 			if (options) {
 				const equals = options.equals;
-				if (equals) node.equal = equals;
+				if (equals) {node.equal = equals;}
 				node.watched = options[Signal2.subtle.watched];
 				node.unwatched = options[Signal2.subtle.unwatched];
 			}
 		}
 		get() {
-			if (!(0, Signal2.isComputed)(this)) throw new TypeError("Wrong receiver type for Signal.Computed.prototype.get");
+			if (!(0, Signal2.isComputed)(this)) {throw new TypeError("Wrong receiver type for Signal.Computed.prototype.get");}
 			return computedGet(this[NODE]);
 		}
 	}
@@ -5436,7 +5436,7 @@ var Signal;
 	Signal2.isComputed = (c) => typeof c === "object" && __privateIn(_brand2, c);
 	Signal2.Computed = Computed;
 	((subtle2) => {
-		var _a2, _brand3, _assertSignals, assertSignals_fn;
+		let _a2, _brand3, _assertSignals, assertSignals_fn;
 		function untrack(cb) {
 			let output;
 			let prevActiveConsumer = null;
@@ -5450,28 +5450,28 @@ var Signal;
 		}
 		subtle2.untrack = untrack;
 		function introspectSources(sink) {
-			var _a3;
-			if (!(0, Signal2.isComputed)(sink) && !(0, Signal2.isWatcher)(sink)) throw new TypeError("Called introspectSources without a Computed or Watcher argument");
+			let _a3;
+			if (!(0, Signal2.isComputed)(sink) && !(0, Signal2.isWatcher)(sink)) {throw new TypeError("Called introspectSources without a Computed or Watcher argument");}
 			return ((_a3 = sink[NODE].producerNode) == null ? void 0 : _a3.map((n) => n.wrapper)) ?? [];
 		}
 		subtle2.introspectSources = introspectSources;
 		function introspectSinks(signal) {
-			var _a3;
-			if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) throw new TypeError("Called introspectSinks without a Signal argument");
+			let _a3;
+			if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) {throw new TypeError("Called introspectSinks without a Signal argument");}
 			return ((_a3 = signal[NODE].liveConsumerNode) == null ? void 0 : _a3.map((n) => n.wrapper)) ?? [];
 		}
 		subtle2.introspectSinks = introspectSinks;
 		function hasSinks(signal) {
-			if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) throw new TypeError("Called hasSinks without a Signal argument");
+			if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) {throw new TypeError("Called hasSinks without a Signal argument");}
 			const liveConsumerNode = signal[NODE].liveConsumerNode;
-			if (!liveConsumerNode) return false;
+			if (!liveConsumerNode) {return false;}
 			return liveConsumerNode.length > 0;
 		}
 		subtle2.hasSinks = hasSinks;
 		function hasSources(signal) {
-			if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isWatcher)(signal)) throw new TypeError("Called hasSources without a Computed or Watcher argument");
+			if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isWatcher)(signal)) {throw new TypeError("Called hasSources without a Computed or Watcher argument");}
 			const producerNode = signal[NODE].producerNode;
-			if (!producerNode) return false;
+			if (!producerNode) {return false;}
 			return producerNode.length > 0;
 		}
 		subtle2.hasSources = hasSources;
@@ -5480,7 +5480,7 @@ var Signal;
 				__privateAdd(this, _brand3);
 				__privateAdd(this, _assertSignals);
 				__publicField(this, _a2);
-				let node = Object.create(REACTIVE_NODE);
+				const node = Object.create(REACTIVE_NODE);
 				node.wrapper = this;
 				node.consumerMarkedDirty = notify;
 				node.consumerIsAlwaysLive = true;
@@ -5489,20 +5489,20 @@ var Signal;
 				this[NODE] = node;
 			}
 			watch(...signals) {
-				if (!(0, Signal2.isWatcher)(this)) throw new TypeError("Called unwatch without Watcher receiver");
+				if (!(0, Signal2.isWatcher)(this)) {throw new TypeError("Called unwatch without Watcher receiver");}
 				__privateMethod(this, _assertSignals, assertSignals_fn).call(this, signals);
 				const node = this[NODE];
 				node.dirty = false;
 				const prev = setActiveConsumer(node);
-				for (const signal of signals) producerAccessed(signal[NODE]);
+				for (const signal of signals) {producerAccessed(signal[NODE]);}
 				setActiveConsumer(prev);
 			}
 			unwatch(...signals) {
-				if (!(0, Signal2.isWatcher)(this)) throw new TypeError("Called unwatch without Watcher receiver");
+				if (!(0, Signal2.isWatcher)(this)) {throw new TypeError("Called unwatch without Watcher receiver");}
 				__privateMethod(this, _assertSignals, assertSignals_fn).call(this, signals);
 				const node = this[NODE];
 				assertConsumerNode(node);
-				for (let i = node.producerNode.length - 1; i >= 0; i--) if (signals.includes(node.producerNode[i].wrapper)) {
+				for (let i = node.producerNode.length - 1; i >= 0; i--) {if (signals.includes(node.producerNode[i].wrapper)) {
 					producerRemoveLiveConsumerAtIndex(node.producerNode[i], node.producerIndexOfThis[i]);
 					const lastIdx = node.producerNode.length - 1;
 					node.producerNode[i] = node.producerNode[lastIdx];
@@ -5516,10 +5516,10 @@ var Signal;
 						assertProducerNode(producer);
 						producer.liveConsumerIndexOfThis[idxConsumer] = i;
 					}
-				}
+				}}
 			}
 			getPending() {
-				if (!(0, Signal2.isWatcher)(this)) throw new TypeError("Called getPending without Watcher receiver");
+				if (!(0, Signal2.isWatcher)(this)) {throw new TypeError("Called getPending without Watcher receiver");}
 				return this[NODE].producerNode.filter((n) => n.dirty).map((n) => n.wrapper);
 			}
 		}
@@ -5527,12 +5527,12 @@ var Signal;
 		_brand3 = /* @__PURE__ */ new WeakSet();
 		_assertSignals = /* @__PURE__ */ new WeakSet();
 		assertSignals_fn = function(signals) {
-			for (const signal of signals) if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) throw new TypeError("Called watch/unwatch without a Computed or State argument");
+			for (const signal of signals) {if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) throw new TypeError("Called watch/unwatch without a Computed or State argument");}
 		};
 		Signal2.isWatcher = (w) => __privateIn(_brand3, w);
 		subtle2.Watcher = Watcher;
 		function currentComputed() {
-			var _a3;
+			let _a3;
 			return (_a3 = getActiveConsumer()) == null ? void 0 : _a3.wrapper;
 		}
 		subtle2.currentComputed = currentComputed;
@@ -5581,12 +5581,12 @@ const ARRAY_WRITE_THEN_READ_METHODS = new Set([
 	"unshift"
 ]);
 function convertToInt(prop) {
-	if (typeof prop === "symbol") return null;
+	if (typeof prop === "symbol") {return null;}
 	const num = Number(prop);
-	if (isNaN(num)) return null;
+	if (isNaN(num)) {return null;}
 	return num % 1 === 0 ? num : null;
 }
-var SignalArray = class SignalArray {
+const SignalArray = class SignalArray {
 	/**
 	* Creates an array from an iterable object.
 	* @param iterable An iterable object to convert to an array.
@@ -5670,7 +5670,7 @@ var SignalArray = class SignalArray {
 	}
 };
 Object.setPrototypeOf(SignalArray.prototype, Array.prototype);
-var SignalMap = class {
+const SignalMap = class {
 	collection = createStorage();
 	storages = /* @__PURE__ */ new Map();
 	vals;
@@ -5764,11 +5764,11 @@ const SignalObject = class SignalObjectImpl {
 	#storages = /* @__PURE__ */ new Map();
 	#collection = createStorage();
 	constructor(obj = {}) {
-		let proto = Object.getPrototypeOf(obj);
-		let descs = Object.getOwnPropertyDescriptors(obj);
-		let clone = Object.create(proto);
-		for (let prop in descs) Object.defineProperty(clone, prop, descs[prop]);
-		let self = this;
+		const proto = Object.getPrototypeOf(obj);
+		const descs = Object.getOwnPropertyDescriptors(obj);
+		const clone = Object.create(proto);
+		for (const prop in descs) {Object.defineProperty(clone, prop, descs[prop]);}
+		const self = this;
 		return new Proxy(clone, {
 			get(target, prop, receiver) {
 				self.#readStorageFor(prop);
@@ -5783,7 +5783,7 @@ const SignalObject = class SignalObjectImpl {
 				return Reflect.ownKeys(target);
 			},
 			set(target, prop, value, receiver) {
-				let result = Reflect.set(target, prop, value, receiver);
+				const result = Reflect.set(target, prop, value, receiver);
 				self.#dirtyStorageFor(prop);
 				self.#dirtyCollection();
 				return result;
@@ -5811,13 +5811,13 @@ const SignalObject = class SignalObjectImpl {
 	}
 	#dirtyStorageFor(key) {
 		const storage = this.#storages.get(key);
-		if (storage) storage.set(null);
+		if (storage) {storage.set(null);}
 	}
 	#dirtyCollection() {
 		this.#collection.set(null);
 	}
 };
-var SignalSet = class {
+const SignalSet = class {
 	collection = createStorage();
 	storages = /* @__PURE__ */ new Map();
 	vals;
@@ -5905,7 +5905,7 @@ const Data = {
 * SPDX-License-Identifier: BSD-3-Clause
 */
 const t$7 = globalThis, e$13 = t$7.ShadowRoot && (void 0 === t$7.ShadyCSS || t$7.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, s$9 = Symbol(), o$14 = /* @__PURE__ */ new WeakMap();
-var n$13 = class {
+const n$13 = class {
 	constructor(t, e, o) {
 		if (this._$cssResult$ = !0, o !== s$9) throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");
 		this.cssText = t, this.t = e;
@@ -5923,21 +5923,21 @@ var n$13 = class {
 		return this.cssText;
 	}
 };
-const r$11 = (t) => new n$13("string" == typeof t ? t : t + "", void 0, s$9), i$10 = (t, ...e) => {
-	return new n$13(1 === t.length ? t[0] : e.reduce((e, s, o) => e + ((t) => {
-		if (!0 === t._$cssResult$) return t.cssText;
-		if ("number" == typeof t) return t;
-		throw Error("Value passed to 'css' function must be a 'css' function result: " + t + ". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.");
+const r$11 = (t) => new n$13(typeof t == "string" ? t : String(t), void 0, s$9), i$10 = (t, ...e) => {
+	return new n$13(t.length === 1 ? t[0] : e.reduce((e, s, o) => e + ((t) => {
+		if (!0 === t._$cssResult$) {return t.cssText;}
+		if (typeof t == "number") {return t;}
+		throw new Error("Value passed to 'css' function must be a 'css' function result: " + t + ". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.");
 	})(s) + t[o + 1], t[0]), t, s$9);
 }, S$1 = (s, o) => {
-	if (e$13) s.adoptedStyleSheets = o.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);
-	else for (const e of o) {
+	if (e$13) {s.adoptedStyleSheets = o.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);}
+	else {for (const e of o) {
 		const o = document.createElement("style"), n = t$7.litNonce;
 		void 0 !== n && o.setAttribute("nonce", n), o.textContent = e.cssText, s.appendChild(o);
-	}
+	}}
 }, c$7 = e$13 ? (t) => t : (t) => t instanceof CSSStyleSheet ? ((t) => {
 	let e = "";
-	for (const s of t.cssRules) e += s.cssText;
+	for (const s of t.cssRules) {e += s.cssText;}
 	return r$11(e);
 })(t) : t;
 /**
@@ -5951,7 +5951,7 @@ const r$11 = (t) => new n$13("string" == typeof t ? t : t + "", void 0, s$9), i$
 				t = t ? l$4 : null;
 				break;
 			case Object:
-			case Array: t = null == t ? t : JSON.stringify(t);
+			case Array: t = t == null ? t : JSON.stringify(t);
 		}
 		return t;
 	},
@@ -5959,15 +5959,15 @@ const r$11 = (t) => new n$13("string" == typeof t ? t : t + "", void 0, s$9), i$
 		let i = t;
 		switch (s) {
 			case Boolean:
-				i = null !== t;
+				i = t !== null;
 				break;
 			case Number:
-				i = null === t ? null : Number(t);
+				i = t === null ? null : Number(t);
 				break;
 			case Object:
 			case Array: try {
 				i = JSON.parse(t);
-			} catch (t) {
+			} catch {
 				i = null;
 			}
 		}
@@ -5982,7 +5982,7 @@ const r$11 = (t) => new n$13("string" == typeof t ? t : t + "", void 0, s$9), i$
 	hasChanged: f$3
 };
 Symbol.metadata ??= Symbol("metadata"), a$1.litPropertyMetadata ??= /* @__PURE__ */ new WeakMap();
-var y$1 = class extends HTMLElement {
+const y$1 = class extends HTMLElement {
 	static addInitializer(t) {
 		this._$Ei(), (this.l ??= []).push(t);
 	}
@@ -6173,28 +6173,28 @@ y$1.elementStyles = [], y$1.shadowRootOptions = { mode: "open" }, y$1[d$2("eleme
 * Copyright 2017 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
-const t$6 = globalThis, i$8 = (t) => t, s$8 = t$6.trustedTypes, e$11 = s$8 ? s$8.createPolicy("lit-html", { createHTML: (t) => t }) : void 0, h$6 = "$lit$", o$12 = `lit$${Math.random().toFixed(9).slice(2)}$`, n$11 = "?" + o$12, r$9 = `<${n$11}>`, l$3 = document, c$5 = () => l$3.createComment(""), a = (t) => null === t || "object" != typeof t && "function" != typeof t, u$2 = Array.isArray, d$1 = (t) => u$2(t) || "function" == typeof t?.[Symbol.iterator], f$2 = "[ 	\n\f\r]", v$1 = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, _ = /-->/g, m$3 = />/g, p$1 = RegExp(`>|${f$2}(?:([^\\s"'>=/]+)(${f$2}*=${f$2}*(?:[^ \t\n\f\r"'\`<>=]|("|')|))|$)`, "g"), g = /'/g, $ = /"/g, y = /^(?:script|style|textarea|title)$/i, x = (t) => (i, ...s) => ({
+const t$6 = globalThis, i$8 = (t) => t, s$8 = t$6.trustedTypes, e$11 = s$8 ? s$8.createPolicy("lit-html", { createHTML: (t) => t }) : void 0, h$6 = "$lit$", o$12 = `lit$${Math.random().toFixed(9).slice(2)}$`, n$11 = "?" + o$12, r$9 = `<${n$11}>`, l$3 = document, c$5 = () => l$3.createComment(""), a = (t) => t === null || typeof t != "object" && typeof t != "function" , u$2 = Array.isArray, d$1 = (t) => u$2(t) || typeof t?.[Symbol.iterator] == "function" , f$2 = "[ 	\n\f\r]", v$1 = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, _ = /-->/g, m$3 = />/g, p$1 = RegExp(`>|${f$2}(?:([^\\s"'>=/]+)(${f$2}*=${f$2}*(?:[^ \t\n\f\r"'\`<>=]|("|')|))|$)`, "g"), g = /'/g, $ = /"/g, y = /^(?:script|style|textarea|title)$/i, x = (t) => (i, ...s) => ({
 	_$litType$: t,
 	strings: i,
 	values: s
 }), b = x(1), E = Symbol.for("lit-noChange"), A = Symbol.for("lit-nothing"), C = /* @__PURE__ */ new WeakMap(), P = l$3.createTreeWalker(l$3, 129);
 function V(t, i) {
-	if (!u$2(t) || !t.hasOwnProperty("raw")) throw Error("invalid template strings array");
+	if (!u$2(t) || !t.hasOwnProperty("raw")) {throw Error("invalid template strings array");}
 	return void 0 !== e$11 ? e$11.createHTML(i) : i;
 }
 const N = (t, i) => {
 	const s = t.length - 1, e = [];
-	let n, l = 2 === i ? "<svg>" : 3 === i ? "<math>" : "", c = v$1;
+	let n, l = i === 2 ? "<svg>" : i === 3 ? "<math>" : "", c = v$1;
 	for (let i = 0; i < s; i++) {
 		const s = t[i];
 		let a, u, d = -1, f = 0;
-		for (; f < s.length && (c.lastIndex = f, u = c.exec(s), null !== u);) f = c.lastIndex, c === v$1 ? "!--" === u[1] ? c = _ : void 0 !== u[1] ? c = m$3 : void 0 !== u[2] ? (y.test(u[2]) && (n = RegExp("</" + u[2], "g")), c = p$1) : void 0 !== u[3] && (c = p$1) : c === p$1 ? ">" === u[0] ? (c = n ?? v$1, d = -1) : void 0 === u[1] ? d = -2 : (d = c.lastIndex - u[2].length, a = u[1], c = void 0 === u[3] ? p$1 : "\"" === u[3] ? $ : g) : c === $ || c === g ? c = p$1 : c === _ || c === m$3 ? c = v$1 : (c = p$1, n = void 0);
+		for (; f < s.length && (c.lastIndex = f, u = c.exec(s), u !== null);) {f = c.lastIndex, c === v$1 ? "!--" === u[1] ? c = _ : void 0 !== u[1] ? c = m$3 : void 0 !== u[2] ? (y.test(u[2]) && (n = RegExp("</" + u[2], "g")), c = p$1) : void 0 !== u[3] && (c = p$1) : c === p$1 ? ">" === u[0] ? (c = n ?? v$1, d = -1) : void 0 === u[1] ? d = -2 : (d = c.lastIndex - u[2].length, a = u[1], c = void 0 === u[3] ? p$1 : "\"" === u[3] ? $ : g) : c === $ || c === g ? c = p$1 : c === _ || c === m$3 ? c = v$1 : (c = p$1, n = void 0);}
 		const x = c === p$1 && t[i + 1].startsWith("/>") ? " " : "";
-		l += c === v$1 ? s + r$9 : d >= 0 ? (e.push(a), s.slice(0, d) + h$6 + s.slice(d) + o$12 + x) : s + o$12 + (-2 === d ? i : x);
+		l += c === v$1 ? s + r$9 : d >= 0 ? (e.push(a), s.slice(0, d) + h$6 + s.slice(d) + o$12 + x) : s + o$12 + (d === -2 ? i : x);
 	}
-	return [V(t, l + (t[s] || "<?>") + (2 === i ? "</svg>" : 3 === i ? "</math>" : "")), e];
+	return [V(t, l + (t[s] || "<?>") + (i === 2 ? "</svg>" : i === 3 ? "</math>" : "")), e];
 };
-var S = class S {
+const S = class S {
 	constructor({ strings: t, _$litType$: i }, e) {
 		let r;
 		this.parts = [];
@@ -6250,12 +6250,12 @@ var S = class S {
 	}
 };
 function M$1(t, i, s = t, e) {
-	if (i === E) return i;
+	if (i === E) {return i;}
 	let h = void 0 !== e ? s._$Co?.[e] : s._$Cl;
 	const o = a(i) ? void 0 : i._$litDirective$;
 	return h?.constructor !== o && (h?._$AO?.(!1), void 0 === o ? h = void 0 : (h = new o(t), h._$AT(t, s, e)), void 0 !== e ? (s._$Co ??= [])[e] = h : s._$Cl = h), void 0 !== h && (i = M$1(t, h._$AS(t, i.values), h, e)), i;
 }
-var R = class {
+const R = class {
 	constructor(t, i) {
 		this._$AV = [], this._$AN = void 0, this._$AD = t, this._$AM = i;
 	}
@@ -6283,7 +6283,7 @@ var R = class {
 		for (const s of this._$AV) void 0 !== s && (void 0 !== s.strings ? (s._$AI(t, s, i), i += s.strings.length - 2) : s._$AI(t[i])), i++;
 	}
 };
-var k = class k {
+const k = class k {
 	get _$AU() {
 		return this._$AM?._$AU ?? this._$Cv;
 	}
@@ -6342,7 +6342,7 @@ var k = class k {
 		void 0 === this._$AM && (this._$Cv = t, this._$AP?.(t));
 	}
 };
-var H = class {
+const H = class {
 	get tagName() {
 		return this.element.tagName;
 	}
@@ -6367,7 +6367,7 @@ var H = class {
 		t === A ? this.element.removeAttribute(this.name) : this.element.setAttribute(this.name, t ?? "");
 	}
 };
-var I = class extends H {
+const I = class extends H {
 	constructor() {
 		super(...arguments), this.type = 3;
 	}
@@ -6375,7 +6375,7 @@ var I = class extends H {
 		this.element[this.name] = t === A ? void 0 : t;
 	}
 };
-var L = class extends H {
+const L = class extends H {
 	constructor() {
 		super(...arguments), this.type = 4;
 	}
@@ -6383,7 +6383,7 @@ var L = class extends H {
 		this.element.toggleAttribute(this.name, !!t && t !== A);
 	}
 };
-var z = class extends H {
+const z = class extends H {
 	constructor(t, i, s, e, h) {
 		super(t, i, s, e, h), this.type = 5;
 	}
@@ -6396,7 +6396,7 @@ var z = class extends H {
 		"function" == typeof this._$AH ? this._$AH.call(this.options?.host ?? this.element, t) : this._$AH.handleEvent(t);
 	}
 };
-var Z = class {
+const Z = class {
 	constructor(t, i, s) {
 		this.element = t, this.type = 6, this._$AN = void 0, this._$AM = i, this.options = s;
 	}
@@ -6438,7 +6438,7 @@ const D = (t, i, s) => {
 * Copyright 2017 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */ const s$7 = globalThis;
-var i$7 = class extends y$1 {
+const i$7 = class extends y$1 {
 	constructor() {
 		super(...arguments), this.renderOptions = { host: this }, this._$Do = void 0;
 	}
@@ -6492,7 +6492,7 @@ const t$5 = (t) => (e, o) => {
 }, r$8 = (t = o$9, e, r) => {
 	const { kind: n, metadata: i } = r;
 	let s = globalThis.litPropertyMetadata.get(i);
-	if (void 0 === s && globalThis.litPropertyMetadata.set(i, s = /* @__PURE__ */ new Map()), "setter" === n && ((t = Object.create(t)).wrapped = !0), s.set(r.name, t), "accessor" === n) {
+	if (void 0 === s && globalThis.litPropertyMetadata.set(i, s = /* @__PURE__ */ new Map()), n === "setter" && ((t = Object.create(t)).wrapped = !0), s.set(r.name, t), n === "accessor") {
 		const { name: o } = r;
 		return {
 			set(r) {
@@ -6504,17 +6504,17 @@ const t$5 = (t) => (e, o) => {
 			}
 		};
 	}
-	if ("setter" === n) {
+	if (n === "setter") {
 		const { name: o } = r;
 		return function(r) {
 			const n = this[o];
 			e.call(this, r), this.requestUpdate(o, n, t, !0, r);
 		};
 	}
-	throw Error("Unsupported decorator location: " + n);
+	throw new Error("Unsupported decorator location: " + n);
 };
 function n$9(t) {
-	return (e, o) => "object" == typeof o ? r$8(t, e, o) : ((t, e, o) => {
+	return (e, o) => typeof o == "object" ? r$8(t, e, o) : ((t, e, o) => {
 		const r = e.hasOwnProperty(o);
 		return e.constructor.createProperty(o, t), r ? Object.getOwnPropertyDescriptor(e, o) : void 0;
 	})(t, e, o);
@@ -6540,7 +6540,7 @@ function n$9(t) {
 * Copyright 2017 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
-const e$10 = (e, t, c) => (c.configurable = !0, c.enumerable = !0, Reflect.decorate && "object" != typeof t && Object.defineProperty(e, t, c), c);
+const e$10 = (e, t, c) => (c.configurable = !0, c.enumerable = !0, Reflect.decorate && typeof t != "object" && Object.defineProperty(e, t, c), c);
 /**
 * @license
 * Copyright 2017 Google LLC
@@ -6549,7 +6549,7 @@ const e$10 = (e, t, c) => (c.configurable = !0, c.enumerable = !0, Reflect.decor
 	return (n, s, i) => {
 		const o = (t) => t.renderRoot?.querySelector(e) ?? null;
 		if (r) {
-			const { get: e, set: r } = "object" == typeof s ? n : i ?? (() => {
+			const { get: e, set: r } = typeof s == "object" ? n : i ?? (() => {
 				const t = Symbol();
 				return {
 					get() {
@@ -6562,7 +6562,7 @@ const e$10 = (e, t, c) => (c.configurable = !0, c.enumerable = !0, Reflect.decor
 			})();
 			return e$10(n, s, { get() {
 				let t = e.call(this);
-				return void 0 === t && (t = o(this), (null !== t || this.hasUpdated) && r.call(this, t)), t;
+				return void 0 === t && (t = o(this), (t !== null || this.hasUpdated) && r.call(this, t)), t;
 			} });
 		}
 		return e$10(n, s, { get() {
@@ -6598,7 +6598,7 @@ const e$10 = (e, t, c) => (c.configurable = !0, c.enumerable = !0, Reflect.decor
 const s$6 = new Signal.subtle.Watcher(() => {
 	i$6 || (i$6 = !0, queueMicrotask(() => {
 		i$6 = !1;
-		for (const t of s$6.getPending()) t.get();
+		for (const t of s$6.getPending()) {t.get();}
 		s$6.watch();
 	}));
 }), h$5 = Symbol("SignalWatcherBrand"), e$7 = new FinalizationRegistry((i) => {
@@ -6610,13 +6610,13 @@ function o$7(i) {
 			super(...arguments), this._$St = /* @__PURE__ */ new Map(), this._$So = new Signal.State(0), this._$Si = !1;
 		}
 		_$Sl() {
-			var t, i;
+			let t, i;
 			const s = [], h = [];
 			this._$St.forEach((t, i) => {
-				((null == t ? void 0 : t.beforeUpdate) ? s : h).push(i);
+				((t == null ? void 0 : t.beforeUpdate) ? s : h).push(i);
 			});
-			const e = null === (t = this.h) || void 0 === t ? void 0 : t.getPending().filter((t) => t !== this._$Su && !this._$St.has(t));
-			s.forEach((t) => t.get()), null === (i = this._$Su) || void 0 === i || i.get(), e.forEach((t) => t.get()), h.forEach((t) => t.get());
+			const e = (t = this.h) === null || void 0 === t ? void 0 : t.getPending().filter((t) => t !== this._$Su && !this._$St.has(t));
+			s.forEach((t) => t.get()), (i = this._$Su) === null || void 0 === i || i.get(), e.forEach((t) => t.get()), h.forEach((t) => t.get());
 		}
 		_$Sv() {
 			this.isUpdatePending || queueMicrotask(() => {
@@ -6624,7 +6624,7 @@ function o$7(i) {
 			});
 		}
 		_$S_() {
-			if (void 0 !== this.h) return;
+			if (void 0 !== this.h) {return;}
 			this._$Su = new Signal.Computed(() => {
 				this._$So.get(), super.performUpdate();
 			});
@@ -6635,21 +6635,21 @@ function o$7(i) {
 			n$7.set(i, this), e$7.register(this, i), i.watch(this._$Su), i.watch(...Array.from(this._$St).map(([t]) => t));
 		}
 		_$Sp() {
-			if (void 0 === this.h) return;
+			if (void 0 === this.h) {return;}
 			let i = !1;
 			this.h.unwatch(...Signal.subtle.introspectSources(this.h).filter((t) => {
-				var s;
-				const h = !0 !== (null === (s = this._$St.get(t)) || void 0 === s ? void 0 : s.manualDispose);
+				let s;
+				const h = !0 !== ((s = this._$St.get(t)) === null || void 0 === s ? void 0 : s.manualDispose);
 				return h && this._$St.delete(t), i || (i = !h), h;
 			})), i || (this._$Su = void 0, this.h = void 0, this._$St.clear());
 		}
 		updateEffect(i, s) {
-			var h;
+			let h;
 			this._$S_();
 			const e = new Signal.Computed(() => {
 				i();
 			});
-			return this.h.watch(e), this._$St.set(e, s), null !== (h = null == s ? void 0 : s.beforeUpdate) && void 0 !== h && h ? Signal.subtle.untrack(() => e.get()) : this.updateComplete.then(() => Signal.subtle.untrack(() => e.get())), () => {
+			return this.h.watch(e), this._$St.set(e, s), (h = null == s ? void 0 : s.beforeUpdate) !== null && void 0 !== h && h ? Signal.subtle.untrack(() => e.get()) : this.updateComplete.then(() => Signal.subtle.untrack(() => e.get())), () => {
 				this._$St.delete(e), this.h.unwatch(e), !1 === this.isConnected && this._$Sp();
 			};
 		}
@@ -6682,7 +6682,7 @@ const t$3 = {
 	_$litDirective$: t,
 	values: e
 });
-var i$5 = class {
+const i$5 = class {
 	constructor(t) {}
 	get _$AU() {
 		return this._$AM._$AU;
@@ -6701,9 +6701,9 @@ var i$5 = class {
 * @license
 * Copyright 2020 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ const { I: t$2 } = j$1, i$4 = (o) => o, n$6 = (o) => null === o || "object" != typeof o && "function" != typeof o, r$4 = (o) => void 0 === o.strings, s$5 = () => document.createComment(""), v = (o, n, e) => {
+*/ const { I: t$2 } = j$1, i$4 = (o) => o, n$6 = (o) => o === null || typeof o != "object" && typeof o != "function" , r$4 = (o) => void 0 === o.strings, s$5 = () => document.createComment(""), v = (o, n, e) => {
 	const l = o._$AA.parentNode, d = void 0 === n ? o._$AB : n._$AA;
-	if (void 0 === e) e = new t$2(l.insertBefore(s$5(), d), l.insertBefore(s$5(), d), o, o.options);
+	if (void 0 === e) {e = new t$2(l.insertBefore(s$5(), d), l.insertBefore(s$5(), d), o, o.options);}
 	else {
 		const t = e._$AB.nextSibling, n = e._$AM, c = n !== o;
 		if (c) {
@@ -6728,20 +6728,20 @@ var i$5 = class {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const s$4 = (i, t) => {
 	const e = i._$AN;
-	if (void 0 === e) return !1;
-	for (const i of e) i._$AO?.(t, !1), s$4(i, t);
+	if (void 0 === e) {return !1;}
+	for (const i of e) {i._$AO?.(t, !1), s$4(i, t);}
 	return !0;
 }, o$6 = (i) => {
 	let t, e;
 	do {
-		if (void 0 === (t = i._$AM)) break;
+		if (void 0 === (t = i._$AM)) {break;}
 		e = t._$AN, e.delete(i), i = t;
-	} while (0 === e?.size);
+	} while (e?.size === 0);
 }, r$3 = (i) => {
 	for (let t; t = i._$AM; i = t) {
 		let e = t._$AN;
-		if (void 0 === e) t._$AN = e = /* @__PURE__ */ new Set();
-		else if (e.has(i)) break;
+		if (void 0 === e) {t._$AN = e = /* @__PURE__ */ new Set();}
+		else if (e.has(i)) {break;}
 		e.add(i), c$3(t);
 	}
 };
@@ -6750,14 +6750,14 @@ function h$3(i) {
 }
 function n$5(i, t = !1, e = 0) {
 	const r = this._$AH, h = this._$AN;
-	if (void 0 !== h && 0 !== h.size) if (t) if (Array.isArray(r)) for (let i = e; i < r.length; i++) s$4(r[i], !1), o$6(r[i]);
+	if (void 0 !== h && h.size !== 0) {if (t) if (Array.isArray(r)) for (let i = e; i < r.length; i++) s$4(r[i], !1), o$6(r[i]);
 	else null != r && (s$4(r, !1), o$6(r));
-	else s$4(this, i);
+	else s$4(this, i);}
 }
 const c$3 = (i) => {
 	i.type == t$3.CHILD && (i._$AP ??= n$5, i._$AQ ??= h$3);
 };
-var f = class extends i$5 {
+const f = class extends i$5 {
 	constructor() {
 		super(...arguments), this._$AN = void 0;
 	}
@@ -6786,7 +6786,7 @@ let o$5 = !1;
 const n$4 = new Signal.subtle.Watcher(async () => {
 	o$5 || (o$5 = !0, queueMicrotask(() => {
 		o$5 = !1;
-		for (const i of n$4.getPending()) i.get();
+		for (const i of n$4.getPending()) {i.get();}
 		n$4.watch();
 	}));
 });
@@ -6807,7 +6807,7 @@ Signal.Computed;
 * Copyright 2021 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
-var s$3 = class extends Event {
+const s$3 = class extends Event {
 	constructor(s, t, e, o) {
 		super("context-request", {
 			bubbles: !0,
@@ -6827,7 +6827,7 @@ function n$3(n) {
 * @license
 * Copyright 2021 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ var s$2 = class {
+*/ const s$2 = class {
 	constructor(t, s, i, h) {
 		if (this.subscribe = !1, this.provided = !1, this.value = void 0, this.t = (t, s) => {
 			this.unsubscribe && (this.unsubscribe !== s && (this.provided = !1, this.unsubscribe()), this.subscribe || this.unsubscribe()), this.value = t, this.host.requestUpdate(), this.provided && !this.subscribe || (this.provided = !0, this.callback && this.callback(t, s)), this.unsubscribe = s;
@@ -6852,7 +6852,7 @@ function n$3(n) {
 * Copyright 2021 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
-var s$1 = class {
+const s$1 = class {
 	get value() {
 		return this.o;
 	}
@@ -6887,7 +6887,7 @@ var s$1 = class {
 * @license
 * Copyright 2021 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ var e$4 = class extends Event {
+*/ const e$4 = class extends Event {
 	constructor(t, s) {
 		super("context-provider", {
 			bubbles: !0,
@@ -6895,7 +6895,7 @@ var s$1 = class {
 		}), this.context = t, this.contextTarget = s;
 	}
 };
-var i$2 = class extends s$1 {
+const i$2 = class extends s$1 {
 	constructor(s, e, i) {
 		super(void 0 !== e.context ? e.initialValue : i), this.onContextRequest = (t) => {
 			if (t.context !== this.context) return;
@@ -6932,7 +6932,7 @@ var i$2 = class extends s$1 {
 * SPDX-License-Identifier: BSD-3-Clause
 */ function c$2({ context: c, subscribe: e }) {
 	return (o, n) => {
-		"object" == typeof n ? n.addInitializer((function() {
+		 typeof n == "object" ? n.addInitializer((function() {
 			new s$2(this, {
 				context: c,
 				callback: (t) => {
@@ -6959,11 +6959,11 @@ var i$2 = class extends s$1 {
 function* o$3(o, f) {
 	if (void 0 !== o) {
 		let i = 0;
-		for (const t of o) yield f(t, i++);
+		for (const t of o) {yield f(t, i++);}
 	}
 }
 let pending = false;
-let watcher = new Signal.subtle.Watcher(() => {
+const watcher = new Signal.subtle.Watcher(() => {
 	if (!pending) {
 		pending = true;
 		queueMicrotask(() => {
@@ -6973,7 +6973,7 @@ let watcher = new Signal.subtle.Watcher(() => {
 	}
 });
 function flushPending() {
-	for (const signal of watcher.getPending()) signal.get();
+	for (const signal of watcher.getPending()) {signal.get();}
 	watcher.watch();
 }
 /**
@@ -6981,7 +6981,7 @@ function flushPending() {
 * This will produce a memory leak.
 */
 function effect(cb) {
-	let c = new Signal.Computed(() => cb());
+	const c = new Signal.Computed(() => cb());
 	watcher.watch(c);
 	c.get();
 	return () => {
@@ -6995,7 +6995,7 @@ function effect(cb) {
 */
 const themeContext = n$3(Symbol("A2UITheme"));
 const buildStructuralStyles = () => {
-	if (typeof window === "undefined") return [];
+	if (typeof window === "undefined") {return [];}
 	try {
 		const styleSheet = new CSSStyleSheet();
 		styleSheet.replaceSync(structuralStyles$1);
@@ -7005,7 +7005,7 @@ const buildStructuralStyles = () => {
 	}
 };
 const structuralStyles = buildStructuralStyles();
-var ComponentRegistry = class {
+const ComponentRegistry = class {
 	constructor() {
 		this.schemas = /* @__PURE__ */ new Map();
 		this.registry = /* @__PURE__ */ new Map();
@@ -7032,12 +7032,12 @@ var ComponentRegistry = class {
 	}
 };
 const componentRegistry = new ComponentRegistry();
-var __runInitializers$19 = function(thisArg, initializers, value) {
+const __runInitializers$19 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
-var __esDecorate$19 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$19 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -7070,7 +7070,7 @@ var __esDecorate$19 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-let Root = (() => {
+const Root = (() => {
 	let _classDecorators = [t$5("a2ui-root")];
 	let _classDescriptor;
 	let _classExtraInitializers = [];
@@ -7672,21 +7672,21 @@ let Root = (() => {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const e$2 = e$6(class extends i$5 {
 	constructor(t) {
-		if (super(t), t.type !== t$3.ATTRIBUTE || "class" !== t.name || t.strings?.length > 2) throw Error("`classMap()` can only be used in the `class` attribute and must be the only part in the attribute.");
+		if (super(t), t.type !== t$3.ATTRIBUTE || t.name !== "class" || t.strings?.length > 2) {throw Error("`classMap()` can only be used in the `class` attribute and must be the only part in the attribute.");}
 	}
 	render(t) {
 		return " " + Object.keys(t).filter((s) => t[s]).join(" ") + " ";
 	}
 	update(s, [i]) {
 		if (void 0 === this.st) {
-			this.st = /* @__PURE__ */ new Set(), void 0 !== s.strings && (this.nt = new Set(s.strings.join(" ").split(/\s/).filter((t) => "" !== t)));
-			for (const t in i) i[t] && !this.nt?.has(t) && this.st.add(t);
+			this.st = /* @__PURE__ */ new Set(), void 0 !== s.strings && (this.nt = new Set(s.strings.join(" ").split(/\s/).filter((t) => t !== "")));
+			for (const t in i) {i[t] && !this.nt?.has(t) && this.st.add(t);}
 			return this.render(i);
 		}
 		const r = s.element.classList;
-		for (const t of this.st) t in i || (r.remove(t), this.st.delete(t));
+		for (const t of this.st) {t in i || (r.remove(t), this.st.delete(t));}
 		for (const t in i) {
-			const s = !!i[t];
+			const s = Boolean(i[t]);
 			s === this.st.has(t) || this.nt?.has(t) || (s ? (r.add(t), this.st.add(t)) : (r.remove(t), this.st.delete(t)));
 		}
 		return E;
@@ -7698,30 +7698,30 @@ let Root = (() => {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const n$2 = "important", i$1 = " !important", o$2 = e$6(class extends i$5 {
 	constructor(t) {
-		if (super(t), t.type !== t$3.ATTRIBUTE || "style" !== t.name || t.strings?.length > 2) throw Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");
+		if (super(t), t.type !== t$3.ATTRIBUTE || t.name !== "style" || t.strings?.length > 2) {throw Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");}
 	}
 	render(t) {
 		return Object.keys(t).reduce((e, r) => {
 			const s = t[r];
-			return null == s ? e : e + `${r = r.includes("-") ? r : r.replace(/(?:^(webkit|moz|ms|o)|)(?=[A-Z])/g, "-$&").toLowerCase()}:${s};`;
+			return s == null ? e : e + `${r = r.includes("-") ? r : r.replace(/(?:^(webkit|moz|ms|o)|)(?=[A-Z])/g, "-$&").toLowerCase()}:${s};`;
 		}, "");
 	}
 	update(e, [r]) {
 		const { style: s } = e.element;
-		if (void 0 === this.ft) return this.ft = new Set(Object.keys(r)), this.render(r);
-		for (const t of this.ft) null == r[t] && (this.ft.delete(t), t.includes("-") ? s.removeProperty(t) : s[t] = null);
+		if (void 0 === this.ft) {return this.ft = new Set(Object.keys(r)), this.render(r);}
+		for (const t of this.ft) r[t] == null && (this.ft.delete(t), t.includes("-") ? s.removeProperty(t) : s[t] = null);
 		for (const t in r) {
 			const e = r[t];
-			if (null != e) {
+			if (e != null) {
 				this.ft.add(t);
-				const r = "string" == typeof e && e.endsWith(i$1);
+				const r = typeof e == "string" && e.endsWith(i$1);
 				t.includes("-") || r ? s.setProperty(t, r ? e.slice(0, -11) : e, r ? n$2 : "") : s[t] = e;
 			}
 		}
 		return E;
 	}
 });
-var __esDecorate$18 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$18 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -7754,21 +7754,21 @@ var __esDecorate$18 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$18 = function(thisArg, initializers, value) {
+const __runInitializers$18 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-audioplayer")];
+	const _classDecorators = [t$5("a2ui-audioplayer")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _url_decorators;
-	let _url_initializers = [];
-	let _url_extraInitializers = [];
-	var Audio = class extends _classSuper {
+	const _url_initializers = [];
+	const _url_extraInitializers = [];
+	let Audio = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -7861,7 +7861,7 @@ var __runInitializers$18 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$17 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$17 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -7894,24 +7894,24 @@ var __esDecorate$17 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$17 = function(thisArg, initializers, value) {
+const __runInitializers$17 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-button")];
+	const _classDecorators = [t$5("a2ui-button")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _action_decorators;
-	let _action_initializers = [];
-	let _action_extraInitializers = [];
+	const _action_initializers = [];
+	const _action_extraInitializers = [];
 	let _primary_decorators;
-	let _primary_initializers = [];
-	let _primary_extraInitializers = [];
-	var Button = class extends _classSuper {
+	const _primary_initializers = [];
+	const _primary_extraInitializers = [];
+	let Button = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -8012,7 +8012,7 @@ var __runInitializers$17 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$16 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$16 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -8045,18 +8045,18 @@ var __esDecorate$16 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$16 = function(thisArg, initializers, value) {
+const __runInitializers$16 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-card")];
+	const _classDecorators = [t$5("a2ui-card")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
-	var Card = class extends _classSuper {
+	const _classSuper = Root;
+	let Card = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -8117,12 +8117,12 @@ var __runInitializers$16 = function(thisArg, initializers, value) {
 })();
 function extractStringValue(val, component, processor, surfaceId) {
 	if (val !== null && typeof val === "object") {
-		if ("literalString" in val) return val.literalString ?? "";
-		else if ("literal" in val && val.literal !== void 0) return val.literal ?? "";
+		if ("literalString" in val) {return val.literalString ?? "";}
+		else if ("literal" in val && val.literal !== void 0) {return val.literal ?? "";}
 		else if (val && "path" in val && val.path) {
-			if (!processor || !component) return "(no model)";
+			if (!processor || !component) {return "(no model)";}
 			const textValue = processor.getData(component, val.path, surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-			if (textValue === null || typeof textValue !== "string") return "";
+			if (textValue === null || typeof textValue !== "string") {return "";}
 			return textValue;
 		}
 	}
@@ -8130,22 +8130,22 @@ function extractStringValue(val, component, processor, surfaceId) {
 }
 function extractNumberValue(val, component, processor, surfaceId) {
 	if (val !== null && typeof val === "object") {
-		if ("literalNumber" in val) return val.literalNumber ?? 0;
-		else if ("literal" in val && val.literal !== void 0) return val.literal ?? 0;
+		if ("literalNumber" in val) {return val.literalNumber ?? 0;}
+		else if ("literal" in val && val.literal !== void 0) {return val.literal ?? 0;}
 		else if (val && "path" in val && val.path) {
-			if (!processor || !component) return -1;
+			if (!processor || !component) {return -1;}
 			let numberValue = processor.getData(component, val.path, surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 			if (typeof numberValue === "string") {
 				numberValue = Number.parseInt(numberValue, 10);
-				if (Number.isNaN(numberValue)) numberValue = null;
+				if (Number.isNaN(numberValue)) {numberValue = null;}
 			}
-			if (numberValue === null || typeof numberValue !== "number") return -1;
+			if (numberValue === null || typeof numberValue !== "number") {return -1;}
 			return numberValue;
 		}
 	}
 	return 0;
 }
-var __esDecorate$15 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$15 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -8178,24 +8178,24 @@ var __esDecorate$15 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$15 = function(thisArg, initializers, value) {
+const __runInitializers$15 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-checkbox")];
+	const _classDecorators = [t$5("a2ui-checkbox")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _value_decorators;
-	let _value_initializers = [];
-	let _value_extraInitializers = [];
+	const _value_initializers = [];
+	const _value_extraInitializers = [];
 	let _label_decorators;
-	let _label_initializers = [];
-	let _label_extraInitializers = [];
-	var Checkbox = class extends _classSuper {
+	const _label_initializers = [];
+	const _label_extraInitializers = [];
+	let Checkbox = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -8333,7 +8333,7 @@ var __runInitializers$15 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$14 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$14 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -8366,24 +8366,24 @@ var __esDecorate$14 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$14 = function(thisArg, initializers, value) {
+const __runInitializers$14 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-column")];
+	const _classDecorators = [t$5("a2ui-column")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _alignment_decorators;
-	let _alignment_initializers = [];
-	let _alignment_extraInitializers = [];
+	const _alignment_initializers = [];
+	const _alignment_extraInitializers = [];
 	let _distribution_decorators;
-	let _distribution_initializers = [];
-	let _distribution_extraInitializers = [];
-	var Column = class extends _classSuper {
+	const _distribution_initializers = [];
+	const _distribution_extraInitializers = [];
+	let Column = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -8529,7 +8529,7 @@ var __runInitializers$14 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$13 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$13 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -8562,30 +8562,30 @@ var __esDecorate$13 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$13 = function(thisArg, initializers, value) {
+const __runInitializers$13 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-datetimeinput")];
+	const _classDecorators = [t$5("a2ui-datetimeinput")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _value_decorators;
-	let _value_initializers = [];
-	let _value_extraInitializers = [];
+	const _value_initializers = [];
+	const _value_extraInitializers = [];
 	let _label_decorators;
-	let _label_initializers = [];
-	let _label_extraInitializers = [];
+	const _label_initializers = [];
+	const _label_extraInitializers = [];
 	let _enableDate_decorators;
-	let _enableDate_initializers = [];
-	let _enableDate_extraInitializers = [];
+	const _enableDate_initializers = [];
+	const _enableDate_extraInitializers = [];
 	let _enableTime_decorators;
-	let _enableTime_initializers = [];
-	let _enableTime_extraInitializers = [];
-	var DateTimeInput = class extends _classSuper {
+	const _enableTime_initializers = [];
+	const _enableTime_extraInitializers = [];
+	let DateTimeInput = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -8798,7 +8798,7 @@ var __runInitializers$13 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$12 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$12 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -8831,18 +8831,18 @@ var __esDecorate$12 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$12 = function(thisArg, initializers, value) {
+const __runInitializers$12 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-divider")];
+	const _classDecorators = [t$5("a2ui-divider")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
-	var Divider = class extends _classSuper {
+	const _classSuper = Root;
+	let Divider = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -8888,7 +8888,7 @@ var __runInitializers$12 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$11 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$11 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -8921,21 +8921,21 @@ var __esDecorate$11 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$11 = function(thisArg, initializers, value) {
+const __runInitializers$11 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-icon")];
+	const _classDecorators = [t$5("a2ui-icon")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _name_decorators;
-	let _name_initializers = [];
-	let _name_extraInitializers = [];
-	var Icon = class extends _classSuper {
+	const _name_initializers = [];
+	const _name_extraInitializers = [];
+	let Icon = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -9044,7 +9044,7 @@ var __runInitializers$11 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$10 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$10 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -9077,30 +9077,30 @@ var __esDecorate$10 = function(ctor, descriptorIn, decorators, contextIn, initia
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$10 = function(thisArg, initializers, value) {
+const __runInitializers$10 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-image")];
+	const _classDecorators = [t$5("a2ui-image")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _url_decorators;
-	let _url_initializers = [];
-	let _url_extraInitializers = [];
+	const _url_initializers = [];
+	const _url_extraInitializers = [];
 	let _altText_decorators;
-	let _altText_initializers = [];
-	let _altText_extraInitializers = [];
+	const _altText_initializers = [];
+	const _altText_extraInitializers = [];
 	let _usageHint_decorators;
-	let _usageHint_initializers = [];
-	let _usageHint_extraInitializers = [];
+	const _usageHint_initializers = [];
+	const _usageHint_extraInitializers = [];
 	let _fit_decorators;
-	let _fit_initializers = [];
-	let _fit_extraInitializers = [];
-	var Image = class extends _classSuper {
+	const _fit_initializers = [];
+	const _fit_extraInitializers = [];
+	let Image = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -9280,7 +9280,7 @@ var __runInitializers$10 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$9 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$9 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -9313,21 +9313,21 @@ var __esDecorate$9 = function(ctor, descriptorIn, decorators, contextIn, initial
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$9 = function(thisArg, initializers, value) {
+const __runInitializers$9 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-list")];
+	const _classDecorators = [t$5("a2ui-list")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _direction_decorators;
-	let _direction_initializers = [];
-	let _direction_extraInitializers = [];
-	var List = class extends _classSuper {
+	const _direction_initializers = [];
+	const _direction_extraInitializers = [];
+	let List = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -9420,7 +9420,7 @@ var __runInitializers$9 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$8 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$8 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -9453,39 +9453,39 @@ var __esDecorate$8 = function(ctor, descriptorIn, decorators, contextIn, initial
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$8 = function(thisArg, initializers, value) {
+const __runInitializers$8 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-multiplechoice")];
+	const _classDecorators = [t$5("a2ui-multiplechoice")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _description_decorators;
-	let _description_initializers = [];
-	let _description_extraInitializers = [];
+	const _description_initializers = [];
+	const _description_extraInitializers = [];
 	let _options_decorators;
-	let _options_initializers = [];
-	let _options_extraInitializers = [];
+	const _options_initializers = [];
+	const _options_extraInitializers = [];
 	let _selections_decorators;
-	let _selections_initializers = [];
-	let _selections_extraInitializers = [];
+	const _selections_initializers = [];
+	const _selections_extraInitializers = [];
 	let _variant_decorators;
-	let _variant_initializers = [];
-	let _variant_extraInitializers = [];
+	const _variant_initializers = [];
+	const _variant_extraInitializers = [];
 	let _filterable_decorators;
-	let _filterable_initializers = [];
-	let _filterable_extraInitializers = [];
+	const _filterable_initializers = [];
+	const _filterable_extraInitializers = [];
 	let _isOpen_decorators;
-	let _isOpen_initializers = [];
-	let _isOpen_extraInitializers = [];
+	const _isOpen_initializers = [];
+	const _isOpen_extraInitializers = [];
 	let _filterText_decorators;
-	let _filterText_initializers = [];
-	let _filterText_extraInitializers = [];
-	var MultipleChoice = class extends _classSuper {
+	const _filterText_initializers = [];
+	const _filterText_extraInitializers = [];
+	let MultipleChoice = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -10024,14 +10024,14 @@ const o$1 = /* @__PURE__ */ new WeakMap(), n$1 = e$6(class extends f {
 		return e && this.rt(void 0), (e || this.lt !== this.ct) && (this.G = s, this.ht = i.options?.host, this.rt(this.ct = i.element)), A;
 	}
 	rt(t) {
-		if (void 0 !== this.G) if (this.isConnected || (t = void 0), "function" == typeof this.G) {
+		if (void 0 !== this.G) {if (this.isConnected || (t = void 0), "function" == typeof this.G) {
 			const i = this.ht ?? globalThis;
 			let s = o$1.get(i);
 			void 0 === s && (s = /* @__PURE__ */ new WeakMap(), o$1.set(i, s)), void 0 !== s.get(this.G) && this.G.call(this.ht, void 0), s.set(this.G, t), void 0 !== t && this.G.call(this.ht, t);
-		} else this.G.value = t;
+		} else this.G.value = t;}
 	}
 	get lt() {
-		return "function" == typeof this.G ? o$1.get(this.ht ?? globalThis)?.get(this.G) : this.G?.value;
+		return typeof this.G == "function" ? o$1.get(this.ht ?? globalThis)?.get(this.G) : this.G?.value;
 	}
 	disconnected() {
 		this.lt === this.ct && this.rt(void 0);
@@ -10040,7 +10040,7 @@ const o$1 = /* @__PURE__ */ new WeakMap(), n$1 = e$6(class extends f {
 		this.rt(this.ct);
 	}
 });
-var __esDecorate$7 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$7 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -10073,12 +10073,12 @@ var __esDecorate$7 = function(ctor, descriptorIn, decorators, contextIn, initial
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$7 = function(thisArg, initializers, value) {
+const __runInitializers$7 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
-var __setFunctionName = function(f, name, prefix) {
+const __setFunctionName = function(f, name, prefix) {
 	if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
 	return Object.defineProperty(f, "name", {
 		configurable: true,
@@ -10086,20 +10086,20 @@ var __setFunctionName = function(f, name, prefix) {
 	});
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-modal")];
+	const _classDecorators = [t$5("a2ui-modal")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _private_showModal_decorators;
-	let _private_showModal_initializers = [];
-	let _private_showModal_extraInitializers = [];
+	const _private_showModal_initializers = [];
+	const _private_showModal_extraInitializers = [];
 	let _private_showModal_descriptor;
 	let _private_modalRef_decorators;
-	let _private_modalRef_initializers = [];
-	let _private_modalRef_extraInitializers = [];
+	const _private_modalRef_initializers = [];
+	const _private_modalRef_extraInitializers = [];
 	let _private_modalRef_descriptor;
-	var Modal = class extends _classSuper {
+	let Modal = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -10262,7 +10262,7 @@ var __setFunctionName = function(f, name, prefix) {
 	};
 	return _classThis;
 })();
-var __esDecorate$6 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$6 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -10295,24 +10295,24 @@ var __esDecorate$6 = function(ctor, descriptorIn, decorators, contextIn, initial
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$6 = function(thisArg, initializers, value) {
+const __runInitializers$6 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-row")];
+	const _classDecorators = [t$5("a2ui-row")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _alignment_decorators;
-	let _alignment_initializers = [];
-	let _alignment_extraInitializers = [];
+	const _alignment_initializers = [];
+	const _alignment_extraInitializers = [];
 	let _distribution_decorators;
-	let _distribution_initializers = [];
-	let _distribution_extraInitializers = [];
-	var Row = class extends _classSuper {
+	const _distribution_initializers = [];
+	const _distribution_extraInitializers = [];
+	let Row = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -10458,7 +10458,7 @@ var __runInitializers$6 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$5 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$5 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -10491,30 +10491,30 @@ var __esDecorate$5 = function(ctor, descriptorIn, decorators, contextIn, initial
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$5 = function(thisArg, initializers, value) {
+const __runInitializers$5 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-slider")];
+	const _classDecorators = [t$5("a2ui-slider")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _value_decorators;
-	let _value_initializers = [];
-	let _value_extraInitializers = [];
+	const _value_initializers = [];
+	const _value_extraInitializers = [];
 	let _minValue_decorators;
-	let _minValue_initializers = [];
-	let _minValue_extraInitializers = [];
+	const _minValue_initializers = [];
+	const _minValue_extraInitializers = [];
 	let _maxValue_decorators;
-	let _maxValue_initializers = [];
-	let _maxValue_extraInitializers = [];
+	const _maxValue_initializers = [];
+	const _maxValue_extraInitializers = [];
 	let _label_decorators;
-	let _label_initializers = [];
-	let _label_extraInitializers = [];
-	var Slider = class extends _classSuper {
+	const _label_initializers = [];
+	const _label_extraInitializers = [];
+	let Slider = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -10696,7 +10696,7 @@ var __runInitializers$5 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$4 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$4 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -10729,30 +10729,30 @@ var __esDecorate$4 = function(ctor, descriptorIn, decorators, contextIn, initial
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$4 = function(thisArg, initializers, value) {
+const __runInitializers$4 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-surface")];
+	const _classDecorators = [t$5("a2ui-surface")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _surfaceId_decorators;
-	let _surfaceId_initializers = [];
-	let _surfaceId_extraInitializers = [];
+	const _surfaceId_initializers = [];
+	const _surfaceId_extraInitializers = [];
 	let _surface_decorators;
-	let _surface_initializers = [];
-	let _surface_extraInitializers = [];
+	const _surface_initializers = [];
+	const _surface_extraInitializers = [];
 	let _processor_decorators;
-	let _processor_initializers = [];
-	let _processor_extraInitializers = [];
+	const _processor_initializers = [];
+	const _processor_extraInitializers = [];
 	let _enableCustomElements_decorators;
-	let _enableCustomElements_initializers = [];
-	let _enableCustomElements_extraInitializers = [];
-	var Surface = class extends _classSuper {
+	const _enableCustomElements_initializers = [];
+	const _enableCustomElements_extraInitializers = [];
+	let Surface = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -10947,18 +10947,18 @@ var __runInitializers$4 = function(thisArg, initializers, value) {
 */
 const u = (e, s, t) => {
 	const r = /* @__PURE__ */ new Map();
-	for (let l = s; l <= t; l++) r.set(e[l], l);
+	for (let l = s; l <= t; l++) {r.set(e[l], l);}
 	return r;
 }, c$1 = e$6(class extends i$5 {
 	constructor(e) {
-		if (super(e), e.type !== t$3.CHILD) throw Error("repeat() can only be used in text expressions");
+		if (super(e), e.type !== t$3.CHILD) {throw Error("repeat() can only be used in text expressions");}
 	}
 	dt(e, s, t) {
 		let r;
 		void 0 === t ? t = s : void 0 !== s && (r = s);
 		const l = [], o = [];
 		let i = 0;
-		for (const s of e) l[i] = r ? r(s, i) : i, o[i] = t(s, i), i++;
+		for (const s of e) {l[i] = r ? r(s, i) : i, o[i] = t(s, i), i++;}
 		return {
 			values: o,
 			keys: l
@@ -10969,10 +10969,10 @@ const u = (e, s, t) => {
 	}
 	update(s, [t, r, c]) {
 		const d = M(s), { values: p$3, keys: a } = this.dt(t, r, c);
-		if (!Array.isArray(d)) return this.ut = a, p$3;
+		if (!Array.isArray(d)) {return this.ut = a, p$3;}
 		const h = this.ut ??= [], v$2 = [];
 		let m, y, x = 0, j = d.length - 1, k = 0, w = p$3.length - 1;
-		for (; x <= j && k <= w;) if (null === d[x]) x++;
+		for (; x <= j && k <= w;) {if (null === d[x]) x++;
 		else if (null === d[j]) j--;
 		else if (h[x] === a[k]) v$2[k] = u$1(d[x], p$3[k]), x++, k++;
 		else if (h[j] === a[w]) v$2[w] = u$1(d[j], p$3[w]), j--, w--;
@@ -10986,19 +10986,19 @@ const u = (e, s, t) => {
 			} else v$2[k] = u$1(t, p$3[k]), v(s, d[x], t), d[e] = null;
 			k++;
 		} else h$4(d[j]), j--;
-		else h$4(d[x]), x++;
+		else h$4(d[x]), x++;}
 		for (; k <= w;) {
 			const e = v(s, v$2[w + 1]);
 			u$1(e, p$3[k]), v$2[k++] = e;
 		}
 		for (; x <= j;) {
 			const e = d[x++];
-			null !== e && h$4(e);
+			 e !== null && h$4(e);
 		}
 		return this.ut = a, p(s, v$2), E;
 	}
 });
-var __esDecorate$3 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$3 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -11031,24 +11031,24 @@ var __esDecorate$3 = function(ctor, descriptorIn, decorators, contextIn, initial
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$3 = function(thisArg, initializers, value) {
+const __runInitializers$3 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-tabs")];
+	const _classDecorators = [t$5("a2ui-tabs")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _titles_decorators;
-	let _titles_initializers = [];
-	let _titles_extraInitializers = [];
+	const _titles_initializers = [];
+	const _titles_extraInitializers = [];
 	let _selected_decorators;
-	let _selected_initializers = [];
-	let _selected_extraInitializers = [];
-	var Tabs = class extends _classSuper {
+	const _selected_initializers = [];
+	const _selected_extraInitializers = [];
+	let Tabs = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -11177,7 +11177,7 @@ var __runInitializers$3 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate$2 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$2 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -11210,30 +11210,30 @@ var __esDecorate$2 = function(ctor, descriptorIn, decorators, contextIn, initial
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$2 = function(thisArg, initializers, value) {
+const __runInitializers$2 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-textfield")];
+	const _classDecorators = [t$5("a2ui-textfield")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _text_decorators;
-	let _text_initializers = [];
-	let _text_extraInitializers = [];
+	const _text_initializers = [];
+	const _text_extraInitializers = [];
 	let _label_decorators;
-	let _label_initializers = [];
-	let _label_extraInitializers = [];
+	const _label_initializers = [];
+	const _label_extraInitializers = [];
 	let _textFieldType_decorators;
-	let _textFieldType_initializers = [];
-	let _textFieldType_extraInitializers = [];
+	const _textFieldType_initializers = [];
+	const _textFieldType_extraInitializers = [];
 	let _validationRegexp_decorators;
-	let _validationRegexp_initializers = [];
-	let _validationRegexp_extraInitializers = [];
-	var TextField = class extends _classSuper {
+	const _validationRegexp_initializers = [];
+	const _validationRegexp_extraInitializers = [];
+	let TextField = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -11425,7 +11425,7 @@ var __runInitializers$2 = function(thisArg, initializers, value) {
 * @license
 * Copyright 2017 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ var e = class extends i$5 {
+*/ const e = class extends i$5 {
 	constructor(i) {
 		if (super(i), this.it = A, i.type !== t$3.CHILD) throw Error(this.constructor.directiveName + "() can only be used in child bindings");
 	}
@@ -11450,7 +11450,7 @@ const o = e$6(e);
 * Copyright 2021 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
-var s = class {
+const s = class {
 	constructor(t) {
 		this.G = t;
 	}
@@ -11464,7 +11464,7 @@ var s = class {
 		return this.G;
 	}
 };
-var i = class {
+const i = class {
 	constructor() {
 		this.Y = void 0, this.Z = void 0;
 	}
@@ -11482,8 +11482,8 @@ var i = class {
 * @license
 * Copyright 2017 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ const n = (t) => !n$6(t) && "function" == typeof t.then, h = 1073741823;
-var c = class extends f {
+*/ const n = (t) => !n$6(t) && typeof t.then == "function" , h = 1073741823;
+const c = class extends f {
 	constructor() {
 		super(...arguments), this._$Cwt = h, this._$Cbt = [], this._$CK = new s(this), this._$CX = new i();
 	}
@@ -11523,7 +11523,7 @@ const markdown$1 = e$6(class MarkdownDirective extends i$5 {
 	#lastTagClassMap = null;
 	update(_part, [value, markdownRenderer, markdownOptions]) {
 		const jsonTagClassMap = JSON.stringify(markdownOptions?.tagClassMap);
-		if (this.#lastValue === value && jsonTagClassMap === this.#lastTagClassMap) return E;
+		if (this.#lastValue === value && jsonTagClassMap === this.#lastTagClassMap) {return E;}
 		this.#lastValue = value;
 		this.#lastTagClassMap = jsonTagClassMap;
 		return this.render(value, markdownRenderer, markdownOptions);
@@ -11536,14 +11536,14 @@ const markdown$1 = e$6(class MarkdownDirective extends i$5 {
 	* if present. Otherwise, it returns the value wrapped in a span.
 	*/
 	render(value, markdownRenderer, markdownOptions) {
-		if (markdownRenderer) return m(markdownRenderer(value, markdownOptions).then((value) => {
+		if (markdownRenderer) {return m(markdownRenderer(value, markdownOptions).then((value) => {
 			return o(value);
-		}), b`<span class="no-markdown-renderer">${value}</span>`);
+		}), b`<span class="no-markdown-renderer">${value}</span>`);}
 		return m((async () => {
 			try {
 				const { renderMarkdown } = await import("@a2ui/markdown-it");
 				return o(await renderMarkdown(value, markdownOptions));
-			} catch (e) {
+			} catch {
 				if (!MarkdownDirective.defaultMarkdownWarningLogged) {
 					console.warn("[MarkdownDirective] Failed to load optional `@a2ui/markdown-it` renderer. Using fallback regex.");
 					MarkdownDirective.defaultMarkdownWarningLogged = true;
@@ -11557,7 +11557,7 @@ const markdown$1 = e$6(class MarkdownDirective extends i$5 {
 * The markdown renderer context.
 */
 const markdown = n$3(Symbol("A2UIMarkdown"));
-var __esDecorate$1 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate$1 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -11590,27 +11590,27 @@ var __esDecorate$1 = function(ctor, descriptorIn, decorators, contextIn, initial
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers$1 = function(thisArg, initializers, value) {
+const __runInitializers$1 = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-text")];
+	const _classDecorators = [t$5("a2ui-text")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _text_decorators;
-	let _text_initializers = [];
-	let _text_extraInitializers = [];
+	const _text_initializers = [];
+	const _text_extraInitializers = [];
 	let _usageHint_decorators;
-	let _usageHint_initializers = [];
-	let _usageHint_extraInitializers = [];
+	const _usageHint_initializers = [];
+	const _usageHint_extraInitializers = [];
 	let _markdownRenderer_decorators;
-	let _markdownRenderer_initializers = [];
-	let _markdownRenderer_extraInitializers = [];
-	var Text = class extends _classSuper {
+	const _markdownRenderer_initializers = [];
+	const _markdownRenderer_extraInitializers = [];
+	let Text = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -11796,7 +11796,7 @@ var __runInitializers$1 = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
-var __esDecorate = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+const __esDecorate = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
 		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
 		return f;
@@ -11829,21 +11829,21 @@ var __esDecorate = function(ctor, descriptorIn, decorators, contextIn, initializ
 	if (target) Object.defineProperty(target, contextIn.name, descriptor);
 	done = true;
 };
-var __runInitializers = function(thisArg, initializers, value) {
+const __runInitializers = function(thisArg, initializers, value) {
 	var useValue = arguments.length > 2;
 	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
 	return useValue ? value : void 0;
 };
 (() => {
-	let _classDecorators = [t$5("a2ui-video")];
+	const _classDecorators = [t$5("a2ui-video")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = Root;
+	const _classSuper = Root;
 	let _url_decorators;
-	let _url_initializers = [];
-	let _url_extraInitializers = [];
-	var Video = class extends _classSuper {
+	const _url_initializers = [];
+	const _url_extraInitializers = [];
+	let Video = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -11957,10 +11957,10 @@ const modalStyles = i$10`
   }
 `;
 const modalElement = customElements.get("a2ui-modal");
-if (modalElement && Array.isArray(modalElement.styles)) modalElement.styles = [...modalElement.styles, modalStyles];
+if (modalElement && Array.isArray(modalElement.styles)) {modalElement.styles = [...modalElement.styles, modalStyles];}
 const appendComponentStyles = (tagName, extraStyles) => {
 	const component = customElements.get(tagName);
-	if (!component) return;
+	if (!component) {return;}
 	const current = component.styles;
 	if (!current) {
 		component.styles = [extraStyles];
@@ -12175,7 +12175,7 @@ const openclawTheme = {
 		Image: { borderRadius: "12px" }
 	}
 };
-var OpenClawA2UIHost = class extends i$7 {
+const OpenClawA2UIHost = class extends i$7 {
 	static properties = {
 		surfaces: { state: true },
 		pendingAction: { state: true },
@@ -12486,4 +12486,4 @@ var OpenClawA2UIHost = class extends i$7 {
       </section>`;
 	}
 };
-if (!customElements.get("openclaw-a2ui-host")) customElements.define("openclaw-a2ui-host", OpenClawA2UIHost);
+if (!customElements.get("openclaw-a2ui-host")) {customElements.define("openclaw-a2ui-host", OpenClawA2UIHost);}
