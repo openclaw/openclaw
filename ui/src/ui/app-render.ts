@@ -8,6 +8,7 @@ import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
+  refreshChatCommands,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
@@ -560,7 +561,7 @@ function renderSidebarSessions(state: AppViewState) {
           if (newSessionDisabled) {
             return;
           }
-          if (await createChatSession(state)) {
+          if (await createChatSession(state, { source: "user" })) {
             state.setTab("chat" as import("./navigation.ts").Tab);
           }
         }}
@@ -679,6 +680,7 @@ const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notif
 type ChatWorkspaceFilesState = {
   activeName: string | null;
   agentId: string;
+  collapsed: boolean;
   error: string | null;
   list: AgentsFilesListResult | null;
   loading: boolean;
@@ -699,6 +701,7 @@ function getChatWorkspaceFilesState(state: AppViewState, agentId: string): ChatW
   const next = {
     activeName: null,
     agentId,
+    collapsed: true,
     error: null,
     list: null,
     loading: false,
@@ -2097,6 +2100,7 @@ export function renderApp(state: AppViewState) {
   };
   if (
     isChat &&
+    !chatWorkspaceFiles.collapsed &&
     state.connected &&
     state.agentsList &&
     !chatWorkspaceFiles.loading &&
@@ -2105,6 +2109,13 @@ export function renderApp(state: AppViewState) {
   ) {
     loadChatWorkspaceFiles();
   }
+  const toggleChatWorkspaceFilesCollapsed = () => {
+    chatWorkspaceFiles.collapsed = !chatWorkspaceFiles.collapsed;
+    if (!chatWorkspaceFiles.collapsed && chatWorkspaceFiles.list?.agentId !== chatAgentId) {
+      loadChatWorkspaceFiles();
+    }
+    requestHostUpdate?.();
+  };
   const refreshChatWorkspaceFiles = () => {
     loadChatWorkspaceFiles({ force: true });
   };
@@ -2209,6 +2220,9 @@ export function renderApp(state: AppViewState) {
       open: state.paletteOpen,
       query: state.paletteQuery,
       activeIndex: state.paletteActiveIndex,
+      onOpen: () => {
+        void refreshChatCommands(state).finally(requestHostUpdate);
+      },
       onToggle: () => {
         state.paletteOpen = !state.paletteOpen;
       },
@@ -2310,11 +2324,16 @@ export function renderApp(state: AppViewState) {
               <button
                 type="button"
                 class="nav-collapse-toggle"
-                @click=${() =>
+                @click=${() => {
+                  if (navDrawerOpen) {
+                    state.navDrawerOpen = false;
+                    return;
+                  }
                   state.applySettings({
                     ...state.settings,
                     navCollapsed: !state.settings.navCollapsed,
-                  })}
+                  });
+                }}
                 title="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
                 aria-label="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
               >
@@ -3525,6 +3544,7 @@ export function renderApp(state: AppViewState) {
                   sessions: state.sessionsResult,
                   composerControls: renderGuardedChatControls(state),
                   workspaceFiles: {
+                    collapsed: chatWorkspaceFiles.collapsed,
                     agentId: chatAgentId,
                     list:
                       chatWorkspaceFiles.list?.agentId === chatAgentId
@@ -3533,6 +3553,7 @@ export function renderApp(state: AppViewState) {
                     loading: chatWorkspaceFiles.loading,
                     error: chatWorkspaceFiles.error,
                     activeName: chatWorkspaceFiles.activeName,
+                    onToggleCollapsed: toggleChatWorkspaceFilesCollapsed,
                     onRefresh: refreshChatWorkspaceFiles,
                     onOpenFile: openChatWorkspaceFile,
                   },
@@ -3547,6 +3568,7 @@ export function renderApp(state: AppViewState) {
                   onDraftChange: (next) => state.handleChatDraftChange(next),
                   onRequestUpdate: requestHostUpdate,
                   onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
+                  onSlashIntent: () => refreshChatCommands(state).finally(requestHostUpdate),
                   attachments: state.chatAttachments,
                   onAttachmentsChange: (next) => (state.chatAttachments = next),
                   onSend: () => void state.handleSendChat(),
@@ -3572,7 +3594,7 @@ export function renderApp(state: AppViewState) {
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
                   },
-                  onNewSession: () => void createChatSession(state),
+                  onNewSession: () => void createChatSession(state, { source: "user" }),
                   onClearHistory: runUiTask(async () => {
                     if (!state.client || !state.connected) {
                       return;

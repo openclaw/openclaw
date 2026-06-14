@@ -1,6 +1,10 @@
 // Opencode Go provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  buildLiveModelProviderConfig,
+  type LiveModelCatalogFetchGuard,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import type {
   ModelDefinitionConfig,
@@ -11,7 +15,7 @@ const PROVIDER_ID = "opencode-go";
 
 const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
-const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set(["kimi-k2.5", "kimi-k2.6"]);
+const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set(["kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code"]);
 const OPENCODE_GO_QWEN3_7_PLUS_TIERED_PRICING = [
   {
     input: 0.4,
@@ -44,6 +48,9 @@ const OPENCODE_GO_QWEN3_6_PLUS_TIERED_PRICING = [
     range: [256_000] as const,
   },
 ] as const;
+const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
+const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
+const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
 
 type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
@@ -178,6 +185,23 @@ const OPENCODE_GO_MODELS = (
         input: 0.95,
         output: 4,
         cacheRead: 0.16,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 65_536,
+    },
+    {
+      id: "kimi-k2.7-code",
+      name: "Kimi K2.7 Code",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0.95,
+        output: 4,
+        cacheRead: 0.19,
         cacheWrite: 0,
       },
       contextWindow: 262_144,
@@ -378,6 +402,13 @@ const OPENCODE_GO_MODELS = (
   ] satisfies OpencodeGoModelDefinition[]
 ).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
 
+export type FetchOpencodeGoLiveModelIdsParams = {
+  apiKey?: string;
+  discoveryApiKey?: string;
+  fetchGuard?: LiveModelCatalogFetchGuard;
+  signal?: AbortSignal;
+};
+
 function buildOpencodeGoProviderConfig(
   models: OpencodeGoModelDefinition[],
   apiKey?: string,
@@ -392,6 +423,27 @@ function buildOpencodeGoProviderConfig(
 
 export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProviderConfig {
   return buildOpencodeGoProviderConfig(OPENCODE_GO_MODELS, apiKey);
+}
+
+export async function buildOpencodeGoLiveProviderConfig(
+  params: FetchOpencodeGoLiveModelIdsParams = {},
+): Promise<ModelProviderConfig> {
+  return await buildLiveModelProviderConfig({
+    providerId: PROVIDER_ID,
+    endpoint: OPENCODE_GO_MODELS_ENDPOINT,
+    providerConfig: {
+      api: "openai-completions",
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+    },
+    models: OPENCODE_GO_MODELS,
+    apiKey: params.apiKey,
+    discoveryApiKey: params.discoveryApiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
+    ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
+    auditContext: "opencode-go-model-discovery",
+  });
 }
 
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {

@@ -313,9 +313,13 @@ available timeout in this order:
 - For `image_generate` without a configured timeout, the 120 second
   image-generation default.
 - For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
-  converted to milliseconds, or the 60 second media default.
+  converted to milliseconds, or the 60 second media default. For image
+  understanding, this applies to the request itself and is not reduced by
+  earlier preparation work.
 - The 90 second dynamic-tool default.
 
+This watchdog is the outer dynamic `item/tool/call` budget. Provider-specific
+request timeouts run inside that call and keep their own timeout semantics.
 Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
 tool signal where supported and returns a failed dynamic-tool response to Codex
 so the turn can continue instead of leaving the session in `processing`.
@@ -373,17 +377,16 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.135.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.139.0`. A `model/list` probe
 against that bundled app-server returned:
 
-| Model id              | Default | Hidden | Input modalities | Reasoning efforts        |
-| --------------------- | ------- | ------ | ---------------- | ------------------------ |
-| `gpt-5.5`             | Yes     | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`             | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`        | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex`       | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex-spark` | No      | No     | text             | low, medium, high, xhigh |
-| `gpt-5.2`             | No      | No     | text, image      | low, medium, high, xhigh |
+| Model id        | Default | Hidden | Input modalities | Reasoning efforts        |
+| --------------- | ------- | ------ | ---------------- | ------------------------ |
+| `gpt-5.5`       | Yes     | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4`       | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4-mini`  | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex` | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.2`       | No      | No     | text, image      | low, medium, high, xhigh |
 
 Hidden models can be returned by the app-server catalog for internal or
 specialized flows, but they are not normal model-picker choices.

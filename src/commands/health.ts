@@ -31,6 +31,7 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
+import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
 import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
@@ -73,6 +74,52 @@ const debugHealth = (...args: unknown[]) => {
     console.warn("[health:debug]", ...args);
   }
 };
+
+function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
+  return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
+}
+
+export async function emitReachableGatewayAuthDiagnostic(params: {
+  error: unknown;
+  config: OpenClawConfig;
+  runtime: RuntimeEnv;
+  timeoutMs?: number;
+  token?: string;
+  password?: string;
+  json?: boolean;
+}): Promise<boolean> {
+  if (!isGatewayHealthAuthUnavailableError(params.error)) {
+    return false;
+  }
+  const details = await buildGatewayProbeConnectionDetails({
+    config: params.config,
+    token: params.token,
+    password: params.password,
+  });
+  const probe = await probeGatewayStatus({
+    url: details.url,
+    token: params.token,
+    password: params.password,
+    tlsFingerprint: details.tlsFingerprint,
+    preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    config: params.config,
+    json: params.json,
+  });
+  if (!gatewayProbeResultSawGateway(probe)) {
+    return false;
+  }
+  const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+  if (params.json) {
+    writeRuntimeJson(params.runtime, diagnostic);
+    params.runtime.exit(1);
+    return true;
+  }
+  params.runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+  params.runtime.log(diagnostic.error.message);
+  params.runtime.exit(1);
+  return true;
+}
 
 const loadConfigRuntime = async () => await import("../config/config.js");
 
@@ -664,34 +711,20 @@ export async function healthCommand(
         }),
     );
   } catch (error) {
-    if (isGatewayCredentialsRequiredError(error)) {
-      const details = await buildGatewayProbeConnectionDetails({
+    if (
+      await emitReachableGatewayAuthDiagnostic({
+        error,
         config: cfg,
+        runtime,
+        timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
-      });
-      const probe = await probeGatewayStatus({
-        url: details.url,
-        token: opts.token,
-        password: opts.password,
-        tlsFingerprint: details.tlsFingerprint,
-        preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
-        timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        config: cfg,
         json: opts.json,
-      });
-      if (gatewayProbeResultSawGateway(probe)) {
-        const diagnostic = buildCredentialsRequiredHealthDiagnostic();
-        if (opts.json) {
-          writeRuntimeJson(runtime, diagnostic);
-          runtime.exit(1);
-          return;
-        }
-        runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
-        runtime.log(diagnostic.error.message);
-        runtime.exit(1);
-        return;
-      }
+      })
+    ) {
+      return;
+    }
+    if (isGatewayHealthAuthUnavailableError(error)) {
       throw error;
     }
     if (opts.json) {
@@ -723,18 +756,21 @@ export async function healthCommand(
     const localAgents = resolveAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
-    const fallbackAgents: AgentHealthSummary[] = [];
-    for (const entry of localAgents.ordered) {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-      fallbackAgents.push({
-        agentId: entry.id,
-        name: entry.name,
-        isDefault: entry.id === localAgents.defaultAgentId,
-        heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-        sessions: await buildSessionSummary(storePath),
-      });
-    }
-    const resolvedAgents = agents.length > 0 ? agents : fallbackAgents;
+    const resolvedAgents =
+      agents.length > 0
+        ? agents
+        : await Promise.all(
+            localAgents.ordered.map(async (entry) => {
+              const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+              return {
+                agentId: entry.id,
+                name: entry.name,
+                isDefault: entry.id === localAgents.defaultAgentId,
+                heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+                sessions: await buildSessionSummary(storePath),
+              } satisfies AgentHealthSummary;
+            }),
+          );
     const displayAgents = opts.verbose
       ? resolvedAgents
       : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);

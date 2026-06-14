@@ -99,6 +99,6 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   await Promise.all(monitorPromises);
 }
 
-export function stopFeishuMonitor(accountId?: string): void {
-  stopFeishuMonitorState(accountId);
+export async function stopFeishuMonitor(accountId?: string): Promise<void> {
+  await stopFeishuMonitorState(accountId);
 }

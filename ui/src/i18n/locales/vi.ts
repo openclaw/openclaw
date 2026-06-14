@@ -495,6 +495,21 @@ export const vi: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Workboard đã bị tắt. Bật",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -613,6 +628,7 @@ export const vi: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Tìm kiếm thẻ",
     allPriorities: "Tất cả mức ưu tiên",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Thả công việc vào đây",
     lifecycleUnlinked: "Không có phiên",
     lifecycleUnlinkedDetail: "Bắt đầu hoặc liên kết một phiên",
@@ -1337,6 +1353,17 @@ export const vi: TranslationMap = {
     toolCards: {
       toolError: "Lỗi công cụ",
     },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
+    },
   },
   languages: {
     en: "English (Tiếng Anh)",
@@ -1596,6 +1623,8 @@ export const vi: TranslationMap = {
     },
     jobDetail: {
       system: "Hệ thống",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Gửi",
       agent: "Agent",

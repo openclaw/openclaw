@@ -494,6 +494,21 @@ export const pt_BR: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "O Workboard está desativado. Ative",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -612,6 +627,7 @@ export const pt_BR: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Pesquisar cartões",
     allPriorities: "Todas as prioridades",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "Solte o trabalho aqui",
     lifecycleUnlinked: "Nenhuma sessão",
     lifecycleUnlinkedDetail: "Inicie ou vincule uma sessão",
@@ -1345,6 +1361,17 @@ export const pt_BR: TranslationMap = {
     toolCards: {
       toolError: "Erro da ferramenta",
     },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
+    },
   },
   languages: {
     en: "Inglês",
@@ -1608,6 +1635,8 @@ export const pt_BR: TranslationMap = {
     },
     jobDetail: {
       system: "Sistema",
+      command: "Command",
+      cwd: "CWD",
       prompt: "Prompt",
       delivery: "Entrega",
       agent: "Agente",

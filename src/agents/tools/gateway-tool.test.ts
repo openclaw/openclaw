@@ -149,11 +149,16 @@ describe("gateway tool restart continuation", () => {
     const parameters = tool.parameters as {
       properties?: {
         delayMs?: { minimum?: number; type?: string };
+        replacePaths?: { items?: { type?: string }; type?: string };
         restartDelayMs?: { minimum?: number; type?: string };
         timeoutMs?: { minimum?: number; type?: string };
       };
     };
     expect(parameters.properties?.delayMs).toMatchObject({ type: "integer", minimum: 0 });
+    expect(parameters.properties?.replacePaths).toMatchObject({
+      type: "array",
+      items: { type: "string" },
+    });
     expect(parameters.properties?.restartDelayMs).toMatchObject({ type: "integer", minimum: 0 });
     expect(parameters.properties?.timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
@@ -161,6 +166,7 @@ describe("gateway tool restart continuation", () => {
   it("instructs agents to use continuationMessage for internal post-restart work", async () => {
     const tool = createGatewayTool();
 
+    expect(tool.description).toContain("replacePaths");
     expect(tool.description).toContain("post-restart work must continue internally");
     expect(tool.description).toContain(
       "visible follow-up from that turn must use the message tool",

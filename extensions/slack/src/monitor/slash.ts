@@ -18,7 +18,7 @@ import {
 } from "openclaw/plugin-sdk/native-command-config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -661,6 +661,10 @@ export async function registerSlackMonitorSlashCommands(params: {
         targetSessionKey: route.sessionKey,
         lowercaseSessionKey: true,
       });
+      const slashReplyTarget =
+        !slashCommand.ephemeral && isRoomish
+          ? `channel:${command.channel_id}`
+          : `user:${command.user_id}`;
       const ctxPayload = finalizeInboundContext({
         Body: prompt,
         BodyForAgent: prompt,
@@ -702,7 +706,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         CommandSource: "native" as const,
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "slack" as const,
-        OriginatingTo: `user:${command.user_id}`,
+        OriginatingTo: slashReplyTarget,
       });
 
       await recordInboundSessionMetaSafe({
@@ -731,12 +735,18 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
       });
 
+      const messageSentHookTarget = ctxPayload.OriginatingTo ?? ctxPayload.To ?? slashReplyTarget;
       const deliverSlashPayloads = async (replies: ReplyPayload[]) => {
         await deliverSlackSlashReplies({
           replies,
           respond,
           ephemeral: slashCommand.ephemeral,
           textLimit: ctx.textLimit,
+          messageSentHookTarget,
+          accountId: route.accountId,
+          sessionKeyForInternalHooks: ctxPayload.SessionKey ?? route.sessionKey,
+          isGroup: isRoomish,
+          groupId: isRoomish ? command.channel_id : undefined,
           chunkMode: resolveChunkMode(cfg, "slack", route.accountId),
           tableMode: resolveMarkdownTableMode({
             cfg,
@@ -927,6 +937,11 @@ export async function registerSlackMonitorSlashCommands(params: {
     registerArgOptions();
   } catch (err) {
     supportsExternalArgMenus = false;
+    runtime.log?.(
+      warn(
+        "slack: external arg-menu registration failed; falling back to static slash command menus. Enable verbose logs for details.",
+      ),
+    );
     logVerbose(
       `slack: external arg-menu registration failed, falling back to static menus: ${formatErrorMessage(err)}`,
     );

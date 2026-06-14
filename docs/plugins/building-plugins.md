@@ -106,6 +106,14 @@ local proof.
     eagerly loading every plugin runtime. Set `activation.onStartup`
     intentionally. This example starts on Gateway startup.
 
+    Host-trusted plugin surfaces are also manifest-gated and require explicit
+    enablement for installed plugins. If an installed plugin registers
+    `api.registerAgentToolResultMiddleware(...)`, declare each target runtime in
+    `contracts.agentToolResultMiddleware`. If it registers
+    `api.registerTrustedToolPolicy(...)`, declare each policy id in
+    `contracts.trustedToolPolicies`. These declarations keep install-time
+    inspection and runtime registration aligned.
+
     For every manifest field, see [Plugin manifest](/plugins/manifest).
 
   </Step>

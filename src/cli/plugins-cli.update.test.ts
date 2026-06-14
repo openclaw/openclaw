@@ -78,8 +78,8 @@ describe("plugins cli update", () => {
 
     expect(helpText).toContain("--dangerously-force-unsafe-install");
     expect(helpText).toContain("Deprecated no-op");
-    expect(helpText).toContain("install policy and");
-    expect(helpText).toContain("plugin hooks may still block");
+    expect(helpText).toContain("security.installPolicy");
+    expect(helpText).toContain("may still block");
   });
 
   it("refuses plugin updates in Nix mode before package-manager work", async () => {

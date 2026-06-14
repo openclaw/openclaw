@@ -579,6 +579,16 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
   return container;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("chat compaction divider", () => {
   it("renders checkpoint recovery copy and action", () => {
     const onOpenSessionCheckpoints = vi.fn();
@@ -865,12 +875,14 @@ describe("chat goal status", () => {
 });
 
 describe("chat composer workbench", () => {
-  it("renders session controls in the composer and workspace files in the rail", () => {
+  it("renders session controls in the composer and workspace files in the expanded rail", () => {
+    const onToggleCollapsed = vi.fn();
     const onRefresh = vi.fn();
     const onOpenFile = vi.fn();
     const container = renderChatView({
       composerControls: html`<button class="test-composer-control">Model</button>`,
       workspaceFiles: {
+        collapsed: false,
         agentId: "main",
         list: {
           agentId: "main",
@@ -887,6 +899,7 @@ describe("chat composer workbench", () => {
         loading: false,
         error: null,
         activeName: "AGENTS.md",
+        onToggleCollapsed,
         onRefresh,
         onOpenFile,
       },
@@ -895,6 +908,15 @@ describe("chat composer workbench", () => {
     expect(
       container.querySelector(".agent-chat__composer-controls .test-composer-control"),
     ).not.toBeNull();
+    const workbench = container.querySelector(".chat-workbench");
+    const main = container.querySelector(".chat-workbench__main");
+    const rail = container.querySelector(".chat-workspace-rail");
+    expect(main?.parentElement).toBe(workbench);
+    expect(rail?.parentElement).toBe(workbench);
+    expect(Array.from(workbench?.children ?? []).map((child) => child.className)).toEqual([
+      "chat-workspace-rail",
+      "chat-workbench__main",
+    ]);
     expect(container.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
       "/workspace",
     );
@@ -903,8 +925,41 @@ describe("chat composer workbench", () => {
     expect(file?.textContent).toContain("2 KB");
 
     file?.click();
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Collapse workspace files"]')
+      ?.click();
 
     expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('button[aria-label="Workspace files"]')).toBeNull();
+  });
+
+  it("keeps the workspace files rail reachable from the collapsed strip", () => {
+    const onToggleCollapsed = vi.fn();
+    const container = renderChatView({
+      workspaceFiles: {
+        collapsed: true,
+        agentId: "main",
+        list: null,
+        loading: false,
+        error: null,
+        activeName: null,
+        onToggleCollapsed,
+        onRefresh: () => undefined,
+        onOpenFile: () => undefined,
+      },
+    });
+
+    expect(container.querySelector(".chat-workspace-rail__list")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__collapsed-icon")).not.toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Expand workspace files"]',
+    );
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+
+    toggle?.click();
+
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
@@ -1174,6 +1229,131 @@ describe("chat loading skeleton", () => {
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
 
+  it("shows prompt-bar progress while the current session send is awaiting acknowledgement", () => {
+    const container = renderChatView({
+      sending: true,
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 1,
+          sendRunId: "run-main",
+          sendState: "sending",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    const status = container.querySelector(".agent-chat__run-status--in-progress");
+    expect(status).toBeInstanceOf(HTMLElement);
+    expect(status?.textContent).toContain("In progress");
+    expect(status?.closest(".agent-chat__toolbar-left")).not.toBeNull();
+  });
+
+  it("does not show prompt-bar progress for another session send", () => {
+    const container = renderChatView({
+      sessionKey: "session-b",
+      sending: true,
+      queue: [
+        {
+          id: "send-a",
+          text: "hello from A",
+          createdAt: 1,
+          sendRunId: "run-a",
+          sendState: "sending",
+          sessionKey: "session-a",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+  });
+
+  it("shows prompt-bar progress while the current session send waits for model switching", () => {
+    const container = renderChatView({
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 1,
+          sendRunId: "run-main",
+          sendState: "waiting-model",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    const status = container.querySelector(".agent-chat__run-status--in-progress");
+    expect(status).toBeInstanceOf(HTMLElement);
+    expect(status?.textContent).toContain("In progress");
+  });
+
+  it("shows active model-switch progress over the previous run's terminal status", () => {
+    const container = renderChatView({
+      runStatus: {
+        phase: "done",
+        runId: "run-previous",
+        sessionKey: "main",
+        occurredAt: 1_000,
+      },
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 999,
+          sendRunId: "run-main",
+          sendState: "waiting-model",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__run-status--done")).toBeNull();
+  });
+
+  it("keeps terminal status for the submitted run while its acknowledgement is pending", () => {
+    const occurredAt = Date.now();
+    const container = renderChatView({
+      runStatus: {
+        phase: "done",
+        runId: "run-main",
+        sessionKey: "main",
+        occurredAt,
+      },
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 999,
+          sendRunId: "run-main",
+          sendState: "sending",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--done")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+  });
+
+  it("does not show prompt-bar progress for reconnect-waiting sends", () => {
+    const container = renderChatView({
+      queue: [
+        {
+          id: "send-main",
+          text: "hello",
+          createdAt: 1,
+          sendRunId: "run-main",
+          sendState: "waiting-reconnect",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+  });
+
   it("lets terminal run status win over stale abortable session UI", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
@@ -1438,6 +1618,55 @@ describe("chat slash menu accessibility", () => {
 
     expect(onDraftChange).toHaveBeenCalledWith("plain first message");
     expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests slash command hydration only after slash intent", () => {
+    const onSlashIntent = vi.fn(async () => undefined);
+    const container = renderChatView({ onSlashIntent });
+
+    inputDraft(container, "plain first message");
+
+    expect(onSlashIntent).not.toHaveBeenCalled();
+
+    inputDraft(container, "/");
+
+    expect(onSlashIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reopen slash suggestions when command hydration finishes after plain typing", async () => {
+    let draft = "";
+    const hydration = createDeferred<void>();
+    const onSlashIntent = vi.fn(() => hydration.promise);
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onRequestUpdate: renderCurrent,
+            onSlashIntent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+
+    inputDraft(container, "/");
+    expect(container.querySelector(".slash-menu")).not.toBeNull();
+
+    inputDraft(container, "plain first message");
+    expect(container.querySelector(".slash-menu")).toBeNull();
+    hydration.resolve();
+    await hydration.promise;
+    await Promise.resolve();
+
+    expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
   it("clears the visible local draft immediately when send clears the host draft", () => {
