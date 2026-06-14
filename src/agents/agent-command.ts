@@ -615,7 +615,13 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     throw new Error("Message (--message) is required");
   }
   const rawExplicitSessionKey = opts.sessionKey?.trim();
-  if (!opts.to && !opts.sessionId && !rawExplicitSessionKey && !opts.agentId) {
+  const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const rawTo = opts.to?.trim();
+  const toSessionKey =
+    !rawExplicitSessionKey && !requestedSessionId && classifySessionKeyShape(rawTo) === "agent"
+      ? rawTo
+      : undefined;
+  if (!opts.to && !requestedSessionId && !rawExplicitSessionKey && !opts.agentId) {
     throw new Error(
       "Pass --to <E.164>, --session-key, --session-id, or --agent to choose a session",
     );
@@ -647,12 +653,14 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
     !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
   );
-  const explicitSessionKey = resolveExplicitAgentCommandSessionKey({
-    rawExplicitSessionKey,
-    agentIdOverride,
-    shouldScopeDefaultAgentKey,
-    cfg,
-  });
+  const explicitSessionKey =
+    toSessionKey ??
+    resolveExplicitAgentCommandSessionKey({
+      rawExplicitSessionKey,
+      agentIdOverride,
+      shouldScopeDefaultAgentKey,
+      cfg,
+    });
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
       `Invalid --session-key "${explicitSessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
@@ -698,10 +706,13 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   });
   const runTimeoutOverrideMs = hasExplicitTimeoutOption ? timeoutMs : undefined;
 
+  const commandOpts = toSessionKey
+    ? { ...opts, to: undefined, sessionKey: explicitSessionKey }
+    : opts;
   const sessionResolution = resolveSession({
     cfg,
-    to: opts.to,
-    sessionId: opts.sessionId,
+    to: commandOpts.to,
+    sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
     clone: false,
@@ -791,6 +802,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
   return {
+    opts: commandOpts,
     body,
     transcriptBody,
     cfg,
@@ -826,15 +838,17 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
 }
 
 async function agentCommandInternal(
-  opts: AgentCommandOpts,
+  initialOpts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
-  const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
-  const suppressVisibleSessionEffects = opts.sessionEffects === "internal";
-  const preserveUserFacingSessionModelState = opts.preserveUserFacingSessionModelState === true;
-  const prepared = await prepareAgentCommandExecution(opts, runtime);
+  const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
+  const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
+  const preserveUserFacingSessionModelState =
+    initialOpts.preserveUserFacingSessionModelState === true;
+  const prepared = await prepareAgentCommandExecution(initialOpts, runtime);
+  const opts = prepared.opts;
   const {
     body,
     transcriptBody,
