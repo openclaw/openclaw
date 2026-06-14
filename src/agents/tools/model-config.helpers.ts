@@ -178,7 +178,7 @@ function hasAuthProfileTypeInStore(params: {
 }): boolean {
   const types = Array.isArray(params.type) ? params.type : [params.type];
   return listProfilesForProvider(params.store, params.provider).some((profileId) =>
-    types.includes(params.store.profiles[profileId]?.type as AuthProfileCredential["type"]),
+    types.includes(params.store.profiles[profileId]?.type),
   );
 }
 

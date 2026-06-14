@@ -28,7 +28,15 @@ const openAiKeep = { kind: "keep", ref: `openai/${MODEL}` } satisfies Decision;
 const drop = { kind: "drop" } satisfies Decision;
 
 const openAiRefCfg: OpenClawConfig = {
-  models: { providers: { openai: { apiKey: "openai:default" } } },
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "openai:default",
+        models: [],
+      },
+    },
+  },
 };
 
 const store = (profiles: Profiles): AuthProfileStore => ({ version: 1, profiles });

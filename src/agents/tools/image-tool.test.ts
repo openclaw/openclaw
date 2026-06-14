@@ -17,7 +17,7 @@ import type {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
@@ -911,6 +911,14 @@ function findSchemaUnionKeywords(schema: unknown, pathLocal = "root"): string[] 
 
 describe("image tool implicit imageModel config", () => {
   type Profiles = AuthProfileStore["profiles"];
+  type ImplicitImageRoutingCase = {
+    name: string;
+    cfg: OpenClawConfig;
+    profiles?: Profiles;
+    codexRoute?: boolean;
+    openAiApiKey?: boolean;
+    expected: ReturnType<typeof resolveImageModelConfigForTool>;
+  };
 
   const openAiPrimaryCfg = {
     agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
@@ -921,7 +929,7 @@ describe("image tool implicit imageModel config", () => {
   const codexImageModel = { primary: "codex/gpt-5.5" };
   const openAiDefaultImageModel = { primary: "openai/gpt-5.4-mini" };
 
-  const openAiOAuthProfile = (provider = "openai") => ({
+  const openAiOAuthProfile = (provider = "openai"): AuthProfileCredential => ({
     provider,
     type: "oauth" as const,
     access: "oauth-test",
@@ -929,15 +937,15 @@ describe("image tool implicit imageModel config", () => {
     expires: Date.now() + 60_000,
   });
 
-  const openAiTokenProfile = (provider = "openai") => ({
+  const openAiTokenProfile = (provider = "openai"): AuthProfileCredential => ({
     provider,
     type: "token" as const,
     token: "token-test",
   });
 
-  const authStore = (profiles: Profiles): AuthProfileStore => ({ version: 1, profiles });
+  const makeAuthStore = (profiles: Profiles): AuthProfileStore => ({ version: 1, profiles });
   const writeProfiles = (agentDir: string, profiles: Profiles) =>
-    writeAuthProfiles(agentDir, authStore(profiles));
+    writeAuthProfiles(agentDir, makeAuthStore(profiles));
 
   const priorFetch = global.fetch;
   registerImageToolEnvReset(priorFetch, [
@@ -969,14 +977,7 @@ describe("image tool implicit imageModel config", () => {
     testing.setProviderDepsForTest();
   });
 
-  it("stays disabled without auth when no pairing is possible", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      expect(resolveImageModelConfigForTool({ cfg: openAiPrimaryCfg, agentDir })).toBeNull();
-      expect(createImageTool({ config: openAiPrimaryCfg, agentDir })).toBeNull();
-    });
-  });
-
-  it.each([
+  const implicitImageRoutingCases: ImplicitImageRoutingCase[] = [
     {
       name: "uses Codex media for implicit OpenAI image defaults on canonical OAuth-only auth",
       cfg: openAiPrimaryCfg,
@@ -1023,26 +1024,38 @@ describe("image tool implicit imageModel config", () => {
       codexRoute: true,
       expected: null,
     },
-  ])("$name", async ({ cfg, profiles, codexRoute, openAiApiKey, expected }) => {
-    if (codexRoute) {
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
-    }
-    if (openAiApiKey) {
-      vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    }
-    await withTempAgentDir(async (agentDir) => {
-      if (profiles) {
-        await writeProfiles(agentDir, profiles);
-      }
+  ];
 
-      const actual = resolveImageModelConfigForTool({ cfg, agentDir });
-      if (expected === null) {
-        expect(actual).toBeNull();
-      } else {
-        expect(actual).toEqual(expected);
-      }
+  it("stays disabled without auth when no pairing is possible", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      expect(resolveImageModelConfigForTool({ cfg: openAiPrimaryCfg, agentDir })).toBeNull();
+      expect(createImageTool({ config: openAiPrimaryCfg, agentDir })).toBeNull();
     });
   });
+
+  it.each(implicitImageRoutingCases)(
+    "$name",
+    async ({ cfg, profiles, codexRoute, openAiApiKey, expected }) => {
+      if (codexRoute) {
+        vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      }
+      if (openAiApiKey) {
+        vi.stubEnv("OPENAI_API_KEY", "openai-test");
+      }
+      await withTempAgentDir(async (agentDir) => {
+        if (profiles) {
+          await writeProfiles(agentDir, profiles);
+        }
+
+        const actual = resolveImageModelConfigForTool({ cfg, agentDir });
+        if (expected === null) {
+          expect(actual).toBeNull();
+        } else {
+          expect(actual).toEqual(expected);
+        }
+      });
+    },
+  );
 
   it("uses Codex media when OAuth-only OpenAI has configured vision model metadata", async () => {
     await withTempAgentDir(async (agentDir) => {
@@ -1053,7 +1066,8 @@ describe("image tool implicit imageModel config", () => {
         models: {
           providers: {
             openai: {
-              models: [{ id: "gpt-5.5", input: ["text", "image"] }],
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeModelDefinition("gpt-5.5", ["text", "image"])],
             },
           },
         },
@@ -1073,7 +1087,8 @@ describe("image tool implicit imageModel config", () => {
         models: {
           providers: {
             openai: {
-              models: [{ id: "gpt-5.5", input: ["text", "image"] }],
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeModelDefinition("gpt-5.5", ["text", "image"])],
             },
           },
         },
@@ -1138,7 +1153,7 @@ describe("image tool implicit imageModel config", () => {
         resolveImageModelConfigForTool({
           cfg: openAiPrimaryCfg,
           agentDir,
-          authStore: authStore({}),
+          authStore: makeAuthStore({}),
         }),
       ).toEqual(codexImageModel);
     });
@@ -1153,7 +1168,7 @@ describe("image tool implicit imageModel config", () => {
         resolveImageModelConfigForTool({
           cfg: openAiPrimaryCfg,
           agentDir,
-          authStore: authStore({}),
+          authStore: makeAuthStore({}),
         }),
       ).toBeNull();
     });
