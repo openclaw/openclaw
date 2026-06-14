@@ -12,6 +12,12 @@ import {
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
+import {
+  buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
+  resolveModelRefFromString,
+} from "../model-selection-shared.js";
 import {
   openAIProviderUsesCodexRuntimeByDefault,
   resolveSelectedOpenAIRuntimeProvider,
@@ -118,6 +124,48 @@ export function resolveEmbeddedCompactionTarget(params: {
       provider: overrideProvider,
       ...resolveTargetProviders(overrideProvider, authProfileId),
       model: overrideModel,
+      authProfileId,
+    };
+  }
+  const defaultProvider = provider?.trim() || params.defaultProvider?.trim() || DEFAULT_PROVIDER;
+  const config = params.config ?? {};
+  const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: config,
+    model: override,
+  });
+  if (inferredLiteralProvider) {
+    const authProfileId =
+      inferredLiteralProvider !== (params.provider ?? "")?.trim()
+        ? undefined
+        : (params.authProfileId ?? undefined);
+    return {
+      provider: inferredLiteralProvider,
+      ...resolveTargetProviders(inferredLiteralProvider, authProfileId),
+      model: override,
+      authProfileId,
+    };
+  }
+  const aliasIndex = buildModelAliasIndex({
+    cfg: config,
+    defaultProvider,
+  });
+  const aliasResolution = resolveModelRefFromString({
+    cfg: config,
+    raw: override,
+    defaultProvider,
+    aliasIndex,
+  });
+  if (aliasResolution?.alias) {
+    const resolvedProvider = aliasResolution.ref.provider;
+    const resolvedModel = aliasResolution.ref.model;
+    const authProfileId =
+      resolvedProvider !== (params.provider ?? "")?.trim()
+        ? undefined
+        : (params.authProfileId ?? undefined);
+    return {
+      provider: resolvedProvider,
+      ...resolveTargetProviders(resolvedProvider, authProfileId),
+      model: resolvedModel,
       authProfileId,
     };
   }
