@@ -454,3 +454,43 @@ describe("createAgentSession thinking level defaults", () => {
     expect(session.thinkingLevel).toBe("off");
   });
 });
+
+// Regression tests for #92974: getAttributionHeaders null-guard
+describe("getAttributionHeaders", () => {
+  // Dynamic import to access the exported function through the module.
+  let getAttributionHeaders: typeof import("./sdk.js").getAttributionHeaders;
+
+  beforeAll(async () => {
+    const mod = await import("./sdk.js");
+    getAttributionHeaders = mod.getAttributionHeaders;
+  });
+
+  it("returns undefined when baseUrl is missing (Bedrock models)", () => {
+    const model = { provider: "amazon-bedrock", id: "bedrock-model" } as any;
+    const settings = { get: () => true } as any;
+    expect(() => getAttributionHeaders(model, settings)).not.toThrow();
+    expect(getAttributionHeaders(model, settings)).toBeUndefined();
+  });
+
+  it("returns OpenRouter headers when baseUrl includes openrouter.ai", () => {
+    const model = { provider: "custom", id: "model", baseUrl: "https://openrouter.ai/api/v1" } as any;
+    const settings = { get: () => true } as any;
+    const result = getAttributionHeaders(model, settings);
+    expect(result).toBeDefined();
+    expect(result!["HTTP-Referer"]).toBe("https://openclaw.ai");
+  });
+
+  it("returns Cloudflare headers with optional chaining on baseUrl", () => {
+    const model = { provider: "cloudflare-ai-gateway", id: "model", baseUrl: "https://gateway.ai.cloudflare.com/v1" } as any;
+    const settings = { get: () => true } as any;
+    const result = getAttributionHeaders(model, settings);
+    expect(result).toBeDefined();
+    expect(result!["User-Agent"]).toBe("openclaw");
+  });
+
+  it("returns undefined when telemetry is disabled", () => {
+    const model = { provider: "openrouter", id: "model", baseUrl: "https://openrouter.ai/api/v1" } as any;
+    const settings = { get: () => false } as any;
+    expect(getAttributionHeaders(model, settings)).toBeUndefined();
+  });
+});
