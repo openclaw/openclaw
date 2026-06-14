@@ -176,12 +176,12 @@ describe("node pairing rate limit", () => {
     });
   });
 
-  test("limits repeated paired reapproval before the pairing lock", async () => {
+  test("reuses identical paired reapproval without rejecting the node", async () => {
     testState.gatewayAuth = {
       mode: "token",
       token: "secret",
       rateLimit: {
-        maxAttempts: 3,
+        maxAttempts: 1,
         windowMs: 60_000,
         lockoutMs: 60_000,
         exemptLoopback: true,
@@ -193,7 +193,7 @@ describe("node pairing rate limit", () => {
 
       const responses = await Promise.all(
         Array.from(
-          { length: 5 },
+          { length: 20 },
           async () =>
             await attemptNodePairing(port, identityPath, {
               caps: ["camera", "screen"],
@@ -201,19 +201,36 @@ describe("node pairing rate limit", () => {
             }),
         ),
       );
-      const rateLimited = responses.filter((res) => {
-        const details = res.error?.details as { code?: unknown; authReason?: unknown } | undefined;
-        return (
-          details?.code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED &&
-          details.authReason === "rate_limited"
-        );
+      expect(responses.every((res) => res.ok)).toBe(true);
+      const pendingBeforeReuse = (await listNodePairing()).pending.find(
+        (entry) => entry.nodeId === identity.deviceId,
+      );
+      expect(pendingBeforeReuse).toBeDefined();
+
+      await expect(
+        attemptNodePairing(port, identityPath, {
+          caps: ["camera", "screen"],
+          commands: [],
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(
+        (await listNodePairing()).pending.find((entry) => entry.nodeId === identity.deviceId),
+      ).toMatchObject({
+        requestId: pendingBeforeReuse!.requestId,
+        ts: pendingBeforeReuse!.ts,
       });
 
-      expect(responses.filter((res) => res.ok)).toHaveLength(3);
-      expect(rateLimited).toHaveLength(2);
+      const changedSurface = await attemptNodePairing(port, identityPath, {
+        caps: ["camera", "microphone"],
+        commands: [],
+      });
+      expect(changedSurface.ok).toBe(true);
       expect(
-        (await listNodePairing()).pending.filter((entry) => entry.nodeId === identity.deviceId),
-      ).toHaveLength(1);
+        (await listNodePairing()).pending.find((entry) => entry.nodeId === identity.deviceId),
+      ).toMatchObject({
+        requestId: pendingBeforeReuse!.requestId,
+        caps: ["camera", "screen"],
+      });
     });
   });
 });

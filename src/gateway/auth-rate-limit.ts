@@ -43,8 +43,8 @@ export const AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN = "device-token";
 // The request path enters the node-pairing storage lock, so bursts must be
 // throttled before they queue behind that lock and delay operator actions.
 export const AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING = "node-pairing";
-// Separate paired-node reapproval traffic from first-time pairing while still
-// bounding writes queued behind the shared node-pairing state lock.
+// Paired-node approval-surface changes use a dedicated limiter so reconnect
+// storms cannot queue unbounded writes behind the shared pairing-state lock.
 export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
 // Per-IP gate for the pre-auth bootstrap-token verify path.
 // `verifyDeviceBootstrapToken` is `withLock`-serialized in

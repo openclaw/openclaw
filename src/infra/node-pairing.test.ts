@@ -11,6 +11,7 @@ import {
   releaseNodePairingCleanupClaim,
   removePairedNode,
   requestNodePairing,
+  reusePendingNodePairingForReconnect,
   updatePairedNodeMetadata,
   verifyNodeToken,
 } from "./node-pairing.js";
@@ -390,6 +391,110 @@ describe("node pairing tokens", () => {
     });
   });
 
+  test("reuses an unchanged reconnect request without leaving stale cleanup ownership", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+      const snapshot = await beginNodePairingConnect("node-1", baseDir);
+      expect(snapshot.cleanupClaim).toBeDefined();
+
+      await expect(
+        reusePendingNodePairingForReconnect(
+          {
+            nodeId: "node-1",
+            platform: "darwin",
+            commands: ["system.run", "canvas.snapshot"],
+          },
+          snapshot.cleanupClaim!,
+          baseDir,
+        ),
+      ).resolves.toMatchObject({
+        request: { requestId: pending.request.requestId },
+        created: false,
+      });
+      await expect(finalizeNodePairingCleanupClaim(snapshot.cleanupClaim!)).resolves.toEqual([]);
+      await expect(
+        approveNodePairing(
+          pending.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.admin"] },
+          baseDir,
+        ),
+      ).resolves.toMatchObject({ requestId: pending.request.requestId });
+    });
+  });
+
+  test("does not reuse a reconnect request when pending metadata changed", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          displayName: "Old Name",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+      const snapshot = await beginNodePairingConnect("node-1", baseDir);
+
+      await expect(
+        reusePendingNodePairingForReconnect(
+          {
+            nodeId: "node-1",
+            platform: "darwin",
+            displayName: "New Name",
+            commands: ["system.run", "canvas.snapshot"],
+          },
+          snapshot.cleanupClaim,
+          baseDir,
+        ),
+      ).resolves.toBeNull();
+      if (snapshot.cleanupClaim) {
+        await releaseNodePairingCleanupClaim(snapshot.cleanupClaim);
+      }
+    });
+  });
+
+  test("preserves newer cleanup ownership after an older reconnect reuses pending state", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+      const matchingReconnect = await beginNodePairingConnect("node-1", baseDir);
+      const changedReconnect = await beginNodePairingConnect("node-1", baseDir);
+      expect(matchingReconnect.cleanupClaim).toBeDefined();
+      expect(changedReconnect.cleanupClaim).toBeDefined();
+
+      await reusePendingNodePairingForReconnect(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        matchingReconnect.cleanupClaim!,
+        baseDir,
+      );
+
+      await expect(
+        finalizeNodePairingCleanupClaim(changedReconnect.cleanupClaim!),
+      ).resolves.toEqual([{ requestId: pending.request.requestId, nodeId: "node-1" }]);
+      expect((await listNodePairing(baseDir)).pending).toEqual([]);
+    });
+  });
+
   test("preserves a replacement pending request created after the connect snapshot", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
@@ -434,7 +539,9 @@ describe("node pairing tokens", () => {
       const firstSnapshot = await beginNodePairingConnect("node-1", baseDir);
       const secondSnapshot = await beginNodePairingConnect("node-1", baseDir);
       expect(firstSnapshot.cleanupClaim).toBeDefined();
-      expect(secondSnapshot.cleanupClaim).toEqual(firstSnapshot.cleanupClaim);
+      expect(secondSnapshot.cleanupClaim?.generation).toBeGreaterThan(
+        firstSnapshot.cleanupClaim!.generation,
+      );
 
       await expect(
         approveNodePairing(

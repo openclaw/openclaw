@@ -174,7 +174,7 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.pendingPairing?.request.requestId).toBe("req-caps");
   });
 
-  it("preserves the approved surface when paired node upgrade pairing is throttled", async () => {
+  it("keeps the approved surface when paired-node reapproval is throttled", async () => {
     const requestPairing = vi.fn(async () => null);
 
     const result = await reconcileNodePairingOnConnect({
@@ -195,6 +195,7 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.effectiveCommands).toEqual([]);
     expect(result.declaredCaps).toEqual(["camera", "screen"]);
     expect(result.pendingPairing).toBeUndefined();
+    expect(result.shouldClearPendingPairings).toBeUndefined();
   });
 
   it("defers stale pending reapproval cleanup when the node returns to its approved surface", async () => {
