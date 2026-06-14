@@ -49,6 +49,39 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it("normalizes unreadable schema containers to empty object schemas", () => {
+    const unreadableRoot = new Proxy(
+      { type: "object", properties: {} },
+      {
+        ownKeys() {
+          throw new Error("root schema ownKeys exploded");
+        },
+      },
+    );
+    const unreadableProperties = new Proxy(
+      { query: { type: "string" } },
+      {
+        ownKeys() {
+          throw new Error("properties ownKeys exploded");
+        },
+      },
+    );
+
+    expect(normalizeToolParameterSchema(unreadableRoot)).toEqual({
+      type: "object",
+      properties: {},
+    });
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: unreadableProperties,
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
+
   it("leaves top-level allOf schemas unchanged", () => {
     const schema = {
       allOf: [{ type: "object", properties: { id: { type: "string" } } }],
