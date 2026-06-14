@@ -17,7 +17,7 @@ import {
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "./runtime-api.js";
-import { resolveSlackChannelId, slackContextTargetsMatch, slackTargetsMatch } from "./targets.js";
+import { resolveSlackChannelId, slackContextTargetsMatch } from "./targets.js";
 
 const messagingActions = new Set([
   "sendMessage",
@@ -30,8 +30,6 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
-
-const sameSlackTarget = slackTargetsMatch;
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
