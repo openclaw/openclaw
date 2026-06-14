@@ -2262,6 +2262,21 @@ describe("active-memory plugin", () => {
         ),
       ).toBe(true);
     }
+    for (const status of ["not_found", "empty", "no_results", "no_matches"]) {
+      expect(
+        testing.hasUsableMemoryResultInSessionRecord(
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_lookup_custom",
+              details: { status },
+              content: [{ type: "text", text: "No memories found." }],
+            },
+          },
+          ["memory_lookup_custom"],
+        ),
+      ).toBe(false);
+    }
     expect(
       testing.hasUsableMemoryResultInSessionRecord(
         {
@@ -2272,6 +2287,22 @@ describe("active-memory plugin", () => {
             content: [
               { type: "text", text: '{"status":"aborted"}' },
               { type: "text", text: "The memory lookup was cancelled." },
+            ],
+          },
+        },
+        ["memory_lookup_custom"],
+      ),
+    ).toBe(false);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_lookup_custom",
+            details: {},
+            content: [
+              { type: "text", text: '{"status":"not_found"}' },
+              { type: "text", text: "No memories found." },
             ],
           },
         },

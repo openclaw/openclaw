@@ -77,6 +77,12 @@ const STRUCTURED_MEMORY_FAILURE_STATUSES = new Set([
   "disabled",
   "blocked",
 ]);
+const STRUCTURED_MEMORY_EMPTY_STATUSES = new Set([
+  "not_found",
+  "empty",
+  "no_results",
+  "no_matches",
+]);
 const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "*",
   "agents_list",
@@ -2383,6 +2389,12 @@ function normalizeNoRecallValue(value: string): boolean {
 }
 
 function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | undefined {
+  const status = normalizeOptionalString(source.status)
+    ?.toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  if (status !== undefined && STRUCTURED_MEMORY_EMPTY_STATUSES.has(status)) {
+    return false;
+  }
   const resultCollections = [source.results, source.memories, source.items];
   if (resultCollections.some((entry) => Array.isArray(entry))) {
     return resultCollections.some((entry) => Array.isArray(entry) && entry.length > 0);
