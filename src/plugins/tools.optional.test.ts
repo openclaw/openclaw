@@ -164,6 +164,22 @@ function createMalformedTool(name: string) {
   };
 }
 
+function createToolWithUnstableDescriptorSchema(name: string) {
+  let parameterReads = 0;
+  const tool = makeTool(name);
+  Object.defineProperty(tool, "parameters", {
+    enumerable: true,
+    get() {
+      parameterReads += 1;
+      if (parameterReads > 1) {
+        throw new Error("fuzzplugin parameters getter exploded");
+      }
+      return { type: "object", properties: {} };
+    },
+  });
+  return tool;
+}
+
 function installConsoleMethodSpy(method: "log" | "warn") {
   const spy = vi.fn();
   loggingState.rawConsole = {
@@ -2059,6 +2075,28 @@ describe("resolvePluginTools optional tools", () => {
     await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
       content: [{ type: "text", text: "same" }],
     });
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps live tools when descriptor cache capture hits an unstable schema getter", () => {
+    const factory = vi.fn(() =>
+      createToolWithUnstableDescriptorSchema("unstable_descriptor_tool"),
+    );
+    setRegistry([
+      {
+        pluginId: "cache-fuzz",
+        optional: false,
+        source: "/tmp/cache-fuzz.js",
+        names: ["unstable_descriptor_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(first, ["unstable_descriptor_tool"]);
+    expectResolvedToolNames(second, ["unstable_descriptor_tool"]);
     expect(factory).toHaveBeenCalledTimes(2);
   });
 

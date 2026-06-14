@@ -148,21 +148,27 @@ export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
   optional: boolean;
-}): CachedPluginToolDescriptor {
-  const label = (params.tool as { label?: unknown }).label;
-  const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
-  return {
-    ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
-    optional: params.optional,
-    descriptor: {
-      name: params.tool.name,
-      ...(title ? { title } : {}),
-      description: params.tool.description,
-      inputSchema: asJsonObject(params.tool.parameters),
-      owner: { kind: "plugin", pluginId: params.pluginId },
-      executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
-    },
-  };
+}): CachedPluginToolDescriptor | undefined {
+  try {
+    const label = (params.tool as { label?: unknown }).label;
+    const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+    const displaySummary = params.tool.displaySummary;
+    const name = params.tool.name;
+    return {
+      ...(displaySummary ? { displaySummary } : {}),
+      optional: params.optional,
+      descriptor: {
+        name,
+        ...(title ? { title } : {}),
+        description: params.tool.description,
+        inputSchema: asJsonObject(params.tool.parameters),
+        owner: { kind: "plugin", pluginId: params.pluginId },
+        executor: { kind: "plugin", pluginId: params.pluginId, toolName: name },
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export function readCachedPluginToolDescriptors(

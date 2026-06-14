@@ -17,9 +17,37 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
+
+describe("plugin tool descriptor capture", () => {
+  it("skips unreadable plugin tool descriptor fields", () => {
+    const tool = {
+      name: "unstable_tool",
+      description: "unstable tool",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    };
+    Object.defineProperty(tool, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters getter exploded");
+      },
+    });
+
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "fuzzplugin",
+        tool: tool as never,
+        optional: false,
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("plugin tool descriptor cache keys", () => {
   afterEach(() => {
