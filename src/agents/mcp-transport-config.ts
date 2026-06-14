@@ -204,13 +204,7 @@ export function resolveMcpTransportConfig(
   const requestedTransport = getRequestedTransport(rawServer);
   const requestedTransportAlias = requestedTransport ? "" : getRequestedTransportAlias(rawServer);
   const effectiveTransport = requestedTransport || requestedTransportAlias;
-  const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer, {
-    onDroppedEnv: (key) => {
-      logWarn(
-        `bundle-mcp: server "${logServerName}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and was ignored.`,
-      );
-    },
-  });
+  const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer);
   if (stdioLaunch.ok) {
     // A command-bearing server is always treated as stdio even when HTTP-ish
     // aliases are present, matching existing MCP config precedence.

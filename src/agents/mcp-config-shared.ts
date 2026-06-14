@@ -103,6 +103,24 @@ export function toMcpEnvRecord(
   });
 }
 
+/**
+ * Lists env keys from a raw MCP env config that would be blocked by stdio
+ * startup safety filtering. Returns an empty array when env is absent or all
+ * keys are safe.
+ */
+export function listBlockedMcpEnvKeys(value: unknown): string[] {
+  if (!isMcpConfigRecord(value)) {
+    return [];
+  }
+  const blocked: string[] = [];
+  for (const key of Object.keys(value)) {
+    if (isDangerousMcpStdioEnvVarName(key)) {
+      blocked.push(key);
+    }
+  }
+  return blocked;
+}
+
 /** Coerces an MCP string-array config value, dropping non-string entries. */
 export function toMcpStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {

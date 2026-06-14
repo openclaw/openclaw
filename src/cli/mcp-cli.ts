@@ -9,6 +9,7 @@ import {
 import { Command } from "commander";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
 import { createSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
+import { listBlockedMcpEnvKeys } from "../agents/mcp-config-shared.js";
 import {
   buildMcpHttpFetch,
   withoutMcpAuthorizationHeader,
@@ -324,6 +325,15 @@ async function collectMcpDoctorIssues(params: {
       }
       if (resolved.cwd && !(await directoryExists(resolved.cwd))) {
         issues.push(issue("error", `stdio cwd does not exist: ${resolved.cwd}`));
+      }
+      const blockedEnvKeys = listBlockedMcpEnvKeys(server.env);
+      if (blockedEnvKeys.length > 0) {
+        issues.push(
+          issue(
+            "info",
+            `env keys [${blockedEnvKeys.join(", ")}] are blocked for stdio safety and will be ignored at runtime`,
+          ),
+        );
       }
     }
     if (resolved?.kind === "http") {
@@ -972,6 +982,12 @@ export function registerMcpCli(program: Command) {
           previous: current,
           next: server,
         });
+        const blockedEnvKeys = listBlockedMcpEnvKeys(server.env);
+        if (blockedEnvKeys.length > 0) {
+          defaultRuntime.error(
+            `Warning: server "${name}" env keys [${blockedEnvKeys.join(", ")}] are blocked for stdio safety and will be ignored at runtime.`,
+          );
+        }
         defaultRuntime.log(`Saved MCP server "${name}" to ${result.path}.`);
         if (server.auth === "oauth") {
           defaultRuntime.log(
@@ -1005,6 +1021,14 @@ export function registerMcpCli(program: Command) {
         previous: current,
         next: parsed.value,
       });
+      const blockedEnvKeys = listBlockedMcpEnvKeys(
+        (parsed.value as Record<string, unknown> | null)?.env,
+      );
+      if (blockedEnvKeys.length > 0) {
+        defaultRuntime.error(
+          `Warning: server "${name}" env keys [${blockedEnvKeys.join(", ")}] are blocked for stdio safety and will be ignored at runtime.`,
+        );
+      }
       defaultRuntime.log(`Saved MCP server "${name}" to ${result.path}.`);
     });
 

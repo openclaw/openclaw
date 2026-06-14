@@ -48,10 +48,12 @@ describe("resolveMcpTransportConfig", () => {
     );
   });
 
-  it("drops dangerous env overrides from stdio config", () => {
+  it("drops dangerous env overrides from stdio config without per-resolve warnings", () => {
     // Stdio env is inherited executable process input. Block loader/shell hook
     // variables and child-process config pivots while preserving explicit MCP
-    // credentials and ordinary scalar env values.
+    // credentials and ordinary scalar env values. Blocked keys are silently
+    // dropped at resolution time to avoid journal flooding; `mcp set` and
+    // `mcp doctor` surface them once at config/inspection time.
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
       env: {
@@ -86,21 +88,8 @@ describe("resolveMcpTransportConfig", () => {
       requestTimeoutMs: 60_000,
       supportsParallelToolCalls: false,
     });
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "LD_PRELOAD" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "BASH_ENV" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "ANSIBLE_CONFIG" is blocked for stdio startup safety and was ignored.',
-    );
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probe": env "TF_CLI_CONFIG_FILE" is blocked for stdio startup safety and was ignored.',
-    );
+    // No per-resolve log warnings for blocked env keys.
+    expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("uses an explicit empty stdio env when all configured env keys are blocked", () => {
@@ -126,7 +115,7 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
-  it("sanitizes config-controlled names in stdio env warnings", () => {
+  it("silently drops blocked stdio env keys without logging per-resolve warnings", () => {
     resolveMcpTransportConfig("probe\nWARN forged\u001b[31m", {
       command: "node",
       env: {
@@ -134,9 +123,8 @@ describe("resolveMcpTransportConfig", () => {
       },
     });
 
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: server "probeWARN forged": env "LD_PRELOADWARN forged" is blocked for stdio startup safety and was ignored.',
-    );
+    // Blocked keys should be silently dropped; no per-resolve log spam.
+    expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("resolves SSE config by default", () => {

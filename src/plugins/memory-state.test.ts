@@ -245,6 +245,71 @@ describe("memory plugin state", () => {
     ]);
   });
 
+  it("tolerates omitted agentIds from a public-artifact provider", async () => {
+    // cloneMemoryPublicArtifact crashed with "agentIds is not iterable"
+    // when the provider returned artifacts without agentIds (e.g. some
+    // workspace metadata). Verify the guard tolerates omitted agentIds.
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root" as const,
+              workspaceDir: "/tmp/workspace-a",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace-a/MEMORY.md",
+              // agentIds intentionally omitted
+              contentType: "markdown" as const,
+            },
+            {
+              kind: "daily-note" as const,
+              workspaceDir: "/tmp/workspace-b",
+              relativePath: "memory/note.md",
+              absolutePath: "/tmp/workspace-b/memory/note.md",
+              agentIds: ["beta"],
+              contentType: "markdown" as const,
+            },
+            {
+              kind: "memory-root" as const,
+              workspaceDir: "/tmp/workspace-c",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace-c/MEMORY.md",
+              agentIds: ["gamma"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace-a",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace-a/MEMORY.md",
+        agentIds: [],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/workspace-b",
+        relativePath: "memory/note.md",
+        absolutePath: "/tmp/workspace-b/memory/note.md",
+        agentIds: ["beta"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace-c",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace-c/MEMORY.md",
+        agentIds: ["gamma"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
   it("passes citations mode through to the prompt builder", () => {
     registerMemoryPromptSection(({ citationsMode }) => [
       `citations: ${citationsMode ?? "default"}`,
