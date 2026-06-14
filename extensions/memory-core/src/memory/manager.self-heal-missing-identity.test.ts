@@ -205,4 +205,33 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     expect(statusAfter.chunks).toBeGreaterThan(0);
     expect(statusAfter.dirty).toBe(false);
   });
+
+  it("clears stale dirty state when search first observes a cli atomic reindex replacement", async () => {
+    await seedChunksWithNoMeta();
+    const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+
+    expect(indexIdentityStatus(memoryManager)).toBe("missing");
+
+    const cliResult = await getMemorySearchManager({
+      cfg: createCfg({ provider: "none", vectorEnabled: false }),
+      agentId: "main",
+      purpose: "cli",
+    });
+    if (!cliResult.manager) {
+      throw new Error(cliResult.error ?? "cli manager missing");
+    }
+    const cliManager = cliResult.manager as unknown as MemoryIndexManager;
+    try {
+      await cliManager.sync({ reason: "cli", force: true });
+    } finally {
+      await cliManager.close?.();
+    }
+
+    const results = await memoryManager.search("Alpha topic");
+    const statusAfter = memoryManager.status();
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(statusAfter.custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(statusAfter.dirty).toBe(false);
+  });
 });

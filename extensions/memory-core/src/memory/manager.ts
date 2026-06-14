@@ -305,6 +305,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
   private indexFileSignature: MemoryIndexFileSignature | null = null;
+  private indexFileRefreshPendingDirtyCleanup = false;
   private indexIdentityState: MemoryIndexIdentityState = {
     status: "missing",
     reason: "index metadata is missing",
@@ -594,6 +595,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.resetVectorState();
     this.ensureSchema();
     this.vector.dims = this.readMeta()?.vectorDims;
+    this.indexFileRefreshPendingDirtyCleanup = true;
     return true;
   }
 
@@ -615,7 +617,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
     const hadIndexIdentityDirty = this.indexIdentityDirty;
-    const refreshedDatabase = this.refreshDatabaseHandleIfExternallyReplaced();
+    const refreshedDatabase =
+      this.refreshDatabaseHandleIfExternallyReplaced() || this.indexFileRefreshPendingDirtyCleanup;
     const provider =
       this.settings.provider === "none"
         ? null
@@ -638,6 +641,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionsDirtyFiles.clear();
       this.memoryFullRetryDirty = false;
       this.sessionsFullRetryDirty = false;
+    }
+    if (refreshedDatabase) {
+      this.indexFileRefreshPendingDirtyCleanup = false;
     }
     return state;
   }
