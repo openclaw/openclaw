@@ -293,8 +293,33 @@ function isOversizedTranscriptLine(line: string): boolean {
   return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
 }
 
+// Cache compiled regexes per field name. The oversized transcript path calls
+// these helpers several times per record (id / parentId / type / timestamp /
+// role); without the cache each call recompiles RegExp objects on the
+// transcript-tail hot path.
+const TRANSCRIPT_FIELD_REGEX_CACHE = new Map<
+  string,
+  { stringRe: RegExp; nullRe: RegExp }
+>();
+
+function getTranscriptFieldRegexes(field: string): {
+  stringRe: RegExp;
+  nullRe: RegExp;
+} {
+  let cached = TRANSCRIPT_FIELD_REGEX_CACHE.get(field);
+  if (!cached) {
+    const escapedField = escapeRegExp(field);
+    cached = {
+      stringRe: new RegExp(`"${escapedField}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`),
+      nullRe: new RegExp(`"${escapedField}"\\s*:\\s*null`),
+    };
+    TRANSCRIPT_FIELD_REGEX_CACHE.set(field, cached);
+  }
+  return cached;
+}
+
 function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
-  const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
+  const match = getTranscriptFieldRegexes(field).stringRe.exec(prefix);
   if (!match) {
     return undefined;
   }
@@ -310,7 +335,7 @@ function extractJsonNullableStringFieldPrefix(
   prefix: string,
   field: string,
 ): string | null | undefined {
-  if (new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*null`).test(prefix)) {
+  if (getTranscriptFieldRegexes(field).nullRe.test(prefix)) {
     return null;
   }
   return extractJsonStringFieldPrefix(prefix, field);
