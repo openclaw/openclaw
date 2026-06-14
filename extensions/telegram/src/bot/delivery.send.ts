@@ -19,6 +19,8 @@ import {
   buildTelegramRichMessage,
   getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
+  splitTelegramRichTextChunks,
+  TELEGRAM_LEGACY_TEXT_LIMIT,
   toTelegramRichMessageContextParams,
 } from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
@@ -29,6 +31,7 @@ export { buildTelegramSendParams } from "../reply-parameters.js";
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
+const HTML_ENTITY_PARSE_RE = /can't parse entities|parse entities|find end of the entity/i;
 
 function isTelegramQuoteParamError(err: unknown): boolean {
   if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
@@ -123,13 +126,76 @@ export async function sendTelegramText(
   const richMessage = buildTelegramRichMessage(text, textMode, {
     skipEntityDetection: opts?.linkPreview === false,
   });
-  const htmlText = renderTelegramHtmlText(text, { textMode });
-  const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
 
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
   let res: { message_id: number };
+  const legacyTextChunks = () => {
+    return splitTelegramRichTextChunks({
+      text,
+      textLimit: TELEGRAM_LEGACY_TEXT_LIMIT,
+      textMode,
+      chunkMode: "length",
+    });
+  };
+  const withoutReplyMarkup = (params: Record<string, unknown>) => {
+    if (!("reply_markup" in params)) {
+      return params;
+    }
+    const { reply_markup: _replyMarkup, ...rest } = params;
+    return rest;
+  };
+  const sendLegacyTextChunk = async (
+    chunk: string,
+    index: number,
+    chunkCount: number,
+    plain: boolean,
+  ) => {
+    const renderedChunk = renderTelegramHtmlText(chunk, { textMode });
+    const textChunk = plain
+      ? textMode === "html"
+        ? telegramHtmlToPlainTextFallback(renderedChunk)
+        : chunk
+      : renderedChunk;
+    const requestParams = {
+      ...baseParams,
+      ...(index === chunkCount - 1 && opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+      ...(plain ? {} : { parse_mode: "HTML" as const }),
+      ...(opts?.linkPreview === false ? { link_preview_options: { is_disabled: true } } : {}),
+    };
+    return await sendTelegramWithThreadFallback({
+      operation: plain ? "sendMessage-plain" : "sendMessage",
+      runtime,
+      thread: opts?.thread,
+      requestParams,
+      send: (effectiveParams) =>
+        bot.api.sendMessage(
+          chatId,
+          textChunk,
+          index === chunkCount - 1 ? effectiveParams : withoutReplyMarkup(effectiveParams),
+        ),
+    });
+  };
+  const sendLegacyTextChunks = async () => {
+    let lastRes: { message_id: number } | undefined;
+    const chunks = legacyTextChunks();
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index] ?? "";
+      try {
+        lastRes = await sendLegacyTextChunk(chunk, index, chunks.length, false);
+      } catch (htmlErr) {
+        if (!HTML_ENTITY_PARSE_RE.test(formatErrorMessage(htmlErr))) {
+          throw htmlErr;
+        }
+        lastRes = await sendLegacyTextChunk(chunk, index, chunks.length, true);
+      }
+    }
+    if (!lastRes) {
+      throw new Error("Message must be non-empty for Telegram sends");
+    }
+    return lastRes;
+  };
   try {
     const richRawApi = getTelegramRichRawApi(bot.api);
     res = await sendTelegramWithThreadFallback({
@@ -154,40 +220,7 @@ export async function sendTelegramText(
     runtime.log?.(
       `telegram sendRichMessage unavailable; retrying via sendMessage: ${formatErrorMessage(err)}`,
     );
-    const legacyParams = {
-      ...baseParams,
-      ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-      parse_mode: "HTML" as const,
-      ...(opts?.linkPreview === false ? { link_preview_options: { is_disabled: true } } : {}),
-    };
-    try {
-      res = await sendTelegramWithThreadFallback({
-        operation: "sendMessage",
-        runtime,
-        thread: opts?.thread,
-        requestParams: legacyParams,
-        send: (effectiveParams) => bot.api.sendMessage(chatId, htmlText, effectiveParams),
-      });
-    } catch (htmlErr) {
-      if (
-        !/can't parse entities|parse entities|find end of the entity/i.test(
-          formatErrorMessage(htmlErr),
-        )
-      ) {
-        throw htmlErr;
-      }
-      res = await sendTelegramWithThreadFallback({
-        operation: "sendMessage-plain",
-        runtime,
-        thread: opts?.thread,
-        requestParams: {
-          ...baseParams,
-          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...(opts?.linkPreview === false ? { link_preview_options: { is_disabled: true } } : {}),
-        },
-        send: (effectiveParams) => bot.api.sendMessage(chatId, plainText, effectiveParams),
-      });
-    }
+    res = await sendLegacyTextChunks();
   }
   return res.message_id;
 }

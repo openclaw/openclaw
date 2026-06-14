@@ -42,6 +42,7 @@ import {
   buildTelegramRichMessage,
   getTelegramRichRawApi,
   splitTelegramRichTextChunks,
+  TELEGRAM_LEGACY_TEXT_LIMIT,
   TELEGRAM_RICH_TEXT_LIMIT,
   toTelegramRichMessageContextParams,
   type TelegramEditRichMessageTextParams,
@@ -623,6 +624,11 @@ export async function sendMessageTelegram(
   type TelegramTextChunk = {
     text: string;
   };
+  type SentTelegramTextChunk = {
+    result: TelegramMessageLike;
+    acceptedParams?: Record<string, unknown>;
+    text: string;
+  };
 
   let richTextUnavailable = false;
 
@@ -645,11 +651,25 @@ export async function sendMessageTelegram(
       ? { link_preview_options: { is_disabled: true } }
       : {}),
   });
+  const buildLegacyTextChunkPlan = (rawText: string): TelegramTextChunk[] =>
+    splitTelegramRichTextChunks({
+      text: rawText,
+      textLimit: TELEGRAM_LEGACY_TEXT_LIMIT,
+      textMode,
+      chunkMode,
+    }).map((chunk) => ({ text: chunk }));
+  const removeReplyMarkup = (params: Record<string, unknown> | undefined) => {
+    if (!params || !("reply_markup" in params)) {
+      return params;
+    }
+    const { reply_markup: _replyMarkup, ...rest } = params;
+    return rest;
+  };
 
-  const sendLegacyTelegramTextChunk = async (
+  const sendSingleLegacyTelegramTextChunk = async (
     chunk: TelegramTextChunk,
-    params?: TelegramRichMessageContextParams,
-  ) => {
+    params?: Record<string, unknown>,
+  ): Promise<SentTelegramTextChunk> => {
     const htmlText = renderHtmlText(chunk.text);
     const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : chunk.text;
     const result = await withTelegramHtmlParseFallback({
@@ -666,13 +686,33 @@ export async function sendMessageTelegram(
           retryLabel,
         ),
     });
-    return { result, acceptedParams: params };
+    return { result, acceptedParams: params, text: chunk.text };
+  };
+  const sendLegacyTelegramTextChunk = async (
+    chunk: TelegramTextChunk,
+    params?: Record<string, unknown>,
+  ): Promise<SentTelegramTextChunk[]> => {
+    const chunks = buildLegacyTextChunkPlan(chunk.text);
+    const sent: SentTelegramTextChunk[] = [];
+    for (let index = 0; index < chunks.length; index += 1) {
+      const legacyChunk = chunks[index];
+      if (!legacyChunk) {
+        continue;
+      }
+      sent.push(
+        await sendSingleLegacyTelegramTextChunk(
+          legacyChunk,
+          index === chunks.length - 1 ? params : removeReplyMarkup(params),
+        ),
+      );
+    }
+    return sent;
   };
 
   const sendTelegramTextChunk = async (
     chunk: TelegramTextChunk,
-    params?: TelegramRichMessageContextParams,
-  ) => {
+    params?: Record<string, unknown>,
+  ): Promise<SentTelegramTextChunk[]> => {
     if (richTextUnavailable) {
       return await sendLegacyTelegramTextChunk(chunk, params);
     }
@@ -691,7 +731,7 @@ export async function sendMessageTelegram(
           }),
         "richMessage",
       );
-      return { result, acceptedParams: params };
+      return [{ result, acceptedParams: params, text: chunk.text }];
     } catch (err) {
       if (!isTelegramRichMethodUnavailableError(err)) {
         throw err;
@@ -720,34 +760,37 @@ export async function sendMessageTelegram(
   ): Promise<{ messageId: string; chatId: string }> => {
     let lastMessageId = "";
     let lastChatId = chatId;
-    let lastAcceptedParams: TelegramThreadScopedParams | undefined;
+    let lastAcceptedParams: Record<string, unknown> | undefined;
     let sentChunkCount = 0;
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
       if (!chunk) {
         continue;
       }
-      const { result: res, acceptedParams } = await sendTelegramTextChunk(
+      const sentChunks = await sendTelegramTextChunk(
         chunk,
         buildTextParams(index === chunks.length - 1),
       );
-      const messageId = resolveTelegramMessageIdOrThrow(res, context);
-      recordSentMessage(chatId, messageId, cfg);
-      await recordOutboundMessageForPromptContext({
-        cfg,
-        account,
-        chatId,
-        message: res,
-        messageId,
-        text: chunk.text,
-        ...(acceptedParams?.message_thread_id !== undefined
-          ? { messageThreadId: acceptedParams.message_thread_id }
-          : {}),
-      });
-      lastMessageId = String(messageId);
-      lastChatId = String(res?.chat?.id ?? chatId);
-      lastAcceptedParams = acceptedParams;
-      sentChunkCount += 1;
+      for (const sentChunk of sentChunks) {
+        const { result: res, acceptedParams } = sentChunk;
+        const messageId = resolveTelegramMessageIdOrThrow(res, context);
+        recordSentMessage(chatId, messageId, cfg);
+        await recordOutboundMessageForPromptContext({
+          cfg,
+          account,
+          chatId,
+          message: res,
+          messageId,
+          text: sentChunk.text,
+          ...(acceptedParams?.message_thread_id !== undefined
+            ? { messageThreadId: acceptedParams.message_thread_id as number }
+            : {}),
+        });
+        lastMessageId = String(messageId);
+        lastChatId = String(res?.chat?.id ?? chatId);
+        lastAcceptedParams = acceptedParams;
+        sentChunkCount += 1;
+      }
     }
     if (lastMessageId) {
       logTelegramOutboundSendOk({
@@ -756,7 +799,10 @@ export async function sendMessageTelegram(
         messageId: lastMessageId,
         operation: "sendRichMessage",
         deliveryKind: "text",
-        messageThreadId: lastAcceptedParams?.message_thread_id,
+        messageThreadId:
+          typeof lastAcceptedParams?.message_thread_id === "number"
+            ? lastAcceptedParams.message_thread_id
+            : undefined,
         replyToMessageId: opts.replyToMessageId,
         silent: opts.silent,
         chunkCount: sentChunkCount,
