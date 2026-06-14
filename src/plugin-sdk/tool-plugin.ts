@@ -178,13 +178,43 @@ function applyFactoryTerminalResultFallback(
     if (tool.terminalResultFallback !== undefined) {
       return tool;
     }
-    Object.defineProperty(tool, "terminalResultFallback", {
-      configurable: true,
-      enumerable: true,
-      value: terminalResultFallback,
-      writable: true,
+    const boundFunctions = new WeakMap<WeakKey, WeakKey>();
+    return new Proxy(Object.create(Object.getPrototypeOf(tool)) as AnyAgentTool, {
+      get(_target, property) {
+        if (property === "terminalResultFallback") {
+          return terminalResultFallback;
+        }
+        const value = Reflect.get(tool, property, tool);
+        if (typeof value !== "function") {
+          return value;
+        }
+        const bound = boundFunctions.get(value);
+        if (bound) {
+          return bound;
+        }
+        const nextBound = value.bind(tool);
+        boundFunctions.set(value, nextBound);
+        return nextBound;
+      },
+      getOwnPropertyDescriptor(_target, property) {
+        if (property === "terminalResultFallback") {
+          return {
+            configurable: true,
+            enumerable: true,
+            value: terminalResultFallback,
+            writable: false,
+          };
+        }
+        const descriptor = Reflect.getOwnPropertyDescriptor(tool, property);
+        return descriptor ? { ...descriptor, configurable: true } : undefined;
+      },
+      has(_target, property) {
+        return property === "terminalResultFallback" || Reflect.has(tool, property);
+      },
+      ownKeys() {
+        return [...new Set([...Reflect.ownKeys(tool), "terminalResultFallback"])];
+      },
     });
-    return tool;
   };
   return Array.isArray(result) ? result.map(applyFallback) : applyFallback(result);
 }

@@ -1202,7 +1202,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           blockedMessage?: string;
         }) => void;
       };
-      attemptParams.onTerminalDrainReady?.(() => new Promise<void>(() => undefined));
+      attemptParams.onTerminalDrainReady?.(
+        () =>
+          new Promise<void>(() => {
+            // Intentionally never resolves to verify the drain timeout.
+          }),
+      );
       attemptParams.onToolOutcome?.({
         toolName: "status",
         argsHash: "current",
@@ -2664,6 +2669,35 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(warnMessages()).toEqual([]);
     expect(result.payloads).toEqual([{ text: "Absolutely." }]);
     expect(JSON.stringify(result.payloads)).not.toContain("read completed");
+  });
+
+  it("does not recreate final assistant text after committed message-tool delivery", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Already delivered."],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Already delivered."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Already delivered." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-suppressed-normal-terminal-message-delivery",
+    });
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.messagingToolSentTexts).toEqual(["Already delivered."]);
   });
 
   it("preserves an explicitly requested plan after completed safe tool work", async () => {

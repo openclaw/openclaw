@@ -479,6 +479,59 @@ describe("defineToolPlugin", () => {
     expect(factory().terminalResultFallback).toEqual({ mode: "none" });
   });
 
+  it("applies factory fallbacks without mutating frozen shared tools", async () => {
+    const sharedTool = Object.freeze({
+      name: "shared_factory_echo",
+      label: "Shared Factory Echo",
+      description: "Echo input.",
+      parameters: Type.Object({ input: Type.String() }),
+      async execute(_toolCallId: string, params: { input?: unknown }) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: typeof params.input === "string" ? params.input : "",
+            },
+          ],
+          details: undefined,
+        };
+      },
+    });
+    const entry = defineToolPlugin({
+      id: "frozen-shared-factory-tools",
+      name: "Frozen Shared Factory Tools",
+      description: "Frozen shared factory tool demo.",
+      tools: (tool) => [
+        tool({
+          name: "shared_factory_echo",
+          description: "Echo input.",
+          parameters: Type.Object({ input: Type.String() }),
+          terminalResultFallback: { mode: "safe_text", prefix: "Echo:" },
+          factory: () => sharedTool,
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "frozen-shared-factory-tools" });
+    const registerTool = vi.fn();
+    captured.api.registerTool = registerTool as typeof captured.api.registerTool;
+
+    entry.register(captured.api);
+
+    const factory = registerTool.mock.calls[0]?.[0] as () => typeof sharedTool & {
+      terminalResultFallback?: { mode: string; prefix?: string };
+    };
+    const factoryTool = factory();
+    expect(factoryTool).not.toBe(sharedTool);
+    expect(sharedTool).not.toHaveProperty("terminalResultFallback");
+    expect(factoryTool.terminalResultFallback).toEqual({
+      mode: "safe_text",
+      prefix: "Echo:",
+    });
+    await expect(factoryTool.execute("call-1", { input: "hello" })).resolves.toMatchObject({
+      content: [{ type: "text", text: "hello" }],
+    });
+  });
+
   it("preserves class-backed factory tools when applying terminal fallbacks", async () => {
     class ClassBackedTool {
       readonly #prefix = "class";
@@ -532,7 +585,8 @@ describe("defineToolPlugin", () => {
     const factoryTool = factory() as ClassBackedTool & {
       terminalResultFallback?: { mode: string; prefix?: string };
     };
-    expect(factoryTool).toBe(createdTool);
+    expect(factoryTool).not.toBe(createdTool);
+    expect(createdTool).not.toHaveProperty("terminalResultFallback");
     expect(factoryTool).toBeInstanceOf(ClassBackedTool);
     expect(factoryTool.name).toBe("factory_echo");
     expect(typeof factoryTool.execute).toBe("function");

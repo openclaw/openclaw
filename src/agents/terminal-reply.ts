@@ -40,11 +40,15 @@ export function normalizeGenericTerminalToolResultText(
     return undefined;
   }
   const redacted = redactToolPayloadText(normalized);
-  if (redacted.length <= maxChars) {
+  const boundedMaxChars = Number.isFinite(maxChars)
+    ? Math.max(0, Math.floor(maxChars))
+    : DEFAULT_GENERIC_TERMINAL_TOOL_RESULT_MAX_CHARS;
+  if (boundedMaxChars === 0) {
+    return undefined;
+  }
+  if (redacted.length <= boundedMaxChars) {
     return redacted;
   }
-  return `${redacted.slice(
-    0,
-    Math.max(0, maxChars - GENERIC_TERMINAL_TOOL_RESULT_TRUNCATED_SUFFIX.length),
-  )}${GENERIC_TERMINAL_TOOL_RESULT_TRUNCATED_SUFFIX}`;
+  const suffix = GENERIC_TERMINAL_TOOL_RESULT_TRUNCATED_SUFFIX.slice(0, boundedMaxChars);
+  return `${redacted.slice(0, Math.max(0, boundedMaxChars - suffix.length))}${suffix}`;
 }

@@ -4537,9 +4537,7 @@ async function runEmbeddedAgentInternal(
             "end_turn",
             "stop",
           ].includes(finalAssistantStopReasonForTerminalPayloads);
-          const finalAssistantTerminalText = (
-            finalAssistantVisibleText ?? finalAssistantRawText
-          )?.trim();
+          const finalAssistantTerminalText = finalAssistantVisibleText?.trim();
           const hasCurrentAttemptToolActivity =
             currentAttemptToolLoopObservations.length > 0 ||
             attempt.toolMetas.length > 0 ||
@@ -4548,6 +4546,7 @@ async function runEmbeddedAgentInternal(
             (attempt.itemLifecycle?.activeCount ?? 0) > 0;
           const finalAssistantTextTerminalPayloads =
             !renderedTerminalPayloads &&
+            canUseAttemptTerminalFallback &&
             hasCompletedAssistantForTerminalPayloads &&
             finalAssistantTerminalText &&
             !hasAsyncTaskProgressPlaceholderText(attempt)
@@ -4556,6 +4555,7 @@ async function runEmbeddedAgentInternal(
           const completedAssistantTextTerminalPayloads =
             finalAssistantTextTerminalPayloads ??
             (!renderedTerminalPayloads &&
+            canUseAttemptTerminalFallback &&
             hasCompletedAssistantForTerminalPayloads &&
             !hasCurrentAttemptToolActivity &&
             !isPlanningOnlyAssistantText(attempt.assistantTexts) &&

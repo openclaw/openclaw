@@ -13,4 +13,10 @@ describe("generic terminal tool result text", () => {
 
     expect(normalized).toBe("xxx\n...[truncated]");
   });
+
+  it.each([0, 1, 5, 14])("never exceeds a small maxChars limit of %s", (maxChars) => {
+    const normalized = normalizeGenericTerminalToolResultText("x".repeat(20), maxChars);
+
+    expect(normalized?.length ?? 0).toBeLessThanOrEqual(maxChars);
+  });
 });
