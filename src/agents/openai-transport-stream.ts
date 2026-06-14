@@ -2208,7 +2208,8 @@ export function buildOpenAIResponsesParams(
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
-  const policyAllowsReplayIds = payloadPolicy.explicitStore !== false;
+  const policyAllowsReplayIds =
+    payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
   const replayResponsesItemIds =
     !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   const messages = convertResponsesMessages(

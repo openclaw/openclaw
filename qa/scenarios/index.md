@@ -4,7 +4,8 @@ Single source of truth for repo-backed QA suite bootstrap data.
 `qa-lab` should treat this directory as a generic markdown scenario pack:
 
 - `index.md` defines pack-level bootstrap data
-- each nested `*.md` scenario defines one runnable test via `qa-scenario` + `qa-flow`
+- each nested `*.md` scenario defines one evidence scenario via `qa-scenario`
+- flow scenarios add `qa-flow`; Vitest and Playwright scenarios use `execution.path`
 - scenario markdown may also define coverage IDs, category metadata, required plugins,
   lane filters, runtime parity tiers, and gateway config patching
 
@@ -20,6 +21,10 @@ Coverage tracking:
 - prefer reusing an existing feature ID over minting a scenario-shaped ID
 - avoid copying the scenario title into coverage IDs
 - use `pnpm openclaw qa coverage` to render the current inventory
+- use `execution.kind: vitest` or `execution.kind: playwright` plus `execution.path`
+  for test files that provide evidence without a `qa-flow` block
+- run Vitest and Playwright scenarios with
+  `pnpm openclaw qa suite --scenario <scenario-id>`
 - use `runtimeParityTier` for runtime-pair gate membership: `standard`,
   `optional`, `live-only`, or `soak`
 - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid

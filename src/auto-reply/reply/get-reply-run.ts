@@ -69,6 +69,7 @@ import type { InlineDirectives } from "./directive-handling.js";
 import { isSystemEventProvider } from "./effective-reply-route.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
+import type { ReplySessionBinding } from "./get-reply.types.js";
 import {
   buildDirectChatContext,
   buildGroupChatContext,
@@ -119,6 +120,7 @@ type InternalGetReplyOptions = GetReplyOptions & {
    * can differ from abortSignal when dispatch temporarily borrows an active lane.
    */
   queuedFollowupAbortSignal?: AbortSignal;
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -820,6 +822,7 @@ export async function runPreparedReply(
         sessionKey,
         isMainSession,
         isNewSession,
+        suppressHeartbeatOwnedEvents: isHeartbeat,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
@@ -949,6 +952,11 @@ export async function runPreparedReply(
           }).existing ?? sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
+    internalOpts?.onSessionPrepared?.({
+      sessionKey,
+      sessionId: latestSessionId,
+      storePath,
+    });
     return {
       sessionEntry: latestSessionEntry,
       sessionId: latestSessionId,
@@ -1339,8 +1347,7 @@ export async function runPreparedReply(
           : {}),
       },
       timeoutMs,
-      runTimeoutOverrideMs:
-        opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
+      runTimeoutOverrideMs: opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance,
