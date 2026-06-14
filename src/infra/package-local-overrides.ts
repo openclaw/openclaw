@@ -78,6 +78,32 @@ async function packageRootExists(packageRoot: string): Promise<boolean> {
   }
 }
 
+type LocalOverridePackageRootIdentity = {
+  realPath: string;
+  device: bigint;
+  inode: bigint;
+};
+
+async function readLocalOverridePackageRootIdentity(
+  packageRoot: string,
+): Promise<LocalOverridePackageRootIdentity> {
+  const realPath = await fs.realpath(packageRoot);
+  const stats = await fs.stat(realPath, { bigint: true });
+  if (!stats.isDirectory()) {
+    throw new Error(`local override package root is not a directory: ${packageRoot}`);
+  }
+  return { realPath, device: stats.dev, inode: stats.ino };
+}
+
+function isSameLocalOverridePackageRoot(
+  left: LocalOverridePackageRootIdentity,
+  right: LocalOverridePackageRootIdentity,
+): boolean {
+  return (
+    left.realPath === right.realPath && left.device === right.device && left.inode === right.inode
+  );
+}
+
 function isMissingPathError(error: unknown): boolean {
   return ["ENOENT", "ENOTDIR", "not-found"].includes((error as NodeJS.ErrnoException).code ?? "");
 }
@@ -265,6 +291,19 @@ async function copyFileWithMode(source: string, destination: string, mode?: numb
 
 type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
 
+class LocalOverrideRollbackError extends Error {
+  constructor(
+    readonly relativePath: string,
+    readonly action: string,
+    readonly rollbackError: unknown,
+  ) {
+    super(
+      `local override rollback failed for ${relativePath}: ${formatErrorMessage(rollbackError)}`,
+    );
+    this.name = "LocalOverrideRollbackError";
+  }
+}
+
 function createLocalOverrideMutationPath(relativePath: string, label: string): string {
   const normalized = normalizeDistPath(relativePath);
   return path.posix.join(
@@ -327,6 +366,32 @@ async function restoreMovedLocalOverrideTarget(params: {
   await params.packageFs.remove(params.movedPath);
 }
 
+async function throwAfterRestoringMovedLocalOverrideTarget(params: {
+  packageFs: LocalOverridePackageRoot;
+  movedPath: string;
+  relativePath: string;
+  originalError: unknown;
+  removeMovedAfterFailedRestore: boolean;
+}): Promise<never> {
+  try {
+    await restoreMovedLocalOverrideTarget({
+      packageFs: params.packageFs,
+      movedPath: params.movedPath,
+      relativePath: params.relativePath,
+    });
+  } catch (rollbackError) {
+    if (params.removeMovedAfterFailedRestore) {
+      await params.packageFs.remove(params.movedPath).catch(() => undefined);
+    }
+    throw new LocalOverrideRollbackError(
+      params.relativePath,
+      "restore current target",
+      rollbackError,
+    );
+  }
+  throw params.originalError;
+}
+
 async function removeLocalOverrideCleanupPath(
   packageFs: LocalOverridePackageRoot,
   relativePath: string,
@@ -366,11 +431,13 @@ async function moveExpectedLocalOverrideTarget(params: {
     return { movedPath, content: moved.buffer, mode };
   } catch (error) {
     if (targetMoved) {
-      await restoreMovedLocalOverrideTarget({
+      await throwAfterRestoringMovedLocalOverrideTarget({
         packageFs: params.packageFs,
         movedPath,
         relativePath: params.relativePath,
-      }).catch(() => undefined);
+        originalError: error,
+        removeMovedAfterFailedRestore: false,
+      });
     }
     throw error;
   }
@@ -437,16 +504,13 @@ async function replaceLocalOverrideTarget(params: {
     return cleanupPaths;
   } catch (error) {
     if (movedPath && !committed) {
-      const restored = await restoreMovedLocalOverrideTarget({
+      await throwAfterRestoringMovedLocalOverrideTarget({
         packageFs: params.packageFs,
         movedPath,
         relativePath: params.relativePath,
-      })
-        .then(() => true)
-        .catch(() => false);
-      if (!restored && backupWritten) {
-        await params.packageFs.remove(movedPath).catch(() => undefined);
-      }
+        originalError: error,
+        removeMovedAfterFailedRestore: backupWritten,
+      });
     }
     throw error;
   } finally {
@@ -477,17 +541,13 @@ async function deleteLocalOverrideTarget(params: {
     backupWritten = true;
     await params.packageFs.remove(moved.movedPath);
   } catch (error) {
-    const restored = await restoreMovedLocalOverrideTarget({
+    await throwAfterRestoringMovedLocalOverrideTarget({
       packageFs: params.packageFs,
       movedPath: moved.movedPath,
       relativePath: params.relativePath,
-    })
-      .then(() => true)
-      .catch(() => false);
-    if (!restored && backupWritten) {
-      await params.packageFs.remove(moved.movedPath).catch(() => undefined);
-    }
-    throw error;
+      originalError: error,
+      removeMovedAfterFailedRestore: backupWritten,
+    });
   }
 }
 
@@ -926,6 +986,23 @@ async function preflightLocalOverrides(params: {
   return conflicts;
 }
 
+function localOverridePackageRootConflict(
+  plan: LocalPackageOverridesPlan,
+): LocalPackageOverridesResult {
+  return {
+    ...plan.result,
+    status: "conflict",
+    applied: 0,
+    conflicts: plan.changes.map((change) => ({
+      path: change.path,
+      reason: "target-inspection-failed" as const,
+    })),
+    warnings: [
+      "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
+    ],
+  };
+}
+
 export async function applyLocalPackageOverrides(params: {
   packageRoot: string;
   plan: LocalPackageOverridesPlan | null;
@@ -946,24 +1023,15 @@ export async function applyLocalPackageOverrides(params: {
     };
   }
 
-  const realPackageRoot = await fs.realpath(params.packageRoot).catch(() => null);
-  if (!realPackageRoot) {
-    return {
-      ...params.plan.result,
-      status: "conflict",
-      applied: 0,
-      conflicts: params.plan.changes.map((change) => ({
-        path: change.path,
-        reason: "target-inspection-failed" as const,
-      })),
-      warnings: [
-        "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-      ],
-    };
+  const packageRootIdentity = await readLocalOverridePackageRootIdentity(params.packageRoot).catch(
+    () => null,
+  );
+  if (!packageRootIdentity) {
+    return localOverridePackageRootConflict(params.plan);
   }
   const conflicts = await preflightLocalOverrides({
     packageRoot: params.packageRoot,
-    realPackageRoot,
+    realPackageRoot: packageRootIdentity.realPath,
     plan: params.plan,
   });
   const conflictPaths = new Set(conflicts.map((conflict) => conflict.path));
@@ -1013,6 +1081,15 @@ export async function applyLocalPackageOverrides(params: {
       mkdir: true,
       symlinks: "reject",
     });
+    const openedPackageRootIdentity = await readLocalOverridePackageRootIdentity(
+      packageFs.rootReal,
+    ).catch(() => null);
+    if (
+      !openedPackageRootIdentity ||
+      !isSameLocalOverridePackageRoot(packageRootIdentity, openedPackageRootIdentity)
+    ) {
+      return localOverridePackageRootConflict(params.plan);
+    }
     rollbackDir = await fs.mkdtemp(path.join(params.plan.recoveryDir, "rollback-"));
     for (const change of changesToApply) {
       const backupPath = path.join(rollbackDir, change.path);
@@ -1064,13 +1141,16 @@ export async function applyLocalPackageOverrides(params: {
       }
       applied += 1;
     }
-  } catch {
+  } catch (applyError) {
     const rollbackFailures = new Map<string, string[]>();
     const recordRollbackFailure = (relativePath: string, action: string, error: unknown) => {
       const messages = rollbackFailures.get(relativePath) ?? [];
       messages.push(`${action}: ${formatErrorMessage(error)}`);
       rollbackFailures.set(relativePath, messages);
     };
+    if (applyError instanceof LocalOverrideRollbackError) {
+      recordRollbackFailure(applyError.relativePath, applyError.action, applyError.rollbackError);
+    }
     for (const entry of rollbackEntries.toReversed()) {
       if (entry.cleanupPaths && packageFs) {
         for (const cleanupPath of entry.cleanupPaths) {

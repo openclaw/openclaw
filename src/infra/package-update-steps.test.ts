@@ -238,6 +238,57 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
+  it("does not reapply added overrides after the package root changes", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-root-swap-" }, async (base) => {
+      const packageRoot = path.join(base, "package");
+      const replacementRoot = path.join(base, "replacement");
+      const preservedRoot = path.join(base, "preserved");
+      const addedPath = path.join(packageRoot, "dist", "local.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(addedPath, "export const local = true;\n", "utf8");
+
+      const plan = await captureLocalPackageOverrides({ packageRoot });
+      expect(plan).not.toBeNull();
+      await writePackageRoot(packageRoot, "2.0.0");
+      await fs.rm(addedPath);
+      await writePackageDistInventory(packageRoot);
+      await writePackageRoot(replacementRoot, "2.0.0");
+
+      const realRealpath = fs.realpath.bind(fs);
+      let rootChanged = false;
+      const realpathSpy = vi
+        .spyOn(fs, "realpath")
+        .mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
+          const result = await realRealpath(...args);
+          if (!rootChanged && String(args[0]) === path.join(packageRoot, "dist")) {
+            rootChanged = true;
+            await fs.rename(packageRoot, preservedRoot);
+            await fs.rename(replacementRoot, packageRoot);
+          }
+          return result;
+        });
+
+      try {
+        const result = await applyLocalPackageOverrides({
+          packageRoot,
+          plan,
+          reapply: true,
+        });
+
+        expect(rootChanged).toBe(true);
+        expect(result.status).toBe("conflict");
+        expect(result.applied).toBe(0);
+        expect(result.conflicts).toEqual([
+          { path: "dist/local.js", reason: "target-inspection-failed" },
+        ]);
+        await expectPathMissing(path.join(packageRoot, "dist", "local.js"));
+        await expectPathMissing(path.join(preservedRoot, "dist", "local.js"));
+      } finally {
+        realpathSpy.mockRestore();
+      }
+    });
+  });
+
   it.runIf(process.platform !== "win32").each([
     ["modified", "outside"],
     ["deleted", "outside"],
@@ -3599,6 +3650,132 @@ describe("runGlobalPackageUpdateSteps", () => {
         __setFsSafeTestHooksForTest(undefined);
       }
     });
+  });
+
+  it("preserves rollback data when a current replacement cannot restore", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-current-restore-" },
+      async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await writePackageRoot(packageRoot, "2.0.0");
+
+        const realLink = fs.link.bind(fs);
+        let indexLinkAttempts = 0;
+        const linkSpy = vi
+          .spyOn(fs, "link")
+          .mockImplementation(async (...args: Parameters<typeof fs.link>) => {
+            if (String(args[1]) === indexPath) {
+              indexLinkAttempts += 1;
+              throw createFsError(
+                indexLinkAttempts === 1 ? "EIO" : "EACCES",
+                indexLinkAttempts === 1
+                  ? "replacement publish failed"
+                  : "replacement restore failed",
+              );
+            }
+            return await realLink(...args);
+          });
+
+        try {
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(indexLinkAttempts).toBe(2);
+          expect(result.status).toBe("error");
+          expect(result.applied).toBe(0);
+          expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "rollback-failed" }]);
+          expect(result.warnings.join("\n")).toContain("Rollback failed for dist/index.js");
+          await expectPathMissing(indexPath);
+          const recoveryDir = result.recoveryDir ?? "";
+          const rollbackDir = (await fs.readdir(recoveryDir)).find((entry) =>
+            entry.startsWith("rollback-"),
+          );
+          expect(rollbackDir).toBeDefined();
+          await expect(
+            fs.readFile(path.join(recoveryDir, rollbackDir ?? "", "dist/index.js"), "utf8"),
+          ).resolves.toBe("export {};\n");
+        } finally {
+          linkSpy.mockRestore();
+        }
+      },
+    );
+  });
+
+  it("preserves rollback data when a current deletion cannot restore", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-current-delete-restore-" },
+      async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.rm(indexPath);
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await writePackageRoot(packageRoot, "2.0.0");
+
+        let deleteCleanupFailed = false;
+        __setFsSafeTestHooksForTest({
+          beforeRootFallbackMutation: (operation, targetPath) => {
+            if (
+              !deleteCleanupFailed &&
+              operation === "remove" &&
+              targetPath.includes(`${path.sep}.openclaw-override-previous-`)
+            ) {
+              deleteCleanupFailed = true;
+              throw createFsError("EIO", "deletion cleanup failed");
+            }
+          },
+        });
+        const realLink = fs.link.bind(fs);
+        let restoreAttempts = 0;
+        const linkSpy = vi
+          .spyOn(fs, "link")
+          .mockImplementation(async (...args: Parameters<typeof fs.link>) => {
+            if (deleteCleanupFailed && String(args[1]) === indexPath) {
+              restoreAttempts += 1;
+              throw createFsError("EACCES", "deletion restore failed");
+            }
+            return await realLink(...args);
+          });
+
+        try {
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(deleteCleanupFailed).toBe(true);
+          expect(restoreAttempts).toBe(1);
+          expect(result.status).toBe("error");
+          expect(result.applied).toBe(0);
+          expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "rollback-failed" }]);
+          expect(result.warnings.join("\n")).toContain("Rollback failed for dist/index.js");
+          await expectPathMissing(indexPath);
+          const recoveryDir = result.recoveryDir ?? "";
+          const rollbackDir = (await fs.readdir(recoveryDir)).find((entry) =>
+            entry.startsWith("rollback-"),
+          );
+          expect(rollbackDir).toBeDefined();
+          await expect(
+            fs.readFile(path.join(recoveryDir, rollbackDir ?? "", "dist/index.js"), "utf8"),
+          ).resolves.toBe("export {};\n");
+        } finally {
+          linkSpy.mockRestore();
+          __setFsSafeTestHooksForTest(undefined);
+        }
+      },
+    );
   });
 
   it("reports and preserves rollback data when reapply rollback is incomplete", async () => {
