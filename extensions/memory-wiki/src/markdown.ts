@@ -417,11 +417,14 @@ function normalizeMarkdownLines(markdown: string): string[] {
 }
 
 function hasGeneratedWrapperLines(lines: string[], patterns: RegExp[]): boolean {
-  if (!patterns[0]?.test(lines[0] ?? "")) {
+  const firstWrapperLineIndex = lines.findIndex(
+    (line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER,
+  );
+  if (firstWrapperLineIndex === -1 || !patterns[0]?.test(lines[firstWrapperLineIndex] ?? "")) {
     return false;
   }
   const remainingLines = lines
-    .slice(1)
+    .slice(firstWrapperLineIndex + 1)
     .filter((line) => line.trim().length > 0 && line.trim() !== WIKI_RAW_SOURCE_MARKER);
   if (patterns[1] && !patterns[1].test(remainingLines[0] ?? "")) {
     return false;
@@ -573,9 +576,7 @@ export function toWikiPageSummary(params: {
     (typeof parsed.frontmatter.title === "string" && parsed.frontmatter.title.trim()) ||
     extractTitleFromMarkdown(parsed.body) ||
     path.basename(params.relativePath, ".md");
-  const generatedSourceBody = parsed.hasFrontmatter
-    ? undefined
-    : detectGeneratedSourceBody(params.raw);
+  const generatedSourceBody = detectGeneratedSourceBody(parsed.body);
   const importedSourceBody =
     generatedSourceBody === "bridge" || generatedSourceBody === "unsafe-local"
       ? generatedSourceBody

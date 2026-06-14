@@ -104,8 +104,8 @@ describe("lintMemoryWikiVault", () => {
     expect(nativeFrontmatterIssueCodes).not.toContain("missing-id");
     expect(nativeFrontmatterIssueCodes).not.toContain("missing-page-type");
     expect(nativeFrontmatterIssueCodes).not.toContain("stale-page");
-    expect(nativeFrontmatterIssueCodes).not.toContain("duplicate-id");
-    expect(issueCodesForPath(result, "sources/raw-native-frontmatter-copy.md")).not.toContain(
+    expect(nativeFrontmatterIssueCodes).toContain("duplicate-id");
+    expect(issueCodesForPath(result, "sources/raw-native-frontmatter-copy.md")).toContain(
       "duplicate-id",
     );
   });
@@ -264,6 +264,33 @@ describe("lintMemoryWikiVault", () => {
       "utf8",
     );
     await fs.writeFile(
+      path.join(rootDir, "sources", "local-file-partial-frontmatter.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          id: "source.partial",
+          title: "Partial Source",
+        },
+        body: [
+          WIKI_RAW_SOURCE_MARKER,
+          "",
+          "# Local File Source",
+          "",
+          "## Source",
+          "- Type: `local-file`",
+          "- Path: `/tmp/source.md`",
+          "",
+          "## Content",
+          "source body",
+          "",
+          "## Notes",
+          "<!-- openclaw:human:start -->",
+          "<!-- openclaw:human:end -->",
+          "",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
       path.join(rootDir, "sources", "chatgpt-export.md"),
       [
         "# ChatGPT Export: Alpha",
@@ -288,6 +315,9 @@ describe("lintMemoryWikiVault", () => {
 
     expect(issueCodesForPath(result, "sources/local-file.md")).toEqual(
       expect.arrayContaining(["missing-id", "missing-page-type", "stale-page"]),
+    );
+    expect(issueCodesForPath(result, "sources/local-file-partial-frontmatter.md")).toEqual(
+      expect.arrayContaining(["missing-page-type", "stale-page"]),
     );
     expect(issueCodesForPath(result, "sources/chatgpt-export.md")).toEqual(
       expect.arrayContaining(["missing-id", "missing-page-type", "stale-page"]),

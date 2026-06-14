@@ -184,6 +184,54 @@ describe("toWikiPageSummary", () => {
         "",
       ].join("\n"),
     });
+    const leadingMarkedLocalFileSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/local-leading-marked-alpha.md",
+      relativePath: "sources/local-leading-marked-alpha.md",
+      raw: [
+        WIKI_RAW_SOURCE_MARKER,
+        "",
+        "# Alpha",
+        "",
+        "## Source",
+        "- Type: `local-file`",
+        "- Path: `/tmp/source.md`",
+        "",
+        "## Content",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    const partialFrontmatterLocalFileSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/local-partial-frontmatter-alpha.md",
+      relativePath: "sources/local-partial-frontmatter-alpha.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          id: "source.partial",
+          title: "Partial Source",
+        },
+        body: [
+          WIKI_RAW_SOURCE_MARKER,
+          "",
+          "# Alpha",
+          "",
+          "## Source",
+          "- Type: `local-file`",
+          "- Path: `/tmp/source.md`",
+          "",
+          "## Content",
+          "alpha",
+          "",
+          "## Notes",
+          "<!-- openclaw:human:start -->",
+          "<!-- openclaw:human:end -->",
+          "",
+        ].join("\n"),
+      }),
+    });
     const chatGptSource = toWikiPageSummary({
       absolutePath: "/tmp/wiki/sources/chatgpt-alpha.md",
       relativePath: "sources/chatgpt-alpha.md",
@@ -260,6 +308,10 @@ describe("toWikiPageSummary", () => {
     expect(localFileSource?.generatedSourceBody).toBe("local-file");
     expect(markedLocalFileSource?.generatedSourceBody).toBe("local-file");
     expect(markedLocalFileSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(leadingMarkedLocalFileSource?.generatedSourceBody).toBe("local-file");
+    expect(leadingMarkedLocalFileSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(partialFrontmatterLocalFileSource?.generatedSourceBody).toBe("local-file");
+    expect(partialFrontmatterLocalFileSource?.unmanagedRawSourceBody).toBeUndefined();
     expect(chatGptSource?.generatedSourceBody).toBe("chatgpt-export");
     expect(structuredSource?.hasFrontmatter).toBe(true);
     expect(structuredSource?.importedSourceBody).toBeUndefined();

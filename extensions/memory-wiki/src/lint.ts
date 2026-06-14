@@ -116,11 +116,9 @@ function collectPageIssues(
         });
       }
     } else {
-      if (requiresStructuredPageMetadata) {
-        const current = pagesById.get(page.id) ?? [];
-        current.push(page);
-        pagesById.set(page.id, current);
-      }
+      const current = pagesById.get(page.id) ?? [];
+      current.push(page);
+      pagesById.set(page.id, current);
     }
 
     if (!page.pageType) {
