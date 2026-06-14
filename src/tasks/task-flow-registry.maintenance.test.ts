@@ -99,11 +99,13 @@ describe("task-flow-registry maintenance", () => {
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 1,
         pruned: 0,
+        expired: 0,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 1,
         pruned: 0,
+        expired: 0,
       });
       const storedFlow = getTaskFlowById(flow.flowId);
       if (!storedFlow) {
@@ -131,11 +133,13 @@ describe("task-flow-registry maintenance", () => {
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
         pruned: 1,
+        expired: 0,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
         pruned: 1,
+        expired: 0,
       });
       expect(getTaskFlowById(oldFlow.flowId)).toBeUndefined();
     });
@@ -157,11 +161,13 @@ describe("task-flow-registry maintenance", () => {
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 1,
         pruned: 0,
+        expired: 0,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 1,
         pruned: 0,
+        expired: 0,
       });
       const storedFlow = getTaskFlowById(flow.flowId);
       if (!storedFlow) {
@@ -212,11 +218,13 @@ describe("task-flow-registry maintenance", () => {
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
         pruned: 0,
+        expired: 0,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
         pruned: 0,
+        expired: 0,
       });
       const storedFlow = getTaskFlowById(flow.flowId);
       if (!storedFlow) {
@@ -267,15 +275,144 @@ describe("task-flow-registry maintenance", () => {
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
         pruned: 25,
+        expired: 0,
       });
 
       expect(await runTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
         pruned: 25,
+        expired: 0,
       });
 
       const remainingFlowIds = new Set(listTaskFlowRecords().map((flow) => flow.flowId));
       expect(remainingFlowIds).toEqual(new Set([fresh.flowId, running.flowId]));
+    });
+  });
+
+  it("expires waiting flows older than 5 minutes", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const now = Date.now();
+      const stuckFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Waiting for approval",
+        status: "waiting",
+        createdAt: now - 6 * 60_000,
+        updatedAt: now - 6 * 60_000,
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+        expired: 1,
+      });
+
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+        expired: 1,
+      });
+      const storedFlow = getTaskFlowById(stuckFlow.flowId);
+      if (!storedFlow) {
+        throw new Error("Expected expired waiting flow to remain registered");
+      }
+      expect(storedFlow.flowId).toBe(stuckFlow.flowId);
+      expect(storedFlow.status).toBe("lost");
+    });
+  });
+
+  it("does not expire waiting flows younger than 5 minutes", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const now = Date.now();
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Waiting for approval — fresh",
+        status: "waiting",
+        createdAt: now - 2 * 60_000,
+        updatedAt: now - 2 * 60_000,
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+        expired: 0,
+      });
+
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+        expired: 0,
+      });
+    });
+  });
+
+  it("does not expire non-waiting flows", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const now = Date.now();
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Running flow",
+        status: "running",
+        createdAt: now - 10 * 60_000,
+        updatedAt: now - 10 * 60_000,
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+        expired: 0,
+      });
+
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+        expired: 0,
+      });
+    });
+  });
+
+  it("expires multiple stuck waiting flows from different sessions", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const now = Date.now();
+      for (let index = 0; index < 10; index += 1) {
+        createManagedTaskFlow({
+          ownerKey: `agent:main:${index}`,
+          controllerId: "tests/task-flow-maintenance",
+          goal: `Waiting flow ${index}`,
+          status: "waiting",
+          createdAt: now - 10 * 60_000 - index * 1000,
+          updatedAt: now - 10 * 60_000 - index * 1000,
+        });
+      }
+
+      const freshWaiting = createManagedTaskFlow({
+        ownerKey: "agent:main:fresh",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Fresh waiting flow",
+        status: "waiting",
+        createdAt: now - 2 * 60_000,
+        updatedAt: now - 2 * 60_000,
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+        expired: 10,
+      });
+
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        pruned: 0,
+        expired: 10,
+      });
+
+      const storedFreshFlow = getTaskFlowById(freshWaiting.flowId);
+      if (!storedFreshFlow) {
+        throw new Error("Expected fresh waiting flow to remain registered");
+      }
+      expect(storedFreshFlow.status).toBe("waiting");
     });
   });
 });

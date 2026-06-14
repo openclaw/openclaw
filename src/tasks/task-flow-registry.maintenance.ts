@@ -15,10 +15,14 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 const TASK_FLOW_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
+/** Maximum time a flow may remain in `waiting` status before it is expired. */
+const WAITING_FLOW_EXPIRY_MS = 5 * 60_000;
+
 /** Counts task-flow registry maintenance actions without exposing individual records. */
 export type TaskFlowRegistryMaintenanceSummary = {
   reconciled: number;
   pruned: number;
+  expired: number;
 };
 
 function isTerminalFlow(flow: TaskFlowRecord): boolean {
@@ -49,6 +53,43 @@ function shouldPruneFlow(flow: TaskFlowRecord, now: number): boolean {
     return false;
   }
   return now - resolveTerminalAt(flow) >= TASK_FLOW_RETENTION_MS;
+}
+
+function shouldExpireWaitingFlow(flow: TaskFlowRecord, now: number): boolean {
+  if (flow.status !== "waiting") {
+    return false;
+  }
+  return now - flow.updatedAt >= WAITING_FLOW_EXPIRY_MS;
+}
+
+function expireWaitingFlow(flow: TaskFlowRecord, now: number): boolean {
+  let current = flow;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const endedAt = Math.max(now, current.updatedAt);
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: current.flowId,
+      expectedRevision: current.revision,
+      patch: {
+        status: "lost",
+        blockedTaskId: null,
+        blockedSummary: null,
+        waitJson: null,
+        endedAt,
+        updatedAt: endedAt,
+      },
+    });
+    if (result.applied) {
+      return true;
+    }
+    if (result.reason === "not_found" || !result.current) {
+      return false;
+    }
+    current = result.current;
+    if (!shouldExpireWaitingFlow(current, now)) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function shouldFinalizeCancelledFlow(flow: TaskFlowRecord): boolean {
@@ -133,9 +174,14 @@ export function previewTaskFlowRegistryMaintenance(): TaskFlowRegistryMaintenanc
   const now = Date.now();
   let reconciled = 0;
   let pruned = 0;
+  let expired = 0;
   for (const flow of listTaskFlowRecords()) {
     if (shouldRepairTerminalMirroredFlowTimestamp(flow)) {
       reconciled += 1;
+      continue;
+    }
+    if (shouldExpireWaitingFlow(flow, now)) {
+      expired += 1;
       continue;
     }
     if (shouldFinalizeCancelledFlow(flow)) {
@@ -146,13 +192,14 @@ export function previewTaskFlowRegistryMaintenance(): TaskFlowRegistryMaintenanc
       pruned += 1;
     }
   }
-  return { reconciled, pruned };
+  return { reconciled, pruned, expired };
 }
 
 export async function runTaskFlowRegistryMaintenance(): Promise<TaskFlowRegistryMaintenanceSummary> {
   const now = Date.now();
   let reconciled = 0;
   let pruned = 0;
+  let expired = 0;
   for (const flow of listTaskFlowRecords()) {
     const current = getTaskFlowById(flow.flowId);
     if (!current) {
@@ -161,6 +208,12 @@ export async function runTaskFlowRegistryMaintenance(): Promise<TaskFlowRegistry
     if (shouldRepairTerminalMirroredFlowTimestamp(current)) {
       if (repairTerminalMirroredFlowTimestamp(current)) {
         reconciled += 1;
+      }
+      continue;
+    }
+    if (shouldExpireWaitingFlow(current, now)) {
+      if (expireWaitingFlow(current, now)) {
+        expired += 1;
       }
       continue;
     }
@@ -174,5 +227,5 @@ export async function runTaskFlowRegistryMaintenance(): Promise<TaskFlowRegistry
       pruned += 1;
     }
   }
-  return { reconciled, pruned };
+  return { reconciled, pruned, expired };
 }
