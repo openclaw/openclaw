@@ -204,6 +204,19 @@ describe("resolveBundledStaticCatalogModel", () => {
     expect(model?.maxTokens).toBe(8192);
   });
 
+  it("can include bundled refreshable manifest catalog rows for read-only metadata fallbacks", () => {
+    setManifestPlugins([createMistralManifestPlugin({ discovery: "refreshable" })]);
+
+    const model = resolveBundledStaticCatalogModel({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: {},
+      includeRefreshableDiscovery: true,
+    });
+
+    expect(model?.maxTokens).toBe(8192);
+  });
+
   it("requires an exact provider and model match", () => {
     setManifestPlugins([createMistralManifestPlugin()]);
 

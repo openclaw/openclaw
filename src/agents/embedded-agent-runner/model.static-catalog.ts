@@ -255,6 +255,7 @@ type BundledProviderStaticCatalogResolverParams = {
  */
 export function createBundledStaticCatalogModelResolver(params?: {
   env?: NodeJS.ProcessEnv;
+  includeRefreshableDiscovery?: boolean;
   includeRuntimeDiscovery?: boolean;
 }): (lookup: BundledStaticCatalogLookup) => ProviderRuntimeModel | undefined {
   const bundledStaticPlugins = listBundledStaticCatalogPlugins(params?.env ?? process.env);
@@ -273,9 +274,11 @@ export function createBundledStaticCatalogModelResolver(params?: {
       plans.set(provider, plan);
     }
     for (const entry of plan.entries) {
+      const discovery = entry.discovery ?? "static";
       if (
-        entry.discovery !== "static" &&
-        !(params?.includeRuntimeDiscovery && entry.discovery === "runtime")
+        discovery !== "static" &&
+        !(discovery === "refreshable" && params?.includeRefreshableDiscovery === true) &&
+        !(discovery === "runtime" && params?.includeRuntimeDiscovery === true)
       ) {
         continue;
       }
@@ -300,11 +303,15 @@ export function resolveBundledStaticCatalogModel(
     cfg?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    includeRefreshableDiscovery?: boolean;
     includeRuntimeDiscovery?: boolean;
   },
 ): ProviderRuntimeModel | undefined {
   return createBundledStaticCatalogModelResolver({
     ...(params.env ? { env: params.env } : {}),
+    ...(params.includeRefreshableDiscovery !== undefined
+      ? { includeRefreshableDiscovery: params.includeRefreshableDiscovery }
+      : {}),
     ...(params.includeRuntimeDiscovery !== undefined
       ? { includeRuntimeDiscovery: params.includeRuntimeDiscovery }
       : {}),

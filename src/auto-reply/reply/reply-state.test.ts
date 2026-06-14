@@ -442,6 +442,15 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
     expect(resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 })).toBe(42_000);
   });
 
+  it("uses bundled opencode-go manifest limits for sync memory flush callers", () => {
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        provider: "opencode-go",
+        modelId: "mimo-v2.5-pro",
+      }),
+    ).toBe(1_048_576);
+  });
+
   it("uses provider-specific configured limits when the same model id exists on multiple providers", () => {
     const cfg = {
       models: {

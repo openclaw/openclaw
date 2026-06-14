@@ -89,6 +89,7 @@ describe("opencode-go provider plugin", () => {
       "glm-5.1",
       "hy3-preview",
       "kimi-k2.5",
+      "kimi-k2.7-code",
       "kimi-k2.6",
       "mimo-v2-omni",
       "mimo-v2.5",
@@ -125,13 +126,21 @@ describe("opencode-go provider plugin", () => {
     expect(deepSeekFlash.provider).toBe("opencode-go");
     expect(deepSeekFlash.name).toBe("DeepSeek V4 Flash");
 
-    const kimi = requireMapEntry(models, "kimi-k2.6");
+    const kimi = requireMapEntry(models, "kimi-k2.7-code");
     expect(kimi.api).toBe("openai-completions");
     expect(kimi.baseUrl).toBe("https://opencode.ai/zen/go/v1");
     expect(kimi.input).toEqual(["text", "image"]);
     expect(kimi.reasoning).toBe(true);
     expect(kimi.contextWindow).toBe(262_144);
-    expect(kimi.maxTokens).toBe(65_536);
+    expect(kimi.maxTokens).toBe(262_144);
+
+    const kimiK26 = requireMapEntry(models, "kimi-k2.6");
+    expect(kimiK26.api).toBe("openai-completions");
+    expect(kimiK26.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+    expect(kimiK26.input).toEqual(["text", "image"]);
+    expect(kimiK26.reasoning).toBe(true);
+    expect(kimiK26.contextWindow).toBe(262_144);
+    expect(kimiK26.maxTokens).toBe(262_144);
 
     const minimax = requireMapEntry(models, "minimax-m2.7");
     expect(minimax.api).toBe("anthropic-messages");
@@ -144,8 +153,8 @@ describe("opencode-go provider plugin", () => {
     expect(minimaxM3.api).toBe("anthropic-messages");
     expect(minimaxM3.baseUrl).toBe("https://opencode.ai/zen/go");
     expect(minimaxM3.reasoning).toBe(true);
-    expect(minimaxM3.contextWindow).toBe(204_800);
-    expect(minimaxM3.maxTokens).toBe(131_072);
+    expect(minimaxM3.contextWindow).toBe(512_000);
+    expect(minimaxM3.maxTokens).toBe(128_000);
 
     const mimoPro = requireMapEntry(models, "mimo-v2.5-pro");
     expect(mimoPro.api).toBe("openai-completions");
@@ -153,13 +162,13 @@ describe("opencode-go provider plugin", () => {
     expect(mimoPro.input).toEqual(["text"]);
     expect(mimoPro.reasoning).toBe(true);
     expect(mimoPro.contextWindow).toBe(1_048_576);
-    expect(mimoPro.maxTokens).toBe(128_000);
+    expect(mimoPro.maxTokens).toBe(131_072);
 
     const mimo = requireMapEntry(models, "mimo-v2.5");
     expect(mimo.input).toEqual(["text", "image"]);
     expect(mimo.reasoning).toBe(true);
-    expect(mimo.contextWindow).toBe(1_000_000);
-    expect(mimo.maxTokens).toBe(128_000);
+    expect(mimo.contextWindow).toBe(1_048_576);
+    expect(mimo.maxTokens).toBe(131_072);
 
     const qwenMax = requireMapEntry(models, "qwen3.7-max");
     expect(qwenMax.api).toBe("anthropic-messages");
@@ -175,6 +184,8 @@ describe("opencode-go provider plugin", () => {
     const qwenPlus = requireMapEntry(models, "qwen3.6-plus");
     expect(qwenPlus.api).toBe("anthropic-messages");
     expect(qwenPlus.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(qwenPlus.contextWindow).toBe(1_000_000);
+    expect(qwenPlus.maxTokens).toBe(65_536);
 
     const qwen37Plus = requireMapEntry(models, "qwen3.7-plus");
     expect(qwen37Plus.api).toBe("anthropic-messages");
@@ -182,12 +193,12 @@ describe("opencode-go provider plugin", () => {
     expect(qwen37Plus.input).toEqual(["text", "image"]);
     expect(qwen37Plus.reasoning).toBe(true);
     expect(qwen37Plus.contextWindow).toBe(1_000_000);
-    expect(qwen37Plus.maxTokens).toBe(65_536);
+    expect(qwen37Plus.maxTokens).toBe(64_000);
     expect(qwen37Plus.cost).toMatchObject({
-      input: 0.4,
-      output: 1.6,
-      cacheRead: 0.04,
-      cacheWrite: 0.5,
+      input: 0.5,
+      output: 3,
+      cacheRead: 0.05,
+      cacheWrite: 0.625,
     });
 
     const dynamicModel = requireRecord(
@@ -211,7 +222,7 @@ describe("opencode-go provider plugin", () => {
 
   it("loads OpenCode Go model discovery through the provider runtime", () => {
     expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
-    expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
+    expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("refreshable");
   });
 
   it("exposes the complete offline catalog through provider discovery", async () => {
@@ -397,6 +408,42 @@ describe("opencode-go provider plugin", () => {
     ]);
   });
 
+  it("strips unsupported Kimi K2.7 Code reasoning payloads on OpenCode Go", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      const payload = {
+        model: "kimi-k2.7-code",
+        reasoning_effort: "high",
+        reasoning: { effort: "high" },
+        reasoningEffort: "high",
+      };
+      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as never;
+    };
+
+    const streamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode-go",
+      modelId: "kimi-k2.7-code",
+      thinkingLevel: "high",
+    } as never);
+
+    expect(streamFn).toBeTypeOf("function");
+    await streamFn?.(
+      { provider: "opencode-go", id: "kimi-k2.7-code", api: "openai-completions" } as never,
+      {} as never,
+      {},
+    );
+
+    expect(capturedPayloads).toEqual([
+      {
+        model: "kimi-k2.7-code",
+      },
+    ]);
+  });
+
   it("canonicalizes stale OpenCode Go base URLs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -418,8 +465,8 @@ describe("opencode-go provider plugin", () => {
         provider: "opencode-go",
         model: {
           provider: "opencode-go",
-          id: "kimi-k2.5",
-          name: "Kimi K2.5",
+          id: "kimi-k2.6",
+          name: "Kimi K2.6",
           api: "openai-completions",
           baseUrl: "https://opencode.ai/go/v1",
           reasoning: true,

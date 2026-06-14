@@ -305,6 +305,17 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
+  it("uses bundled refreshable manifest context windows for sync provider lookups", () => {
+    const result = resolveContextTokensForModel({
+      provider: "opencode-go",
+      model: "mimo-v2.5-pro",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(1_048_576);
+  });
+
   it("uses provider-level context defaults when no model-level cap is set", () => {
     const result = resolveContextTokensForModel({
       cfg: {
