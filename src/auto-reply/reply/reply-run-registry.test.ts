@@ -281,6 +281,53 @@ describe("reply run registry", () => {
     }
   });
 
+  it("keeps follow-up admission blocked during an unsettled inter-block delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:mattermost:direct:user-1",
+        sessionId: "mattermost-delivery-session",
+        resetTriggered: false,
+      });
+      let settledDeliveryCount = 1;
+      const queuedDeliveryCount = 2;
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+      operation.completeWithAfterClearBarrier(new Promise<void>(() => {}), {
+        maxTimeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS * 3,
+        shouldExtend: () => settledDeliveryCount < queuedDeliveryCount,
+      });
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      expect(afterClear).not.toHaveBeenCalled();
+      expect(() =>
+        createReplyOperation({
+          sessionKey: "agent:main:mattermost:direct:user-1",
+          sessionId: "queued-followup",
+          resetTriggered: false,
+          respectFollowupAdmissionBarrier: true,
+        }),
+      ).toThrow();
+
+      settledDeliveryCount = 2;
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      await vi.waitFor(() => {
+        expect(afterClear).toHaveBeenCalledWith("mattermost-delivery-session");
+      });
+
+      const followup = createReplyOperation({
+        sessionKey: "agent:main:mattermost:direct:user-1",
+        sessionId: "admitted-followup",
+        resetTriggered: false,
+        respectFollowupAdmissionBarrier: true,
+      });
+      followup.complete();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("eventually releases a permanently hung delivery barrier at the default timeout", async () => {
     vi.useFakeTimers();
     try {

@@ -42,14 +42,14 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
 }
 
 describe("createMattermostReplyDeliveryBarrier", () => {
-  it("extends only while cache-miss DM resolution is active", async () => {
+  it("extends while direct deliveries or DM resolution remain unsettled", async () => {
     const barrier = createMattermostReplyDeliveryBarrier({ isDirect: true });
     const policy = barrier.resolveTimeoutPolicy({
       queuedCounts: { tool: 1, block: 0, final: 1 },
       humanDelayBudgetMs: 0,
     });
     expect(policy?.maxTimeoutMs).toBe(420_000);
-    expect(policy?.shouldExtend()).toBe(false);
+    expect(policy?.shouldExtend()).toBe(true);
 
     let resolveResolution: () => void = () => {};
     const resolution = new Promise<void>((resolve) => {
@@ -61,6 +61,12 @@ describe("createMattermostReplyDeliveryBarrier", () => {
     resolveResolution();
     await resolution;
     await Promise.resolve();
+    expect(policy?.shouldExtend()).toBe(true);
+
+    barrier.markDeliverySettled();
+    expect(policy?.shouldExtend()).toBe(true);
+
+    barrier.markDeliverySettled();
     expect(policy?.shouldExtend()).toBe(false);
   });
 

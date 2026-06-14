@@ -36,7 +36,6 @@ export function createMattermostReplyDeliveryBarrier(params: {
   dmRetryOptions?: CreateDmChannelRetryOptions;
 }) {
   let activeDmChannelResolutions = 0;
-  let failedDmChannelResolution = false;
   let queuedDeliveryCount = 0;
   let settledDeliveryCount = 0;
   return {
@@ -45,11 +44,9 @@ export function createMattermostReplyDeliveryBarrier(params: {
       void Promise.resolve(resolution).then(
         () => {
           activeDmChannelResolutions -= 1;
-          failedDmChannelResolution = false;
         },
         () => {
           activeDmChannelResolutions -= 1;
-          failedDmChannelResolution = true;
         },
       );
     },
@@ -74,8 +71,7 @@ export function createMattermostReplyDeliveryBarrier(params: {
       return {
         maxTimeoutMs,
         shouldExtend: () =>
-          activeDmChannelResolutions > 0 ||
-          (failedDmChannelResolution && settledDeliveryCount < queuedDeliveryCount),
+          activeDmChannelResolutions > 0 || settledDeliveryCount < queuedDeliveryCount,
       };
     },
   };
