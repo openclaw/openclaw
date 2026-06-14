@@ -1091,11 +1091,17 @@ describe("runBtwSideQuestion", () => {
       .mockReturnValue(makeAsyncEvents([createDoneEvent("Ollama Cloud answer.")]));
     registerProviderStreamForModelMock.mockReturnValue(providerStreamFn);
 
-    const result = await runSideQuestion({ provider: "ollama", model: "glm-5.1" });
+    const result = await runSideQuestion({
+      provider: "ollama",
+      model: "glm-5.1",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
 
     expect(result).toEqual({ text: "Ollama Cloud answer." });
     const registerParams = expectRecordFields(mockArg(registerProviderStreamForModelMock, 0, 0), {
       workspaceDir: "/tmp/workspace",
+      sessionId: "session-1",
+      sessionKey: DEFAULT_SESSION_KEY,
     });
     expectRecordFields(registerParams.model, {
       provider: "ollama",

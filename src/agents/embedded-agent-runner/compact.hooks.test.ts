@@ -1509,6 +1509,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: undefined,
       agentDir: "/tmp",
       effectiveWorkspace: "/tmp",
+      sessionId: "session-compact",
+      sessionKey: "agent:main:telegram:direct:user-1",
     });
 
     expect(result).toBe(streamFn);
@@ -1519,6 +1521,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expectRecordFields(streamRegistration, {
       agentDir: "/tmp",
       workspaceDir: "/tmp",
+      sessionId: "session-compact",
+      sessionKey: "agent:main:telegram:direct:user-1",
     });
     expectRecordFields(streamRegistration.model, {
       provider: "ollama",
