@@ -223,6 +223,7 @@ export function buildBuiltinChatCommands(
       textAlias: "/status",
       category: "status",
       tier: "essential",
+      acceptsArgs: true,
     }),
     defineChatCommand({
       key: "goal",
