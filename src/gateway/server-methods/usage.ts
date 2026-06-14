@@ -1145,8 +1145,9 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Sort by most recent first
     mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    // Apply limit
-    const limitedEntries = mergedEntries.slice(0, limit);
+    // Build a fast-lookup set of session keys for the page window so the aggregate
+    // loop can iterate all entries while only pushing per-session rows for the page.
+    const limitedKeys = new Set(mergedEntries.slice(0, limit).map((e) => e.key));
 
     // Load usage for each session
     const sessions: SessionUsageEntry[] = [];
@@ -1232,7 +1233,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
 
     const usageByEntryIndex: Array<SessionCostSummary | null> = Array.from(
-      { length: limitedEntries.length },
+      { length: mergedEntries.length },
       () => null,
     );
     const usageLoadTasks: Array<
@@ -1243,7 +1244,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       }>
     > = [];
 
-    for (const [entryIndex, merged] of limitedEntries.entries()) {
+    for (const [entryIndex, merged] of mergedEntries.entries()) {
       const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
       for (const includedSessionId of includedSessionIds) {
         const isCurrentSession = includedSessionId === merged.sessionId;
@@ -1289,7 +1290,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       if (!loaded.summary) {
         continue;
       }
-      const merged = limitedEntries[loaded.entryIndex];
+      const merged = mergedEntries[loaded.entryIndex];
       const usage = usageByEntryIndex[loaded.entryIndex] ?? createEmptySessionCostSummary();
       usage.sessionId = merged.sessionId;
       usage.sessionFile = merged.sessionFile;
@@ -1297,7 +1298,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       usageByEntryIndex[loaded.entryIndex] = usage;
     }
 
-    for (const [entryIndex, merged] of limitedEntries.entries()) {
+    for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
       const usage = usageByEntryIndex[entryIndex];
 
@@ -1433,29 +1434,31 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      sessions.push({
-        key: merged.key,
-        label: merged.label,
-        sessionId: merged.sessionId,
-        scope: merged.scope ?? "instance",
-        sessionFamilyKey: merged.sessionFamilyKey,
-        currentSessionId: merged.currentSessionId,
-        includedSessionIds: merged.includedSessionIds,
-        historicalInstanceCount: merged.includedSessionIds?.length,
-        updatedAt: merged.updatedAt,
-        agentId,
-        channel,
-        chatType,
-        origin: merged.storeEntry?.origin,
-        modelOverride: merged.storeEntry?.modelOverride,
-        providerOverride: merged.storeEntry?.providerOverride,
-        modelProvider: merged.storeEntry?.modelProvider,
-        model: merged.storeEntry?.model,
-        usage,
-        contextWeight: includeContextWeight
-          ? (merged.storeEntry?.systemPromptReport ?? null)
-          : undefined,
-      });
+      if (limitedKeys.has(merged.key)) {
+        sessions.push({
+          key: merged.key,
+          label: merged.label,
+          sessionId: merged.sessionId,
+          scope: merged.scope ?? "instance",
+          sessionFamilyKey: merged.sessionFamilyKey,
+          currentSessionId: merged.currentSessionId,
+          includedSessionIds: merged.includedSessionIds,
+          historicalInstanceCount: merged.includedSessionIds?.length,
+          updatedAt: merged.updatedAt,
+          agentId,
+          channel,
+          chatType,
+          origin: merged.storeEntry?.origin,
+          modelOverride: merged.storeEntry?.modelOverride,
+          providerOverride: merged.storeEntry?.providerOverride,
+          modelProvider: merged.storeEntry?.modelProvider,
+          model: merged.storeEntry?.model,
+          usage,
+          contextWeight: includeContextWeight
+            ? (merged.storeEntry?.systemPromptReport ?? null)
+            : undefined,
+        });
+      }
     }
 
     // Format dates back to YYYY-MM-DD strings
