@@ -1,4 +1,5 @@
 // Plugin MCP serve tests cover serving plugin tools over MCP.
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type HookContext,
@@ -173,6 +174,40 @@ describe("plugin tools MCP server", () => {
     expect(executeCall[2]).toBeUndefined();
     expect(executeCall[3]).toBeUndefined();
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
+  });
+
+  it("serializes source-shaped image tool content with pinned MCP image blocks", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [
+        { type: "text", text: "browser screenshot" },
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "iVBORw0KGgo=",
+          },
+        },
+      ],
+    });
+    const tool = {
+      name: "browser_screenshot",
+      description: "Capture a browser screenshot",
+      parameters: { type: "object", properties: {} },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "browser_screenshot",
+      arguments: {},
+    });
+
+    expect(result.content).toEqual([
+      { type: "text", text: "browser screenshot" },
+      { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+    ]);
+    expect(() => CallToolResultSchema.parse(result)).not.toThrow();
   });
 
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {
