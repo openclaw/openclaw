@@ -29,8 +29,8 @@ import {
 } from "./client.js";
 import {
   buildButtonProps,
+  ensureInteractionSecret,
   resolveInteractionCallbackUrl,
-  setInteractionSecret,
   type MattermostInteractiveButtonInput,
 } from "./interactions.js";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
@@ -350,6 +350,7 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
 
 type MattermostSendContext = {
   cfg: OpenClawConfig;
+  account: ReturnType<typeof resolveMattermostAccount>;
   accountId: string;
   token: string;
   baseUrl: string;
@@ -421,6 +422,7 @@ async function resolveMattermostSendContext(
 
   return {
     cfg,
+    account,
     accountId: account.accountId,
     token,
     baseUrl,
@@ -443,20 +445,17 @@ export async function sendMessageMattermost(
 ): Promise<MattermostSendResult> {
   const core = getCore();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
-  const { cfg, accountId, token, baseUrl, channelId, allowPrivateNetwork } =
+  const { cfg, account, accountId, token, baseUrl, channelId, allowPrivateNetwork } =
     await resolveMattermostSendContext(to, opts);
 
   const client = createMattermostClient({ baseUrl, botToken: token, allowPrivateNetwork });
   let props = opts.props;
   if (!props && Array.isArray(opts.buttons) && opts.buttons.length > 0) {
-    setInteractionSecret(accountId, token);
+    ensureInteractionSecret(accountId, account.interactionSecret);
     props = buildButtonProps({
       callbackUrl: resolveInteractionCallbackUrl(accountId, {
         gateway: cfg.gateway,
-        interactions: resolveMattermostAccount({
-          cfg,
-          accountId,
-        }).config?.interactions,
+        interactions: account.config?.interactions,
       }),
       accountId,
       channelId,
