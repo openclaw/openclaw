@@ -469,6 +469,38 @@ describe("handleCompactionEnd", () => {
     expect(freshAssistant.usage).toEqual(freshUsage);
   });
 
+  it("clears assistant usage when final compaction has no summary marker", async () => {
+    const firstUsage = makeUsageSnapshot(120_000);
+    const secondUsage = makeUsageSnapshot(1_250);
+    const messages = [
+      makeAssistantUsageMessage({
+        text: "first answer before marker-free compaction",
+        usage: firstUsage,
+      }),
+      { role: "user", content: "new question" },
+      makeAssistantUsageMessage({
+        text: "second answer before marker-free compaction",
+        usage: secondUsage,
+      }),
+    ] as AgentMessage[];
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-no-summary-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      messages,
+    });
+
+    finishCompaction(ctx);
+
+    const firstAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const secondAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(firstAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(secondAssistant.usage).toEqual(makeZeroUsageSnapshot());
+  });
+
   it("does not let legacy index fallback erase timestamp-fresh usage", async () => {
     const freshUsage = makeUsageSnapshot(1_250);
     const messages = [

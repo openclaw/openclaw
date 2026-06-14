@@ -197,5 +197,11 @@ function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedAgentSubscribeCo
   if (!Array.isArray(messages)) {
     return;
   }
-  stripStaleAssistantUsageBeforeLatestCompaction(messages, { mutate: true });
+  // Marker-free final compaction has no fresh boundary to compare against.
+  // Clear all assistant usage or stale pre-compaction totals keep driving the
+  // context counter after cleanup.
+  stripStaleAssistantUsageBeforeLatestCompaction(messages, {
+    mutate: true,
+    whenMissingCompactionSummary: "zeroAssistantUsage",
+  });
 }

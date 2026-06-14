@@ -20,7 +20,10 @@ function parseCompactionUsageTimestamp(value: unknown): number | null {
 
 export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends AgentMessage>(
   messages: TMessage[],
-  options: { mutate?: boolean } = {},
+  options: {
+    mutate?: boolean;
+    whenMissingCompactionSummary?: "preserve" | "zeroAssistantUsage";
+  } = {},
 ): TMessage[] {
   let latestCompactionSummaryIndex = -1;
   let latestCompactionTimestamp: number | null = null;
@@ -34,7 +37,8 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
       (entry as { timestamp?: unknown }).timestamp ?? null,
     );
   }
-  if (latestCompactionSummaryIndex === -1) {
+  const hasCompactionSummary = latestCompactionSummaryIndex !== -1;
+  if (!hasCompactionSummary && options.whenMissingCompactionSummary !== "zeroAssistantUsage") {
     return messages;
   }
 
@@ -53,10 +57,13 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
 
     const messageTimestamp = parseCompactionUsageTimestamp(candidate.timestamp);
     const compactionTimestamp = latestCompactionTimestamp;
-    const hasTimestampBoundary = compactionTimestamp !== null && messageTimestamp !== null;
+    const hasTimestampBoundary =
+      hasCompactionSummary && compactionTimestamp !== null && messageTimestamp !== null;
+    const staleByMissingSummary = !hasCompactionSummary;
     const staleByTimestamp = hasTimestampBoundary && messageTimestamp <= compactionTimestamp;
-    const staleByLegacyOrdering = !hasTimestampBoundary && i < latestCompactionSummaryIndex;
-    if (!staleByTimestamp && !staleByLegacyOrdering) {
+    const staleByLegacyOrdering =
+      hasCompactionSummary && !hasTimestampBoundary && i < latestCompactionSummaryIndex;
+    if (!staleByMissingSummary && !staleByTimestamp && !staleByLegacyOrdering) {
       continue;
     }
 
