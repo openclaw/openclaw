@@ -150,7 +150,26 @@ function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  // Walk character codes instead of regex to avoid V8 stack overflow on large strings.
+  const len = value.length;
+  const padStart =
+    value[len - 1] === '=' ? (value[len - 2] === '=' ? len - 2 : len - 1) : len;
+  for (let i = 0; i < padStart; i++) {
+    const c = value.charCodeAt(i);
+    if (
+      !(c >= 65 && c <= 90) && // A-Z
+      !(c >= 97 && c <= 122) && // a-z
+      !(c >= 48 && c <= 57) && // 0-9
+      c !== 43 && // +
+      c !== 47 // /
+    ) {
+      return false;
+    }
+  }
+  for (let i = padStart; i < len; i++) {
+    if (value.charCodeAt(i) !== 61) return false; // =
+  }
+  return true;
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
