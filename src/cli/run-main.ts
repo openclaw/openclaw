@@ -296,8 +296,13 @@ export function resolveMissingPluginCommandMessage(
 }
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (existsSync(path.join(process.cwd(), ".env"))) {
-    return true;
+  try {
+    if (existsSync(path.join(process.cwd(), ".env"))) {
+      return true;
+    }
+  } catch {
+    // process.cwd() throws ENOENT when the launch directory was removed;
+    // fall through to the state-dir .env lookup instead of crashing.
   }
   return existsSync(path.join(resolveStateDir(env), ".env"));
 }
