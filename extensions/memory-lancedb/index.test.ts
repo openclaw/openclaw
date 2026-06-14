@@ -19,8 +19,8 @@ import {
   registerMemoryCapability,
   type MemoryPluginCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
