@@ -7,6 +7,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createReadToolDefinition } from "./read.js";
+import { decodeFileBuffer } from "./encoding.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
 
 const ONE_PIXEL_PNG_BASE64 =
@@ -99,5 +100,76 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+  });
+
+  describe("encoding auto-detection (decodeFileBuffer)", () => {
+    it("decodes GBK-encoded Chinese text", () => {
+      // GBK encoding: "Chinese" = \xd6\xd0\xce\xc4 (2 bytes per character)
+      const gbkBuffer = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x0a, 0x63, 0x6f, 0x64, 0x65]);
+      const result = decodeFileBuffer(gbkBuffer);
+      expect(result).toBe("中文\ncode");
+    });
+
+    it("decodes UTF-8 BOM file", () => {
+      // UTF-8 BOM (EF BB BF) followed by "hello"
+      const utf8BomBuffer = Buffer.from([0xef, 0xbb, 0xbf, 0x68, 0x65, 0x6c, 0x6c, 0x6f]);
+      const result = decodeFileBuffer(utf8BomBuffer);
+      expect(result).toBe("hello");
+    });
+
+    it("decodes UTF-16LE BOM file", () => {
+      // UTF-16LE BOM (FF FE) followed by "hi" in UTF-16LE
+      const utf16leBuffer = Buffer.from([0xff, 0xfe, 0x68, 0x00, 0x69, 0x00]);
+      const result = decodeFileBuffer(utf16leBuffer);
+      expect(result).toBe("hi");
+    });
+
+    it("decodes UTF-16BE BOM file", () => {
+      // UTF-16BE BOM (FE FF) followed by "hi" in UTF-16BE
+      const utf16beBuffer = Buffer.from([0xfe, 0xff, 0x00, 0x68, 0x00, 0x69]);
+      const result = decodeFileBuffer(utf16beBuffer);
+      expect(result).toBe("hi");
+    });
+
+    it("decodes pure ASCII file without regression", () => {
+      const asciiBuffer = Buffer.from("hello world\nline 2");
+      const result = decodeFileBuffer(asciiBuffer);
+      expect(result).toBe("hello world\nline 2");
+    });
+
+    it("decodes valid UTF-8 without BOM without regression", () => {
+      const utf8Buffer = Buffer.from("hello éàü\nline 2");
+      const result = decodeFileBuffer(utf8Buffer);
+      expect(result).toBe("hello éàü\nline 2");
+    });
+
+    it("returns empty string for empty buffer", () => {
+      const result = decodeFileBuffer(Buffer.alloc(0));
+      expect(result).toBe("");
+    });
+
+    it("decodes mixed GBK content read through tool", async () => {
+      // GBK bytes for "file" (\xce\xc4\xbc\xfe) followed by newline and ASCII
+      const gbkBuffer = Buffer.from([
+        0xce, 0xc4, 0xbc, 0xfe, 0x0a, 0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64,
+      ]);
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => gbkBuffer,
+        },
+      });
+
+      const result = await tool.execute(
+        "call-1",
+        { path: "gbk_file.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(textContent(result)).toBe("文件\nsecond");
+    });
   });
 });
