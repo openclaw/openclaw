@@ -90,7 +90,7 @@ async function withMockChromeCdpServer(params: {
     res.writeHead(404);
     res.end();
   });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   server.on("upgrade", (req, socket, head) => {
     if (!req.url?.startsWith(params.wsPath)) {
       socket.destroy();
@@ -310,6 +310,16 @@ describe("browser chrome profile decoration", () => {
 
     expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(false);
     expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
+  });
+
+  it("keeps singleton artifacts when the lock owner is malformed", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie");
+    await fsp.symlink("-12345", path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(false);
+    expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(true);
   });
 
   it("keeps singleton artifacts when the lock PID exists but cannot be signaled", async () => {
@@ -730,7 +740,7 @@ describe("browser chrome helpers", () => {
       res.writeHead(404);
       res.end();
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
     server.on("upgrade", (req, socket, head) => {
       if (req.url?.startsWith("/e/bad")) {
         socket.destroy();

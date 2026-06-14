@@ -4,8 +4,14 @@
  * Builds launch args, starts/stops managed Chrome, probes CDP readiness, and
  * resolves WebSocket endpoints for browser control.
  */
-import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import {
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+  execFile,
+  spawn,
+} from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
@@ -80,6 +86,35 @@ const CHROME_SINGLETON_LOCK_PATHS = [
 ] as const;
 const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
 const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
+const LSOF_CANDIDATES =
+  process.platform === "darwin"
+    ? ["/usr/sbin/lsof", "/usr/bin/lsof"]
+    : ["/usr/bin/lsof", "/usr/sbin/lsof"];
+const PS_CANDIDATES =
+  process.platform === "darwin" || process.platform === "linux" ? ["/bin/ps", "/usr/bin/ps"] : [];
+const LINUX_CHROMIUM_PROCESS_FAMILIES: ReadonlyMap<string, string> = new Map([
+  ["brave", "brave"],
+  ["brave-browser", "brave"],
+  ["brave-browser-stable", "brave"],
+  ["chrome", "chrome"],
+  ["google-chrome", "chrome"],
+  ["google-chrome-beta", "chrome"],
+  ["google-chrome-stable", "chrome"],
+  ["google-chrome-unstable", "chrome"],
+  ["chromium", "chromium"],
+  ["chromium-browser", "chromium"],
+  ["microsoft-edge", "edge"],
+  ["microsoft-edge-beta", "edge"],
+  ["microsoft-edge-canary", "edge"],
+  ["microsoft-edge-dev", "edge"],
+  ["microsoft-edge-stable", "edge"],
+  ["opera", "opera"],
+  ["opera-gx", "opera"],
+  ["opera-stable", "opera"],
+  ["vivaldi", "vivaldi"],
+  ["vivaldi-stable", "vivaldi"],
+  ["yandex-browser", "yandex"],
+]);
 const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "ssrf_blocked",
   "http_unreachable",
@@ -149,27 +184,65 @@ function clearChromeSingletonArtifacts(userDataDir: string) {
   }
 }
 
-/** Remove stale Chrome singleton lock files from a user-data-dir. */
-export function clearStaleChromeSingletonLocks(
+async function clearChromeSingletonArtifactsForOwner(
   userDataDir: string,
-  hostname = os.hostname(),
-): boolean {
+  owner: ChromeSingletonOwner,
+  ownerIdentity: string,
+): Promise<boolean> {
+  const currentOwner = readChromeSingletonOwner(userDataDir);
+  if (!currentOwner) {
+    return true;
+  }
+  if (currentOwner.host !== owner.host || currentOwner.pid !== owner.pid) {
+    return false;
+  }
+  // Keep the PID liveness check adjacent to the unlink calls: a reused PID with
+  // the same lock owner string must not lose its new Chrome singleton files.
+  if (processExists(owner.pid) || (await processIdentityMatches(owner.pid, ownerIdentity))) {
+    return false;
+  }
+  clearChromeSingletonArtifacts(userDataDir);
+  return true;
+}
+
+type ChromeSingletonOwner = {
+  host: string;
+  pid: number;
+};
+
+function readChromeSingletonOwner(userDataDir: string): ChromeSingletonOwner | null {
   const lockPath = path.join(userDataDir, "SingletonLock");
   let target: string;
   try {
     target = fs.readlinkSync(lockPath);
   } catch {
-    return false;
+    return null;
   }
 
   const match = /^(?<lockHost>.+)-(?<pid>\d+)$/.exec(target);
   if (!match?.groups) {
-    return false;
+    return null;
   }
 
-  const lockHost = normalizeOptionalString(match.groups.lockHost) ?? "";
+  const host = normalizeOptionalString(match.groups.lockHost) ?? "";
   const pid = Number.parseInt(match.groups.pid ?? "", 10);
-  if (lockHost === hostname && processExists(pid)) {
+  if (!host || !Number.isInteger(pid) || pid <= 0) {
+    // Malformed lock targets do not prove local ownership. Leave them in
+    // place instead of deleting an unknown profile owner's lock.
+    return null;
+  }
+  return { host, pid };
+}
+
+export function clearStaleChromeSingletonLocks(
+  userDataDir: string,
+  hostname = os.hostname(),
+): boolean {
+  const owner = readChromeSingletonOwner(userDataDir);
+  if (!owner) {
+    return false;
+  }
+  if (owner.host === hostname && processExists(owner.pid)) {
     return false;
   }
 
@@ -204,6 +277,417 @@ async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string) 
   }
   await waitForChromeProcessExit(proc, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
   clearStaleChromeSingletonLocks(userDataDir);
+}
+
+function isPortInUseError(err: unknown): boolean {
+  const maybeError = err as { name?: unknown; code?: unknown };
+  return maybeError.name === "PortInUseError" || maybeError.code === "EADDRINUSE";
+}
+
+function resolveExecutableCandidate(candidates: readonly string[]): string | null {
+  for (const candidate of candidates) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // keep trying
+    }
+  }
+  return null;
+}
+
+function execFileText(
+  executable: string,
+  args: readonly string[],
+  maxBuffer = 64 * 1024,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      executable,
+      [...args],
+      { timeout: CHROME_STOP_PROBE_TIMEOUT_MS, maxBuffer },
+      (err, stdout) => resolve(err ? null : stdout),
+    );
+  });
+}
+
+async function inspectTcpListenPids(port: number): Promise<Set<number> | null> {
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    return null;
+  }
+  const lsof = resolveExecutableCandidate(LSOF_CANDIDATES);
+  if (!lsof) {
+    return null;
+  }
+  const stdout = await execFileText(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"]);
+  if (!stdout) {
+    return null;
+  }
+  const pids = new Set<number>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^p(?<pid>\d+)$/.exec(line);
+    const pid = Number.parseInt(match?.groups?.pid ?? "", 10);
+    if (Number.isInteger(pid) && pid > 0) {
+      pids.add(pid);
+    }
+  }
+  return pids.size > 0 ? pids : null;
+}
+
+type ProcessCommandLine = {
+  args: string[];
+  executablePath?: string | null;
+  lossy?: boolean;
+  raw?: string;
+};
+
+async function inspectProcessExecutablePath(pid: number): Promise<string | null> {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const lsof = resolveExecutableCandidate(LSOF_CANDIDATES);
+  if (!lsof) {
+    return null;
+  }
+  const stdout = await execFileText(lsof, ["-p", String(pid), "-a", "-d", "txt", "-Fn"]);
+  for (const line of (stdout ?? "").split(/\r?\n/)) {
+    if (line.startsWith("n/") && !line.includes("/usr/lib/dyld")) {
+      return line.slice(1);
+    }
+  }
+  return null;
+}
+
+async function readProcessIdentity(pid: number): Promise<string | null> {
+  if (process.platform === "linux") {
+    try {
+      const raw = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = raw
+        .slice(raw.lastIndexOf(")") + 2)
+        .trim()
+        .split(/\s+/);
+      return fields[19] ? `linux:${fields[19]}` : null;
+    } catch {
+      return null;
+    }
+  }
+  const ps = resolveExecutableCandidate(PS_CANDIDATES);
+  if (!ps || process.platform !== "darwin") {
+    return null;
+  }
+  const stdout = await execFileText(ps, ["-p", String(pid), "-o", "lstart="], 4 * 1024);
+  const startedAt = normalizeOptionalString(stdout?.trim() ?? "");
+  return startedAt ? `ps:${startedAt}` : null;
+}
+
+async function processIdentityMatches(pid: number, identity: string): Promise<boolean> {
+  return (await readProcessIdentity(pid)) === identity;
+}
+
+async function readProcessCommandLine(pid: number): Promise<ProcessCommandLine | null> {
+  if (process.platform === "linux") {
+    try {
+      const args = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
+      return args.length > 0 ? { args } : null;
+    } catch {
+      return null;
+    }
+  }
+  const ps = resolveExecutableCandidate(PS_CANDIDATES);
+  if (!ps) {
+    return null;
+  }
+  const raw = (await execFileText(ps, ["-ww", "-p", String(pid), "-o", "command="]))?.trim();
+  if (!raw) {
+    return null;
+  }
+  return {
+    args: raw.split(/\s+/),
+    executablePath: await inspectProcessExecutablePath(pid),
+    lossy: true,
+    raw,
+  };
+}
+
+function hasRawCommandLineUnsafeChars(value: string): boolean {
+  return /\s|["']/.test(value);
+}
+
+function argsHaveAdjacentPair(args: readonly string[], first: string, second: string): boolean {
+  return args.some((arg, index) => arg === first && args[index + 1] === second);
+}
+
+function linuxChromiumProcessFamily(executablePath: string): string | null {
+  return LINUX_CHROMIUM_PROCESS_FAMILIES.get(path.basename(executablePath).toLowerCase()) ?? null;
+}
+
+function commandLineMatchesResolvedExecutable(
+  cmdline: ProcessCommandLine,
+  executablePath: string,
+): boolean {
+  if (cmdline.lossy) {
+    if (process.platform === "darwin") {
+      return (
+        cmdline.executablePath === executablePath &&
+        typeof cmdline.raw === "string" &&
+        (cmdline.raw === executablePath || cmdline.raw.startsWith(`${executablePath} `))
+      );
+    }
+    if (hasRawCommandLineUnsafeChars(executablePath)) {
+      return false;
+    }
+  }
+  if (cmdline.args[0] === executablePath) {
+    return true;
+  }
+  if (process.platform !== "linux") {
+    return false;
+  }
+  const actualExecutable = cmdline.args[0];
+  if (!actualExecutable) {
+    return false;
+  }
+  const expectedFamily = linuxChromiumProcessFamily(executablePath);
+  return expectedFamily !== null && expectedFamily === linuxChromiumProcessFamily(actualExecutable);
+}
+
+function rawCommandLineHasManagedLaunchPrefix(params: {
+  executablePath: string;
+  raw: string;
+  remoteDebuggingPortArg: string;
+  userDataDirArg: string;
+}): boolean {
+  const expectedPrefix = `${params.executablePath} ${params.remoteDebuggingPortArg} ${params.userDataDirArg} --no-first-run`;
+  return params.raw === expectedPrefix || params.raw.startsWith(`${expectedPrefix} `);
+}
+
+async function isManagedChromeProcessForProfile(params: {
+  executablePath: string;
+  pid: number;
+  profile: ResolvedBrowserProfile;
+  userDataDir: string;
+}): Promise<boolean> {
+  const cmdline = await readProcessCommandLine(params.pid);
+  if (!cmdline) {
+    return false;
+  }
+  const remoteDebuggingPortArg = `--remote-debugging-port=${params.profile.cdpPort}`;
+  const userDataDirArg = `--user-data-dir=${params.userDataDir}`;
+  if (cmdline.lossy && process.platform === "darwin" && typeof cmdline.raw === "string") {
+    return (
+      commandLineMatchesResolvedExecutable(cmdline, params.executablePath) &&
+      rawCommandLineHasManagedLaunchPrefix({
+        executablePath: params.executablePath,
+        raw: cmdline.raw,
+        remoteDebuggingPortArg,
+        userDataDirArg,
+      })
+    );
+  }
+  // Recovery relies on the canonical launch-arg ordering from
+  // buildOpenClawChromeLaunchArgs(); a reordered process is not safe to signal.
+  return (
+    commandLineMatchesResolvedExecutable(cmdline, params.executablePath) &&
+    argsHaveAdjacentPair(cmdline.args, remoteDebuggingPortArg, userDataDirArg) &&
+    argsHaveAdjacentPair(cmdline.args, userDataDirArg, "--no-first-run")
+  );
+}
+
+async function isLoopbackPortAccepting(port: number, timeoutMs: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port }, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+    socket.setTimeout(timeoutMs, () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
+async function waitForProcessExitByPid(pid: number, timeoutMs: number): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!processExists(pid)) {
+      return true;
+    }
+    const remainingMs = timeoutMs - (Date.now() - start);
+    await new Promise((r) => {
+      setTimeout(r, Math.max(1, Math.min(CHROME_BOOTSTRAP_EXIT_POLL_MS, remainingMs)));
+    });
+  }
+  return !processExists(pid);
+}
+
+async function stopOwnedChromePid(
+  pid: number,
+  isStillOwnedChrome: () => Promise<boolean>,
+): Promise<boolean> {
+  if (!(await isStillOwnedChrome())) {
+    return false;
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    // ignore; the second port check below is the source of truth
+  }
+  if (await waitForProcessExitByPid(pid, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS)) {
+    return true;
+  }
+  if (!(await isStillOwnedChrome())) {
+    return false;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // ignore; the second port check below is the source of truth
+  }
+  return await waitForProcessExitByPid(pid, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
+}
+
+async function waitForLoopbackPortClosed(port: number, timeoutMs: number): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!(await isLoopbackPortAccepting(port, CHROME_STOP_PROBE_TIMEOUT_MS))) {
+      return true;
+    }
+    const remainingMs = timeoutMs - (Date.now() - start);
+    await new Promise((r) => {
+      setTimeout(r, Math.max(1, Math.min(CHROME_BOOTSTRAP_EXIT_POLL_MS, remainingMs)));
+    });
+  }
+  return !(await isLoopbackPortAccepting(port, CHROME_STOP_PROBE_TIMEOUT_MS));
+}
+
+async function waitForOwnedChromeCdpToStayUnready(params: {
+  profile: ResolvedBrowserProfile;
+  isStillOwnedChrome: () => Promise<boolean>;
+  timeoutMs: number;
+}): Promise<boolean> {
+  const timeoutMs = Math.max(1, params.timeoutMs);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    if (!(await params.isStillOwnedChrome())) {
+      return false;
+    }
+    if (
+      await isChromeCdpReady(
+        params.profile.cdpUrl,
+        CHROME_REACHABILITY_TIMEOUT_MS,
+        CHROME_WS_READY_TIMEOUT_MS,
+      )
+    ) {
+      return false;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return true;
+    }
+    await new Promise((r) => {
+      setTimeout(r, Math.max(1, Math.min(CHROME_LAUNCH_READY_POLL_MS, remainingMs)));
+    });
+  }
+}
+
+async function recoverOwnedChromePortBlocker(params: {
+  executablePath: string;
+  profile: ResolvedBrowserProfile;
+  readinessTimeoutMs: number;
+  userDataDir: string;
+}): Promise<boolean> {
+  if (!params.profile.cdpIsLoopback) {
+    return false;
+  }
+  const owner = readChromeSingletonOwner(params.userDataDir);
+  if (!owner || owner.host !== os.hostname() || !processExists(owner.pid)) {
+    return false;
+  }
+  const ownerIdentity = await readProcessIdentity(owner.pid);
+  if (!ownerIdentity) {
+    return false;
+  }
+  const isStillOwnedChrome = async () => {
+    if (!(await processIdentityMatches(owner.pid, ownerIdentity))) {
+      return false;
+    }
+    const listenerPids = await inspectTcpListenPids(params.profile.cdpPort);
+    if (!listenerPids?.has(owner.pid)) {
+      return false;
+    }
+    return await isManagedChromeProcessForProfile({
+      executablePath: params.executablePath,
+      pid: owner.pid,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+    });
+  };
+  if (!(await isStillOwnedChrome())) {
+    return false;
+  }
+  if (
+    !(await waitForOwnedChromeCdpToStayUnready({
+      profile: params.profile,
+      isStillOwnedChrome,
+      timeoutMs: params.readinessTimeoutMs,
+    }))
+  ) {
+    return false;
+  }
+
+  log.warn(
+    `Stopping unresponsive managed Chrome for profile "${params.profile.name}" on port ${params.profile.cdpPort} (pid ${owner.pid}) before relaunch.`,
+  );
+  if (!(await stopOwnedChromePid(owner.pid, isStillOwnedChrome))) {
+    return false;
+  }
+  if (
+    !(await waitForLoopbackPortClosed(params.profile.cdpPort, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS))
+  ) {
+    return false;
+  }
+  if (processExists(owner.pid)) {
+    return false;
+  }
+  return await clearChromeSingletonArtifactsForOwner(params.userDataDir, owner, ownerIdentity);
+}
+
+async function ensureManagedLoopbackPortAvailable(params: {
+  executablePath: string;
+  profile: ResolvedBrowserProfile;
+  readinessTimeoutMs: number;
+  userDataDir: string;
+}): Promise<void> {
+  if (!params.profile.cdpIsLoopback) {
+    await ensurePortAvailable(params.profile.cdpPort);
+    return;
+  }
+  try {
+    await ensurePortAvailable(params.profile.cdpPort);
+  } catch (err) {
+    if (!isPortInUseError(err) || !(await recoverOwnedChromePortBlocker(params))) {
+      throw err;
+    }
+    await ensurePortAvailable(params.profile.cdpPort);
+  }
+
+  const owner = readChromeSingletonOwner(params.userDataDir);
+  if (!owner || owner.host !== os.hostname() || !processExists(owner.pid)) {
+    return;
+  }
+  // Some hosts can accept a generic listen probe while 127.0.0.1 is still
+  // held. Only use the exact loopback probe after SingletonLock proves local
+  // managed-profile ownership, so external CDP services are not killed by port.
+  if (!(await isLoopbackPortAccepting(params.profile.cdpPort, CHROME_STOP_PROBE_TIMEOUT_MS))) {
+    return;
+  }
+  const err = new Error(`Port ${params.profile.cdpPort} is already in use.`);
+  err.name = "PortInUseError";
+  if (await recoverOwnedChromePortBlocker(params)) {
+    return;
+  }
+  throw err;
 }
 
 function chromeLaunchHints(params: {
@@ -467,8 +951,6 @@ export async function launchOpenClawChrome(
     );
   }
 
-  await ensurePortAvailable(profile.cdpPort);
-
   const exe = resolveBrowserExecutable(resolved, profile);
   if (!exe) {
     throw new Error(
@@ -478,6 +960,12 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
+  await ensureManagedLoopbackPortAvailable({
+    executablePath: exe.path,
+    profile,
+    readinessTimeoutMs: resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS,
+    userDataDir,
+  });
   await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
 
   const needsDecorate = !isProfileDecorated(
