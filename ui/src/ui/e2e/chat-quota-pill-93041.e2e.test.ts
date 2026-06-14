@@ -1,5 +1,5 @@
 // Real-browser proof + regression for #93041: the desktop chat composer renders the provider
-// usage pill from models.authStatus. Captures screenshots to .e2e-proof-93041/ for the PR proof.
+// usage pill from models.authStatus. Screenshots go to the ignored .artifacts/ tree.
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -16,7 +16,7 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const describeE2e = chromiumAvailable ? describe : describe.skip;
 
 const baseTime = 1_700_000_000_000;
-const artifactDir = path.resolve(process.cwd(), ".e2e-proof-93041");
+const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-quota-pill-93041");
 
 const authStatusWithUsage = {
   ts: baseTime,
