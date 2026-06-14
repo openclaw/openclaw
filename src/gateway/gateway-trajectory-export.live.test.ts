@@ -25,7 +25,21 @@ const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
 const LIVE_TIMEOUT_MS = 420_000;
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
 const AGENT_REQUEST_TIMEOUT_MS = 180_000;
+// Keep this below LIVE_TIMEOUT_MS so timeout diagnostics win over Vitest's generic cap.
+const TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS = 120_000;
 const DEFAULT_CODEX_MODEL = "openai/gpt-5.5";
+
+type TrajectoryExportApprovalEntry = {
+  id?: string;
+  request?: {
+    command?: string;
+  };
+};
+
+type TrajectoryExportApprovalSummary = {
+  id?: string;
+  hasTrajectoryExportCommand: boolean;
+};
 
 function logLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CODEX_HARNESS_DEBUG) {
@@ -189,6 +203,22 @@ function extractAssistantTexts(messages: unknown[]): string[] {
   return texts;
 }
 
+function isTrajectoryExportApproval(entry: TrajectoryExportApprovalEntry): boolean {
+  return Boolean(entry.request?.command?.includes("sessions export-trajectory"));
+}
+
+function summarizeTrajectoryExportApproval(
+  entry: TrajectoryExportApprovalEntry,
+): TrajectoryExportApprovalSummary {
+  const summary: TrajectoryExportApprovalSummary = {
+    hasTrajectoryExportCommand: isTrajectoryExportApproval(entry),
+  };
+  if (entry.id) {
+    summary.id = entry.id;
+  }
+  return summary;
+}
+
 async function waitForTrajectoryExportInstructionText(params: {
   client: GatewayClient;
   events: EventFrame[];
@@ -214,6 +244,7 @@ async function waitForTrajectoryExportInstructionText(params: {
     });
   }
   let assistantTexts: string[];
+  let approvalSummaries: TrajectoryExportApprovalSummary[];
   try {
     const history = (await params.client.request(
       "chat.history",
@@ -227,9 +258,19 @@ async function waitForTrajectoryExportInstructionText(params: {
   } catch {
     assistantTexts = [];
   }
+  try {
+    const approvals = (await params.client.request(
+      "exec.approval.list",
+      {},
+      { timeoutMs: 10_000 },
+    )) as TrajectoryExportApprovalEntry[];
+    approvalSummaries = approvals.map(summarizeTrajectoryExportApproval);
+  } catch {
+    approvalSummaries = [];
+  }
   throw new Error(
     `timed out waiting for trajectory export instruction text for ${params.runId}; ` +
-      `events=${params.events.length}; finalTexts=${formatTextPreview(finalTexts)}; assistantTexts=${formatTextPreview(assistantTexts)}`,
+      `events=${params.events.length}; finalTexts=${formatTextPreview(finalTexts)}; assistantTexts=${formatTextPreview(assistantTexts)}; approvals=${JSON.stringify(approvalSummaries)}`,
   );
 }
 
@@ -285,35 +326,16 @@ function extractVisibleMessageText(message: unknown): string | undefined {
 
 async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
   const startedAt = Date.now();
-  let approval:
-    | {
-        id?: string;
-        request?: {
-          command?: string;
-        };
-      }
-    | undefined;
-  let lastApprovalSummaries: Array<{ id?: string; hasTrajectoryExportCommand: boolean }> = [];
+  let approval: TrajectoryExportApprovalEntry | undefined;
+  let lastApprovalSummaries: TrajectoryExportApprovalSummary[] = [];
   while (Date.now() - startedAt < 60_000) {
     const approvals = (await client.request(
       "exec.approval.list",
       {},
       { timeoutMs: 10_000 },
-    )) as Array<{
-      id?: string;
-      request?: {
-        command?: string;
-      };
-    }>;
-    lastApprovalSummaries = approvals.map((entry) => ({
-      ...(entry.id ? { id: entry.id } : {}),
-      hasTrajectoryExportCommand: Boolean(
-        entry.request?.command?.includes("sessions export-trajectory"),
-      ),
-    }));
-    approval = approvals.find((entry) =>
-      entry.request?.command?.includes("sessions export-trajectory"),
-    );
+    )) as TrajectoryExportApprovalEntry[];
+    lastApprovalSummaries = approvals.map(summarizeTrajectoryExportApproval);
+    approval = approvals.find(isTrajectoryExportApproval);
     if (approval) {
       break;
     }
@@ -461,7 +483,7 @@ describeLive("gateway live trajectory export", () => {
               expectedText: "Trajectory exports can include",
               runId: exportRunId,
               sessionKey,
-              timeoutMs: 60_000,
+              timeoutMs: TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS,
             });
       expect(finalText).toContain("Trajectory exports can include");
       expect(finalText).toContain("through exec approval");
