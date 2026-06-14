@@ -1230,7 +1230,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const { target, storePath, store, entry } = loadSessionEntriesForTarget({ key, cfg });
+    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const { target, storePath, store, entry } = loadSessionEntriesForTarget({
+      key,
+      cfg,
+      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+    });
     if (!entry) {
       respond(true, { session: null }, undefined);
       return;
@@ -1244,6 +1253,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       includeDerivedTitles: p.includeDerivedTitles,
       includeLastMessage: p.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,
+      ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
     });
     respond(true, { session: row }, undefined);
   },
