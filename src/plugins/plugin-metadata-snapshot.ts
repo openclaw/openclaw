@@ -174,10 +174,26 @@ function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
     });
     return Object.freeze(value);
   }
-  for (const entry of Object.values(value)) {
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    keys = [];
+  }
+  for (const key of keys) {
+    let entry: unknown;
+    try {
+      entry = (value as Record<string, unknown>)[key];
+    } catch {
+      continue;
+    }
     freezeSnapshotValue(entry, seen);
   }
-  return Object.freeze(value);
+  try {
+    return Object.freeze(value);
+  } catch {
+    return value;
+  }
 }
 
 function freezePluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): PluginMetadataSnapshot {
@@ -481,10 +497,121 @@ function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: s
   owners.set(ownedId, [pluginId]);
 }
 
+function readPluginOwnerId(plugin: PluginManifestRecord): string | null {
+  try {
+    return typeof plugin.id === "string" && plugin.id ? plugin.id : null;
+  } catch {
+    return null;
+  }
+}
+
+function readArray(read: () => readonly unknown[] | undefined): readonly unknown[] {
+  let values: readonly unknown[] | undefined;
+  try {
+    values = read();
+  } catch {
+    return [];
+  }
+  return Array.isArray(values) ? values : [];
+}
+
+function readStringArray(read: () => readonly unknown[] | undefined): string[] {
+  const values = readArray(read);
+  const normalized: string[] = [];
+  for (const index of values.keys()) {
+    let value: unknown;
+    try {
+      value = values[index];
+    } catch {
+      continue;
+    }
+    if (typeof value === "string") {
+      normalized.push(value);
+    }
+  }
+  return normalized;
+}
+
+function readRecordStringFields(
+  read: () => readonly unknown[] | undefined,
+  field: string,
+): string[] {
+  const values = readArray(read);
+  const fields: string[] = [];
+  for (const index of values.keys()) {
+    try {
+      const value = values[index];
+      if (isRecord(value) && typeof value[field] === "string") {
+        fields.push(value[field]);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return fields;
+}
+
+function readRecordKeys(read: () => unknown): string[] {
+  let value: unknown;
+  try {
+    value = read();
+  } catch {
+    return [];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  try {
+    return Object.keys(value);
+  } catch {
+    return [];
+  }
+}
+
+function readRecordEntries(read: () => unknown): [string, unknown][] {
+  let value: unknown;
+  try {
+    value = read();
+  } catch {
+    return [];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return [];
+  }
+  const entries: [string, unknown][] = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
 function freezeOwnerMap(owners: Map<string, string[]>): ReadonlyMap<string, readonly string[]> {
   return new Map(
     [...owners.entries()].map(([ownedId, pluginIds]) => [ownedId, Object.freeze([...pluginIds])]),
   );
+}
+
+function buildPluginMetadataByPluginId(
+  plugins: readonly PluginManifestRecord[],
+): ReadonlyMap<string, PluginManifestRecord> {
+  const byPluginId = new Map<string, PluginManifestRecord>();
+  for (const plugin of plugins) {
+    const pluginId = readPluginOwnerId(plugin);
+    if (pluginId) {
+      byPluginId.set(pluginId, plugin);
+    }
+  }
+  return byPluginId;
 }
 
 function buildPluginMetadataOwnerMaps(
@@ -500,49 +627,56 @@ function buildPluginMetadataOwnerMaps(
   const contracts = new Map<string, string[]>();
 
   for (const plugin of plugins) {
-    for (const channelId of plugin.channels ?? []) {
-      appendOwner(channels, channelId, plugin.id);
+    const pluginId = readPluginOwnerId(plugin);
+    if (!pluginId) {
+      continue;
     }
-    for (const channelId of Object.keys(plugin.channelConfigs ?? {})) {
-      appendOwner(channelConfigs, channelId, plugin.id);
+    const providerIds = readStringArray(() => plugin.providers);
+
+    for (const channelId of readStringArray(() => plugin.channels)) {
+      appendOwner(channels, channelId, pluginId);
     }
-    for (const providerId of plugin.providers ?? []) {
-      appendOwner(providers, providerId, plugin.id);
+    for (const channelId of readRecordKeys(() => plugin.channelConfigs)) {
+      appendOwner(channelConfigs, channelId, pluginId);
     }
-    for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+    for (const providerId of providerIds) {
+      appendOwner(providers, providerId, pluginId);
+    }
+    for (const [rawAlias, target] of readRecordEntries(() => plugin.providerAuthAliases)) {
+      if (typeof target !== "string") {
+        continue;
+      }
       const alias = normalizeProviderId(rawAlias);
       const targetProvider = normalizeProviderId(target);
       if (
         alias &&
         targetProvider &&
-        (plugin.providers ?? []).some(
-          (providerId) => normalizeProviderId(providerId) === targetProvider,
-        )
+        providerIds.some((providerId) => normalizeProviderId(providerId) === targetProvider)
       ) {
-        appendOwner(providers, alias, plugin.id);
+        appendOwner(providers, alias, pluginId);
       }
     }
-    for (const providerId of Object.keys(plugin.modelCatalog?.providers ?? {})) {
-      appendOwner(modelCatalogProviders, providerId, plugin.id);
+    for (const providerId of readRecordKeys(() => plugin.modelCatalog?.providers)) {
+      appendOwner(modelCatalogProviders, providerId, pluginId);
     }
-    for (const providerId of Object.keys(plugin.modelCatalog?.aliases ?? {})) {
-      appendOwner(modelCatalogProviders, providerId, plugin.id);
+    for (const providerId of readRecordKeys(() => plugin.modelCatalog?.aliases)) {
+      appendOwner(modelCatalogProviders, providerId, pluginId);
     }
-    for (const cliBackendId of plugin.cliBackends ?? []) {
-      appendOwner(cliBackends, cliBackendId, plugin.id);
+    for (const cliBackendId of readStringArray(() => plugin.cliBackends)) {
+      appendOwner(cliBackends, cliBackendId, pluginId);
     }
-    for (const cliBackendId of plugin.setup?.cliBackends ?? []) {
-      appendOwner(cliBackends, cliBackendId, plugin.id);
+    for (const cliBackendId of readStringArray(() => plugin.setup?.cliBackends)) {
+      appendOwner(cliBackends, cliBackendId, pluginId);
     }
-    for (const setupProvider of plugin.setup?.providers ?? []) {
-      appendOwner(setupProviders, setupProvider.id, plugin.id);
+    for (const setupProviderId of readRecordStringFields(() => plugin.setup?.providers, "id")) {
+      appendOwner(setupProviders, setupProviderId, pluginId);
     }
-    for (const commandAlias of plugin.commandAliases ?? []) {
-      appendOwner(commandAliases, commandAlias.name, plugin.id);
+    for (const commandAlias of readRecordStringFields(() => plugin.commandAliases, "name")) {
+      appendOwner(commandAliases, commandAlias, pluginId);
     }
-    for (const [contract, values] of Object.entries(plugin.contracts ?? {})) {
+    for (const [contract, values] of readRecordEntries(() => plugin.contracts)) {
       if (Array.isArray(values) && values.length > 0) {
-        appendOwner(contracts, contract, plugin.id);
+        appendOwner(contracts, contract, pluginId);
       }
     }
   }
@@ -733,7 +867,7 @@ function loadPluginMetadataSnapshotImpl(params: LoadPluginMetadataSnapshotParams
         });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
   const normalizePluginId = createPluginRegistryIdNormalizer(index, { manifestRegistry });
-  const byPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+  const byPluginId = buildPluginMetadataByPluginId(manifestRegistry.plugins);
   const ownerMapsStartedAt = performance.now();
   const owners = buildPluginMetadataOwnerMaps(manifestRegistry.plugins);
   const ownerMapsMs = performance.now() - ownerMapsStartedAt;

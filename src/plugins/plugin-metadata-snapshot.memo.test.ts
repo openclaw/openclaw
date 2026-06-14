@@ -229,6 +229,20 @@ function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
   return { plugins: [plugin], diagnostics: [] };
 }
 
+function withThrowingMetadataField(
+  plugin: PluginManifestRecord,
+  field: keyof PluginManifestRecord,
+  message: string,
+): PluginManifestRecord {
+  Object.defineProperty(plugin, field, {
+    configurable: true,
+    get() {
+      throw new Error(message);
+    },
+  });
+  return plugin;
+}
+
 describe("loadPluginMetadataSnapshot process memo", () => {
   beforeEach(() => {
     clearLoadPluginMetadataSnapshotMemo();
@@ -539,6 +553,57 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(() => {
       snapshotRecord.pluginId = "snapshot-mutated";
     }).toThrow();
+  });
+
+  it("skips unreadable owner metadata fields while preserving healthy owners", () => {
+    const stateDir = tempStateDir();
+    const index = makeIndex();
+    const providerAuthAliases = { "poisoned-alias-ok": "poisoned-provider" };
+    Object.defineProperty(providerAuthAliases, "poisoned-alias-bad", {
+      enumerable: true,
+      get() {
+        throw new Error("plugin metadata owner provider alias exploded");
+      },
+    });
+    const poisoned = withThrowingMetadataField(
+      withThrowingMetadataField(
+        {
+          ...makeManifestRegistry("poisoned").plugins[0]!,
+          channels: ["poisoned-channel"],
+          providers: ["poisoned-provider"],
+          providerAuthAliases,
+          cliBackends: ["poisoned-cli"],
+        },
+        "modelCatalog",
+        "plugin metadata owner model catalog exploded",
+      ),
+      "commandAliases",
+      "plugin metadata owner command aliases exploded",
+    );
+    const healthy = {
+      ...makeManifestRegistry("healthy").plugins[0]!,
+      modelCatalog: { providers: { "healthy-catalog": {} }, aliases: {} },
+      setup: { providers: [{ id: "healthy-setup", authMethods: [] }], cliBackends: [] },
+    } satisfies PluginManifestRecord;
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "provided",
+      snapshot: index,
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [poisoned, healthy],
+      diagnostics: [],
+    });
+
+    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index, stateDir });
+
+    expect(snapshot.owners.channels.get("poisoned-channel")).toEqual(["poisoned"]);
+    expect(snapshot.owners.providers.get("poisoned-provider")).toEqual(["poisoned"]);
+    expect(snapshot.owners.providers.get("poisoned-alias-ok")).toEqual(["poisoned"]);
+    expect(snapshot.owners.cliBackends.get("poisoned-cli")).toEqual(["poisoned"]);
+    expect(snapshot.owners.modelCatalogProviders.get("healthy-catalog")).toEqual(["healthy"]);
+    expect(snapshot.owners.setupProviders.get("healthy-setup")).toEqual(["healthy"]);
+    expect(snapshot.owners.commandAliases.get("healthy-command")).toEqual(["healthy"]);
   });
 
   it("memoizes policy-stale derived snapshots within the process", () => {
