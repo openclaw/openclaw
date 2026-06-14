@@ -2,6 +2,7 @@
 import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
+import { hasAllowFromEntries } from "./allowlist.js";
 import { collectEmptyAllowlistPolicyWarningsForAccount } from "./empty-allowlist-policy.js";
 import { asObjectRecord } from "./object.js";
 
@@ -97,18 +98,30 @@ export function scanEmptyAllowlistPolicyWarnings(
     }
 
     const accounts = asObjectRecord(channelConfig.accounts);
-    const hasAnyAccounts =
-      accounts && Object.keys(accounts).some((id) => !isDisabledRecord(accounts[id]));
 
-    // When non-disabled sub-accounts exist, the top-level config's empty
-    // groupAllowFrom is a parent/fallback, not a standalone account policy.
-    // Skip the group-allowlist warning (but still run DM and extra warnings).
+    // When every non-disabled sub-account carries its own populated
+    // groupAllowFrom (or allowFrom on fallback channels), the top-level's
+    // empty groupAllowFrom is an unused parent/fallback and should not
+    // trigger a warning.  If any account lacks its own list and relies on
+    // the top-level, the warning is still legitimate.
+    const allAccountsHaveOwnAllowFrom =
+      accounts &&
+      Object.keys(accounts).length > 0 &&
+      Object.keys(accounts).every((id) => {
+        if (isDisabledRecord(accounts[id])) return true;
+        const acct = accounts[id] as DoctorAccountRecord;
+        return hasAllowFromEntries(
+          (acct.groupAllowFrom as DoctorAllowFromList | undefined) ??
+            (acct.allowFrom as DoctorAllowFromList | undefined),
+        );
+      });
+
     checkAccount(
       channelConfig,
       `channels.${channelName}`,
       channelName,
       undefined,
-      hasAnyAccounts ? true : undefined,
+      allAccountsHaveOwnAllowFrom ? true : undefined,
     );
 
     if (!accounts) {
