@@ -133,7 +133,6 @@ final class NodeAppModel {
         self.lastGatewayProblem?.statusText ?? self.gatewayStatusText
     }
 
-    var seamColorHex: String?
     private var mainSessionBaseKey: String = "main"
     private var focusedChatSessionKey: String?
     var selectedAgentId: String?
@@ -202,9 +201,6 @@ final class NodeAppModel {
     private var apnsDeviceTokenHex: String?
     private var apnsLastRegisteredTokenHex: String?
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
-    var gatewaySession: GatewayNodeSession {
-        self.nodeGateway
-    }
 
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
@@ -724,11 +720,6 @@ final class NodeAppModel {
         }
     }
 
-    var seamColor: Color {
-        Self.color(fromHex: self.seamColorHex) ?? Self.defaultSeamColor
-    }
-
-    private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
     private static let deepLinkKeyUserDefaultsKey = "deeplink.agent.key"
     private static let canvasUnattendedDeepLinkKey: String = NodeAppModel.generateDeepLinkKey()
@@ -738,12 +729,9 @@ final class NodeAppModel {
             let res = try await self.operatorGateway.request(method: "config.get", paramsJSON: "{}", timeoutSeconds: 8)
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
             guard let config = json["config"] as? [String: Any] else { return }
-            let ui = config["ui"] as? [String: Any]
-            let raw = (ui?["seamColor"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let session = config["session"] as? [String: Any]
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             await MainActor.run {
-                self.seamColorHex = raw.isEmpty ? nil : raw
                 self.mainSessionBaseKey = mainKey
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
                 self.homeCanvasRevision &+= 1
@@ -1948,7 +1936,7 @@ extension NodeAppModel {
         }
 
         self.activeGatewayConnectConfig = nextConfig
-        self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
+        self.prepareForGatewayConnect(stableID: effectiveStableID)
         if operatorLoopRequired {
             self.startOperatorGatewayLoop(
                 url: url,
@@ -2045,7 +2033,6 @@ extension NodeAppModel {
         self.gatewayConnected = false
         self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
-        self.seamColorHex = nil
         self.mainSessionBaseKey = "main"
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
         ShareGatewayRelaySettings.clearConfig()
@@ -2054,7 +2041,7 @@ extension NodeAppModel {
 }
 
 extension NodeAppModel {
-    private func prepareForGatewayConnect(url: URL, stableID: String) {
+    private func prepareForGatewayConnect(stableID: String) {
         self.isAppleReviewDemoModeEnabled = false
         self.gatewayAutoReconnectEnabled = true
         self.gatewayPairingPaused = false
@@ -2658,7 +2645,6 @@ extension NodeAppModel {
                 self.gatewayConnected = false
                 self.setOperatorConnected(false)
                 self.talkMode.updateGatewayConnected(false)
-                self.seamColorHex = nil
                 self.mainSessionBaseKey = "main"
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
                 self.showLocalCanvasOnDisconnect()
@@ -2831,7 +2817,6 @@ extension NodeAppModel {
         self.talkMode.updateGatewayConnected(false)
         self.talkMode.setEnabled(false)
         self.talkMode.statusText = "Demo mode only"
-        self.seamColorHex = nil
         self.mainSessionBaseKey = "main"
         self.selectedAgentId = nil
         self.gatewayDefaultAgentId = "main"
@@ -2944,14 +2929,6 @@ extension NodeAppModel {
     func recordShareEvent(_ text: String) {
         ShareGatewayRelaySettings.saveLastEvent(text)
         self.refreshLastShareEventFromRelay()
-    }
-
-    func reloadTalkConfig() {
-        Task { [weak self] in
-            guard let self else { return }
-            await self.talkMode.reloadConfig()
-            await self.talkMode.prefetchRealtimeSessionIfReady(reason: "config_reload")
-        }
     }
 
     /// Back-compat hook retained for older gateway-connect flows.
@@ -3914,32 +3891,6 @@ extension NodeAppModel {
         }
     }
 
-    func handleExecApprovalNotificationDecision(
-        approvalId: String,
-        decision: String) async
-    {
-        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedApprovalID.isEmpty else { return }
-
-        if self.pendingExecApprovalPrompt?.id == normalizedApprovalID {
-            self.pendingExecApprovalPromptResolving = true
-            self.pendingExecApprovalPromptErrorText = nil
-        }
-
-        let outcome = await self.resolveExecApprovalNotificationDecision(
-            approvalId: normalizedApprovalID,
-            decision: decision)
-        switch outcome {
-        case .resolved, .stale, .unavailable:
-            break
-        case let .failed(message):
-            if self.pendingExecApprovalPrompt?.id == normalizedApprovalID {
-                self.pendingExecApprovalPromptResolving = false
-                self.pendingExecApprovalPromptErrorText = message
-            }
-        }
-    }
-
     private func resolveExecApprovalNotificationDecision(
         approvalId: String,
         decision: String,
@@ -4476,17 +4427,6 @@ extension NodeAppModel {
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
     }
 
-    private static func color(fromHex raw: String?) -> Color? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let hex = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
-        guard hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
-        let r = Double((value >> 16) & 0xFF) / 255.0
-        let g = Double((value >> 8) & 0xFF) / 255.0
-        let b = Double(value & 0xFF) / 255.0
-        return Color(red: r, green: g, blue: b)
-    }
-
     func approvePendingAgentDeepLinkPrompt() async {
         guard let prompt = self.pendingAgentDeepLinkPrompt else { return }
         self.pendingAgentDeepLinkPrompt = nil
@@ -4636,28 +4576,8 @@ extension NodeAppModel {
         try self.encodePayload(obj)
     }
 
-    func _test_isCameraEnabled() -> Bool {
-        self.isCameraEnabled()
-    }
-
-    func _test_triggerCameraFlash() {
-        self.triggerCameraFlash()
-    }
-
-    func _test_showCameraHUD(text: String, kind: CameraHUDKind, autoHideSeconds: Double? = nil) {
-        self.showCameraHUD(text: text, kind: kind, autoHideSeconds: autoHideSeconds)
-    }
-
     func _test_handleCanvasA2UIAction(body: [String: Any]) async {
         await self.handleCanvasA2UIAction(body: body)
-    }
-
-    func _test_showLocalCanvasOnDisconnect() {
-        self.showLocalCanvasOnDisconnect()
-    }
-
-    func _test_applyTalkModeSync(enabled: Bool, phase: String? = nil) {
-        self.applyTalkModeSync(enabled: enabled, phase: phase)
     }
 
     func _test_queuedWatchReplyCount() -> Int {
