@@ -197,6 +197,23 @@ describe("web monitor inbox", () => {
     expect(inbound.payload.body).toBe("ping");
     expect(inbound.from).toBe("+999");
     expect(inbound.platform.recipientJid).toBe("+123");
+    expect(inbound.admission).toMatchObject({
+      accountId: DEFAULT_ACCOUNT_ID,
+      conversation: {
+        kind: "direct",
+        id: "+999",
+      },
+      sender: {
+        id: "+999",
+        dmSenderId: "+999",
+      },
+      senderAccess: {
+        allowed: true,
+        decision: "allow",
+      },
+    });
+    expect(inbound.accountId).toBe(inbound.admission?.accountId);
+    expect(inbound.chatType).toBe(inbound.admission?.conversation.kind);
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "999@s.whatsapp.net",

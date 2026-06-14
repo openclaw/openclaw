@@ -7,6 +7,7 @@ export {
   extractText,
 } from "./inbound/extract.js";
 export { monitorWebInbox } from "./inbound/monitor.js";
+export type { WhatsAppInboundAdmission } from "./inbound/admission.js";
 export type {
   LegacyFlatWebInboundMessage,
   WebInboundCallbackMessage,
