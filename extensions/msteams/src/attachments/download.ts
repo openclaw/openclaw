@@ -53,8 +53,9 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
     const fileName = normalizeOptionalString(att.content.fileName) ?? "";
 
     const fileHint = name || fileName || (uniqueId && fileType ? `${uniqueId}.${fileType}` : "");
+    const sharesUrl = tryBuildGraphSharesUrlForSharedLink(downloadUrl);
     return {
-      url: downloadUrl,
+      url: sharesUrl ?? downloadUrl,
       fileHint: fileHint || undefined,
       contentTypeHint: undefined,
       placeholder: inferPlaceholder({
