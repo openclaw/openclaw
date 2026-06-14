@@ -52,6 +52,34 @@ vi.mock("../config/runtime-schema.js", () => ({
   readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
 }));
 
+vi.mock("../gateway/config-reload-plan.js", () => ({
+  buildGatewayReloadPlan: (changedPaths: string[]) => {
+    const hotReasons = changedPaths.filter(
+      (changedPath) =>
+        changedPath.startsWith("agents.list.") ||
+        changedPath.startsWith("agents.defaults.models.") ||
+        changedPath.startsWith("models.") ||
+        changedPath.startsWith("plugins."),
+    );
+    const restartReasons = changedPaths.filter((changedPath) => !hotReasons.includes(changedPath));
+    return {
+      changedPaths,
+      restartGateway: restartReasons.length > 0,
+      restartReasons,
+      hotReasons,
+      reloadHooks: false,
+      restartGmailWatcher: false,
+      restartCron: false,
+      restartHeartbeat: hotReasons.length > 0,
+      restartHealthMonitor: false,
+      reloadPlugins: false,
+      restartChannels: new Set(),
+      disposeMcpRuntimes: false,
+      noopPaths: [],
+    };
+  },
+}));
+
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   return {
@@ -3391,6 +3419,149 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("--allow-exec can only be used with --dry-run.");
+    });
+  });
+
+  describe("config apply hints - issue #80722", () => {
+    it("prints a hot-reload hint for agents.list model changes", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main" },
+            { id: "mason-vale", model: { primary: "ollama/qwen3-coder-next" } },
+          ],
+        },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.list[1].model.primary",
+        '"ollama/kimi-k2.6"',
+        "--strict-json",
+      ]);
+
+      expectLogIncludes("Updated agents.list.1.model.primary");
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
+    });
+
+    it("does not treat legacy per-agent agentRuntime as restart-required", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "codex-legacy",
+              agentRuntime: { id: "codex" },
+              model: { primary: "openai/gpt-5.5" },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.list[0].model.primary",
+        '"openai/gpt-5.4-mini"',
+        "--strict-json",
+      ]);
+
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
+    });
+
+    it("prints a hot-reload hint when removing legacy per-agent agentRuntime", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "codex-legacy",
+              agentRuntime: { id: "codex" },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand(["config", "unset", "agents.list[0].agentRuntime"]);
+
+      expectLogIncludes("Removed agents.list[0].agentRuntime");
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
+    });
+
+    it("prints a hot-reload hint for provider runtime policy changes", async () => {
+      const resolved: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {},
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "models.providers.openai.agentRuntime.id",
+        '"pi"',
+        "--strict-json",
+      ]);
+
+      expectLogIncludes("Updated models.providers.openai.agentRuntime.id");
+      expectLogIncludes("Change will apply without restarting the gateway.");
+      expectLogExcludes("Restart the gateway to apply.");
+    });
+
+    it("keeps the restart hint for restart-required config paths", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main" }] },
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
+
+      expectLogIncludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps plugin entry config writes restart-backed when reload metadata is absent", async () => {
+      const resolved: OpenClawConfig = {
+        plugins: {
+          entries: {
+            canvas: { enabled: true },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "plugins.entries.canvas.enabled", "false"]);
+
+      expectLogIncludes("Updated plugins.entries.canvas.enabled");
+      expectLogIncludes("Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
+    });
+
+    it("keeps the restart hint for mixed hot and restart batch updates", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }] },
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "--batch-json",
+        '[{"path":"agents.list[0].model.primary","value":"openai/gpt-5.5"},{"path":"gateway.auth.mode","value":"token"}]',
+      ]);
+
+      expectLogIncludes("Updated 2 config paths. Restart the gateway to apply.");
+      expectLogExcludes("Change will apply without restarting the gateway.");
     });
   });
 
