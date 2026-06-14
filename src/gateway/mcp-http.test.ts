@@ -657,6 +657,27 @@ describe("buildMcpToolSchema", () => {
       ).toEqual(testCase.expected);
     }
   });
+
+  it("ignores unreadable union schema variants while preserving usable siblings", () => {
+    const unreadableVariant = {};
+    Object.defineProperty(unreadableVariant, "properties", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin loopback variant properties exploded");
+      },
+    });
+
+    expect(
+      buildMockMcpToolSchema([
+        makeMockTool({
+          name: "fuzzplugin_move_angles",
+          parameters: {
+            anyOf: [unreadableVariant, angleSchema(ANGLE_NUMBER_PROPERTY, ["angle"])],
+          },
+        }),
+      ])[0]?.inputSchema,
+    ).toEqual(angleSchema(ANGLE_NUMBER_PROPERTY, ["angle"]));
+  });
 });
 
 describe("mcp loopback server", () => {
