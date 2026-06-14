@@ -504,7 +504,7 @@ export abstract class MemoryManagerSyncOps {
               this.settings.provider,
             model:
               this.settings.model.trim() ||
-              resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
+              resolveEmbeddingProviderFallbackModel(this.settings.provider, "fts-only", this.cfg),
           };
     const provider = hasProviderOverride
       ? params.provider!
