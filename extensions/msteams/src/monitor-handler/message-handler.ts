@@ -88,6 +88,7 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   return "";
 }
 
+import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
@@ -98,9 +99,54 @@ import {
   recordMSTeamsSentMessage,
   wasMSTeamsMessageSentWithPersistence,
 } from "../sent-message-cache.js";
+import { applyVoiceTranscripts, isAudioAttachment } from "../voice-message.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
+
+/**
+ * Voice messages (#13): transcribe inbound audio attachments and fold the text into the body so
+ * the agent reads what was said instead of an opaque "<media:document>" placeholder. Opt-in via
+ * msteams.transcribeVoiceMessages (incurs an STT call); a failed clip keeps its placeholder and
+ * never blocks the reply. Returns the (possibly unchanged) body.
+ */
+async function applyMSTeamsVoiceTranscription(params: {
+  rawBody: string;
+  mediaList: Array<{ path: string; contentType?: string; placeholder: string }>;
+  cfg: MSTeamsMessageHandlerDeps["cfg"];
+  log: MSTeamsMessageHandlerDeps["log"];
+}): Promise<string> {
+  const { rawBody, mediaList, cfg, log } = params;
+  const audioMedia = mediaList.filter((m) => isAudioAttachment(m.contentType));
+  if (audioMedia.length === 0) {
+    return rawBody;
+  }
+  const transcribed = await Promise.all(
+    audioMedia.map(async (m) => {
+      try {
+        const result = await transcribeAudioFile({
+          filePath: m.path,
+          cfg,
+          mime: m.contentType,
+        });
+        return { transcript: result.text?.trim() ?? "", placeholder: m.placeholder };
+      } catch (err) {
+        log.debug?.("voice message transcription failed", {
+          contentType: m.contentType,
+          error: formatUnknownError(err),
+        });
+        return { transcript: "", placeholder: m.placeholder };
+      }
+    }),
+  );
+  const merged = applyVoiceTranscripts(rawBody, transcribed);
+  if (merged !== rawBody) {
+    log.debug?.("transcribed voice message(s)", {
+      count: transcribed.filter((t) => t.transcript).length,
+    });
+  }
+  return merged;
+}
 
 function formatMSTeamsSenderReason(params: {
   reasonCode: string;
@@ -233,7 +279,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       maxInlineBytes: mediaMaxBytes,
       maxInlineTotalBytes: mediaMaxBytes,
     });
-    const rawBody = text || attachmentPlaceholder;
+    // `let`: voice-message transcription (#13) folds transcripts into the body after the audio
+    // attachments are downloaded below.
+    let rawBody = text || attachmentPlaceholder;
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;
     let quoteSenderName: string | undefined;
@@ -618,6 +666,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         ?.preserveFilenames,
     });
 
+    if (msteamsCfg?.transcribeVoiceMessages) {
+      rawBody = await applyMSTeamsVoiceTranscription({ rawBody, mediaList, cfg, log });
+    }
+
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
 
     // Fetch thread history when the message is a reply inside a Teams channel thread.
@@ -825,6 +877,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       extra: {
         GroupSubject: !isDirectMessage ? conversationType : undefined,
         ReplyToIsQuote: quoteInfo ? true : undefined,
+        // The sender's Azure AD object id, exposed unambiguously so tools (e.g. the
+        // voice-call tool placing a Teams call back) can target this user without
+        // guessing whether sender.id is an AAD id or a Bot Framework service id.
+        MsteamsAadObjectId: from?.aadObjectId,
         ...mediaPayload,
       },
     });

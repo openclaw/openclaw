@@ -169,6 +169,7 @@ describe("voice-call outbound helpers", () => {
       to: "+14155550123",
       webhookUrl: "https://example.com/webhook",
       inlineTwiml: "<Response />",
+      message: "hello there",
     });
     expect(ctx.providerCallIdMap.get("provider-1")).toBe(callId);
     expect(ctx.activeCalls.get(callId)?.sessionKey).toBe("session-1");
@@ -236,6 +237,7 @@ describe("voice-call outbound helpers", () => {
       webhookUrl: "https://example.com/webhook",
       inlineTwiml: undefined,
       preConnectTwiml: "<DtmfRedirect />",
+      message: "hello meet",
     });
     const metadata = (
       ctx.activeCalls.get(callId) as { metadata?: Record<string, unknown> } | undefined

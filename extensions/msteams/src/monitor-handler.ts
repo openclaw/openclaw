@@ -1,6 +1,7 @@
 // Msteams plugin module implements monitor handler behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
+import { buildMessageActionPrompt, type MSTeamsMessageActionValue } from "./message-action.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
@@ -24,6 +25,30 @@ export type MSTeamsActivityHandler = {
   ) => MSTeamsActivityHandler;
   run?: (context: unknown) => Promise<void>;
 };
+
+/**
+ * Synthetic message activity for an invoke-driven dispatch (card action / message action). The user
+ * explicitly invoked the bot, so stamp a bot-mention entity: without it `wasMSTeamsBotMentioned` is
+ * false and group-chat mention-gating silently drops the dispatch right after the "On it" ack —
+ * the reply never comes, and the quoted prompt only pollutes the group history. (Review B8)
+ */
+function buildInvokeDispatchActivity(
+  activity: MSTeamsTurnContext["activity"],
+  text: string,
+): MSTeamsTurnContext["activity"] {
+  const botId = activity.recipient?.id;
+  return {
+    ...activity,
+    type: "message",
+    text,
+    entities: [
+      ...(activity.entities ?? []),
+      ...(botId
+        ? [{ type: "mention", mentioned: { id: botId, name: activity.recipient?.name ?? "" } }]
+        : []),
+    ],
+  };
+}
 
 function serializeAdaptiveCardActionValue(value: unknown): string | null {
   if (typeof value === "string") {
@@ -164,11 +189,24 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         if (text) {
           await handleTeamsMessage({
             ...ctx,
-            activity: {
-              ...ctx.activity,
-              type: "message",
-              text,
-            },
+            activity: buildInvokeDispatchActivity(ctx.activity, text),
+          });
+        }
+        return;
+      }
+
+      // Message action ("Ask OpenClaw about this", #10): the selected message arrives on a
+      // composeExtension/submitAction invoke. Quote it into a prompt and dispatch as a normal
+      // message so the reply lands in the conversation (same path as adaptiveCard/action above).
+      if (
+        ctx.activity?.type === "invoke" &&
+        ctx.activity?.name === "composeExtension/submitAction"
+      ) {
+        const prompt = buildMessageActionPrompt(ctx.activity?.value as MSTeamsMessageActionValue);
+        if (prompt) {
+          await handleTeamsMessage({
+            ...ctx,
+            activity: buildInvokeDispatchActivity(ctx.activity, prompt),
           });
         }
         return;
