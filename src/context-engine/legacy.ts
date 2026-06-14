@@ -1,7 +1,6 @@
 // Legacy context engine wraps pre-plugin context behavior behind the pluggable interface.
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { delegateCompactionToRuntime } from "./delegate.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -10,6 +9,15 @@ import type {
   ContextEngineRuntimeContext,
   IngestResult,
 } from "./types.js";
+
+type DelegateModule = Pick<typeof import("./delegate.js"), "delegateCompactionToRuntime">;
+
+let delegateModulePromise: Promise<DelegateModule> | null = null;
+
+function loadDelegateModule(): Promise<DelegateModule> {
+  delegateModulePromise ??= import("./delegate.js");
+  return delegateModulePromise;
+}
 
 /**
  * LegacyContextEngine wraps the existing compaction behavior behind the
@@ -79,6 +87,7 @@ export class LegacyContextEngine implements ContextEngine {
     customInstructions?: string;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<CompactResult> {
+    const { delegateCompactionToRuntime } = await loadDelegateModule();
     return await delegateCompactionToRuntime(params);
   }
 
