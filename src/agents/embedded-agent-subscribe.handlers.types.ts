@@ -44,6 +44,7 @@ type EmbeddedSubscribeLogger = {
 export type ToolCallSummary = {
   meta?: string;
   mutatingAction: boolean;
+  mutationClassified: boolean;
   actionFingerprint?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
@@ -70,6 +71,7 @@ export type EmbeddedAgentSubscribeState = {
     toolName?: string;
     meta?: string;
     mutatingAction?: boolean;
+    mutationClassified?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -190,6 +192,7 @@ export type EmbeddedAgentSubscribeContext = {
   blockChunker: EmbeddedBlockChunker | null;
   hookRunner?: HookRunner;
   builtinToolNames?: ReadonlySet<string>;
+  mutationClassifiedToolNames?: ReadonlySet<string>;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
   noteLastAssistant: (msg: AgentMessage) => void;
 
@@ -330,6 +333,7 @@ export type ToolHandlerContext = {
   log: EmbeddedSubscribeLogger;
   hookRunner?: HookRunner;
   builtinToolNames?: ReadonlySet<string>;
+  mutationClassifiedToolNames?: ReadonlySet<string>;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
   flushBlockReplyBuffer: () => void | Promise<void>;
   shouldEmitToolResult: () => boolean;

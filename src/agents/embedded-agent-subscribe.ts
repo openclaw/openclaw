@@ -1254,6 +1254,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     blockChunker,
     hookRunner: params.hookRunner,
     builtinToolNames: params.builtinToolNames,
+    mutationClassifiedToolNames: params.mutationClassifiedToolNames,
     trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
     noteLastAssistant,
     shouldEmitToolResult,

@@ -115,6 +115,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
    * Exact raw names of OpenClaw tools registered for this run.
    */
   builtinToolNames?: ReadonlySet<string>;
+  /** Exact raw names whose mutation behavior is classified by OpenClaw. */
+  mutationClassifiedToolNames?: ReadonlySet<string>;
   /**
    * Exact raw names allowed to emit local media paths for this run.
    * Includes core trusted tools plus bundled plugin tools proven from the

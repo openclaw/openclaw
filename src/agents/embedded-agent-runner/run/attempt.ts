@@ -3469,6 +3469,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           builtinToolNames,
+          mutationClassifiedToolNames: coreBuiltinToolNames,
           internalEvents: params.internalEvents,
         }),
       );

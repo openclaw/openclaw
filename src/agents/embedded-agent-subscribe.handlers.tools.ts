@@ -228,11 +228,17 @@ function isCronAddAction(args: unknown): boolean {
   return normalizeOptionalLowercaseString(action) === "add";
 }
 
-function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
+function buildToolCallSummary(
+  toolName: string,
+  args: unknown,
+  meta: string | undefined,
+  mutationClassified: boolean,
+): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
     meta,
     mutatingAction: mutation.mutatingAction,
+    mutationClassified,
     actionFingerprint: mutation.actionFingerprint,
     fileTarget: mutation.fileTarget,
   };
@@ -984,7 +990,15 @@ export function handleToolExecutionStart(
         detailMode: ctx.params.toolProgressDetail ?? "explain",
       }),
     );
-    ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
+    ctx.state.toolMetaById.set(
+      toolCallId,
+      buildToolCallSummary(
+        toolName,
+        args,
+        meta,
+        ctx.mutationClassifiedToolNames?.has(rawToolName.trim()) === true,
+      ),
+    );
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
@@ -1237,14 +1251,38 @@ export async function handleToolExecutionEnd(
   toolStartData.delete(toolStartKey);
   ctx.state.execLiveUpdateStateById?.delete(toolCallId);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
-  const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
-  const meta = callSummary?.meta;
+  const { consumeAdjustedParamsForToolCall } = await loadBeforeToolCall();
+  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+  const startArgs =
+    adjustedArgs && typeof adjustedArgs === "object"
+      ? (adjustedArgs as Record<string, unknown>)
+      : startData?.args && typeof startData.args === "object"
+        ? (startData.args as Record<string, unknown>)
+        : {};
+  const meta =
+    adjustedArgs && typeof adjustedArgs === "object"
+      ? extendExecMeta(
+          toolName,
+          startArgs,
+          inferToolMetaFromArgs(toolName, startArgs, {
+            detailMode: ctx.params.toolProgressDetail ?? "explain",
+          }),
+        )
+      : callSummary?.meta;
+  const completedCallSummary = buildToolCallSummary(
+    toolName,
+    startArgs,
+    meta,
+    callSummary?.mutationClassified === true,
+  );
+  const completedMutatingAction = !isToolError && completedCallSummary.mutatingAction;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   ctx.state.toolMetas.push({
     toolName,
     meta,
-    mutatingAction: callSummary?.mutatingAction,
+    mutatingAction: completedCallSummary.mutatingAction,
+    mutationClassified: completedCallSummary.mutationClassified,
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -1266,9 +1304,9 @@ export async function handleToolExecutionEnd(
       error: errorMessage,
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
-      mutatingAction: callSummary?.mutatingAction,
-      actionFingerprint: callSummary?.actionFingerprint,
-      fileTarget: callSummary?.fileTarget,
+      mutatingAction: completedCallSummary.mutatingAction,
+      actionFingerprint: completedCallSummary.actionFingerprint,
+      fileTarget: completedCallSummary.fileTarget,
     };
   } else if (ctx.state.lastToolError) {
     // Keep unresolved mutating failures until the same action succeeds.
@@ -1277,8 +1315,8 @@ export async function handleToolExecutionEnd(
         isSameToolMutationAction(ctx.state.lastToolError, {
           toolName,
           meta,
-          actionFingerprint: callSummary?.actionFingerprint,
-          fileTarget: callSummary?.fileTarget,
+          actionFingerprint: completedCallSummary.actionFingerprint,
+          fileTarget: completedCallSummary.fileTarget,
         })
       ) {
         ctx.state.lastToolError = undefined;
@@ -1301,10 +1339,6 @@ export async function handleToolExecutionEnd(
   const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
   const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
   const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
-  const startArgs =
-    startData?.args && typeof startData.args === "object"
-      ? (startData.args as Record<string, unknown>)
-      : {};
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
@@ -1359,7 +1393,7 @@ export async function handleToolExecutionEnd(
   }
 
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
+  if (!isToolError && toolName === "cron" && isCronAddAction(startArgs)) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
@@ -1614,16 +1648,10 @@ export async function handleToolExecutionEnd(
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const { consumeAdjustedParamsForToolCall } = await loadBeforeToolCall();
-    const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
-    const afterToolCallArgs =
-      adjustedArgs && typeof adjustedArgs === "object"
-        ? (adjustedArgs as Record<string, unknown>)
-        : startArgs;
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: afterToolCallArgs,
+      params: startArgs,
       runId,
       toolCallId,
       result: sanitizedResult,

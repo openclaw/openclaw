@@ -249,7 +249,9 @@ export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
   const hadMutatingTools = params.toolMetas.some(
-    (toolMeta) => toolMeta.mutatingAction ?? isLikelyMutatingToolName(toolMeta.toolName),
+    (toolMeta) =>
+      toolMeta.mutationClassified === false ||
+      (toolMeta.mutatingAction ?? isLikelyMutatingToolName(toolMeta.toolName)),
   );
   const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =

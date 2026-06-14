@@ -8,6 +8,7 @@ import {
 } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { recordAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -333,6 +334,7 @@ describe("handleToolExecutionStart read path checks", () => {
 describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   it("increments successfulCronAdds when cron add succeeds", async () => {
     const { ctx } = createTestContext();
+    ctx.mutationClassifiedToolNames = new Set(["cron"]);
     await handleToolExecutionStart(
       ctx as never,
       {
@@ -356,12 +358,18 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
 
     expect(ctx.state.successfulCronAdds).toBe(1);
     expect(ctx.state.toolMetas).toContainEqual(
-      expect.objectContaining({ toolName: "cron", mutatingAction: true }),
+      expect.objectContaining({
+        toolName: "cron",
+        mutatingAction: true,
+        mutationClassified: true,
+      }),
     );
+    expect(ctx.state.successfulCronAdds).toBe(1);
   });
 
   it("retains read-only cron action metadata for replay classification", async () => {
     const { ctx } = createTestContext();
+    ctx.mutationClassifiedToolNames = new Set(["cron"]);
     await handleToolExecutionStart(
       ctx as never,
       {
@@ -384,7 +392,82 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.toolMetas).toContainEqual(
-      expect.objectContaining({ toolName: "cron", mutatingAction: false }),
+      expect.objectContaining({
+        toolName: "cron",
+        mutatingAction: false,
+        mutationClassified: true,
+      }),
+    );
+  });
+
+  it("reclassifies mutation from hook-adjusted execution arguments", async () => {
+    const { ctx } = createTestContext();
+    ctx.mutationClassifiedToolNames = new Set(["cron"]);
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-cron-adjusted",
+        args: { action: "status" },
+      } as never,
+    );
+    recordAdjustedParamsForToolCall(
+      "tool-cron-adjusted",
+      { action: "add", job: { name: "reminder" } },
+      "run-test",
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-cron-adjusted",
+        isError: false,
+        result: { details: { status: "ok" } },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "cron",
+        mutatingAction: true,
+        mutationClassified: true,
+      }),
+    );
+  });
+
+  it("marks plugin tool mutation behavior as unclassified", async () => {
+    const { ctx } = createTestContext();
+    ctx.mutationClassifiedToolNames = new Set(["cron"]);
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "custom_side_effect_tool",
+        toolCallId: "tool-plugin-side-effect",
+        args: { action: "publish" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "custom_side_effect_tool",
+        toolCallId: "tool-plugin-side-effect",
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "custom_side_effect_tool",
+        mutatingAction: false,
+        mutationClassified: false,
+      }),
     );
   });
 

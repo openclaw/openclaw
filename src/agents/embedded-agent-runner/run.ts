@@ -3395,12 +3395,14 @@ async function runEmbeddedAgentInternal(
           if (
             postToolEmptyAssistantTurn &&
             !emptyAssistantReplyIsSilent &&
+            payloadCount === 0 &&
             !aborted &&
             !timedOut &&
             !attempt.clientToolCalls &&
             !attempt.yieldDetected &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
+            !hasMessagingToolDeliveryEvidence(attempt) &&
             !resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects &&
             postToolEmptyContinuationAttempts < 1
           ) {

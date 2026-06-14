@@ -169,6 +169,7 @@ export type EmbeddedRunAttemptResult = {
     toolName: string;
     meta?: string;
     mutatingAction?: boolean;
+    mutationClassified?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;

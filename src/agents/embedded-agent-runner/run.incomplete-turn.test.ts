@@ -592,6 +592,108 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(payload?.text).not.toContain("Adding it now.");
   });
 
+  it("does not continue automatically after an unclassified plugin tool result", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Publishing it now."],
+        toolMetas: [
+          {
+            toolName: "custom_side_effect_tool",
+            mutatingAction: false,
+            mutationClassified: false,
+          },
+        ],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            toolCallId: "call_plugin",
+            content: [{ type: "text", text: '{"ok":true}' }],
+            isError: false,
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-post-tool-empty-unclassified-plugin",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    const [payload] = result.payloads ?? [];
+    expect(payload?.text).toContain("couldn't generate a response");
+    expect(payload?.text).toContain("tool actions may have already been executed");
+    expect(payload?.text).not.toContain("Publishing it now.");
+  });
+
+  it("does not continue when the terminal path already contains tool media", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Checking the image."],
+        toolMetas: [
+          {
+            toolName: "image",
+            mutatingAction: false,
+            mutationClassified: true,
+          },
+        ],
+        toolMediaUrls: ["https://example.com/result.png"],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            toolCallId: "call_image",
+            content: [{ type: "text", text: '{"ok":true}' }],
+            isError: false,
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-post-tool-empty-media",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      expect.objectContaining({ mediaUrl: "https://example.com/result.png" }),
+    ]);
+  });
+
   it("bounds empty post-tool continuation to one retry", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const emptyPostToolAttempt = makeAttemptResult({
@@ -2549,6 +2651,23 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(
       buildAttemptReplayMetadata({
         toolMetas: [{ toolName: "cron", meta: "add", mutatingAction: true }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("fails closed when a completed tool call has no mutation classifier", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [
+          {
+            toolName: "custom_side_effect_tool",
+            mutatingAction: false,
+            mutationClassified: false,
+          },
+        ],
         didSendViaMessagingTool: false,
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
