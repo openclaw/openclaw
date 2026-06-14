@@ -399,6 +399,7 @@ describe("resolveReactionSyntheticEvent", () => {
       },
       message: {
         message_id: "om_msg1:reaction:THUMBSUP:fixed-uuid",
+        suppress_reply_target: true,
         chat_id: "oc_group_from_event",
         chat_type: "group",
         message_type: "text",
@@ -407,6 +408,18 @@ describe("resolveReactionSyntheticEvent", () => {
         }),
       },
     });
+  });
+
+  it("marks reaction synthetic events so generated ids are not reply or typing targets", async () => {
+    const result = await resolveReactionWithLookup({
+      lookupChatId: "oc_group_from_lookup",
+      lookupChatType: "group",
+    });
+
+    expect(result?.message.message_id).toBe("om_msg1:reaction:THUMBSUP:fixed-uuid");
+    expect(result?.message.suppress_reply_target).toBe(true);
+    const ctx = result ? parseFeishuMessageEvent(result) : null;
+    expect(ctx?.suppressReplyTarget).toBe(true);
   });
 
   it("falls back to reacted message chat_id when event chat_id is absent", async () => {

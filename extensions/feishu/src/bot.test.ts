@@ -3397,6 +3397,39 @@ describe("handleFeishuMessage command authorization", () => {
     expect(dispatcherOptions.typingIndicatorMessageId).toBeUndefined();
   });
 
+  it("does not use reaction synthetic message ids as reply or typing targets", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-reaction-user" } },
+      message: {
+        message_id: "om_msg1:reaction:THUMBSUP:fixed-uuid",
+        suppress_reply_target: true,
+        chat_id: "oc-reaction-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "[reacted with THUMBSUP to message om_msg1]" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const dispatcherOptions = mockCallArg<{
+      replyToMessageId?: string;
+      typingIndicatorMessageId?: string;
+    }>(mockCreateFeishuReplyDispatcher, 0, 0);
+    expect(dispatcherOptions.replyToMessageId).toBeUndefined();
+    expect(dispatcherOptions.typingIndicatorMessageId).toBeUndefined();
+  });
+
   it("replies to topic root in topic-sender group with root_id", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
