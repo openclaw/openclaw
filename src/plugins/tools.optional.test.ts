@@ -164,6 +164,19 @@ function createMalformedTool(name: string) {
   };
 }
 
+function createToolWithThrowingGetter(
+  name: string,
+  property: "description" | "name" | "parameters",
+) {
+  const tool = makeTool(name);
+  Object.defineProperty(tool, property, {
+    get() {
+      throw new Error(`${property} exploded`);
+    },
+  });
+  return tool;
+}
+
 function installConsoleMethodSpy(method: "log" | "warn") {
   const spy = vi.fn();
   loggingState.rawConsole = {
@@ -1936,6 +1949,52 @@ describe("resolvePluginTools optional tools", () => {
     expectSingleDiagnosticMessage(
       registry.diagnostics,
       "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
+    );
+  });
+
+  it("skips plugin tools with unreadable schema getters while keeping valid siblings", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-getter-bug",
+        optional: false,
+        source: "/tmp/schema-getter-bug.js",
+        names: ["broken_schema", "valid_tool"],
+        factory: () => [
+          createToolWithThrowingGetter("broken_schema", "parameters"),
+          makeTool("valid_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-getter-bug): broken_schema unreadable parameters object",
+    );
+  });
+
+  it("reports unreadable plugin tool names without poisoning valid siblings", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "name-getter-bug",
+        optional: false,
+        source: "/tmp/name-getter-bug.js",
+        names: ["broken_name", "valid_tool"],
+        factory: () => [
+          createToolWithThrowingGetter("broken_name", "name"),
+          makeTool("valid_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (name-getter-bug): missing non-empty name",
     );
   });
 
