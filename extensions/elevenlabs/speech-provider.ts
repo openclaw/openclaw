@@ -41,9 +41,23 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
 const ELEVENLABS_TTS_MODELS = [
   "eleven_v3",
   "eleven_multilingual_v2",
-  "eleven_turbo_v2_5",
-  "eleven_monolingual_v1",
+  "eleven_flash_v2_5",
+  "eleven_flash_v2",
 ] as const;
+
+function normalizeElevenLabsTtsModelId(value: string | undefined): string | undefined {
+  switch (value) {
+    case "eleven_monolingual_v1":
+    case "eleven_multilingual_v1":
+      return "eleven_multilingual_v2";
+    case "eleven_turbo_v2_5":
+      return "eleven_flash_v2_5";
+    case "eleven_turbo_v2":
+      return "eleven_flash_v2";
+    default:
+      return value;
+  }
+}
 
 type ElevenLabsProviderConfig = {
   apiKey?: string;
@@ -136,7 +150,8 @@ function normalizeElevenLabsProviderConfig(
     }),
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_ELEVENLABS_VOICE_ID,
-    modelId: trimToUndefined(raw?.modelId) ?? DEFAULT_ELEVENLABS_MODEL_ID,
+    modelId:
+      normalizeElevenLabsTtsModelId(trimToUndefined(raw?.modelId)) ?? DEFAULT_ELEVENLABS_MODEL_ID,
     seed: normalizeElevenLabsSeed(raw?.seed),
     applyTextNormalization: trimToUndefined(raw?.applyTextNormalization) as
       | "auto"
@@ -158,7 +173,7 @@ function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsP
     apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
     voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
-    modelId: trimToUndefined(config.modelId) ?? defaults.modelId,
+    modelId: normalizeElevenLabsTtsModelId(trimToUndefined(config.modelId)) ?? defaults.modelId,
     seed: normalizeElevenLabsSeed(config.seed) ?? defaults.seed,
     applyTextNormalization:
       (trimToUndefined(config.applyTextNormalization) as "auto" | "on" | "off" | undefined) ??
@@ -222,7 +237,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         }
         return {
           handled: true,
-          overrides: { ...ctx.currentOverrides, modelId: ctx.value },
+          overrides: { ...ctx.currentOverrides, modelId: normalizeElevenLabsTtsModelId(ctx.value) },
         };
       case "stability": {
         if (!ctx.policy.allowVoiceSettings) {
@@ -407,7 +422,9 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
           : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
         ...(trimToUndefined(talkProviderConfig.modelId) == null
           ? {}
-          : { modelId: trimToUndefined(talkProviderConfig.modelId) }),
+          : {
+              modelId: normalizeElevenLabsTtsModelId(trimToUndefined(talkProviderConfig.modelId)),
+            }),
         ...(normalizeElevenLabsSeed(talkProviderConfig.seed) == null
           ? {}
           : { seed: normalizeElevenLabsSeed(talkProviderConfig.seed) }),
@@ -456,7 +473,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
           : { voiceId: trimToUndefined(params.voiceId) }),
         ...(trimToUndefined(params.modelId) == null
           ? {}
-          : { modelId: trimToUndefined(params.modelId) }),
+          : { modelId: normalizeElevenLabsTtsModelId(trimToUndefined(params.modelId)) }),
         ...(trimToUndefined(params.outputFormat) == null
           ? {}
           : { outputFormat: trimToUndefined(params.outputFormat) }),
@@ -511,7 +528,8 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         apiKey,
         baseUrl: config.baseUrl,
         voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-        modelId: trimToUndefined(overrides.modelId) ?? config.modelId,
+        modelId:
+          normalizeElevenLabsTtsModelId(trimToUndefined(overrides.modelId)) ?? config.modelId,
         outputFormat,
         seed: normalizeElevenLabsSeed(overrides.seed) ?? config.seed,
         applyTextNormalization:
@@ -549,7 +567,8 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         apiKey,
         baseUrl: config.baseUrl,
         voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-        modelId: trimToUndefined(overrides.modelId) ?? config.modelId,
+        modelId:
+          normalizeElevenLabsTtsModelId(trimToUndefined(overrides.modelId)) ?? config.modelId,
         outputFormat,
         seed: normalizeElevenLabsSeed(overrides.seed) ?? config.seed,
         applyTextNormalization:
@@ -586,7 +605,8 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         apiKey,
         baseUrl: config.baseUrl,
         voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-        modelId: trimToUndefined(overrides.modelId) ?? config.modelId,
+        modelId:
+          normalizeElevenLabsTtsModelId(trimToUndefined(overrides.modelId)) ?? config.modelId,
         outputFormat,
         seed: normalizeElevenLabsSeed(overrides.seed) ?? config.seed,
         applyTextNormalization:
