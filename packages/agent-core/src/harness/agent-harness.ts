@@ -193,6 +193,39 @@ function normalizeHarnessError(
   return new AgentHarnessError(fallbackCode, cause.message, cause);
 }
 
+function readHarnessToolName(tool: unknown): string {
+  if (!tool || typeof tool !== "object") {
+    throw new AgentHarnessError("invalid_argument", "Agent tool definition must be an object");
+  }
+  let name: unknown;
+  try {
+    name = Reflect.get(tool, "name");
+  } catch (cause) {
+    throw new AgentHarnessError(
+      "invalid_argument",
+      "Agent tool name must be readable",
+      toError(cause),
+    );
+  }
+  if (typeof name !== "string" || !name.trim()) {
+    throw new AgentHarnessError("invalid_argument", "Agent tool name must be a non-empty string");
+  }
+  return name;
+}
+
+function createToolRegistry<TTool extends AgentTool>(
+  tools: readonly TTool[],
+): { map: Map<string, TTool>; names: string[] } {
+  const map = new Map<string, TTool>();
+  const names: string[] = [];
+  for (const tool of tools) {
+    const name = readHarnessToolName(tool);
+    map.set(name, tool);
+    names.push(name);
+  }
+  return { map, names };
+}
+
 function normalizeHookError(error: unknown): AgentHarnessError {
   return normalizeHarnessError(error, "hook");
 }
@@ -249,13 +282,12 @@ export class CoreAgentHarness<
     this.systemPrompt = options.systemPrompt;
     this.getApiKeyAndHeaders = options.getApiKeyAndHeaders;
     this.runtime = options.runtime;
-    for (const tool of options.tools ?? []) {
-      this.tools.set(tool.name, tool);
-    }
+    const tools = options.tools ?? [];
+    const toolRegistry = createToolRegistry(tools);
+    this.tools = toolRegistry.map;
     this.model = options.model;
     this.thinkingLevel = options.thinkingLevel ?? "off";
-    this.activeToolNames =
-      options.activeToolNames ?? (options.tools ?? []).map((tool) => tool.name);
+    this.activeToolNames = options.activeToolNames ?? toolRegistry.names;
     this.steeringQueueMode = options.steeringMode ?? "one-at-a-time";
     this.followUpQueueMode = options.followUpMode ?? "one-at-a-time";
   }
@@ -1119,7 +1151,7 @@ export class CoreAgentHarness<
 
   async setTools(tools: TTool[], activeToolNames?: string[]): Promise<void> {
     try {
-      const nextTools = new Map(tools.map((tool) => [tool.name, tool]));
+      const nextTools = createToolRegistry(tools).map;
       const nextActiveToolNames = activeToolNames ? [...activeToolNames] : this.activeToolNames;
       this.validateToolNames(nextActiveToolNames, nextTools);
       this.tools = nextTools;
