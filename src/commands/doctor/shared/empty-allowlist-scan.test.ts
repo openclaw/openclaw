@@ -129,4 +129,47 @@ describe("doctor empty allowlist policy scan", () => {
     // No warnings should be emitted because every account has its own populated allowFrom.
     expect(warnings).toEqual([]);
   });
+
+  it("does not warn when top-level has credentials and accounts have allowlists", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            token: "bot-token",
+            accounts: {
+              default: { groupAllowFrom: ["user-123"] },
+              work: { groupAllowFrom: ["user-456"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // No warnings because every enabled account covers the policy.
+    expect(warnings).toEqual([]);
+  });
+
+  it("skips disabled accounts when checking coverage", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              default: { groupAllowFrom: ["user-123"] },
+              disabled: { enabled: false, groupAllowFrom: [] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // No warnings because the disabled account is skipped and the enabled one covers the policy.
+    expect(warnings).toEqual([]);
+  });
 });
