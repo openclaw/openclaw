@@ -378,6 +378,7 @@ export const tr: TranslationMap = {
       host: "Host",
       agent: "Aracı",
       session: "Oturum",
+      cwd: "CWD",
       resolved: "Resolved",
       security: "Security",
       ask: "Ask",

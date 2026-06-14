@@ -375,6 +375,7 @@ export const ar: TranslationMap = {
       host: "المضيف",
       agent: "الوكيل",
       session: "الجلسة",
+      cwd: "CWD",
       resolved: "تم الحل",
       security: "الأمان",
       ask: "السؤال",

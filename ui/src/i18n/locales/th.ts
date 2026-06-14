@@ -374,6 +374,7 @@ export const th: TranslationMap = {
       host: "Host",
       agent: "เอเจนต์",
       session: "เซสชัน",
+      cwd: "CWD",
       resolved: "Resolved",
       security: "Security",
       ask: "Ask",

@@ -376,6 +376,7 @@ export const pt_BR: TranslationMap = {
       host: "Host",
       agent: "Agente",
       session: "Sessão",
+      cwd: "CWD",
       resolved: "Resolved",
       security: "Security",
       ask: "Ask",

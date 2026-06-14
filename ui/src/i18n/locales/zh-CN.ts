@@ -373,6 +373,7 @@ export const zh_CN: TranslationMap = {
       host: "主机",
       agent: "代理",
       session: "会话",
+      cwd: "CWD",
       resolved: "已解析",
       security: "安全",
       ask: "询问策略",

@@ -379,6 +379,7 @@ export const ja_JP: TranslationMap = {
       host: "Host",
       agent: "エージェント",
       session: "セッション",
+      cwd: "CWD",
       resolved: "Resolved",
       security: "Security",
       ask: "Ask",
