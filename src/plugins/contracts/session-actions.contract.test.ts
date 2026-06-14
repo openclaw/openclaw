@@ -53,6 +53,25 @@ async function callPluginSessionActionForTest(params: {
   return response ?? { ok: false, error: new Error("handler did not respond") };
 }
 
+async function callPluginUiDescriptorsForTest(): Promise<HookResponse> {
+  let response: HookResponse | undefined;
+  const respond: RespondFn = (ok, payload, error) => {
+    response = { ok, payload, error };
+  };
+  await pluginHostHookHandlers["plugins.uiDescriptors"]({
+    req: { id: "test", type: "req", method: "plugins.uiDescriptors", params: {} },
+    params: {},
+    client: {
+      connId: "test-client",
+      connect: { scopes: [READ_SCOPE] },
+    } as GatewayClient,
+    isWebchatConnect: () => false,
+    respond,
+    context: {} as never,
+  });
+  return response ?? { ok: false, error: new Error("handler did not respond") };
+}
+
 async function callRegisteredSessionActionForTest(params: {
   pluginId: string;
   actionId: string;
@@ -149,6 +168,52 @@ describe("plugin session actions", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetAgentEventsForTest();
+  });
+
+  it("keeps returning healthy UI descriptors after unreadable registrations", async () => {
+    const registry = createEmptyPluginRegistry();
+    const brokenRegistration = {
+      pluginId: "broken-ui",
+      pluginName: "Broken UI",
+      source: "/plugins/broken-ui/index.ts",
+      rootDir: "/plugins/broken-ui",
+    } as NonNullable<typeof registry.controlUiDescriptors>[number];
+    Object.defineProperty(brokenRegistration, "descriptor", {
+      get() {
+        throw new Error("control UI descriptor getter exploded");
+      },
+    });
+    registry.controlUiDescriptors = [
+      brokenRegistration,
+      {
+        pluginId: "healthy-ui",
+        pluginName: "Healthy UI",
+        descriptor: {
+          id: "healthy-panel",
+          surface: "session",
+          label: "Healthy panel",
+        },
+        source: "/plugins/healthy-ui/index.ts",
+        rootDir: "/plugins/healthy-ui",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const response = await callPluginUiDescriptorsForTest();
+
+    expect(response.ok).toBe(true);
+    expect(response.payload).toEqual({
+      ok: true,
+      descriptors: [
+        {
+          id: "healthy-panel",
+          surface: "session",
+          label: "Healthy panel",
+          pluginId: "healthy-ui",
+          pluginName: "Healthy UI",
+        },
+      ],
+    });
   });
 
   it("initializes and registers typed session actions", () => {
