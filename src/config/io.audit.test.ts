@@ -361,6 +361,133 @@ describe("config io audit helpers", () => {
     ]);
   });
 
+  it("redacts config set positional values for credential-bearing paths", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      "models.providers.openai.apiKey",
+      "boring-provider-key-with-no-token-shape",
+    ];
+    expect(redactConfigAuditArgv(argv)).toEqual([
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      "models.providers.openai.apiKey",
+      "***",
+    ]);
+  });
+
+  it("redacts config set positional values when root and config-set flags are present", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "config",
+      "set",
+      "--strict-json",
+      "channels.slack.botToken",
+      "not-a-token-shaped-secret",
+      "--dry-run",
+    ];
+    expect(redactConfigAuditArgv(argv)).toEqual([
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "config",
+      "set",
+      "--strict-json",
+      "channels.slack.botToken",
+      "***",
+      "--dry-run",
+    ]);
+  });
+
+  it("redacts bracket-notation config set values for plugin API key paths", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      'plugins.entries["higgsfield"].config.apiKey',
+      "plain-higgsfield-key",
+    ];
+    expect(redactConfigAuditArgv(argv)).toEqual([
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      'plugins.entries["higgsfield"].config.apiKey',
+      "***",
+    ]);
+  });
+
+  it("redacts dash-leading config set values for credential-bearing paths", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      "gateway.auth.password",
+      "-plain-password",
+    ];
+    expect(redactConfigAuditArgv(argv)).toEqual([
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      "gateway.auth.password",
+      "***",
+    ]);
+  });
+
+  it("redacts inline config set batch JSON payloads", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      "--batch-json",
+      '[{"path":"models.providers.openai.apiKey","value":"plain-provider-key"}]',
+      "--dry-run",
+    ];
+    expect(redactConfigAuditArgv(argv)).toEqual([
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      "--batch-json",
+      "***",
+      "--dry-run",
+    ]);
+  });
+
+  it("redacts config set batch JSON payloads in equals form", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      '--batch-json=[{"path":"channels.slack.botToken","value":"plain-bot-token"}]',
+    ];
+    expect(redactConfigAuditArgv(argv)).toEqual([
+      "node",
+      "openclaw",
+      "config",
+      "set",
+      "--batch-json=***",
+    ]);
+  });
+
+  it("does not redact config set positional values for non-secret paths", () => {
+    const argv = ["node", "openclaw", "config", "set", "ui.theme", "dark"];
+    expect(redactConfigAuditArgv(argv)).toEqual(argv);
+  });
+
   it("masks the next arg after a secret flag even when it looks like another option", () => {
     const argv = ["openclaw", "--token", "--port", "8080"];
     expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token", "***", "8080"]);
