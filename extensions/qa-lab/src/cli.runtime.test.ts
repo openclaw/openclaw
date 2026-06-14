@@ -347,7 +347,6 @@ describe("qa cli runtime", () => {
       runQaSuite.mockImplementationOnce(async () => {
         expect(process.env.OPENCLAW_QA_PROFILE).toBe("smoke-ci");
         return flowSuiteRuntimeResult({
-          watchUrl: "http://127.0.0.1:43124",
           reportPath: suiteReportPath,
           summaryPath: suiteSummaryPath,
         });
