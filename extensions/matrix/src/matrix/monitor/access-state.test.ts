@@ -158,6 +158,28 @@ describe("resolveMatrixMonitorAccessState", () => {
     );
   });
 
+  it("authorizes room control commands through explicit Matrix command owners", async () => {
+    const state = await resolveMatrixMonitorAccessState({
+      allowFrom: [],
+      storeAllowFrom: [],
+      commandOwnerAllowFrom: ["matrix:@owner:example.org"],
+      groupAllowFrom: [],
+      roomUsers: [],
+      senderId: "@owner:example.org",
+      isRoom: true,
+    });
+
+    await expectCommandAccess(
+      state,
+      {
+        useAccessGroups: true,
+        allowTextCommands: true,
+        hasControlCommand: true,
+      },
+      { authorized: true, shouldBlockControlCommand: false },
+    );
+  });
+
   it("keeps command allow mode when access groups are disabled", async () => {
     const state = await resolveMatrixMonitorAccessState({
       allowFrom: [],

@@ -868,6 +868,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const accessState = await resolveMatrixMonitorAccessState({
           allowFrom: liveDmAllowFrom,
           storeAllowFrom,
+          commandOwnerAllowFrom: Array.isArray(liveCfg.commands?.ownerAllowFrom)
+            ? liveCfg.commands.ownerAllowFrom
+            : [],
           dmPolicy,
           groupPolicy,
           groupAllowFrom: liveGroupAllowFrom,
@@ -1660,7 +1663,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
         reply: {
           to: `room:${roomId}`,
-          replyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
+          replyToId: threadTarget ? messageId : (replyToEventId ?? undefined),
           messageThreadId: threadTarget,
           nativeChannelId: roomId,
         },
@@ -1791,7 +1794,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const draftStreamingEnabled = streaming !== "off";
       const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
       const progressDraftStreaming = streaming === "progress";
-      const draftReplyToId = replyToMode !== "off" && !threadTarget ? messageId : undefined;
+      const draftReplyToId = replyToMode !== "off" ? messageId : undefined;
       const draftStream: MatrixDraftStreamHandle | undefined = draftStreamingEnabled
         ? await loadMatrixDraftStream().then(({ createMatrixDraftStream }) =>
             createMatrixDraftStream({

@@ -647,6 +647,32 @@ describe("sendMessageMatrix threads", () => {
     });
   });
 
+  it("uses replyToId as the fallback target for threaded replies", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "hello thread", {
+      client,
+      cfg: {} as never,
+      threadId: "$thread-root",
+      replyToId: "$current-thread-message",
+    });
+
+    const content = sentContent(sendMessage) as {
+      "m.relates_to"?: {
+        rel_type?: string;
+        event_id?: string;
+        "m.in_reply_to"?: { event_id?: string };
+      };
+    };
+
+    expect(content["m.relates_to"]).toEqual({
+      rel_type: "m.thread",
+      event_id: "$thread-root",
+      is_falling_back: true,
+      "m.in_reply_to": { event_id: "$current-thread-message" },
+    });
+  });
+
   it("resolves text chunk limit using the active Matrix account", async () => {
     const { client } = makeClient();
 
