@@ -521,6 +521,11 @@ type CachedChatItems = {
 type ComposerDraftMirror = {
   hostDraft: string;
   value: string;
+  inputVersion: number;
+  pendingClearedSubmittedDraft: {
+    text: string;
+    inputVersion: number;
+  } | null;
 };
 
 const chatItemsBySession = new Map<string, CachedChatItems>();
@@ -537,23 +542,60 @@ function getComposerDraftMirror(props: ChatProps): ComposerDraftMirror {
     () => ({
       hostDraft: props.draft,
       value: props.draft,
+      inputVersion: 0,
+      pendingClearedSubmittedDraft: null,
     }),
   );
   if (mirror.hostDraft !== props.draft) {
     mirror.hostDraft = props.draft;
     mirror.value = props.draft;
+    mirror.pendingClearedSubmittedDraft = null;
   }
   return mirror;
 }
 
 function commitComposerDraft(props: ChatProps, value: string): void {
   const mirror = getComposerDraftMirror(props);
+  mirror.pendingClearedSubmittedDraft = null;
   mirror.value = value;
   if (mirror.hostDraft === value) {
     return;
   }
   mirror.hostDraft = value;
   props.onDraftChange(value);
+}
+
+function shouldIgnoreClearedSubmittedDraftReplay(
+  props: ChatProps,
+  value: string,
+  mirror: ComposerDraftMirror,
+): boolean {
+  const pending = mirror.pendingClearedSubmittedDraft;
+  return (
+    pending !== null &&
+    props.getDraft?.() === "" &&
+    mirror.hostDraft === "" &&
+    pending.text === value &&
+    pending.inputVersion === mirror.inputVersion
+  );
+}
+
+function commitComposerTextareaDraft(
+  props: ChatProps,
+  value: string,
+  target?: HTMLTextAreaElement | null,
+): void {
+  const mirror = getComposerDraftMirror(props);
+  if (shouldIgnoreClearedSubmittedDraftReplay(props, value, mirror)) {
+    mirror.pendingClearedSubmittedDraft = null;
+    mirror.value = "";
+    if (target && target.value !== "") {
+      target.value = "";
+      adjustTextareaHeight(target);
+    }
+    return;
+  }
+  commitComposerDraft(props, value);
 }
 
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
@@ -1894,13 +1936,23 @@ export function renderChat(props: ChatProps) {
     </div>
   `;
 
-  const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
+  const syncComposerDraftAfterSend = (
+    target: HTMLTextAreaElement | null,
+    submittedDraft: string,
+  ) => {
     const hostDraft = props.getDraft?.();
     if (typeof hostDraft !== "string") {
       return;
     }
     // Sends can clear the host draft synchronously before Lit rerenders; keep
     // the local mirror aligned so the submitted text does not stay editable.
+    draftMirror.pendingClearedSubmittedDraft =
+      hostDraft === "" && submittedDraft.length > 0
+        ? {
+            text: submittedDraft,
+            inputVersion: draftMirror.inputVersion,
+          }
+        : null;
     draftMirror.hostDraft = hostDraft;
     draftMirror.value = hostDraft;
     if (target && target.value !== hostDraft) {
@@ -1980,7 +2032,7 @@ export function renderChat(props: ChatProps) {
 
     if ((e.key === "ArrowUp" || e.key === "ArrowDown") && props.onHistoryKeydown) {
       const target = e.target as HTMLTextAreaElement;
-      commitComposerDraft(props, target.value);
+      commitComposerTextareaDraft(props, target.value, target);
       const result = props.onHistoryKeydown({
         key: e.key,
         selectionStart: target.selectionStart,
@@ -2026,31 +2078,50 @@ export function renderChat(props: ChatProps) {
       e.preventDefault();
       if (canCompose) {
         const target = e.target as HTMLTextAreaElement;
-        commitComposerDraft(props, target.value);
+        const submittedDraft = target.value;
+        commitComposerTextareaDraft(props, submittedDraft, target);
         props.onSend();
-        syncComposerDraftAfterSend(target);
+        syncComposerDraftAfterSend(target, submittedDraft);
       }
     }
   };
 
   const handleInput = (e: Event) => {
     const target = e.target as HTMLTextAreaElement;
+    const staleReplayEvent = typeof InputEvent !== "undefined" ? !(e instanceof InputEvent) : false;
+    if (
+      staleReplayEvent &&
+      shouldIgnoreClearedSubmittedDraftReplay(props, target.value, draftMirror)
+    ) {
+      draftMirror.pendingClearedSubmittedDraft = null;
+      draftMirror.value = "";
+      if (target.value !== "") {
+        target.value = "";
+      }
+      adjustTextareaHeight(target);
+      updateSlashMenu("", requestUpdate);
+      return;
+    }
     adjustTextareaHeight(target);
+    if (draftMirror.value !== target.value) {
+      draftMirror.inputVersion += 1;
+    }
     draftMirror.value = target.value;
     const hostDraftNeeded = isBusy || showAbortableUi || props.queue.length > 0;
     if (hostDraftNeeded || target.value.startsWith("/") || hasVisibleSlashMenuState()) {
-      commitComposerDraft(props, target.value);
+      commitComposerTextareaDraft(props, target.value, target);
     }
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
   };
   const handleBlur = (e: FocusEvent) => {
     const target = e.target as HTMLTextAreaElement;
-    commitComposerDraft(props, target.value);
+    commitComposerTextareaDraft(props, target.value, target);
   };
   const handleSend = () => {
-    commitComposerDraft(props, draftMirror.value);
+    const submittedDraft = draftMirror.value;
+    commitComposerTextareaDraft(props, submittedDraft, composerTextarea);
     props.onSend();
-    syncComposerDraftAfterSend(composerTextarea);
+    syncComposerDraftAfterSend(composerTextarea, submittedDraft);
   };
   const slashMenuVisible = isSlashMenuVisible();
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
