@@ -38,7 +38,10 @@ import {
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  consumeBundledProviderPolicyHookFailure,
+  resolveBundledProviderPolicySurface,
+} from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import {
@@ -442,9 +445,12 @@ export function normalizeProviderConfigWithPlugin(params: {
   const hasConfigChange = (normalized: ModelProviderConfig) =>
     normalized !== params.context.providerConfig;
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
-  if (bundledSurface?.normalizeConfig) {
-    const normalized = bundledSurface.normalizeConfig(params.context);
-    return normalized && hasConfigChange(normalized) ? normalized : undefined;
+  const bundledNormalizeConfig = bundledSurface?.normalizeConfig;
+  if (bundledNormalizeConfig) {
+    const normalized = bundledNormalizeConfig(params.context);
+    if (!consumeBundledProviderPolicyHookFailure(bundledNormalizeConfig)) {
+      return normalized && hasConfigChange(normalized) ? normalized : undefined;
+    }
   }
   if (!hasExplicitProviderRuntimePluginActivation(params)) {
     return undefined;
@@ -483,8 +489,12 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   allowRuntimePluginLoad?: boolean;
 }): string | undefined {
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
-  if (bundledSurface?.resolveConfigApiKey) {
-    return normalizeOptionalString(bundledSurface.resolveConfigApiKey(params.context));
+  const bundledResolveConfigApiKey = bundledSurface?.resolveConfigApiKey;
+  if (bundledResolveConfigApiKey) {
+    const apiKey = normalizeOptionalString(bundledResolveConfigApiKey(params.context));
+    if (!consumeBundledProviderPolicyHookFailure(bundledResolveConfigApiKey)) {
+      return apiKey;
+    }
   }
   if (params.allowRuntimePluginLoad === false) {
     return undefined;
@@ -798,8 +808,12 @@ export function resolveProviderThinkingProfile(params: {
   context: ProviderDefaultThinkingPolicyContext;
 }): ProviderThinkingProfile | null | undefined {
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
-  if (bundledSurface?.resolveThinkingProfile) {
-    return bundledSurface.resolveThinkingProfile(params.context) ?? undefined;
+  const bundledResolveThinkingProfile = bundledSurface?.resolveThinkingProfile;
+  if (bundledResolveThinkingProfile) {
+    const profile = bundledResolveThinkingProfile(params.context) ?? undefined;
+    if (!consumeBundledProviderPolicyHookFailure(bundledResolveThinkingProfile)) {
+      return profile;
+    }
   }
   return resolveProviderRuntimePlugin(params)?.resolveThinkingProfile?.(params.context);
 }
@@ -822,8 +836,12 @@ export function applyProviderConfigDefaultsWithPlugin(params: {
   context: ProviderApplyConfigDefaultsContext;
 }) {
   const bundledSurface = resolveBundledProviderPolicySurface(params.provider);
-  if (bundledSurface?.applyConfigDefaults) {
-    return bundledSurface.applyConfigDefaults(params.context) ?? undefined;
+  const bundledApplyConfigDefaults = bundledSurface?.applyConfigDefaults;
+  if (bundledApplyConfigDefaults) {
+    const config = bundledApplyConfigDefaults(params.context) ?? undefined;
+    if (!consumeBundledProviderPolicyHookFailure(bundledApplyConfigDefaults)) {
+      return config;
+    }
   }
   return resolveProviderRuntimePlugin(params)?.applyConfigDefaults?.(params.context) ?? undefined;
 }

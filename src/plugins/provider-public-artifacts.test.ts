@@ -25,6 +25,7 @@ describe("provider public artifacts", () => {
     vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
+    vi.doUnmock("../logging/subsystem.js");
     vi.resetModules();
   });
 
@@ -342,5 +343,62 @@ describe("provider public artifacts", () => {
       dirName: "openai",
       artifactBasename: "provider-policy-api.js",
     });
+  });
+
+  it("ignores throwing bundled provider policy hooks without poisoning callers", async () => {
+    const warn = vi.fn();
+    let shouldThrow = true;
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
+      normalizeConfig: (ctx: { providerConfig: ModelProviderConfig }) => {
+        if (shouldThrow) {
+          throw new Error("fuzzplugin provider policy exploded");
+        }
+        return {
+          ...ctx.providerConfig,
+          baseUrl: "https://recovered.example/v1",
+        };
+      },
+    }));
+    vi.doMock("../logging/subsystem.js", () => ({
+      createSubsystemLogger: () => ({ warn }),
+    }));
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const {
+      consumeBundledProviderPolicyHookFailure,
+      resolveBundledProviderPolicySurface: resolvePolicySurface,
+    } = await importFreshModule<typeof import("./provider-public-artifacts.js")>(
+      import.meta.url,
+      "./provider-public-artifacts.js?scope=throwing-policy-hook",
+    );
+
+    const providerConfig: ModelProviderConfig = {
+      baseUrl: "https://api.fuzzplugin.example/v1",
+      api: "openai-completions",
+      models: [],
+    };
+    const surface = resolvePolicySurface("fuzzplugin");
+
+    expect(
+      surface?.normalizeConfig?.({
+        provider: "fuzzplugin",
+        providerConfig,
+      }),
+    ).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("fuzzplugin.normalizeConfig failed"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("fuzzplugin provider policy exploded"),
+    );
+
+    shouldThrow = false;
+    expect(
+      surface?.normalizeConfig?.({
+        provider: "fuzzplugin",
+        providerConfig,
+      })?.baseUrl,
+    ).toBe("https://recovered.example/v1");
+    expect(consumeBundledProviderPolicyHookFailure(surface?.normalizeConfig)).toBe(false);
   });
 });
