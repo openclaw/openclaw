@@ -12,6 +12,87 @@ describe("prompt template argument substitution", () => {
     ]);
   });
 
+  it("keeps apostrophes in prose instead of dropping them", () => {
+    expect(parseCommandArgs("fix the user's login bug")).toEqual([
+      "fix",
+      "the",
+      "user's",
+      "login",
+      "bug",
+    ]);
+    expect(parseCommandArgs("it's broken now")).toEqual(["it's", "broken", "now"]);
+  });
+
+  it("preserves apostrophes through $ARGUMENTS and positional placeholders", () => {
+    const args = parseCommandArgs("fix the user's login bug");
+    expect(substituteArgs("Please address: $ARGUMENTS", args)).toBe(
+      "Please address: fix the user's login bug",
+    );
+    const positional = parseCommandArgs("it's broken now");
+    expect(substituteArgs("[$1][$2]", positional)).toBe("[it's][broken]");
+  });
+
+  it("treats an unbalanced quote as a literal but still honors balanced quotes", () => {
+    expect(parseCommandArgs(`don't "quote this"`)).toEqual(["don't", "quote this"]);
+  });
+
+  it("keeps apostrophes literal across multiple contractions", () => {
+    expect(parseCommandArgs("don't it's broken now")).toEqual(["don't", "it's", "broken", "now"]);
+    const args = parseCommandArgs("don't it's broken now");
+    expect(substituteArgs("$ARGUMENTS", args)).toBe("don't it's broken now");
+    expect(substituteArgs("[$1][$2][$3][$4]", args)).toBe("[don't][it's][broken][now]");
+  });
+
+  it("groups shell-style quoted spans embedded in a token", () => {
+    expect(parseCommandArgs(`--title="two words" next`)).toEqual(["--title=two words", "next"]);
+    expect(parseCommandArgs("foo='bar baz' next")).toEqual(["foo=bar baz", "next"]);
+    const args = parseCommandArgs(`--title="two words" next`);
+    expect(substituteArgs("[$1][$2]", args)).toBe("[--title=two words][next]");
+  });
+
+  it("groups bare embedded single-quote concatenation", () => {
+    expect(parseCommandArgs("foo'bar baz' next")).toEqual(["foobar baz", "next"]);
+    const args = parseCommandArgs("foo'bar baz' next");
+    expect(substituteArgs("[$1][$2]", args)).toBe("[foobar baz][next]");
+  });
+
+  it("keeps a plural possessive literal next to a later quoted span", () => {
+    expect(parseCommandArgs("fix users' 'quoted text'")).toEqual(["fix", "users'", "quoted text"]);
+    const args = parseCommandArgs("fix users' 'quoted text'");
+    expect(substituteArgs("[$1][$2][$3]", args)).toBe("[fix][users'][quoted text]");
+  });
+
+  it("keeps prose apostrophes literal when no span can close", () => {
+    expect(parseCommandArgs("O'Brien's rock'n'roll")).toEqual(["O'Brien's", "rock'n'roll"]);
+  });
+
+  it("keeps apostrophes literal after non-ASCII word characters", () => {
+    expect(parseCommandArgs("José's don't fail")).toEqual(["José's", "don't", "fail"]);
+    const args = parseCommandArgs("José's don't fail");
+    expect(substituteArgs("$ARGUMENTS", args)).toBe("José's don't fail");
+    expect(substituteArgs("[$1][$2][$3]", args)).toBe("[José's][don't][fail]");
+  });
+
+  it("does not close an unmatched leading quote on a later contraction", () => {
+    expect(parseCommandArgs("'review don't fail")).toEqual(["'review", "don't", "fail"]);
+    const args = parseCommandArgs("'review don't fail");
+    expect(substituteArgs("[$1][$2][$3]", args)).toBe("['review][don't][fail]");
+  });
+
+  it("keeps a contraction inside a balanced quoted phrase", () => {
+    expect(parseCommandArgs("'it's a test' next")).toEqual(["it's a test", "next"]);
+    expect(parseCommandArgs(`"don't stop" now`)).toEqual(["don't stop", "now"]);
+    const args = parseCommandArgs("'it's a test' next");
+    expect(substituteArgs("[$1][$2]", args)).toBe("[it's a test][next]");
+  });
+
+  it("keeps a contraction literal before a later standalone quoted span", () => {
+    expect(parseCommandArgs("don't 'quoted text' next")).toEqual(["don't", "quoted text", "next"]);
+    expect(parseCommandArgs("it's a 'test case' here")).toEqual(["it's", "a", "test case", "here"]);
+    const args = parseCommandArgs("don't 'quoted text' next");
+    expect(substituteArgs("[$1][$2][$3]", args)).toBe("[don't][quoted text][next]");
+  });
+
   it("rejects unsafe positional placeholders", () => {
     expect(substituteArgs("$9007199254740992", ["first", "second"])).toBe("");
   });
