@@ -72,6 +72,7 @@ import {
   isCompactionFailureError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
   isRateLimitAssistantError,
   parseImageDimensionError,
@@ -107,6 +108,7 @@ import {
   resolveSelectedOpenAIRuntimeProvider,
 } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { hasOnlyAssistantReasoningContent } from "../replay-turn-classification.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -2937,10 +2939,15 @@ async function runEmbeddedAgentInternal(
           const imageDimensionError = parseImageDimensionError(
             assistantForFailover?.errorMessage ?? "",
           );
+          // The shared runtime wraps interrupted streams as a timeout. Retry that
+          // wrapper only for reasoning-only output so ordinary timeouts keep failover.
+          const genericUnknownReasoningError =
+            assistantFailoverReason === "timeout" &&
+            isGenericUnknownStreamErrorMessage(assistantForFailover?.errorMessage ?? "") &&
+            Boolean(assistantForFailover && hasOnlyAssistantReasoningContent(assistantForFailover));
           const silentErrorRetryReason =
             assistantFailoverReason === null ||
-            assistantFailoverReason === "timeout" ||
-            assistantFailoverReason === "server_error" ||
+            genericUnknownReasoningError ||
             assistantFailoverReason === "no_error_details" ||
             assistantFailoverReason === "unclassified" ||
             assistantFailoverReason === "unknown";

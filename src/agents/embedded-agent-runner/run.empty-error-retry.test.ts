@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
@@ -129,6 +130,37 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads).toBeUndefined();
+  });
+
+  it.each([
+    ["timeout", "LLM request timed out."],
+    ["server_error", "Internal server error"],
+  ] as const)("does not intercept recognized %s failover errors", async (reason, errorMessage) => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt(
+        "anthropic",
+        "claude-opus-4-8",
+        1120,
+        [
+          {
+            type: "thinking",
+            thinking: "internal reasoning before provider error",
+            thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+          },
+        ],
+        errorMessage,
+      ),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: `run-empty-error-retry-${reason}`,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("does not intercept concrete non-transient failover errors", async () => {
