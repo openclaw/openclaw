@@ -190,6 +190,32 @@ type ManifestProviderRequestCacheEntry = {
 let manifestProviderEndpointCache: ManifestProviderEndpointCacheEntry[] | null = null;
 let manifestProviderRequestCache: Map<string, ManifestProviderRequestCacheEntry> | null = null;
 
+function tryReadRecordValue(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function tryReadObjectEntryValues(record: Record<string, unknown>): Array<[string, unknown]> {
+  let keys: string[];
+  try {
+    keys = Object.keys(record);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, record[key]]);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
 function formatOpenClawUserAgent(version: string): string {
   return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
 }
@@ -251,38 +277,47 @@ function isManifestProviderEndpointClass(value: string): value is ProviderEndpoi
 function readManifestProviderEndpoints(
   manifest: Record<string, unknown>,
 ): ManifestProviderEndpointCacheEntry[] {
-  if (!Array.isArray(manifest.providerEndpoints)) {
+  const providerEndpoints = tryReadRecordValue(manifest, "providerEndpoints");
+  if (!Array.isArray(providerEndpoints)) {
     return [];
   }
   const entries: ManifestProviderEndpointCacheEntry[] = [];
-  for (const rawEndpoint of manifest.providerEndpoints) {
-    if (!isRecord(rawEndpoint)) {
+  for (const rawEndpoint of providerEndpoints) {
+    try {
+      if (!isRecord(rawEndpoint)) {
+        continue;
+      }
+      const endpointClassRaw = normalizeOptionalString(
+        tryReadRecordValue(rawEndpoint, "endpointClass"),
+      );
+      if (!endpointClassRaw || !isManifestProviderEndpointClass(endpointClassRaw)) {
+        continue;
+      }
+      const googleVertexRegion = normalizeOptionalString(
+        tryReadRecordValue(rawEndpoint, "googleVertexRegion"),
+      );
+      const googleVertexRegionHostSuffix = normalizeOptionalString(
+        tryReadRecordValue(rawEndpoint, "googleVertexRegionHostSuffix"),
+      );
+      entries.push({
+        endpointClass: endpointClassRaw,
+        hosts: normalizeTrimmedStringList(tryReadRecordValue(rawEndpoint, "hosts")).map((host) =>
+          host.toLowerCase(),
+        ),
+        hostSuffixes: normalizeTrimmedStringList(
+          tryReadRecordValue(rawEndpoint, "hostSuffixes"),
+        ).map((host) => host.toLowerCase()),
+        normalizedBaseUrls: normalizeTrimmedStringList(tryReadRecordValue(rawEndpoint, "baseUrls"))
+          .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
+          .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
+        ...(googleVertexRegion ? { googleVertexRegion } : {}),
+        ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
+      });
+    } catch {
+      // Provider attribution metadata is plugin-owned. One unreadable row
+      // must not disable native endpoint classification for healthy plugins.
       continue;
     }
-    const endpointClassRaw = normalizeOptionalString(rawEndpoint.endpointClass);
-    if (!endpointClassRaw || !isManifestProviderEndpointClass(endpointClassRaw)) {
-      continue;
-    }
-    entries.push({
-      endpointClass: endpointClassRaw,
-      hosts: normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase()),
-      hostSuffixes: normalizeTrimmedStringList(rawEndpoint.hostSuffixes).map((host) =>
-        host.toLowerCase(),
-      ),
-      normalizedBaseUrls: normalizeTrimmedStringList(rawEndpoint.baseUrls)
-        .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
-        .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
-      ...(normalizeOptionalString(rawEndpoint.googleVertexRegion)
-        ? { googleVertexRegion: normalizeOptionalString(rawEndpoint.googleVertexRegion) }
-        : {}),
-      ...(normalizeOptionalString(rawEndpoint.googleVertexRegionHostSuffix)
-        ? {
-            googleVertexRegionHostSuffix: normalizeOptionalString(
-              rawEndpoint.googleVertexRegionHostSuffix,
-            ),
-          }
-        : {}),
-    });
   }
   return entries;
 }
@@ -290,38 +325,49 @@ function readManifestProviderEndpoints(
 function readManifestProviderRequests(
   manifest: Record<string, unknown>,
 ): Array<[string, ManifestProviderRequestCacheEntry]> {
-  const providerRequest = manifest.providerRequest;
-  if (!isRecord(providerRequest) || !isRecord(providerRequest.providers)) {
+  const providerRequest = tryReadRecordValue(manifest, "providerRequest");
+  if (!isRecord(providerRequest)) {
+    return [];
+  }
+  const providers = tryReadRecordValue(providerRequest, "providers");
+  if (!isRecord(providers)) {
     return [];
   }
   const entries: Array<[string, ManifestProviderRequestCacheEntry]> = [];
-  for (const [providerRaw, requestRaw] of Object.entries(providerRequest.providers)) {
-    if (!isRecord(requestRaw)) {
-      continue;
-    }
-    const provider = normalizeLowercaseStringOrEmpty(providerRaw);
-    if (!provider) {
-      continue;
-    }
-    const compatibilityFamily =
-      normalizeOptionalString(requestRaw.compatibilityFamily) === "moonshot"
-        ? "moonshot"
+  for (const [providerRaw, requestRaw] of tryReadObjectEntryValues(providers)) {
+    try {
+      if (!isRecord(requestRaw)) {
+        continue;
+      }
+      const provider = normalizeLowercaseStringOrEmpty(providerRaw);
+      if (!provider) {
+        continue;
+      }
+      const compatibilityFamily =
+        normalizeOptionalString(tryReadRecordValue(requestRaw, "compatibilityFamily")) ===
+        "moonshot"
+          ? "moonshot"
+          : undefined;
+      const openAICompletions = tryReadRecordValue(requestRaw, "openAICompletions");
+      const supportsStreamingUsage = isRecord(openAICompletions)
+        ? tryReadRecordValue(openAICompletions, "supportsStreamingUsage")
         : undefined;
-    const supportsStreamingUsage = isRecord(requestRaw.openAICompletions)
-      ? requestRaw.openAICompletions.supportsStreamingUsage
-      : undefined;
-    entries.push([
-      provider,
-      {
-        ...(normalizeOptionalString(requestRaw.family)
-          ? { family: normalizeOptionalString(requestRaw.family) }
-          : {}),
-        ...(compatibilityFamily ? { compatibilityFamily } : {}),
-        ...(typeof supportsStreamingUsage === "boolean"
-          ? { supportsOpenAICompletionsStreamingUsageCompat: supportsStreamingUsage }
-          : {}),
-      },
-    ]);
+      const family = normalizeOptionalString(tryReadRecordValue(requestRaw, "family"));
+      entries.push([
+        provider,
+        {
+          ...(family ? { family } : {}),
+          ...(compatibilityFamily ? { compatibilityFamily } : {}),
+          ...(typeof supportsStreamingUsage === "boolean"
+            ? { supportsOpenAICompletionsStreamingUsageCompat: supportsStreamingUsage }
+            : {}),
+        },
+      ]);
+    } catch {
+      // Provider request metadata feeds shared runtime policy. Skip bad
+      // plugin-owned rows so healthy providers keep their routing facts.
+      continue;
+    }
   }
   return entries;
 }
