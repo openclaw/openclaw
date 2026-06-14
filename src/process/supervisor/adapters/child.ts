@@ -39,12 +39,19 @@ export async function createChildAdapter(params: {
     env: baseEnv,
   });
 
-  const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
+  const serviceManaged = isServiceManagedRuntime();
+  // In service-managed mode (launchd / systemd), stdin is pipe-closed rather
+  // than inherited: the service manager closes fd 0 before exec, so inheriting
+  // it would give child processes a closed fd that triggers EBADF on Node 26.
+  // Outside service mode, inherit lets the existing POSIX detached behaviour
+  // work correctly for interactive shells and sub-shells.
+  const stdinMode =
+    params.stdinMode ?? (params.input !== undefined || serviceManaged ? "pipe-closed" : "inherit");
 
   // In service-managed mode keep children attached so systemd/launchd can
   // stop the full process tree reliably. Outside service mode preserve the
   // existing POSIX detached behavior.
-  const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
+  const useDetached = process.platform !== "win32" && !serviceManaged;
 
   const options: SpawnOptions = {
     cwd: params.cwd,
