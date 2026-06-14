@@ -45,7 +45,7 @@ function resolveBootstrapAgentId(value: string | null | undefined): string | nul
 }
 
 function applyLocalAssistantAvatarOverride(state: ControlUiBootstrapState) {
-  const localAvatar = loadLocalAssistantIdentity().avatar;
+  const localAvatar = loadLocalAssistantIdentity(state.assistantAgentId).avatar;
   if (!localAvatar) {
     return;
   }

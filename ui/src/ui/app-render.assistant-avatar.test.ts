@@ -239,7 +239,9 @@ beforeEach(async () => {
 describe("renderApp assistant avatar routing", () => {
   it("passes the browser-local assistant override to Quick Settings ahead of stale identity metadata", () => {
     const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
-    saveLocalAssistantIdentity({ avatar: dataUrl });
+    // The state created below has assistantAgentId: "main", so the override
+    // must be saved scoped to that agent.
+    saveLocalAssistantIdentity({ avatar: dataUrl }, "main");
 
     renderApp(createState());
 
@@ -249,6 +251,22 @@ describe("renderApp assistant avatar routing", () => {
     expect(quickSettingsProps.current?.assistantAvatarStatus).toBe("data");
     expect(quickSettingsProps.current?.assistantAvatarReason).toBeNull();
     expect(quickSettingsProps.current?.assistantAvatarOverride).toBe(dataUrl);
+  });
+
+  it("does not share local assistant avatar overrides across agents", () => {
+    const mainAvatar = "data:image/png;base64,bWFpbg==";
+    const workAvatar = "data:image/png;base64,d29yaw==";
+    saveLocalAssistantIdentity({ avatar: mainAvatar }, "main");
+    saveLocalAssistantIdentity({ avatar: workAvatar }, "work");
+
+    renderApp(createState({ assistantAgentId: "main" }));
+    expect(quickSettingsProps.current?.assistantAvatarOverride).toBe(mainAvatar);
+
+    renderApp(createState({ assistantAgentId: "work" }));
+    expect(quickSettingsProps.current?.assistantAvatarOverride).toBe(workAvatar);
+
+    renderApp(createState({ assistantAgentId: "other" }));
+    expect(quickSettingsProps.current?.assistantAvatarOverride).toBeNull();
   });
 
   it("applies the configured chat message width as a shell CSS variable", () => {

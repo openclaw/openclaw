@@ -68,7 +68,8 @@ export async function loadAssistantIdentity(
     state.assistantAvatarReason = normalized.avatarReason ?? null;
     state.assistantAgentId = normalized.agentId ?? null;
     // Local override always wins — same pattern as the user avatar.
-    const localAvatar = loadLocalAssistantIdentity().avatar;
+    // Scope the override to the current agent so each agent can have its own avatar.
+    const localAvatar = loadLocalAssistantIdentity(state.assistantAgentId).avatar;
     if (localAvatar) {
       state.assistantAvatar = localAvatar;
       state.assistantAvatarSource = localAvatar;
@@ -83,8 +84,9 @@ export async function loadAssistantIdentity(
 export function setAssistantAvatarOverride(
   state: AssistantAvatarOverrideState,
   avatar: string | null,
+  agentId?: string | null,
 ) {
-  saveLocalAssistantIdentity({ avatar });
+  saveLocalAssistantIdentity({ avatar }, agentId);
   if (avatar) {
     state.assistantAvatar = avatar;
     state.assistantAvatarSource = avatar;
