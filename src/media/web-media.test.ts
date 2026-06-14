@@ -677,6 +677,186 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/html");
   });
 
+  it("allows trusted generated host-read HTML reports staged under outbound media store", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+        const html = "<!doctype html><title>Report</title><h1>Report</h1>\n";
+        const saved = await saveMediaBuffer(
+          Buffer.from(html, "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        // Provenance is the trust signal — staging alone is not enough.
+        await markTrustedGeneratedHtmlPath(saved.path);
+        expect(path.resolve(saved.path)).not.toContain(
+          path.resolve(resolvePreferredOpenClawTmpDir()),
+        );
+        const result = await loadWebMedia(saved.path, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        });
+        expect(result.kind).toBe("document");
+        expect(result.contentType).toBe("text/html");
+        expect(result.buffer.toString("utf8")).toBe(html);
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects outbound-staged HTML without a trusted-generated provenance marker", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const saved = await saveMediaBuffer(
+          Buffer.from("<!doctype html><title>Untrusted</title><body>x</body>\n", "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "untrusted.html",
+        );
+        await expectLoadWebMediaErrorCode(
+          loadWebMedia(saved.path, {
+            maxBytes: 1024 * 1024,
+            localRoots: "any",
+            readFile: async (filePath) => await fs.readFile(filePath),
+            hostReadCapability: true,
+          }),
+          "path-not-allowed",
+        );
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a trusted-generated-html provenance row keyed by the staged file's realpath", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        const { getNodeSqliteKysely, executeSqliteQueryTakeFirstSync } =
+          await import("../infra/kysely-sync.js");
+        const saved = await saveMediaBuffer(
+          Buffer.from("<!doctype html><title>Provenance</title>\n", "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        await markTrustedGeneratedHtmlPath(saved.path);
+
+        const resolved = await fs.realpath(saved.path);
+        const { db } = openOpenClawStateDatabase();
+        type ProvenanceDb = {
+          outbound_media_provenance: {
+            realpath: string;
+            kind: string;
+            version: number;
+            created_at_ms: number;
+          };
+        };
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ProvenanceDb>(db)
+            .selectFrom("outbound_media_provenance")
+            .selectAll()
+            .where("realpath", "=", resolved),
+        );
+        expect(row?.kind).toBe("trusted-generated-html");
+        expect(row?.version).toBe(1);
+        expect(typeof row?.created_at_ms).toBe("number");
+        expect(row?.created_at_ms).toBeGreaterThan(0);
+
+        // A different realpath has no row.
+        const otherRow = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ProvenanceDb>(db)
+            .selectFrom("outbound_media_provenance")
+            .selectAll()
+            .where("realpath", "=", `${resolved}.unrelated`),
+        );
+        expect(otherRow).toBeUndefined();
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes outbound trusted-html provenance rows when cleanOldMedia sweeps the staged file", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer, cleanOldMedia } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        const { getNodeSqliteKysely, executeSqliteQueryTakeFirstSync } =
+          await import("../infra/kysely-sync.js");
+        const saved = await saveMediaBuffer(
+          Buffer.from("<!doctype html><title>Sweep</title>\n", "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        await markTrustedGeneratedHtmlPath(saved.path);
+        const resolved = await fs.realpath(saved.path);
+
+        type ProvenanceDb = {
+          outbound_media_provenance: {
+            realpath: string;
+            kind: string;
+            version: number;
+            created_at_ms: number;
+          };
+        };
+        const { db } = openOpenClawStateDatabase();
+        const before = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ProvenanceDb>(db)
+            .selectFrom("outbound_media_provenance")
+            .selectAll()
+            .where("realpath", "=", resolved),
+        );
+        expect(before?.kind).toBe("trusted-generated-html");
+
+        // Backdate the staged file so cleanOldMedia(1) considers it expired.
+        const past = Date.now() - 10_000;
+        await fs.utimes(saved.path, past / 1000, past / 1000);
+        await cleanOldMedia(1, { recursive: true });
+
+        // File is gone…
+        let statError: NodeJS.ErrnoException | undefined;
+        await fs.stat(saved.path).catch((err: unknown) => {
+          statError = err as NodeJS.ErrnoException;
+        });
+        expect(statError?.code).toBe("ENOENT");
+
+        // …and so is the provenance row.
+        const after = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ProvenanceDb>(db)
+            .selectFrom("outbound_media_provenance")
+            .selectAll()
+            .where("realpath", "=", resolved),
+        );
+        expect(after).toBeUndefined();
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects host-read HTML files outside the trusted OpenClaw temp root", async () => {
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-host-html-"));
     const htmlFile = path.join(outsideRoot, "report.html");
@@ -727,6 +907,86 @@ describe("loadWebMedia", () => {
     } finally {
       await fs.rm(htmlLink, { force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlink escapes from outbound staging dir (markTrustedGeneratedHtmlPath + reader gate)", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    const escapeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-escape-"));
+    const escapeFile = path.join(escapeRoot, "escape.html");
+    await fs.writeFile(
+      escapeFile,
+      "<!doctype html><title>Escaped</title><body>secret</body>\n",
+      "utf8",
+    );
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { ensureMediaDir, getMediaDir } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+        await ensureMediaDir();
+        const outboundDir = path.join(getMediaDir(), "outbound");
+        await fs.mkdir(outboundDir, { recursive: true });
+        const linkPath = path.join(outboundDir, "linked-escape.html");
+        try {
+          await fs.symlink(escapeFile, linkPath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EPERM") {
+            return;
+          }
+          throw err;
+        }
+
+        // Expectation A: markTrustedGeneratedHtmlPath must throw because the
+        // realpath resolves outside the outbound staging dir.
+        await expect(markTrustedGeneratedHtmlPath(linkPath)).rejects.toThrow(
+          /refusing to mark path outside outbound staging dir/i,
+        );
+
+        // Expectation B: even if a forged provenance row existed for the
+        // symlink target's realpath, loadWebMedia must reject because the
+        // reader-side containment check filters by realpath against the
+        // outbound root.
+        const { runOpenClawStateWriteTransaction } = await import(
+          "../state/openclaw-state-db.js"
+        );
+        const { getNodeSqliteKysely, executeSqliteQuerySync } = await import(
+          "../infra/kysely-sync.js"
+        );
+        type ProvenanceDb = {
+          outbound_media_provenance: {
+            realpath: string;
+            kind: string;
+            version: number;
+            created_at_ms: number;
+          };
+        };
+        const escapeRealpath = await fs.realpath(escapeFile);
+        runOpenClawStateWriteTransaction(({ db }) => {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<ProvenanceDb>(db)
+              .insertInto("outbound_media_provenance")
+              .values({
+                realpath: escapeRealpath,
+                kind: "trusted-generated-html",
+                version: 1,
+                created_at_ms: Date.now(),
+              }),
+          );
+        });
+        await expectLoadWebMediaErrorCode(
+          loadWebMedia(linkPath, {
+            maxBytes: 1024 * 1024,
+            localRoots: "any",
+            readFile: async (filePath) => await fs.readFile(filePath),
+            hostReadCapability: true,
+          }),
+          "path-not-allowed",
+        );
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+      await fs.rm(escapeRoot, { recursive: true, force: true });
     }
   });
 

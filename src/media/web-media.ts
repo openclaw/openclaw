@@ -15,10 +15,20 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
 import {
@@ -33,6 +43,7 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
+import { getMediaDir } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -43,6 +54,12 @@ export type WebMediaResult = {
   contentType?: string;
   kind: MediaKind | undefined;
   fileName?: string;
+  /**
+   * True only when the source was a local trusted-generated HTML path (under the
+   * OpenClaw temp root). Outbound staging uses this to persist a provenance
+   * marker so the staged copy remains a trusted host-read source.
+   */
+  trustedGeneratedHtmlSource?: boolean;
 };
 
 type WebMediaOptions = {
@@ -297,13 +314,129 @@ async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined):
   if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
     return false;
   }
-  const [resolvedFilePath, resolvedTmpRoot] = await Promise.all([
+  const [resolvedFilePath, tmpRoot, outboundRoot] = await Promise.all([
     realpath(filePath).catch(() => undefined),
     realpath(resolvePreferredOpenClawTmpDir()).catch(() => undefined),
+    realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined),
   ]);
-  return Boolean(
-    resolvedFilePath && resolvedTmpRoot && isPathInsideRoot(resolvedFilePath, resolvedTmpRoot),
+  if (!resolvedFilePath) {
+    return false;
+  }
+  if (tmpRoot && isPathInsideRoot(resolvedFilePath, tmpRoot)) {
+    return true;
+  }
+  if (outboundRoot && isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+    return await hasTrustedGeneratedHtmlMarker(resolvedFilePath);
+  }
+  return false;
+}
+
+const TRUSTED_GENERATED_HTML_MARKER_VERSION = 1;
+const TRUSTED_GENERATED_HTML_MARKER_KIND = "trusted-generated-html";
+
+type OutboundProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "outbound_media_provenance">;
+
+async function hasTrustedGeneratedHtmlMarker(resolvedFilePath: string): Promise<boolean> {
+  try {
+    const { db } = openOpenClawStateDatabase();
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+        .selectFrom("outbound_media_provenance")
+        .select(["kind", "version"])
+        .where("realpath", "=", resolvedFilePath),
+    );
+    const matched =
+      row?.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
+      row.version === TRUSTED_GENERATED_HTML_MARKER_VERSION;
+    if (shouldLogVerbose()) {
+      logVerbose(
+        `trusted-html marker: ${matched ? "hit" : "miss"} (${resolvedFilePath})`,
+      );
+    }
+    return matched;
+  } catch (err) {
+    logVerbose(
+      `trusted-html marker: lookup failed (${resolvedFilePath}): ${formatErrorMessage(err)}`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Records the trusted-generated-html provenance row for an outbound-staged HTML
+ * file. The row keys on the realpath of the staged file so a later host-read
+ * lookup can recognize it as a trusted source. Callers must have already
+ * verified the source was trusted before staging.
+ *
+ * Provenance rows are pruned in lockstep with the staged file by
+ * pruneStaleTrustedGeneratedHtmlMarkers, which runs from the media-store
+ * retention pass (src/media/store.ts cleanOldMedia).
+ */
+export async function markTrustedGeneratedHtmlPath(filePath: string): Promise<void> {
+  const resolvedFilePath = await realpath(filePath);
+  const outboundRoot = await realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined);
+  if (!outboundRoot || !isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+    throw new Error(
+      `markTrustedGeneratedHtmlPath: refusing to mark path outside outbound staging dir: ${resolvedFilePath}`,
+    );
+  }
+  const now = Date.now();
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+        .insertInto("outbound_media_provenance")
+        .values({
+          realpath: resolvedFilePath,
+          kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
+          version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+          created_at_ms: now,
+        })
+        .onConflict((conflict) =>
+          conflict.column("realpath").doUpdateSet({
+            kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
+            version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+            created_at_ms: now,
+          }),
+        ),
+    );
+  });
+}
+
+/**
+ * Reconciles the outbound-media provenance table against the filesystem,
+ * deleting rows whose `realpath` no longer points to a regular file. Used by
+ * the media-store retention pass so trust metadata cannot outlive the staged
+ * file the row referred to.
+ */
+export async function pruneStaleTrustedGeneratedHtmlMarkers(): Promise<void> {
+  const { db } = openOpenClawStateDatabase();
+  const result = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+      .selectFrom("outbound_media_provenance")
+      .select("realpath"),
   );
+  const stale: string[] = [];
+  for (const row of result.rows) {
+    const info = await lstat(row.realpath).catch(() => undefined);
+    if (!info?.isFile() || info.isSymbolicLink()) {
+      stale.push(row.realpath);
+    }
+  }
+  if (stale.length === 0) {
+    return;
+  }
+  logVerbose(`trusted-html prune: removed ${stale.length} stale marker(s)`);
+  runOpenClawStateWriteTransaction(({ db: writeDb }) => {
+    executeSqliteQuerySync(
+      writeDb,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(writeDb)
+        .deleteFrom("outbound_media_provenance")
+        .where("realpath", "in", stale),
+    );
+  });
 }
 
 function isTrustedGeneratedHostReadHtml(params: {
@@ -909,6 +1042,7 @@ async function loadWebMediaInternal(
     contentType?: string;
     kind: MediaKind | undefined;
     fileName?: string;
+    trustedGeneratedHtmlSource?: boolean;
   }): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
@@ -958,6 +1092,7 @@ async function loadWebMediaInternal(
       contentType: params.contentType ?? undefined,
       kind: params.kind,
       fileName: params.fileName,
+      ...(params.trustedGeneratedHtmlSource ? { trustedGeneratedHtmlSource: true } : {}),
     };
   };
 
@@ -1086,6 +1221,7 @@ async function loadWebMediaInternal(
     contentType: mime,
     kind,
     fileName,
+    trustedGeneratedHtmlSource: trustedGeneratedHtmlPath && hostReadDeclaredMime === "text/html",
   });
 }
 

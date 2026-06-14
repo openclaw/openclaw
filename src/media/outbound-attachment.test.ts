@@ -2,10 +2,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 const loadWebMedia = vi.hoisted(() => vi.fn());
+const markTrustedGeneratedHtmlPath = vi.hoisted(() => vi.fn());
 const saveMediaBuffer = vi.hoisted(() => vi.fn());
 
 vi.mock("./web-media.js", () => ({
   loadWebMedia,
+  markTrustedGeneratedHtmlPath,
 }));
 
 vi.mock("./store.js", () => ({
@@ -37,6 +39,44 @@ describe("resolveOutboundAttachmentFromUrl", () => {
       1024,
       "report.pdf",
     );
+    expect(markTrustedGeneratedHtmlPath).not.toHaveBeenCalled();
+  });
+
+  it("persists a provenance marker when staging trusted generated HTML", async () => {
+    const buffer = Buffer.from("<!doctype html><title>x</title>");
+    loadWebMedia.mockResolvedValueOnce({
+      buffer,
+      contentType: "text/html",
+      fileName: "report.html",
+      trustedGeneratedHtmlSource: true,
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/media/outbound/report---uuid.html",
+      contentType: "text/html",
+    });
+
+    await resolveOutboundAttachmentFromUrl("/tmp/openclaw/report.html", 1024);
+
+    expect(markTrustedGeneratedHtmlPath).toHaveBeenCalledWith(
+      "/tmp/media/outbound/report---uuid.html",
+    );
+  });
+
+  it("does not mark untrusted outbound HTML staging", async () => {
+    const buffer = Buffer.from("<!doctype html><title>x</title>");
+    loadWebMedia.mockResolvedValueOnce({
+      buffer,
+      contentType: "text/html",
+      fileName: "report.html",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/media/outbound/report---uuid.html",
+      contentType: "text/html",
+    });
+
+    markTrustedGeneratedHtmlPath.mockReset();
+    await resolveOutboundAttachmentFromUrl("/some/where/report.html", 1024);
+    expect(markTrustedGeneratedHtmlPath).not.toHaveBeenCalled();
   });
 });
 
