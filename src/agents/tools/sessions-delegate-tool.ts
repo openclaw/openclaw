@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { waitForAgentRun, readLatestAssistantReply } from "../run-wait.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -18,6 +18,7 @@ const DEFAULT_DELEGATE_TIMEOUT_SECONDS = 120;
 const MAX_BATCH_SIZE = 10;
 const FROZEN_RESULT_POLL_INTERVAL_MS = 200;
 const FROZEN_RESULT_MAX_POLL_MS = 2000;
+const BATCH_TIMEOUT_GRACE_MS = 500;
 
 type DelegateToolOpts = {
   agentSessionKey?: string;
@@ -111,51 +112,84 @@ type SingleDelegateResult = {
   error?: string;
 };
 
-async function executeSingleDelegate(
-  params: Record<string, unknown>,
-  opts: DelegateToolOpts | undefined,
-): Promise<SingleDelegateResult> {
+type PreparedDelegateRequest = {
+  task: string;
+  label: string;
+  agentId?: string;
+  model?: string;
+  thinking?: string;
+  sandbox: "inherit" | "require";
+  lightContext: boolean;
+  cleanup: "delete" | "keep";
+  timeoutSeconds: number;
+  attachments?: Array<{
+    name: string;
+    content: string;
+    encoding?: "utf8" | "base64";
+    mimeType?: string;
+  }>;
+};
+
+type AcceptedDelegateRun = {
+  status: "accepted";
+  runId: string;
+  childSessionKey: string;
+  timeoutSeconds: number;
+  startedAt: number;
+};
+
+type DelegateSpawnResult = AcceptedDelegateRun | SingleDelegateResult;
+
+function prepareDelegateRequest(params: Record<string, unknown>): PreparedDelegateRequest {
   const task = readStringParam(params, "task", { required: true });
   const label = readStringParam(params, "label") ?? "";
-  const agentId = readStringParam(params, "agentId");
-  const model = readStringParam(params, "model");
-  const thinking = readStringParam(params, "thinking");
-  const sandbox = params.sandbox === "require" ? "require" : ("inherit" as const);
-  const lightContext = params.lightContext === true;
-  const cleanup =
-    params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "delete";
   const timeoutSecondsRaw =
     typeof params.timeoutSeconds === "number" ? params.timeoutSeconds : undefined;
-  const timeoutSeconds =
-    typeof timeoutSecondsRaw === "number" && Number.isFinite(timeoutSecondsRaw)
-      ? Math.max(1, Math.floor(timeoutSecondsRaw))
-      : DEFAULT_DELEGATE_TIMEOUT_SECONDS;
-  const attachments = Array.isArray(params.attachments)
-    ? (params.attachments as Array<{
-        name: string;
-        content: string;
-        encoding?: "utf8" | "base64";
-        mimeType?: string;
-      }>)
-    : undefined;
+  return {
+    task,
+    label,
+    agentId: readStringParam(params, "agentId"),
+    model: readStringParam(params, "model"),
+    thinking: readStringParam(params, "thinking"),
+    sandbox: params.sandbox === "require" ? "require" : "inherit",
+    lightContext: params.lightContext === true,
+    cleanup: params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "delete",
+    timeoutSeconds:
+      typeof timeoutSecondsRaw === "number" && Number.isFinite(timeoutSecondsRaw)
+        ? Math.max(1, Math.floor(timeoutSecondsRaw))
+        : DEFAULT_DELEGATE_TIMEOUT_SECONDS,
+    attachments: Array.isArray(params.attachments)
+      ? (params.attachments as Array<{
+          name: string;
+          content: string;
+          encoding?: "utf8" | "base64";
+          mimeType?: string;
+        }>)
+      : undefined,
+  };
+}
 
+async function spawnDelegateRun(
+  request: PreparedDelegateRequest,
+  opts: DelegateToolOpts | undefined,
+): Promise<DelegateSpawnResult> {
   const startedAt = Date.now();
-
   const spawnResult = await spawnSubagentDirect(
     {
-      task,
-      label: label || undefined,
-      agentId,
-      model,
-      thinking,
-      runTimeoutSeconds: timeoutSeconds,
+      task: request.task,
+      label: request.label || undefined,
+      agentId: request.agentId,
+      model: request.model,
+      thinking: request.thinking,
+      runTimeoutSeconds: request.timeoutSeconds,
       thread: false,
       mode: "run",
-      cleanup,
-      sandbox,
-      lightContext,
+      cleanup: request.cleanup,
+      sandbox: request.sandbox,
+      lightContext: request.lightContext,
       expectsCompletionMessage: false,
-      attachments,
+      requiresOutputCaptureGate: true,
+      attachments: request.attachments,
     },
     {
       agentSessionKey: opts?.agentSessionKey,
@@ -168,6 +202,8 @@ async function executeSingleDelegate(
       agentGroupSpace: opts?.agentGroupSpace ?? undefined,
       requesterAgentIdOverride: opts?.requesterAgentIdOverride,
       workspaceDir: opts?.workspaceDir,
+      inheritedToolAllowlist: opts?.inheritedToolAllowlist,
+      inheritedToolDenylist: opts?.inheritedToolDenylist,
     },
   );
 
@@ -179,16 +215,19 @@ async function executeSingleDelegate(
     };
   }
 
-  const childSessionKey = spawnResult.childSessionKey!;
-  const runId = spawnResult.runId!;
+  return {
+    status: "accepted",
+    runId: spawnResult.runId!,
+    childSessionKey: spawnResult.childSessionKey!,
+    timeoutSeconds: request.timeoutSeconds,
+    startedAt,
+  };
+}
 
-  // The output capture gate was already registered by registerSubagentRun
-  // (for expectsCompletionMessage: false runs) before any completion
-  // listener can fire. We signal it after reading output below.
-
+async function waitForDelegateRun(spawned: AcceptedDelegateRun): Promise<SingleDelegateResult> {
   const waitResult = await waitForAgentRun({
-    runId,
-    timeoutMs: timeoutSeconds * 1000,
+    runId: spawned.runId,
+    timeoutMs: spawned.timeoutSeconds * 1000,
   });
 
   // Use try/finally so signalOutputCaptured fires on every exit path
@@ -198,9 +237,9 @@ async function executeSingleDelegate(
     if (waitResult.status === "timeout") {
       return {
         status: "timeout",
-        runId,
-        childSessionKey,
-        runtimeMs: Date.now() - startedAt,
+        runId: spawned.runId,
+        childSessionKey: spawned.childSessionKey,
+        runtimeMs: Date.now() - spawned.startedAt,
         error: "Child run did not complete within the timeout.",
       };
     }
@@ -208,25 +247,51 @@ async function executeSingleDelegate(
     if (waitResult.status === "error") {
       return {
         status: "error",
-        runId,
-        childSessionKey,
-        runtimeMs: Date.now() - startedAt,
+        runId: spawned.runId,
+        childSessionKey: spawned.childSessionKey,
+        runtimeMs: Date.now() - spawned.startedAt,
         error: waitResult.error ?? "Child run failed.",
       };
     }
 
-    const output = await readChildOutput({ runId, childSessionKey });
+    const output = await readChildOutput({
+      runId: spawned.runId,
+      childSessionKey: spawned.childSessionKey,
+    });
 
     return {
       status: "ok",
       output: output ?? undefined,
-      runId,
-      childSessionKey,
-      runtimeMs: Date.now() - startedAt,
+      runId: spawned.runId,
+      childSessionKey: spawned.childSessionKey,
+      runtimeMs: Date.now() - spawned.startedAt,
     };
   } finally {
-    signalOutputCaptured(runId);
+    signalOutputCaptured(spawned.runId);
   }
+}
+
+async function executeSingleDelegate(
+  params: Record<string, unknown>,
+  opts: DelegateToolOpts | undefined,
+): Promise<SingleDelegateResult> {
+  const request = prepareDelegateRequest(params);
+  const spawned = await spawnDelegateRun(request, opts);
+  return spawned.status === "accepted" ? waitForDelegateRun(spawned) : spawned;
+}
+
+function buildBatchTimeoutResult(spawned?: AcceptedDelegateRun): SingleDelegateResult {
+  return {
+    status: "timeout",
+    ...(spawned
+      ? {
+          runId: spawned.runId,
+          childSessionKey: spawned.childSessionKey,
+          runtimeMs: Date.now() - spawned.startedAt,
+        }
+      : {}),
+    error: "Overall batch timeout exceeded.",
+  };
 }
 
 export function createSessionsDelegateTool(opts?: DelegateToolOpts): AnyAgentTool {
@@ -266,10 +331,17 @@ export function createSessionsDelegateBatchTool(opts?: DelegateToolOpts): AnyAge
           ? Math.max(1, Math.floor(params.timeoutSeconds))
           : undefined;
 
-      // Spawn all children, then wait in parallel.
+      const batchStartedAt = Date.now();
+      const batchDeadlineMs = overallTimeoutSeconds
+        ? batchStartedAt + overallTimeoutSeconds * 1000
+        : undefined;
+
+      // Spawn sequentially so registerSubagentRun updates active-child state
+      // before the next child checks maxChildrenPerAgent, then wait in parallel.
       const spawnedTasks: Array<{
         index: number;
         task: string;
+        accepted?: AcceptedDelegateRun;
         promise: Promise<SingleDelegateResult>;
       }> = [];
 
@@ -281,10 +353,30 @@ export function createSessionsDelegateBatchTool(opts?: DelegateToolOpts): AnyAge
           // Use per-task timeout if set, otherwise fall back to overall timeout.
           timeoutSeconds: taskParams.timeoutSeconds ?? overallTimeoutSeconds,
         };
+        if (batchDeadlineMs !== undefined && Date.now() >= batchDeadlineMs) {
+          spawnedTasks.push({
+            index: i,
+            task: taskStr,
+            promise: Promise.resolve(buildBatchTimeoutResult()),
+          });
+          continue;
+        }
+
+        const request = prepareDelegateRequest(childParams);
+        const spawned = await spawnDelegateRun(request, opts);
+        if (spawned.status !== "accepted") {
+          spawnedTasks.push({
+            index: i,
+            task: taskStr,
+            promise: Promise.resolve(spawned),
+          });
+          continue;
+        }
         spawnedTasks.push({
           index: i,
           task: taskStr,
-          promise: executeSingleDelegate(childParams, opts),
+          accepted: spawned,
+          promise: waitForDelegateRun(spawned),
         });
       }
 
@@ -302,15 +394,11 @@ export function createSessionsDelegateBatchTool(opts?: DelegateToolOpts): AnyAge
             spawnedTasks.map((t) =>
               Promise.race([
                 t.promise,
+                // Give a tiny grace period for already-completing tasks.
                 new Promise<SingleDelegateResult>((resolve) =>
-                  // Give a tiny grace period for already-completing tasks.
                   setTimeout(
-                    () =>
-                      resolve({
-                        status: "timeout",
-                        error: "Overall batch timeout exceeded.",
-                      }),
-                    500,
+                    () => resolve(buildBatchTimeoutResult(t.accepted)),
+                    BATCH_TIMEOUT_GRACE_MS,
                   ),
                 ),
               ]),

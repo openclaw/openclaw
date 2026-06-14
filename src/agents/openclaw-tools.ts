@@ -551,6 +551,8 @@ export function createOpenClawTools(
             sandboxed: options?.sandboxed,
             requesterAgentIdOverride: options?.requesterAgentIdOverride,
             workspaceDir: spawnWorkspaceDir,
+            inheritedToolAllowlist: options?.inheritedToolAllowlist,
+            inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
           createSessionsDelegateBatchTool({
             agentSessionKey: options?.agentSessionKey,
@@ -564,6 +566,8 @@ export function createOpenClawTools(
             sandboxed: options?.sandboxed,
             requesterAgentIdOverride: options?.requesterAgentIdOverride,
             workspaceDir: spawnWorkspaceDir,
+            inheritedToolAllowlist: options?.inheritedToolAllowlist,
+            inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
         ]
       : []),

@@ -667,7 +667,7 @@ describe("subagent registry lifecycle hardening", () => {
     );
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
-    expect(registryMemoryMocks.waitForOutputCaptureGate).toHaveBeenCalledWith(entry.runId, 30_000);
+    expect(registryMemoryMocks.waitForOutputCaptureGate).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(runs.has(entry.runId)).toBe(false));
     expect(entry.delivery?.announcedAt).toBeUndefined();
   });
@@ -1330,6 +1330,7 @@ describe("subagent registry lifecycle hardening", () => {
     const persist = vi.fn();
     const entry = createRunEntry({
       expectsCompletionMessage: false,
+      requiresOutputCaptureGate: true,
       cleanup: "delete",
     });
 
@@ -1364,7 +1365,7 @@ describe("subagent registry lifecycle hardening", () => {
       params: {
         key: entry.childSessionKey,
         deleteTranscript: true,
-        emitLifecycleHooks: true,
+        emitLifecycleHooks: false,
       },
       timeoutMs: 10_000,
     });
@@ -1372,6 +1373,47 @@ describe("subagent registry lifecycle hardening", () => {
     expect(callOrder.indexOf("waitForOutputCaptureGate")).toBeLessThan(
       callOrder.indexOf("sessions.delete"),
     );
+  });
+
+  it("does not wait for output capture on non-delegate completion-disabled cleanup", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      spawnMode: "session",
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      persist,
+      runSubagentAnnounceFlow: vi.fn(async () => true),
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() =>
+      expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+        method: "sessions.delete",
+        params: {
+          key: entry.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: true,
+        },
+        timeoutMs: 10_000,
+      }),
+    );
+    expect(registryMemoryMocks.waitForOutputCaptureGate).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(runs.has(entry.runId)).toBe(false));
   });
 
   it("dedupes browser cleanup when two callers complete the same run in parallel", async () => {

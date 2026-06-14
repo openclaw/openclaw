@@ -155,6 +155,7 @@ export type RegisterSubagentRunParams = {
   workspaceDir?: string;
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
+  requiresOutputCaptureGate?: boolean;
   spawnMode?: "run" | "session";
   attachmentsDir?: string;
   attachmentsRootDir?: string;
@@ -646,6 +647,7 @@ export function createSubagentRunManager(params: {
       taskName: registerParams.taskName,
       cleanup: registerParams.cleanup,
       expectsCompletionMessage: registerParams.expectsCompletionMessage,
+      requiresOutputCaptureGate: registerParams.requiresOutputCaptureGate === true,
       spawnMode,
       label: registerParams.label,
       model: registerParams.model,
@@ -674,11 +676,9 @@ export function createSubagentRunManager(params: {
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
     params.runs.set(runId, entry);
-    // For delegate runs, register the output capture gate before any
-    // completion listener can fire. The delegate tool signals the gate
-    // after reading the child output, and the cleanup fast path awaits
-    // it before deleting the session/entry.
-    if (registerParams.expectsCompletionMessage === false) {
+    // Delegate runs read child output directly, so register their gate before
+    // any completion listener can delete the child transcript.
+    if (registerParams.requiresOutputCaptureGate === true) {
       registerOutputCaptureGate(registerParams.runId);
     }
     try {

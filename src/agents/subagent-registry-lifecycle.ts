@@ -987,9 +987,11 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (entry.expectsCompletionMessage === false) {
       void (async () => {
-        // Wait for sessions_delegate to finish reading child output before
-        // deleting the child transcript or removing the run entry.
-        await waitForOutputCaptureGate(runId, 30_000);
+        if (entry.requiresOutputCaptureGate === true) {
+          // Wait for sessions_delegate to finish reading child output before
+          // deleting the child transcript or removing the run entry.
+          await waitForOutputCaptureGate(runId, 30_000);
+        }
         if (entry.cleanup === "delete") {
           await deleteSubagentSessionForCleanup({
             callGateway: params.callGateway,

@@ -143,6 +143,34 @@ describe("sessions_delegate", () => {
     expect(spawnParams.expectsCompletionMessage).toBe(false);
   });
 
+  it("marks delegate runs as output-capture gated", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(makeAcceptedSpawn());
+    waitForAgentRunMock.mockResolvedValue({ status: "ok" });
+    subagentRunsMap.set("run-1", { frozenResultText: "done" });
+
+    await tool.execute("call-1", { task: "test" });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams.requiresOutputCaptureGate).toBe(true);
+  });
+
+  it("passes inherited tool policy to delegate spawns", async () => {
+    const scopedTool = createSessionsDelegateTool({
+      agentSessionKey: "agent:main:main",
+      inheritedToolAllowlist: ["sessions_delegate", "read"],
+      inheritedToolDenylist: ["exec"],
+    });
+    spawnSubagentDirectMock.mockResolvedValue(makeAcceptedSpawn());
+    waitForAgentRunMock.mockResolvedValue({ status: "ok" });
+    subagentRunsMap.set("run-1", { frozenResultText: "done" });
+
+    await scopedTool.execute("call-1", { task: "test" });
+
+    const spawnContext = spawnSubagentDirectMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(spawnContext.inheritedToolAllowlist).toEqual(["sessions_delegate", "read"]);
+    expect(spawnContext.inheritedToolDenylist).toEqual(["exec"]);
+  });
+
   it("signals output capture gate after reading child output", async () => {
     spawnSubagentDirectMock.mockResolvedValue(makeAcceptedSpawn());
     waitForAgentRunMock.mockResolvedValue({ status: "ok" });
@@ -208,6 +236,69 @@ describe("sessions_delegate_batch", () => {
     expect(summary.completed).toBe(3);
     expect(summary.failed).toBe(0);
     expect(summary.timedOut).toBe(0);
+  });
+
+  it("spawns batch children sequentially before waiting in parallel", async () => {
+    let resolveFirstSpawn: ((value: SpawnSubagentResult) => void) | undefined;
+    spawnSubagentDirectMock
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<SpawnSubagentResult>((resolve) => {
+            resolveFirstSpawn = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(
+        makeAcceptedSpawn({
+          childSessionKey: "agent:main:subagent:child-2",
+          runId: "run-2",
+        }),
+      );
+    waitForAgentRunMock.mockResolvedValue({ status: "ok" });
+    subagentRunsMap.set("run-1", { frozenResultText: "Result A" });
+    subagentRunsMap.set("run-2", { frozenResultText: "Result B" });
+
+    const resultPromise = tool.execute("call-1", {
+      tasks: [{ task: "Task 1" }, { task: "Task 2" }],
+    });
+
+    await Promise.resolve();
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+
+    resolveFirstSpawn?.(makeAcceptedSpawn());
+    await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2));
+
+    const result = await resultPromise;
+    const payload = result.details as Record<string, unknown>;
+    expect(payload.status).toBe("ok");
+  });
+
+  it("returns accepted child identity when the overall batch timeout wins", async () => {
+    vi.useFakeTimers();
+    try {
+      spawnSubagentDirectMock.mockResolvedValue(makeAcceptedSpawn());
+      waitForAgentRunMock.mockImplementation(async () => await new Promise(() => {}));
+
+      const resultPromise = tool.execute("call-1", {
+        tasks: [{ task: "Slow task" }],
+        timeoutSeconds: 1,
+      });
+
+      await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      const result = await resultPromise;
+      const payload = result.details as Record<string, unknown>;
+      const results = payload.results as Array<Record<string, unknown>>;
+      expect(payload.status).toBe("partial");
+      expect(results[0]).toMatchObject({
+        status: "timeout",
+        runId: "run-1",
+        childSessionKey: "agent:main:subagent:child-1",
+        error: "Overall batch timeout exceeded.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns partial results when one task fails and failureMode is partial", async () => {
