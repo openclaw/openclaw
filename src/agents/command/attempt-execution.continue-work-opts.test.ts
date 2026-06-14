@@ -182,6 +182,7 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
       sessionId: sessionEntry.sessionId,
       sessionKey,
       sessionAgentId: "main",
+      lifecycleGeneration: "test-generation",
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
       body: "trap-test prompt",
