@@ -43,6 +43,30 @@ export function cacheInboundMessageMeta(
   cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
 }
 
+export function cacheOutboundMessageMeta(
+  accountId: string,
+  remoteJid: string,
+  messageId: string,
+  botJid: string,
+  body?: string,
+): void {
+  if (!accountId || !messageId || !remoteJid) {
+    return;
+  }
+  if (cache.size >= MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest) {
+      cache.delete(oldest);
+    }
+  }
+  cache.set(makeCacheKey(accountId, remoteJid, messageId), {
+    participant: botJid,
+    body,
+    fromMe: true,
+    ts: Date.now(),
+  });
+}
+
 export function lookupInboundMessageMeta(
   accountId: string,
   remoteJid: string,

@@ -17,7 +17,7 @@ import {
   normalizeWhatsAppPayloadText,
 } from "./outbound-media-contract.js";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
-import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
+import { cacheOutboundMessageMeta, lookupInboundMessageMetaForTarget } from "./quoted-message.js";
 import { toWhatsappJid } from "./text-runtime.js";
 
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
@@ -174,13 +174,23 @@ export function createWhatsAppOutboundBase({
           to,
           replyToId,
         });
-        return await send(to, normalizedText, {
+        const result = await send(to, normalizedText, {
           verbose: false,
           cfg,
           accountId: accountId ?? undefined,
           gifPlayback,
           quotedMessageKey,
         });
+        if (result.messageId && result.toJid) {
+          cacheOutboundMessageMeta(
+            lookupAccountId,
+            result.toJid,
+            result.messageId,
+            result.toJid,
+            normalizedText,
+          );
+        }
+        return result;
       },
       sendMedia: async ({
         cfg,
@@ -207,7 +217,7 @@ export function createWhatsAppOutboundBase({
           to,
           replyToId,
         });
-        return await send(to, normalizeText(text), {
+        const result = await send(to, normalizeText(text), {
           verbose: false,
           cfg,
           mediaUrl,
@@ -220,6 +230,16 @@ export function createWhatsAppOutboundBase({
           forceDocument,
           quotedMessageKey,
         });
+        if (result.messageId && result.toJid) {
+          cacheOutboundMessageMeta(
+            lookupAccountId,
+            result.toJid,
+            result.messageId,
+            result.toJid,
+            normalizeText(text),
+          );
+        }
+        return result;
       },
       sendPoll: async ({ cfg, to, poll, accountId }) =>
         await sendPollWhatsApp(to, poll, {
