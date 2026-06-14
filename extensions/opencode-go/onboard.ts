@@ -18,7 +18,7 @@ export function applyOpencodeGoProviderConfig(cfg: OpenClawConfig): OpenClawConf
       { modelRef: OPENCODE_GO_DEFAULT_MODEL_REF, alias: OPENCODE_GO_DEFAULT_MODEL_ALIAS },
     ]),
     providerId: "opencode-go",
-    api: OPENCODE_GO_STATIC_PROVIDER.api,
+    api: OPENCODE_GO_STATIC_PROVIDER.api!,
     baseUrl: OPENCODE_GO_STATIC_PROVIDER.baseUrl,
     catalogModels: OPENCODE_GO_STATIC_PROVIDER.models,
   });

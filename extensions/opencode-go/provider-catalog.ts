@@ -26,32 +26,32 @@ const OPENCODE_GO_QWEN3_7_PLUS_TIERED_PRICING = [
     output: 1.6,
     cacheRead: 0.04,
     cacheWrite: 0.5,
-    range: [0, 256_000] as const,
+    range: [0, 256_000] as [number, number],
   },
   {
     input: 1.2,
     output: 4.8,
     cacheRead: 0.12,
     cacheWrite: 1.5,
-    range: [256_000] as const,
+    range: [256_000] as [number],
   },
-] as const;
+];
 const OPENCODE_GO_QWEN3_6_PLUS_TIERED_PRICING = [
   {
     input: 0.5,
     output: 3,
     cacheRead: 0.05,
     cacheWrite: 0.625,
-    range: [0, 256_000] as const,
+    range: [0, 256_000] as [number, number],
   },
   {
     input: 2,
     output: 6,
     cacheRead: 0.2,
     cacheWrite: 2.5,
-    range: [256_000] as const,
+    range: [256_000] as [number],
   },
-] as const;
+];
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
@@ -320,7 +320,7 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
       reasoning: true,
-      input: ["text", "image", "video"],
+      input: ["text", "image"],
       cost: {
         input: 0.9,
         output: 3.6,
@@ -464,7 +464,9 @@ export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
-  return OPENCODE_GO_MODELS.find((model) => model.id === normalizedModelId);
+  return OPENCODE_GO_MODELS.find((model) => model.id === normalizedModelId) as
+    | ProviderRuntimeModel
+    | undefined;
 }
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {

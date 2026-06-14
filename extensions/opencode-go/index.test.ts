@@ -143,7 +143,7 @@ describe("opencode-go provider plugin", () => {
     const minimaxM3 = requireMapEntry(models, "minimax-m3");
     expect(minimaxM3.api).toBe("anthropic-messages");
     expect(minimaxM3.baseUrl).toBe("https://opencode.ai/zen/go");
-    expect(minimaxM3.input).toEqual(["text", "image", "video"]);
+    expect(minimaxM3.input).toEqual(["text", "image"]);
     expect(minimaxM3.reasoning).toBe(true);
     expect(minimaxM3.contextWindow).toBe(512_000);
     expect(minimaxM3.maxTokens).toBe(131_072);
