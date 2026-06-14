@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import type {
   AcpSessionRuntimeOptions,
+  HubDelegatedSessionMeta,
   SessionAcpIdentity,
   SessionAcpIdentitySource,
   SessionAcpIdentityState,
@@ -37,6 +38,7 @@ export type SessionOrigin = {
 
 export type {
   AcpSessionRuntimeOptions,
+  HubDelegatedSessionMeta,
   SessionAcpIdentity,
   SessionAcpIdentitySource,
   SessionAcpIdentityState,
@@ -239,6 +241,8 @@ export type SessionEntry = {
   spawnedCwd?: string;
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
+  /** Hub-delegated persistent ACP worker owned by a parent session without thread binding. */
+  hubDelegated?: HubDelegatedSessionMeta;
   /** True after a thread/topic session has been forked from its parent transcript once. */
   forkedFromParent?: boolean;
   /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */

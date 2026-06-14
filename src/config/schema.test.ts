@@ -780,6 +780,22 @@ describe("config schema", () => {
     });
   });
 
+  it("accepts hub-delegated ACP lifecycle config in the runtime zod schema", () => {
+    const parsed = OpenClawSchema.parse({
+      acp: {
+        delegate: {
+          idleHours: 72,
+          maxAgeHours: 168,
+        },
+      },
+    });
+
+    expect(parsed.acp?.delegate).toEqual({
+      idleHours: 72,
+      maxAgeHours: 168,
+    });
+  });
+
   it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {

@@ -42,6 +42,7 @@ export type AcpAction =
   | "cancel"
   | "steer"
   | "close"
+  | "delegate"
   | "sessions"
   | "status"
   | "set-mode"
@@ -100,6 +101,7 @@ export function resolveAcpAction(tokens: string[]): AcpAction {
     action === "cancel" ||
     action === "steer" ||
     action === "close" ||
+    action === "delegate" ||
     action === "sessions" ||
     action === "status" ||
     action === "set-mode" ||
@@ -442,6 +444,9 @@ export function resolveAcpHelpText(): string {
     "/acp cancel [session-key|session-id|session-label]",
     "/acp steer [--session <session-key|session-id|session-label>] <instruction>",
     "/acp close [session-key|session-id|session-label]",
+    "/acp delegate list",
+    "/acp delegate close <label>",
+    "/acp delegate status <label>",
     "/acp status [session-key|session-id|session-label]",
     "/acp set-mode <mode> [session-key|session-id|session-label]",
     "/acp set <key> <value> [session-key|session-id|session-label]",

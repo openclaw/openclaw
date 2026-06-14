@@ -801,6 +801,13 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        delegate: z
+          .object({
+            idleHours: z.number().nonnegative().optional(),
+            maxAgeHours: z.number().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

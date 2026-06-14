@@ -81,6 +81,8 @@ export type AcpSessionRuntimeOptions = {
   backendExtras?: Record<string, string>;
 };
 
+export type { HubDelegatedSessionMeta } from "./hub-delegated.js";
+
 export type SessionAcpMeta = {
   backend: string;
   agent: string;

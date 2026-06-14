@@ -1,6 +1,11 @@
 // Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
 import {
+  findHubDelegatedLabelConflictInStore,
+  isHubDelegatedAcpSessionEntry,
+  resolveHubDelegatedLineageMismatch,
+} from "@openclaw/acp-core";
+import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -55,6 +60,23 @@ import { parseSessionLabel } from "../sessions/session-label.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
+}
+
+let hubDelegatedLabelPatchTail = Promise.resolve();
+
+/** Serializes owner/label mutations so cross-store uniqueness checks cannot race. */
+export async function withHubDelegatedLabelPatchLock<T>(run: () => Promise<T>): Promise<T> {
+  const previous = hubDelegatedLabelPatchTail;
+  let release!: () => void;
+  hubDelegatedLabelPatchTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+  }
 }
 
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
@@ -138,6 +160,11 @@ export async function applySessionsPatchToStore(params: {
   agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  findHubDelegatedLabelConflict?: (params: {
+    storeKey: string;
+    ownerSessionKey: string;
+    label: string;
+  }) => string | undefined;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
@@ -198,6 +225,57 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnedBy cannot be changed once set");
       }
       next.spawnedBy = trimmed;
+    }
+  }
+
+  if ("parentSessionKey" in patch) {
+    const raw = patch.parentSessionKey;
+    if (raw === null) {
+      if (existing?.parentSessionKey) {
+        return invalid("parentSessionKey cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid parentSessionKey: empty");
+      }
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("parentSessionKey is only supported for subagent:* or acp:* sessions");
+      }
+      if (existing?.parentSessionKey && existing.parentSessionKey !== trimmed) {
+        return invalid("parentSessionKey cannot be changed once set");
+      }
+      next.parentSessionKey = trimmed;
+    }
+  }
+
+  if ("hubDelegated" in patch) {
+    const raw = patch.hubDelegated;
+    if (raw === null) {
+      delete next.hubDelegated;
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("hubDelegated is only supported for subagent:* or acp:* sessions");
+      }
+      const ownerSessionKey = normalizeOptionalString(raw.ownerSessionKey) ?? "";
+      if (!ownerSessionKey) {
+        return invalid("invalid hubDelegated.ownerSessionKey: empty");
+      }
+      if (
+        typeof raw.createdAt !== "number" ||
+        !Number.isFinite(raw.createdAt) ||
+        raw.createdAt < 0
+      ) {
+        return invalid("invalid hubDelegated.createdAt");
+      }
+      const existingOwner = normalizeOptionalString(existing?.hubDelegated?.ownerSessionKey);
+      if (existingOwner && existingOwner !== ownerSessionKey) {
+        return invalid("hubDelegated owner cannot be changed once set");
+      }
+      next.hubDelegated = {
+        ownerSessionKey,
+        createdAt: Math.floor(raw.createdAt),
+      };
     }
   }
 
@@ -356,15 +434,37 @@ export async function applySessionsPatchToStore(params: {
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
-      for (const [key, entry] of Object.entries(store)) {
-        if (key === storeKey) {
-          continue;
-        }
-        if (entry?.label === parsed.label) {
-          return invalid(`label already in use: ${parsed.label}`);
+      const ownerSessionKey = normalizeOptionalString(next.hubDelegated?.ownerSessionKey);
+      if (!ownerSessionKey) {
+        for (const [key, entry] of Object.entries(store)) {
+          if (key === storeKey) {
+            continue;
+          }
+          if (entry?.label === parsed.label) {
+            return invalid(`label already in use: ${parsed.label}`);
+          }
         }
       }
       next.label = parsed.label;
+    }
+  }
+
+  const hubDelegatedOwner = normalizeOptionalString(next.hubDelegated?.ownerSessionKey);
+  const hubDelegatedLabel = normalizeOptionalString(next.label);
+  if (hubDelegatedOwner && hubDelegatedLabel) {
+    const localConflict = findHubDelegatedLabelConflictInStore({
+      store,
+      storeKey,
+      ownerSessionKey: hubDelegatedOwner,
+      label: hubDelegatedLabel,
+    });
+    const externalConflict = params.findHubDelegatedLabelConflict?.({
+      storeKey,
+      ownerSessionKey: hubDelegatedOwner,
+      label: hubDelegatedLabel,
+    });
+    if (localConflict || externalConflict) {
+      return invalid(`label already in use: ${hubDelegatedLabel}`);
     }
   }
 
@@ -639,6 +739,13 @@ export async function applySessionsPatchToStore(params: {
         return invalid('invalid groupActivation (use "mention"|"always")');
       }
       next.groupActivation = normalized;
+    }
+  }
+
+  if (isHubDelegatedAcpSessionEntry(next)) {
+    const lineageMismatch = resolveHubDelegatedLineageMismatch(next);
+    if (lineageMismatch) {
+      return invalid(lineageMismatch);
     }
   }
 

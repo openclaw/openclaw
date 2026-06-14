@@ -1,3 +1,8 @@
+import {
+  isHubDelegatedAcpSessionEntry,
+  resolveHubDelegatedAcpPolicy,
+  resolveHubDelegatedExpiry,
+} from "@openclaw/acp-core";
 // Reconciles stale or lost task registry records during maintenance passes.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -5,6 +10,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import {
+  closeHubDelegatedAcpWorker,
+  listHubDelegatedMaintenanceCandidates,
+  resolveExpiredHubDelegatedCandidates,
+} from "../acp/hub-delegated-lifecycle.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
@@ -14,6 +24,7 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagent-recovery-state.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -658,6 +669,9 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   if (!isParentOwnedAcpSessionTask(task, acpEntry)) {
     return false;
   }
+  if (isHubDelegatedAcpSessionEntry(acpEntry.entry)) {
+    return false;
+  }
   if (acpEntry.acp.mode === "oneshot") {
     return true;
   }
@@ -677,6 +691,9 @@ function shouldCloseOrphanedParentOwnedAcpSession(acpEntry: AcpSessionStoreEntry
   }
   if (acpEntry.acp.mode === "oneshot") {
     return true;
+  }
+  if (isHubDelegatedAcpSessionEntry(acpEntry.entry)) {
+    return false;
   }
   return !hasActiveSessionBinding(sessionKey);
 }
@@ -722,6 +739,59 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
       taskId: task.taskId,
       error,
     });
+  }
+}
+
+async function cleanupExpiredHubDelegatedAcpSessions(): Promise<void> {
+  let acpSessions: AcpSessionStoreEntry[];
+  try {
+    acpSessions = await listHubDelegatedMaintenanceCandidates({ cfg: getRuntimeConfig() });
+  } catch (error) {
+    log.warn("Failed to list ACP sessions during hub-delegate maintenance", { error });
+    return;
+  }
+  const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
+  if (!closeAcpSession) {
+    return;
+  }
+  for (const acpEntry of resolveExpiredHubDelegatedCandidates({ entries: acpSessions })) {
+    const sessionKey = normalizeOptionalString(acpEntry.sessionKey);
+    if (!sessionKey || !acpEntry.entry?.hubDelegated) {
+      continue;
+    }
+    const expiry = resolveHubDelegatedExpiry({
+      entry: {
+        hubDelegated: acpEntry.entry.hubDelegated,
+        acp: acpEntry.acp,
+      },
+      policy: resolveHubDelegatedAcpPolicy(acpEntry.cfg.acp?.delegate),
+    });
+    if (!expiry.expired) {
+      continue;
+    }
+    if (
+      expiry.reason === "delegate-idle-expired" &&
+      taskRegistryMaintenanceRuntime.hasActiveAcpTurn(sessionKey)
+    ) {
+      continue;
+    }
+    try {
+      await closeHubDelegatedAcpWorker({
+        cfg: acpEntry.cfg,
+        sessionKey,
+        storePath: acpEntry.storePath,
+        storeSessionKey: acpEntry.storeSessionKey,
+        reason: expiry.reason,
+        closeRuntime: closeAcpSession,
+        unbind: taskRegistryMaintenanceRuntime.unbindSessionBindings,
+      });
+    } catch (error) {
+      log.warn("Failed to close expired hub-delegated ACP session during task maintenance", {
+        sessionKey,
+        reason: expiry.reason,
+        error,
+      });
+    }
   }
 }
 
@@ -1187,6 +1257,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     }
   }
   await cleanupOrphanedParentOwnedAcpSessions();
+  await cleanupExpiredHubDelegatedAcpSessions();
   if (isPluginStateDatabaseOpen()) {
     try {
       sweepExpiredPluginStateEntries();

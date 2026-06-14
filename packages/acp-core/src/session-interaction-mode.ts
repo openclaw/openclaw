@@ -1,17 +1,30 @@
 // ACP Core module implements session interaction mode behavior.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { HubDelegatedSessionMeta } from "./hub-delegated.js";
 
 type AcpSessionInteractionMode = "interactive" | "parent-owned-background";
 
 type SessionInteractionEntry = {
   spawnedBy?: string;
   parentSessionKey?: string;
+  hubDelegated?: HubDelegatedSessionMeta | null;
   acp?: unknown;
 };
+
+/** Hub-delegated and parent-owned ACP child sessions must stay off user-visible chat surfaces. */
+export function requiresInternalAcpSessionEffects(entry?: SessionInteractionEntry | null): boolean {
+  const hubDelegatedOwner = normalizeOptionalString(entry?.hubDelegated?.ownerSessionKey);
+  const hubDelegated = Boolean(hubDelegatedOwner);
+  return hubDelegated || isParentOwnedBackgroundAcpSession(entry);
+}
 
 function resolveAcpSessionInteractionMode(
   entry?: SessionInteractionEntry | null,
 ): AcpSessionInteractionMode {
+  // Hub-delegated workers are parent-owned even when sqlite ACP metadata is missing.
+  if (normalizeOptionalString(entry?.hubDelegated?.ownerSessionKey)) {
+    return "parent-owned-background";
+  }
   // Parent-owned ACP sessions are background work delegated from another session.
   // They should report back through the parent task notifier instead of speaking directly
   // on the user-facing channel themselves.
@@ -50,6 +63,10 @@ export function isRequesterParentOfBackgroundAcpSession(
   const requester = normalizeOptionalString(requesterSessionKey);
   if (!requester) {
     return false;
+  }
+  const ownerSessionKey = normalizeOptionalString(entry?.hubDelegated?.ownerSessionKey);
+  if (ownerSessionKey) {
+    return requester === ownerSessionKey;
   }
   const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
   const parentSessionKey = normalizeOptionalString(entry?.parentSessionKey);

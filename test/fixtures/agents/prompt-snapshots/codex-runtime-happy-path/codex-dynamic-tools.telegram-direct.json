@@ -1005,6 +1005,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "delegated": {
+          "description": "When true, return only hub-delegated ACP sessions owned by the requester.",
+          "type": "boolean"
+        },
         "includeDerivedTitles": {
           "type": "boolean"
         },

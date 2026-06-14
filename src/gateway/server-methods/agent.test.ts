@@ -2197,6 +2197,52 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("forces internal session effects for hub-delegated ACP child sessions from session metadata", async () => {
+    mockMainSessionEntry({
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime-delegated",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+      spawnedBy: "agent:main:webchat:main",
+      parentSessionKey: "agent:main:webchat:main",
+      hubDelegated: {
+        ownerSessionKey: "agent:main:webchat:main",
+        createdAt: Date.now(),
+      },
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "你好" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "你好",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        bestEffortDeliver: true,
+        idempotencyKey: "test-hub-delegated-metadata-internal",
+      },
+      {
+        reqId: "hub-delegated-metadata-internal",
+        client: backendGatewayClient(),
+        context: makeContext(),
+      },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      sessionEffects?: string;
+      deliver?: boolean;
+    }>();
+    expect(callArgs.sessionEffects).toBe("internal");
+    expect(callArgs.deliver).not.toBe(true);
+  });
+
   it("rejects public transcriptMessage overrides", async () => {
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
     mocks.agentCommand.mockClear();

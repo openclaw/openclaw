@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isParentOwnedBackgroundAcpSession,
   isRequesterParentOfBackgroundAcpSession,
+  requiresInternalAcpSessionEffects,
 } from "./session-interaction-mode.js";
 
 const parentKey = "agent:main:main";
@@ -17,6 +18,15 @@ describe("isParentOwnedBackgroundAcpSession", () => {
     expect(
       isParentOwnedBackgroundAcpSession({
         acp: { mode: "persistent" } as never,
+        spawnedBy: parentKey,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns parent-owned-background for hub-delegated sessions without sqlite acp metadata", () => {
+    expect(
+      isParentOwnedBackgroundAcpSession({
+        hubDelegated: { ownerSessionKey: parentKey, createdAt: 1 },
         spawnedBy: parentKey,
       }),
     ).toBe(true);
@@ -54,6 +64,35 @@ describe("isParentOwnedBackgroundAcpSession", () => {
         acp: { mode: "oneshot" } as never,
       }),
     ).toBe(false);
+  });
+});
+
+describe("requiresInternalAcpSessionEffects", () => {
+  it.each([
+    [
+      "hub-delegated child sessions",
+      {
+        hubDelegated: { ownerSessionKey: parentKey, createdAt: 1 },
+      },
+      true,
+    ],
+    [
+      "parent-owned background ACP sessions",
+      {
+        acp: { mode: "oneshot" },
+        spawnedBy: parentKey,
+      },
+      true,
+    ],
+    [
+      "interactive ACP sessions",
+      {
+        acp: { mode: "persistent" },
+      },
+      false,
+    ],
+  ] as const)("$0 returns $2", (_label, entry, expected) => {
+    expect(requiresInternalAcpSessionEffects(entry)).toBe(expected);
   });
 });
 

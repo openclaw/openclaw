@@ -1196,6 +1196,11 @@ Notes:
     runtime: {
       ttlMinutes: 30,
     },
+
+    delegate: {
+      idleHours: 72,
+      maxAgeHours: 168,
+    },
   },
 }
 ```
@@ -1217,6 +1222,8 @@ Notes:
 - `stream.tagVisibility`: record of tag names to boolean visibility overrides for streamed events.
 - `runtime.ttlMinutes`: idle TTL in minutes for ACP session workers before eligible cleanup.
 - `runtime.installCommand`: optional install command to run when bootstrapping an ACP runtime environment.
+- `delegate.idleHours`: idle TTL in hours before hub-delegated ACP workers auto-close (default: `72`; `0` disables).
+- `delegate.maxAgeHours`: hard max age in hours from creation before hub-delegated workers auto-close (default: `168`; `0` disables).
 
 ---
 

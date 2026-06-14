@@ -27,6 +27,7 @@ function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
     includeGlobal: p.includeGlobal === true,
     includeUnknown: p.includeUnknown === true,
     spawnedBy: p.spawnedBy,
+    hubDelegatedOwner: p.hubDelegatedOwner,
     agentId: p.agentId,
   };
 }
@@ -64,7 +65,11 @@ function isResolvedSessionKeyVisible(params: {
   store: Record<string, SessionEntry>;
   key: string;
 }) {
-  if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
+  if (
+    (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) &&
+    (typeof params.p.hubDelegatedOwner !== "string" ||
+      params.p.hubDelegatedOwner.trim().length === 0)
+  ) {
     return true;
   }
   return filterAndSortSessionEntries({
@@ -238,6 +243,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       label: parsedLabel.label,
       agentId: p.agentId,
       spawnedBy: p.spawnedBy,
+      hubDelegatedOwner: p.hubDelegatedOwner,
       limit: 2,
     },
   });
@@ -262,7 +268,9 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   const labelKey = list.sessions[0].key;
-  const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
+  const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey], {
+    acpMetadataSessionKey: labelKey,
+  });
   if (agentCheckLabel) {
     return agentCheckLabel;
   }

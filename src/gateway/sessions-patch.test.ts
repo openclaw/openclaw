@@ -27,6 +27,7 @@ async function runPatch(params: {
   storeKey?: string;
   agentId?: string;
   loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
+  findHubDelegatedLabelConflict?: ApplySessionsPatchArgs["findHubDelegatedLabelConflict"];
 }) {
   return applySessionsPatchToStore({
     cfg: params.cfg ?? EMPTY_CFG,
@@ -35,6 +36,7 @@ async function runPatch(params: {
     agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    findHubDelegatedLabelConflict: params.findHubDelegatedLabelConflict,
   });
 }
 
@@ -675,6 +677,106 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.spawnedBy).toBe("agent:main:main");
+  });
+
+  test("sets parentSessionKey for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: {
+          key: "agent:main:acp:child",
+          parentSessionKey: "agent:main:main",
+        },
+      }),
+    );
+    expect(entry.parentSessionKey).toBe("agent:main:main");
+  });
+
+  test("rejects parentSessionKey for non-lineage session keys", async () => {
+    expectPatchError(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          parentSessionKey: "agent:main:main",
+        },
+      }),
+      "parentSessionKey is only supported for subagent:* or acp:* sessions",
+    );
+  });
+
+  test("rejects clearing parentSessionKey once set", async () => {
+    expectPatchError(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        store: {
+          "agent:main:acp:child": {
+            sessionId: "sess",
+            updatedAt: 1,
+            parentSessionKey: "agent:main:main",
+          } as SessionEntry,
+        },
+        patch: {
+          key: "agent:main:acp:child",
+          parentSessionKey: null,
+        },
+      }),
+      "parentSessionKey cannot be cleared once set",
+    );
+  });
+
+  test.each([
+    [
+      "new marker with mismatched spawnedBy",
+      {},
+      {
+        key: "agent:codex:acp:child",
+        hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1_700_000_000_000 },
+        spawnedBy: "agent:attacker:main",
+      },
+    ],
+    [
+      "spawnedBy patch drift on existing owner",
+      {
+        "agent:codex:acp:child": {
+          sessionId: "sess-1",
+          updatedAt: 1,
+          hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1 },
+        },
+      },
+      {
+        key: "agent:codex:acp:child",
+        spawnedBy: "agent:attacker:main",
+      },
+    ],
+  ] as const)(
+    "rejects hub-delegated lineage mismatch without mutating store ($0)",
+    async (_label, storeSeed, patch) => {
+      const store: Record<string, SessionEntry> = { ...storeSeed };
+      const before = structuredClone(store);
+
+      expectPatchError(
+        await runPatch({
+          storeKey: "agent:codex:acp:child",
+          store,
+          patch,
+        }),
+        "hubDelegated lineage mismatch: spawnedBy must match hubDelegated.ownerSessionKey",
+      );
+      expect(store).toEqual(before);
+    },
+  );
+
+  test("rejects hub-delegated labels found in another harness store", async () => {
+    const result = await runPatch({
+      storeKey: "agent:codex:acp:child",
+      patch: {
+        key: "agent:codex:acp:child",
+        label: "worker",
+        hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1 },
+      },
+      findHubDelegatedLabelConflict: () => "agent:claude:acp:other",
+    });
+    expectPatchError(result, "label already in use: worker");
   });
 
   test("sets spawnedWorkspaceDir for subagent sessions", async () => {

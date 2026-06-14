@@ -112,6 +112,11 @@ vi.mock("../acp/control-plane/spawn.js", () => ({
 
 vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMeta: (params: unknown) => hoisted.readAcpSessionMetaMock(params),
+  readAcpSessionEntry: () => ({ acp: { backend: "acpx", agent: "codex" } }),
+}));
+
+vi.mock("../config/sessions/store-cache.js", () => ({
+  invalidateSessionStoreCache: vi.fn(),
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -126,9 +131,13 @@ vi.mock("../channels/plugins/registry.js", () => ({
   normalizeChannelId: hoisted.normalizeChannelIdMock,
 }));
 
-vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: hoisted.resolveStorePathMock,
-}));
+vi.mock("../config/sessions/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/paths.js")>();
+  return {
+    ...actual,
+    resolveStorePath: hoisted.resolveStorePathMock,
+  };
+});
 
 vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
@@ -1107,6 +1116,62 @@ describe("spawnAcpDirect", () => {
     const agentCall = findAgentGatewayCall();
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.timeout).toBe(45);
+  });
+
+  it("accepts hub-delegated persistent spawns without thread binding", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        delegate: true,
+        label: "refactor",
+      },
+      {
+        agentSessionKey: "agent:main:webchat:main",
+        agentChannel: "webchat",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(result).toMatchObject({
+      mode: "session",
+      delegate: true,
+      label: "refactor",
+    });
+    const patchCall = hoisted.callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string }).method === "sessions.patch",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+    expect(patchCall?.params?.hubDelegated).toMatchObject({
+      ownerSessionKey: "agent:main:webchat:main",
+    });
+    expect(patchCall?.params?.parentSessionKey).toBe("agent:main:webchat:main");
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.sessionEffects).toBe("internal");
+    expect(hoisted.createRunningTaskRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ notifyPolicy: "silent" }),
+    );
+  });
+
+  it("rejects delegate=true combined with thread=true", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        delegate: true,
+        thread: true,
+        label: "refactor",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.errorCode).toBe("delegate_thread_conflict");
+    }
   });
 
   it("passes zero timeout through to the gateway no-timeout path", async () => {

@@ -1725,10 +1725,12 @@ describe("gateway server chat", () => {
       expect(agentRes.ok).toBe(true);
       expect(agentRes.payload?.status).toBe("accepted");
 
+      const waitStartedAt = Date.now();
       const waitWhileAgentInFlight = await rpcReq(ws, "agent.wait", {
         runId,
         timeoutMs: 40,
       });
+      expect(Date.now() - waitStartedAt).toBeLessThan(500);
       expectAgentWaitTimeout(waitWhileAgentInFlight);
 
       resolveAgentRun?.();
@@ -1920,7 +1922,7 @@ describe("gateway server chat", () => {
         });
 
         const res = await waitP;
-        expectAgentWaitTimeout(res, "boom");
+        expectAgentWaitTimeout(res);
       }
 
       {

@@ -5,6 +5,12 @@
  */
 import path from "node:path";
 import {
+  isHubDelegatedAcpSessionEntry,
+  isHubDelegatedOwnedByRequester,
+  resolveHubDelegatedAcpPolicy,
+  resolveHubDelegatedExpiryPreview,
+} from "@openclaw/acp-core";
+import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
@@ -64,6 +70,11 @@ const SessionsListToolSchema = Type.Object({
   search: Type.Optional(Type.String({ minLength: 1 })),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
+  delegated: Type.Optional(
+    Type.Boolean({
+      description: "When true, return only hub-delegated ACP sessions owned by the requester.",
+    }),
+  ),
 });
 
 type GatewayCaller = typeof callGateway;
@@ -125,6 +136,10 @@ export function createSessionsListTool(opts?: {
       const search = readStringParam(params, "search");
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
+      const delegatedOnly = params.delegated === true;
+      const hubDelegatePolicy = delegatedOnly
+        ? resolveHubDelegatedAcpPolicy(cfg.acp?.delegate)
+        : undefined;
       const gatewayCall = opts?.callGateway ?? callGateway;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
@@ -139,9 +154,10 @@ export function createSessionsListTool(opts?: {
           search,
           includeDerivedTitles: false,
           includeLastMessage: false,
-          includeGlobal: !restrictToSpawned,
-          includeUnknown: !restrictToSpawned,
-          spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
+          includeGlobal: !restrictToSpawned && !delegatedOnly,
+          includeUnknown: !restrictToSpawned && !delegatedOnly,
+          spawnedBy: restrictToSpawned && !delegatedOnly ? effectiveRequesterKey : undefined,
+          hubDelegatedOwner: delegatedOnly ? effectiveRequesterKey : undefined,
         },
       });
 
@@ -199,6 +215,25 @@ export function createSessionsListTool(opts?: {
         const kind = classifySessionKind({ key, gatewayKind, alias, mainKey });
         if (allowedKinds && !allowedKinds.has(kind)) {
           continue;
+        }
+
+        if (delegatedOnly) {
+          const hubDelegated = (entry as SessionEntry).hubDelegated;
+          const delegateEntry = {
+            hubDelegated,
+            spawnedBy: typeof entry.spawnedBy === "string" ? entry.spawnedBy : undefined,
+            parentSessionKey:
+              typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : undefined,
+            acp: (entry as SessionEntry).acp,
+          };
+          if (
+            !isHubDelegatedOwnedByRequester({
+              entry: delegateEntry,
+              requesterSessionKey: effectiveRequesterKey,
+            })
+          ) {
+            continue;
+          }
         }
 
         const displayKey = resolveDisplaySessionKey({
@@ -343,6 +378,36 @@ export function createSessionsListTool(opts?: {
           lastTo: deliveryTo ?? readStringValue(entry.lastTo),
           lastAccountId,
           transcriptPath,
+          ...(delegatedOnly && hubDelegatePolicy
+            ? (() => {
+                const hubDelegatedEntry = (
+                  entry as { hubDelegated?: { ownerSessionKey: string; createdAt: number } }
+                ).hubDelegated;
+                const acpLastActivityAt =
+                  typeof entry.acpLastActivityAt === "number" ? entry.acpLastActivityAt : undefined;
+                if (
+                  !hubDelegatedEntry ||
+                  !isHubDelegatedAcpSessionEntry({
+                    hubDelegated: hubDelegatedEntry,
+                    acp: acpLastActivityAt != null ? { lastActivityAt: acpLastActivityAt } : {},
+                  })
+                ) {
+                  return {};
+                }
+                const expiry = resolveHubDelegatedExpiryPreview({
+                  entry: {
+                    hubDelegated: hubDelegatedEntry,
+                    acp:
+                      acpLastActivityAt != null ? { lastActivityAt: acpLastActivityAt } : undefined,
+                  },
+                  policy: hubDelegatePolicy,
+                });
+                return {
+                  hubDelegated: true,
+                  ...expiry,
+                };
+              })()
+            : {}),
         };
         if (
           sessionId &&

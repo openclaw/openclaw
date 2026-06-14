@@ -27,8 +27,13 @@ const runtimeOptionHandlersLoader = createLazyImportLoader(
 const diagnosticHandlersLoader = createLazyImportLoader(
   () => import("./commands-acp/diagnostics.js"),
 );
+const delegateHandlersLoader = createLazyImportLoader(() => import("./commands-acp/delegate.js"));
 
 async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise<AcpActionHandler> {
+  if (action === "delegate") {
+    const handlers = await delegateHandlersLoader.load();
+    return handlers.handleAcpDelegateAction;
+  }
   if (action === "spawn" || action === "cancel" || action === "steer" || action === "close") {
     const handlers = await lifecycleHandlersLoader.load();
     return {
@@ -76,6 +81,7 @@ const ACP_MUTATING_ACTIONS = new Set<AcpAction>([
   "cancel",
   "steer",
   "close",
+  "delegate",
   "status",
   "set-mode",
   "set",

@@ -183,6 +183,7 @@ export const SessionsListParamsSchema = Type.Object(
     includeLastMessage: Type.Optional(Type.Boolean()),
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
+    hubDelegatedOwner: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
   },
@@ -230,6 +231,7 @@ export const SessionsResolveParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     agentId: Type.Optional(NonEmptyString),
     spawnedBy: Type.Optional(NonEmptyString),
+    hubDelegatedOwner: Type.Optional(NonEmptyString),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
   },
@@ -293,6 +295,15 @@ export const SessionsAbortParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Hub-delegated persistent ACP worker metadata stored on a session row. */
+export const HubDelegatedSessionMetaSchema = Type.Object(
+  {
+    ownerSessionKey: NonEmptyString,
+    createdAt: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 /** Mutable per-session preferences and routing metadata. */
 export const SessionsPatchParamsSchema = Type.Object(
   {
@@ -321,6 +332,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    parentSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    hubDelegated: Type.Optional(Type.Union([HubDelegatedSessionMetaSchema, Type.Null()])),
     spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedCwd: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),

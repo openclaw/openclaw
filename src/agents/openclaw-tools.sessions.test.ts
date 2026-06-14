@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  delegateSessionKey,
+  HUB_OWNER_A,
+  hubDelegatedEntry,
+} from "../../test/helpers/hub-delegated-fixtures.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -1956,82 +1961,100 @@ describe("sessions tools", () => {
     expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
   });
 
-  it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    const requesterKey = "agent:main:discord:direct:parent";
-    const targetKey = "agent:main:subagent:child";
-    let historyCallCount = 0;
-    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
-      sessionKey === targetKey
-        ? {
-            sessionId: "child-session",
-            updatedAt: 1,
-            spawnedBy: requesterKey,
-            deliveryContext: {
-              channel: "discord",
-              to: "direct:parent",
-            },
-          }
-        : undefined,
-    );
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      calls.push(request);
-      if (request.method === "agent") {
-        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
-      }
-      if (request.method === "agent.wait") {
-        return { runId: "run-child", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        historyCallCount += 1;
-        return {
-          messages:
-            historyCallCount === 1
-              ? []
-              : [
-                  {
-                    role: "assistant",
-                    content: [{ type: "text", text: "child reply" }],
-                    timestamp: 20,
-                  },
-                ],
-        };
-      }
-      return {};
-    });
-
-    const tool = createOpenClawTools({
-      agentSessionKey: requesterKey,
+  it.each([
+    {
+      caseName: "waited parent-owned native subagents",
+      requesterKey: "agent:main:discord:direct:parent",
+      targetKey: "agent:main:subagent:child",
       agentChannel: "discord",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+      entry: {
+        sessionId: "child-session",
+        updatedAt: 1,
+        spawnedBy: "agent:main:discord:direct:parent",
+        deliveryContext: {
+          channel: "discord",
+          to: "direct:parent",
+        },
+      },
+      expectedDeliveryMode: "announce" as const,
+    },
+    {
+      caseName: "hub-delegated delegates without sqlite acp metadata",
+      requesterKey: HUB_OWNER_A,
+      targetKey: delegateSessionKey("claude", "delegate-child"),
+      agentChannel: "openclaw-weixin",
+      entry: hubDelegatedEntry({ sessionId: "child-session", label: "delegate-child" }),
+      expectedDeliveryMode: undefined,
+    },
+  ])(
+    "sessions_send skips duplicate A2A delivery for $caseName",
+    async ({ requesterKey, targetKey, agentChannel, entry, expectedDeliveryMode }) => {
+      const calls: Array<{ method?: string; params?: unknown }> = [];
+      let historyCallCount = 0;
+      loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+        sessionKey === targetKey ? entry : undefined,
+      );
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: unknown };
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
+        }
+        if (request.method === "agent.wait") {
+          return { runId: "run-child", status: "ok" };
+        }
+        if (request.method === "chat.history") {
+          historyCallCount += 1;
+          return {
+            messages:
+              historyCallCount === 1
+                ? []
+                : [
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: "child reply" }],
+                      timestamp: 20,
+                    },
+                  ],
+          };
+        }
+        return {};
+      });
 
-    const waited = await tool.execute("call-parent-owned-native-subagent", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
+      const tool = createOpenClawTools({
+        agentSessionKey: requesterKey,
+        agentChannel,
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
 
-    const waitedDetails = sessionsSendDetails(waited.details);
-    expect(waitedDetails.status).toBe("ok");
-    expect(waitedDetails.reply).toBe("child reply");
-    expect(waitedDetails.delivery?.status).toBe("skipped");
-    expect(waitedDetails.delivery?.mode).toBe("announce");
-    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
-    const replyPromptAgentCalls = calls.filter(
-      (call) =>
-        call.method === "agent" &&
-        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
-          "Agent-to-agent reply step",
+      const result = await tool.execute("call-parent-owned-session", {
+        sessionKey: targetKey,
+        message: "ping",
+        timeoutSeconds: 1,
+      });
+
+      const details = sessionsSendDetails(result.details);
+      expect(details.status).toBe("ok");
+      expect(details.reply).toBe("child reply");
+      expect(details.delivery?.status).toBe("skipped");
+      if (expectedDeliveryMode) {
+        expect(details.delivery?.mode).toBe(expectedDeliveryMode);
+      }
+      expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "agent" &&
+            String((call.params as { extraSystemPrompt?: string })?.extraSystemPrompt).includes(
+              "Agent-to-agent reply step",
+            ),
         ),
-    );
-    expect(replyPromptAgentCalls).toStrictEqual([]);
-    expect(calls.some((call) => call.method === "send")).toBe(false);
-  });
+      ).toBe(false);
+      expect(calls.some((call) => call.method === "send")).toBe(false);
+    },
+  );
 
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];

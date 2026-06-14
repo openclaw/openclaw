@@ -35,6 +35,13 @@ export type AcpRuntimeConfig = {
   installCommand?: string;
 };
 
+export type AcpHubDelegatedConfig = {
+  /** Idle TTL in hours before hub-delegated ACP sessions auto-close (0 disables). */
+  idleHours?: number;
+  /** Hard max age in hours from creation before hub-delegated sessions auto-close (0 disables). */
+  maxAgeHours?: number;
+};
+
 export type AcpConfig = {
   /** Global ACP runtime gate. */
   enabled?: boolean;
@@ -48,4 +55,6 @@ export type AcpConfig = {
   maxConcurrentSessions?: number;
   stream?: AcpStreamConfig;
   runtime?: AcpRuntimeConfig;
+  /** Hub-delegated persistent ACP worker lifecycle defaults. */
+  delegate?: AcpHubDelegatedConfig;
 };
