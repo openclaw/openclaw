@@ -46,7 +46,9 @@ Validation is deterministic from argv shape only (no host filesystem existence
 checks), which prevents file-existence oracle behavior from allow/deny
 differences. File-oriented options are denied for default safe bins; long
 options are validated fail-closed (unknown flags and ambiguous abbreviations are
-rejected).
+rejected). Recognized read-only boolean flags of the default bins (for example
+`wc -l`, `tr -d`, `uniq -c`) are accepted, while unrecognized short flags stay
+fail-closed and fall through to manual approval.
 
 Denied flags by safe-bin profile:
 
