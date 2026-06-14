@@ -1643,16 +1643,13 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     await reloader.stop();
   });
 
-  it("disables hot-reload and logs at error level after the retry budget is exhausted", async () => {
-    const watchers = [
-      createWatcherMock(),
-      createWatcherMock(),
-      createWatcherMock(),
-      createWatcherMock(),
-    ];
+  it("degrades to polling then disables after both native and polling retries are exhausted", async () => {
+    // Native phase: initial watcher + 3 re-creates = 4 watchers.
+    // Polling phase: 1 polling re-create + 3 re-creates = 4 watchers.
+    const watchers = Array.from({ length: 8 }, () => createWatcherMock());
     const { watchSpy, log, reloader } = startReloaderWithWatchers(watchers);
 
-    // Three errors consume the retry budget; the fourth error escalates.
+    // --- Native retry phase (3 retries) ---
     watchers[0]?.emit("error");
     await vi.advanceTimersByTimeAsync(500);
     watchers[1]?.emit("error");
@@ -1662,16 +1659,36 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     expect(watchSpy).toHaveBeenCalledTimes(4);
     expect(reloader.hotReloadStatus()).toBe("active");
 
+    // Fourth native error triggers degradation to polling mode (not disabled).
     watchers[3]?.emit("error");
+    expect(reloader.hotReloadStatus()).toBe("active");
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("degrading to polling mode"),
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    expect(watchSpy).toHaveBeenCalledTimes(5);
+
+    // --- Polling retry phase (3 retries) ---
+    watchers[4]?.emit("error");
+    await vi.advanceTimersByTimeAsync(500);
+    watchers[5]?.emit("error");
+    await vi.advanceTimersByTimeAsync(2000);
+    watchers[6]?.emit("error");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(watchSpy).toHaveBeenCalledTimes(8);
+    expect(reloader.hotReloadStatus()).toBe("active");
+
+    // Eighth error in polling mode finally disables hot-reload.
+    watchers[7]?.emit("error");
     expect(reloader.hotReloadStatus()).toBe("disabled");
     expect(log.error).toHaveBeenCalledWith(
       expect.stringContaining(
-        "config hot-reload disabled: watcher failed after 3 re-create attempts",
+        "config hot-reload disabled: watcher failed after 3 re-create attempts in polling mode",
       ),
     );
     // No further watcher is created once disabled.
     await vi.advanceTimersByTimeAsync(10000);
-    expect(watchSpy).toHaveBeenCalledTimes(4);
+    expect(watchSpy).toHaveBeenCalledTimes(8);
 
     await reloader.stop();
   });
