@@ -1,6 +1,11 @@
 // Msteams tests cover mentions plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildMentionEntities, formatMentionText, parseMentions } from "./mentions.js";
+import {
+  buildMentionEntities,
+  formatMentionText,
+  isMSTeamsKeywordMention,
+  parseMentions,
+} from "./mentions.js";
 
 function requireFirstEntity(result: ReturnType<typeof parseMentions>) {
   const entity = result.entities[0];
@@ -251,5 +256,51 @@ describe("formatMentionText", () => {
     const result = formatMentionText(text, mentions);
 
     expect(result).toBe("Hey <at>John(Test)</at> and <at>Alice.Smith</at>");
+  });
+});
+
+describe("isMSTeamsKeywordMention", () => {
+  const regexes = [/\bradar\b/i];
+  const base = {
+    isDirectMessage: false,
+    alreadyMentioned: false,
+    text: "hey radar, you there?",
+    fromId: "29:user",
+    recipientId: "28:bot",
+    mentionRegexes: regexes,
+  };
+
+  it("treats a keyword match in a channel message as an implicit mention", () => {
+    expect(isMSTeamsKeywordMention(base)).toBe(true);
+  });
+
+  it("is case-insensitive (regex carries the flag)", () => {
+    expect(isMSTeamsKeywordMention({ ...base, text: "RADAR, status?" })).toBe(true);
+  });
+
+  it("does not trigger when the keyword is absent", () => {
+    expect(isMSTeamsKeywordMention({ ...base, text: "the weather is nice today" })).toBe(false);
+  });
+
+  it("does not trigger on the bot's own posts (self-echo guard)", () => {
+    expect(isMSTeamsKeywordMention({ ...base, fromId: "28:bot", recipientId: "28:bot" })).toBe(
+      false,
+    );
+  });
+
+  it("skips direct messages (handled by the normal DM path)", () => {
+    expect(isMSTeamsKeywordMention({ ...base, isDirectMessage: true })).toBe(false);
+  });
+
+  it("skips messages already @mentioned (handled normally)", () => {
+    expect(isMSTeamsKeywordMention({ ...base, alreadyMentioned: true })).toBe(false);
+  });
+
+  it("no-ops when no patterns are configured", () => {
+    expect(isMSTeamsKeywordMention({ ...base, mentionRegexes: [] })).toBe(false);
+  });
+
+  it("no-ops on empty text", () => {
+    expect(isMSTeamsKeywordMention({ ...base, text: undefined })).toBe(false);
   });
 });
