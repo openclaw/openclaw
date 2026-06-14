@@ -302,6 +302,88 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(declarations[1]?.behavior).toBe("NON_BLOCKING");
   });
 
+  it("skips unreadable realtime tool declarations while preserving healthy tools", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const cyclicSchema: Record<string, unknown> = { type: "object" };
+    cyclicSchema.properties = { self: cyclicSchema };
+    const sharedProperty = { type: "string" };
+
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        model: "gemini-live-2.5-flash-preview",
+      },
+      tools: [
+        {
+          type: "function",
+          get name(): string {
+            throw new Error("tool name unavailable");
+          },
+          description: "Broken",
+          parameters: {},
+        },
+        {
+          type: "function",
+          name: "revoked",
+          description: "Broken",
+          parameters: proxy,
+        },
+        {
+          type: "function",
+          name: "cyclic",
+          description: "Broken",
+          parameters: cyclicSchema,
+        },
+        {
+          type: "function",
+          name: "lookup",
+          description: "Lookup",
+          parameters: {
+            type: "object",
+            properties: {
+              first: sharedProperty,
+              second: sharedProperty,
+            },
+            required: ["first", "second"],
+          },
+        },
+      ] as never,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    const declarations =
+      (
+        lastConnectParams().config as {
+          tools?: Array<{
+            functionDeclarations?: Array<{
+              description?: string;
+              name?: string;
+              parametersJsonSchema?: unknown;
+            }>;
+          }>;
+        }
+      ).tools?.[0]?.functionDeclarations ?? [];
+    expect(declarations).toEqual([
+      {
+        name: "lookup",
+        description: "Lookup",
+        parametersJsonSchema: {
+          type: "object",
+          properties: {
+            first: { type: "string" },
+            second: { type: "string" },
+          },
+          required: ["first", "second"],
+        },
+      },
+    ]);
+  });
+
   it("omits zero temperature for native audio responses", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const bridge = provider.createBridge({

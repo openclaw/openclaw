@@ -1,7 +1,11 @@
 // Google shared conversion tests cover runtime-to-Google payload conversion.
 import { describe, expect, it } from "vitest";
 import type { Context, Tool } from "../types.js";
-import { convertMessages, convertTools } from "./google-shared.js";
+import {
+  buildGoogleGenerateContentParams,
+  convertMessages,
+  convertTools,
+} from "./google-shared.js";
 import {
   asRecord,
   expectConvertedRoles,
@@ -148,6 +152,171 @@ describe("google-shared convertTools", () => {
     expect(items.type).toBe("string");
     expect(config.required).toEqual(["retries"]);
     expect(params.required).toEqual(["config"]);
+  });
+
+  it("preserves reserved JSON Schema property names", () => {
+    const parameters = JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string"}},"required":["__proto__"]}',
+    ) as Record<string, unknown>;
+
+    const converted = convertTools([
+      {
+        name: "lookup",
+        description: "Lookup",
+        parameters,
+      },
+    ] as unknown as Tool[]);
+
+    const params = getFirstToolParameters(
+      converted as Parameters<typeof getFirstToolParameters>[0],
+    );
+    const properties = asRecord(params.properties);
+    expect(Object.hasOwn(properties, "__proto__")).toBe(true);
+    expect(Reflect.get(properties, "__proto__")).toEqual({ type: "string" });
+    expect(params.required).toEqual(["__proto__"]);
+  });
+
+  it("skips unreadable tool schemas while preserving healthy declarations", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const cyclicSchema: Record<string, unknown> = { type: "object" };
+    cyclicSchema.properties = { self: cyclicSchema };
+    const sharedProperty = { type: "string" };
+
+    const converted = convertTools([
+      {
+        get name(): string {
+          throw new Error("tool name unavailable");
+        },
+        description: "Broken",
+        parameters: {},
+      } as Tool,
+      {
+        name: "revoked",
+        description: "Broken",
+        parameters: proxy,
+      } as unknown as Tool,
+      {
+        name: "cyclic",
+        description: "Broken",
+        parameters: cyclicSchema,
+      } as unknown as Tool,
+      {
+        name: "lookup",
+        description: "Lookup",
+        parameters: {
+          type: "object",
+          properties: {
+            first: sharedProperty,
+            second: sharedProperty,
+          },
+          required: ["first", "second"],
+        },
+      },
+    ]);
+
+    const declarations = converted?.[0]?.functionDeclarations ?? [];
+    expect(declarations).toEqual([
+      {
+        name: "lookup",
+        description: "Lookup",
+        parametersJsonSchema: {
+          type: "object",
+          properties: {
+            first: { type: "string" },
+            second: { type: "string" },
+          },
+          required: ["first", "second"],
+        },
+      },
+    ]);
+  });
+
+  it("keeps OpenAPI parameter cleanup while skipping unreadable schemas", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+
+    const converted = convertTools(
+      [
+        {
+          name: "revoked",
+          description: "Broken",
+          parameters: proxy,
+        } as unknown as Tool,
+        {
+          name: "lookup",
+          description: "Lookup",
+          parameters: {
+            $schema: "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            properties: {
+              query: { type: "string" },
+            },
+          },
+        } as unknown as Tool,
+      ],
+      true,
+    );
+
+    expect(converted?.[0]?.functionDeclarations).toEqual([
+      {
+        name: "lookup",
+        description: "Lookup",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+        },
+      },
+    ]);
+  });
+});
+
+describe("google-shared buildGoogleGenerateContentParams", () => {
+  it("omits optional tools when every Google tool declaration is skipped", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+
+    const params = buildGoogleGenerateContentParams(
+      makeModel("gemini-2.5-pro"),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "revoked",
+            description: "Broken",
+            parameters: proxy,
+          } as unknown as Tool,
+        ],
+      },
+      { toolChoice: "auto" },
+    );
+
+    expect(params.config?.tools).toBeUndefined();
+    expect(params.config?.toolConfig).toBeUndefined();
+  });
+
+  it("throws when forced Google tool choice has no valid declarations", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+
+    expect(() =>
+      buildGoogleGenerateContentParams(
+        makeModel("gemini-2.5-pro"),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "revoked",
+              description: "Broken",
+              parameters: proxy,
+            } as unknown as Tool,
+          ],
+        },
+        { toolChoice: "any" },
+      ),
+    ).toThrow("Google tool choice requires at least one valid tool declaration");
   });
 });
 
