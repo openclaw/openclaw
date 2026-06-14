@@ -354,6 +354,37 @@ Gateway model capability checks also read explicit `models.providers.<id>.models
 
 `agents.defaults.models["provider/model"]` only controls model visibility, aliases, and per-model metadata for agents. It does not register a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`.
 
+### ForAI
+
+ForAI can be configured as an OpenAI-compatible provider through `models.providers`.
+
+- Provider id: `forai`
+- API: `openai-completions`
+- Base URL: `https://www.forai.ai/v1`
+- API key: your ForAI API key
+- Website: <https://www.forai.ai>
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "forai/your-model-id" } },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      forai: {
+        baseUrl: "https://www.forai.ai/v1",
+        apiKey: "${FORAI_API_KEY}",
+        api: "openai-completions",
+        models: [{ id: "your-model-id", name: "ForAI model", input: ["text"] }],
+      },
+    },
+  },
+}
+```
+
+See [/providers/forai](/providers/forai) for setup details.
+
 ### Moonshot AI (Kimi)
 
 Moonshot ships as a bundled provider plugin. Use the built-in provider by default, and add an explicit `models.providers.moonshot` entry only when you need to override the base URL or model metadata:

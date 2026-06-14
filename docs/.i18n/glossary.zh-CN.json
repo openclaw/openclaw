@@ -248,6 +248,10 @@
     "target": "DeepInfra"
   },
   {
+    "source": "ForAI",
+    "target": "ForAI"
+  },
+  {
     "source": "Qwen",
     "target": "Qwen"
   },
