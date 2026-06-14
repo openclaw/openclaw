@@ -73,7 +73,7 @@ const {
   uninstallScheduledTask,
 } = await import("./schtasks.js");
 
-function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
+function resolveStartupEntryPath(env: Record<string, string>, extension = "vbs") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
   return path.join(
     env.APPDATA,
@@ -86,8 +86,11 @@ function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd")
   );
 }
 
-async function writeStartupFallbackEntry(env: Record<string, string>) {
-  const startupEntryPath = resolveStartupEntryPath(env);
+async function writeStartupFallbackEntry(
+  env: Record<string, string>,
+  extension: "cmd" | "vbs" = "vbs",
+) {
+  const startupEntryPath = resolveStartupEntryPath(env, extension);
   await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
   await fs.writeFile(startupEntryPath, "@echo off\r\n", "utf8");
   return startupEntryPath;
@@ -292,24 +295,22 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = resolveStartupEntryPath(env);
       const startupScript = await fs.readFile(startupEntryPath, "utf8");
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
-      expect(startupScript).toContain('start "" /min cmd.exe /d /c');
+      expect(startupScript).toContain("WScript.Shell");
       expect(startupScript).toContain("gateway.cmd");
+      expect(startupScript).toContain(`Run """${result.scriptPath}""", 0, False`);
       expectStartupFallbackSpawn();
       expect(childUnref).toHaveBeenCalled();
       expect(printed).toContain("Installed Windows login item");
     });
   });
 
-  it("uses a hidden Startup-folder launcher when requested", async () => {
+  it("uses a hidden Startup-folder launcher by default", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses([
         { code: 5, stdout: "", stderr: "ERROR: Access is denied." },
       ]);
 
-      const result = await installGatewayScheduledTask({
-        ...env,
-        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
-      });
+      const result = await installGatewayScheduledTask(env);
 
       const startupEntryPath = resolveStartupEntryPath(env, "vbs");
       const startupScript = await fs.readFile(startupEntryPath, "utf8");
@@ -637,7 +638,7 @@ describe("Windows startup fallback", () => {
   it("keeps legacy Startup-folder cmd entries visible after hidden launcher opt-in", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();
-      await writeStartupFallbackEntry(env);
+      await writeStartupFallbackEntry(env, "cmd");
 
       await expect(
         isScheduledTaskInstalled({
@@ -650,16 +651,50 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("keeps legacy Startup-folder vbs entries visible after hidden launcher opt-out", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses();
+      await writeStartupFallbackEntry(env, "vbs");
+
+      await expect(
+        isScheduledTaskInstalled({
+          env: {
+            ...env,
+            OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "0",
+          },
+        }),
+      ).resolves.toBe(true);
+    });
+  });
+
   it("removes legacy Startup-folder cmd entries after hidden launcher opt-in", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
-      const startupEntryPath = await writeStartupFallbackEntry(env);
+      const startupEntryPath = await writeStartupFallbackEntry(env, "cmd");
       const stdout = new PassThrough();
 
       await uninstallScheduledTask({
         env: {
           ...env,
           OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+        },
+        stdout,
+      });
+
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
+    });
+  });
+
+  it("removes legacy Startup-folder vbs entries after hidden launcher opt-out", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
+      const startupEntryPath = await writeStartupFallbackEntry(env, "vbs");
+      const stdout = new PassThrough();
+
+      await uninstallScheduledTask({
+        env: {
+          ...env,
+          OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "0",
         },
         stdout,
       });
