@@ -1080,13 +1080,6 @@ function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boole
     if (normalized.changed || !canonicalEntry) {
       return true;
     }
-    const modelsToMerge = getMergeableLegacyOpenAIModels({
-      canonical: canonicalEntry.value,
-      legacy: normalized.value,
-    });
-    if (modelsToMerge.length === 0) {
-      return true;
-    }
     const mergeBlockers = collectModelMergeBlockers({
       canonical: canonicalEntry.value,
       legacy: normalized.value,
@@ -1114,13 +1107,6 @@ export function collectBlockedLegacyOpenAICodexProviderWarnings(raw: unknown): s
     }
     const normalized = normalizeLegacyOpenAIResponsesApi(providerId, provider, []);
     if (normalized.changed) {
-      continue;
-    }
-    const modelsToMerge = getMergeableLegacyOpenAIModels({
-      canonical: canonicalEntry.value,
-      legacy: normalized.value,
-    });
-    if (modelsToMerge.length === 0) {
       continue;
     }
     const mergeBlockers = collectModelMergeBlockers({
@@ -1230,10 +1216,7 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         canonical,
         legacy: normalized.value,
       });
-      const mergeBlockers =
-        modelsToMerge.length > 0
-          ? collectModelMergeBlockers({ canonical, legacy: normalized.value })
-          : [];
+      const mergeBlockers = collectModelMergeBlockers({ canonical, legacy: normalized.value });
       if (mergeBlockers.length > 0) {
         if (normalized.changed) {
           providers[providerId] = normalized.value;

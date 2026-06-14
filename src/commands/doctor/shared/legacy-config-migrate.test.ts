@@ -4,6 +4,7 @@ import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { normalizeCompatibilityConfigValues } from "./legacy-config-core-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
+import { collectBlockedLegacyOpenAICodexProviderWarnings } from "./legacy-config-migrations.runtime.models.js";
 
 function migrateLegacyConfigForTest(raw: unknown): {
   config: OpenClawConfig | null;
@@ -540,6 +541,102 @@ describe("legacy memory search config migrate", () => {
     expect(res.changes).toContain(
       "Removed models.providers.openai-codex because models.providers.openai already exists.",
     );
+  });
+
+  it("keeps legacy codex OAuth provider when all its models overlap canonical openai", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5.5" }],
+          },
+          "openai-codex": {
+            auth: "oauth",
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            headers: { Authorization: "Bearer token" },
+            request: { retry: { maxAttempts: 3 } },
+            models: [{ id: "gpt-5.5", api: "openai-codex-responses" }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
+      auth: "oauth",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      headers: { Authorization: "Bearer token" },
+      request: { retry: { maxAttempts: 3 } },
+      models: [{ id: "gpt-5.5", api: "openai-chatgpt-responses" }],
+    });
+    expect(res.config?.models?.providers?.openai).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://api.openai.com/v1",
+      models: [{ id: "gpt-5.5" }],
+    });
+    expect(res.changes).toContain(
+      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.auth, models.providers.openai-codex.request, models.providers.openai-codex.headers.",
+    );
+  });
+
+  it("keeps legacy codex OAuth provider that has no models array", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5.5" }],
+          },
+          "openai-codex": {
+            auth: "oauth",
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            headers: { Authorization: "Bearer token" },
+            request: { retry: { maxAttempts: 3 } },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
+      auth: "oauth",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      headers: { Authorization: "Bearer token" },
+      request: { retry: { maxAttempts: 3 } },
+    });
+    expect(res.changes).toContain(
+      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.auth, models.providers.openai-codex.request, models.providers.openai-codex.headers.",
+    );
+  });
+
+  it("previews a doctor warning before removing a codex OAuth provider with no mergeable models", () => {
+    const raw = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5.5" }],
+          },
+          "openai-codex": {
+            auth: "oauth",
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            headers: { Authorization: "Bearer token" },
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    expect(collectBlockedLegacyOpenAICodexProviderWarnings(raw)).toEqual([
+      "models.providers.openai-codex cannot be merged automatically into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.auth, models.providers.openai-codex.headers. Move the affected model/provider defaults manually before removing models.providers.openai-codex.",
+    ]);
   });
 
   it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
