@@ -2,6 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishCommand,
+  candidateParallelsArgs,
+  candidateParallelsShellCommand,
   githubApi,
   parseArgs,
   parseRunIdFromDispatchOutput,
@@ -10,6 +12,47 @@ import {
 } from "../../scripts/release-candidate-checklist.mjs";
 
 describe("release candidate checklist", () => {
+  it("infers validation profiles from candidate tags", () => {
+    expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
+    expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
+      "stable",
+    );
+    expect(
+      parseArgs([
+        "--tag",
+        "v2026.5.14",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--release-profile",
+        "full",
+      ]).releaseProfile,
+    ).toBe("full");
+  });
+
+  it("runs Parallels against the exact prepared candidate tarball", () => {
+    expect(candidateParallelsArgs(".artifacts/preflight/openclaw.tgz")).toEqual([
+      "test:parallels:npm-update",
+      "--",
+      "--target-tarball",
+      ".artifacts/preflight/openclaw.tgz",
+      "--json",
+    ]);
+    expect(
+      candidateParallelsShellCommand(
+        ".artifacts/preflight/openclaw candidate.tgz",
+        "/opt/homebrew/bin/gtimeout",
+      ),
+    ).toContain(
+      "set -a; source \"$HOME/.profile\" >/dev/null 2>&1 || true; set +a; exec '/opt/homebrew/bin/gtimeout' --foreground 150m pnpm",
+    );
+    expect(
+      candidateParallelsShellCommand(
+        ".artifacts/preflight/openclaw candidate.tgz",
+        "/opt/homebrew/bin/gtimeout",
+      ),
+    ).toContain("'--target-tarball' '.artifacts/preflight/openclaw candidate.tgz'");
+  });
+
   it("requires run ids when dispatch is disabled", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
       "--skip-dispatch requires --full-release-run and --npm-preflight-run",

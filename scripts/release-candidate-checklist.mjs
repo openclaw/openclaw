@@ -10,7 +10,6 @@ import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODE = "both";
-const DEFAULT_RELEASE_PROFILE = "beta";
 const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
 const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
@@ -39,12 +38,12 @@ Options:
   --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
-  --skip-parallels                   Do not run local Parallels fresh/update beta smoke.
+  --skip-parallels                   Do not run local Parallels fresh/update candidate smoke.
   --skip-telegram                    Do not run NPM Telegram E2E against the prepared tarball.
   --telegram-provider-mode <mode>     mock-openai|live-frontier. Default: ${DEFAULT_TELEGRAM_PROVIDER_MODE}
   --provider <provider>               Full validation provider. Default: ${DEFAULT_PROVIDER}
   --mode <fresh|upgrade|both>         Full validation cross-OS mode. Default: ${DEFAULT_MODE}
-  --release-profile <beta|stable|full> Default: ${DEFAULT_RELEASE_PROFILE}
+  --release-profile <beta|stable|full> Default: beta for prereleases; stable otherwise.
   --npm-dist-tag <alpha|beta|latest>  Default: ${DEFAULT_NPM_DIST_TAG}
   --plugin-publish-scope <scope>      selected|all-publishable. Default: ${DEFAULT_PLUGIN_SCOPE}
   --plugins <names>                   Required when plugin scope is selected.
@@ -69,7 +68,7 @@ export function parseArgs(argv) {
     repo: DEFAULT_REPO,
     provider: DEFAULT_PROVIDER,
     mode: DEFAULT_MODE,
-    releaseProfile: DEFAULT_RELEASE_PROFILE,
+    releaseProfile: "",
     npmDistTag: DEFAULT_NPM_DIST_TAG,
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
@@ -155,6 +154,11 @@ export function parseArgs(argv) {
   }
   if (!options.tag) {
     throw new Error("--tag is required");
+  }
+  options.releaseProfile ||=
+    options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
+  if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
+    throw new Error("--release-profile must be beta, stable, or full");
   }
   if (options.skipDispatch && (!options.fullReleaseRunId || !options.npmPreflightRunId)) {
     throw new Error("--skip-dispatch requires --full-release-run and --npm-preflight-run");
@@ -656,23 +660,34 @@ function validateFullManifest(manifest, params) {
   }
 }
 
-async function runParallelsIfNeeded(options) {
+export function candidateParallelsArgs(tarballPath) {
+  return ["test:parallels:npm-update", "--", "--target-tarball", tarballPath, "--json"];
+}
+
+export function candidateParallelsShellCommand(tarballPath, timeoutBin) {
+  return [
+    'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
+    "exec",
+    shellQuote(timeoutBin),
+    "--foreground",
+    "150m",
+    "pnpm",
+    ...candidateParallelsArgs(tarballPath).map(shellQuote),
+  ].join(" ");
+}
+
+async function runParallelsIfNeeded(options, tarballPath) {
   if (options.skipParallels) {
     return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
-  const version = options.tag.replace(/^v/u, "");
-  run("pnpm", [
-    "release:beta-smoke",
-    "--",
-    "--beta",
-    version,
-    "--ref",
-    options.workflowRef,
-    "--skip-telegram",
-  ]);
+  const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
+    capture: true,
+  }).trim();
+  const command = candidateParallelsShellCommand(tarballPath, timeoutBin);
+  run("bash", ["-lc", command]);
   return {
     status: "passed",
-    command: `pnpm release:beta-smoke -- --beta ${version} --ref ${options.workflowRef} --skip-telegram`,
+    command,
   };
 }
 
@@ -808,7 +823,7 @@ async function main() {
     );
   }
 
-  const parallels = await runParallelsIfNeeded(options);
+  const parallels = await runParallelsIfNeeded(options, tarballPath);
   const npmTelegram = await runTelegramIfNeeded(options, npmArtifactName);
   options.npmTelegramRunId = npmTelegram.runId ?? "";
   const pluginNpmPlan = await collectPluginPlanWithRetry(

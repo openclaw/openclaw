@@ -99,10 +99,14 @@ the maintainer-only release runbook.
    file, lane, workflow job, package profile, provider, or model allowlist that
    proves the fix. Rerun the full umbrella only when the changed surface makes
    prior evidence stale.
-9. For beta, tag `vYYYY.M.PATCH-beta.N`, then run `pnpm release:candidate -- --tag
-vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. The helper runs
-   the local generated-release checks, dispatches or verifies the full release
-   validation and npm preflight evidence, runs Parallels and Telegram package
+9. For a tagged beta candidate, run
+   `pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N` from the matching
+   `release/YYYY.M.PATCH` branch. For stable, pass the required Windows source
+   release too:
+   `pnpm release:candidate -- --tag vYYYY.M.PATCH --windows-node-tag vX.Y.Z`.
+   The helper runs the local generated-release checks, dispatches or verifies
+   the full release validation and npm preflight evidence, runs Parallels
+   fresh/update proof against the exact prepared tarball plus Telegram package
    proof, records plugin npm and ClawHub plans, and prints the exact
    `OpenClaw Release Publish` command only after the evidence bundle is green.
    `OpenClaw Release Publish` dispatches the selected or all-publishable plugin
