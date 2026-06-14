@@ -564,7 +564,6 @@ describeLive("gateway live trajectory export", () => {
         "artifacts.json",
         "events.jsonl",
         "manifest.json",
-        "metadata.json",
         "prompts.json",
         "session.jsonl",
         "tools.json",
@@ -579,7 +578,11 @@ describeLive("gateway live trajectory export", () => {
         eventCount?: number;
         runtimeEventCount?: number;
         transcriptEventCount?: number;
+        supplementalFiles?: string[];
       };
+      for (const supplementalFile of manifest.supplementalFiles ?? []) {
+        expect(bundleNames).toContain(supplementalFile);
+      }
       expect(manifest.eventCount).toBeGreaterThan(0);
       expect(manifest.runtimeEventCount).toBeGreaterThan(0);
       expect(manifest.transcriptEventCount).toBeGreaterThan(0);
