@@ -17,7 +17,10 @@ import { splitSourceWideEmbeddingChunks } from "./manager-embedding-ops.js";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
+import {
+  DEFAULT_LOCAL_MODEL,
+  registerBuiltInMemoryEmbeddingProviders,
+} from "./provider-adapters.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -76,6 +79,12 @@ vi.mock("./embeddings.js", () => {
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
+      local?: { modelPath?: string };
+      config?: {
+        models?: {
+          providers?: Record<string, { api?: string; baseUrl?: string; models?: unknown[] }>;
+        };
+      };
       outputDimensionality?: number;
     }) => {
       providerCalls.push({
@@ -91,15 +100,21 @@ vi.mock("./embeddings.js", () => {
           providerUnavailableReason: "No API key found for provider",
         };
       }
+      const resolvedProviderId =
+        options.config?.models?.providers?.[options.provider ?? ""]?.api ?? options.provider;
       const providerId =
-        options.provider === "gemini" ||
-        options.provider === "fallback-provider" ||
-        options.provider === "batch-test" ||
-        options.provider === "batch-wide-test" ||
-        options.provider === "ollama"
-          ? options.provider
-          : "mock";
-      const model = options.model ?? "mock-embed";
+        resolvedProviderId === "gemini" ||
+        resolvedProviderId === "fallback-provider" ||
+        resolvedProviderId === "ollama" ||
+        resolvedProviderId === "local"
+          ? resolvedProviderId
+          : options.provider === "batch-test" || options.provider === "batch-wide-test"
+            ? options.provider
+            : "mock";
+      const model =
+        providerId === "local"
+          ? (options.local?.modelPath ?? DEFAULT_LOCAL_MODEL)
+          : (options.model ?? "mock-embed");
       return {
         requestedProvider: options.provider ?? "openai",
         provider: {
@@ -308,6 +323,9 @@ describe("memory index", () => {
     providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
     batchEnabled?: boolean;
     model?: string;
+    local?: {
+      modelPath?: string;
+    };
     outputDimensionality?: number;
     multimodal?: {
       enabled?: boolean;
@@ -328,6 +346,7 @@ describe("memory index", () => {
             ...(params.provider !== undefined ? { provider: params.provider } : {}),
             model: params.model ?? "mock-embed",
             fallback: params.fallback,
+            local: params.local,
             outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
@@ -398,6 +417,10 @@ describe("memory index", () => {
       await manager.close?.();
     }
   }
+
+  const localProviderAliasConfig = {
+    "local-embedding-alias": { api: "local", baseUrl: "", models: [] },
+  } as unknown as NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
 
   it("does not prepare vector deletes after unsafe reset drops a missing vector table", async () => {
     const cfg = createCfg({
@@ -820,6 +843,44 @@ describe("memory index", () => {
       await statusManager.close?.();
     }
   });
+
+  it.each([
+    { name: "direct local provider", provider: "local", providerAliases: undefined },
+    {
+      name: "local provider alias",
+      provider: "local-embedding-alias",
+      providerAliases: localProviderAliasConfig,
+    },
+  ])(
+    "keeps status clean when local modelPath is the indexed model for $name (#91001)",
+    async ({ provider, providerAliases }) => {
+      const dbPath = path.join(workspaceDir, `index-${provider}-model-path-status.sqlite`);
+      const modelPath = "/models/embeddinggemma-300M-Q8_0.gguf";
+      const cfg = createCfg({
+        storePath: dbPath,
+        provider,
+        providerAliases,
+        local: { modelPath },
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const indexManager = await getFreshManager(cfg);
+      await indexManager.sync({ reason: "test", force: true });
+      await indexManager.close?.();
+
+      const statusManager = await getFreshManager(cfg, "status");
+      try {
+        const status = statusManager.status();
+
+        expect(status.dirty).toBe(false);
+        expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+        expect(status.custom?.indexIdentity).not.toMatchObject({
+          reason: expect.stringContaining("expected"),
+        });
+      } finally {
+        await statusManager.close?.();
+      }
+    },
+  );
 
   it("rebuilds missing metadata with existing chunks on gateway sync", async () => {
     const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
