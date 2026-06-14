@@ -84,7 +84,6 @@ import {
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForProjection,
 } from "./openai-tool-schema.js";
-import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildGuardedModelFetch,
@@ -2555,14 +2554,6 @@ function isAzureOpenAICompatibleHost(hostname: string): boolean {
   );
 }
 
-function hasAzureOpenAICompatibleBaseUrl(model: Pick<Model, "baseUrl">): boolean {
-  try {
-    return isAzureOpenAICompatibleHost(new URL(model.baseUrl).hostname.toLowerCase());
-  } catch {
-    return false;
-  }
-}
-
 function buildOpenAICompletionsClientConfig(
   model: Model,
   context: Context,
@@ -4277,28 +4268,10 @@ export function buildOpenAICompletionsParams(
         fallbackMap: compat.reasoningEffortMap,
       })
     : undefined;
-  const rawCompat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as {
-          supportsReasoningEffort?: unknown;
-          supportedReasoningEfforts?: unknown;
-          reasoningEffortMap?: unknown;
-        })
-      : undefined;
-  const hasTools = Array.isArray(params.tools) && params.tools.length > 0;
-  const hasExplicitReasoningEffortCompat =
-    rawCompat?.supportsReasoningEffort === true ||
-    Array.isArray(rawCompat?.supportedReasoningEfforts) ||
-    Boolean(rawCompat?.reasoningEffortMap && typeof rawCompat.reasoningEffortMap === "object");
-  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
-  const isAzureChatCompletionsEndpoint =
-    endpointClass === "azure-openai" || hasAzureOpenAICompatibleBaseUrl(model);
   const omitChatCompletionsToolReasoningEffort =
-    hasTools &&
-    (isOpenAIGpt54MiniModel(model) ||
-      (isOpenAIGpt55Model(model) &&
-        isAzureChatCompletionsEndpoint &&
-        !hasExplicitReasoningEffortCompat));
+    (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) &&
+    Array.isArray(params.tools) &&
+    params.tools.length > 0;
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
