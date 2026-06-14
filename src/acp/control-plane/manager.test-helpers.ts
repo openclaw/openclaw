@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-manager-task-state.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import { clearInternalHooks } from "../../hooks/internal-hooks.js";
 import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resetAcpActiveTurnsForTests } from "./active-turns.js";
@@ -287,6 +288,7 @@ export function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptio
 
 export function installAcpSessionManagerTestLifecycle(): void {
   beforeEach(() => {
+    clearInternalHooks();
     resetAcpSessionManagerForTests();
     resetAcpActiveTurnsForTests();
     vi.useRealTimers();
@@ -304,6 +306,7 @@ export function installAcpSessionManagerTestLifecycle(): void {
   });
 
   afterEach(() => {
+    clearInternalHooks();
     if (ORIGINAL_STATE_DIR === undefined) {
       deleteTestEnvValue("OPENCLAW_STATE_DIR");
     } else {

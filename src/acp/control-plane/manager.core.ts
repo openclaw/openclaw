@@ -7,6 +7,12 @@ import type {
 } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { fireAndForgetBoundedHook } from "../../hooks/fire-and-forget.js";
+import {
+  type AgentTurnEndHookContext,
+  createInternalHookEvent,
+  triggerInternalHook,
+} from "../../hooks/internal-hooks.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { runManagerCancelSession } from "./manager.cancel-session.js";
@@ -36,6 +42,7 @@ import {
   type AcpManagerObservabilitySnapshot,
   type AcpRunTurnInput,
   type AcpSessionManagerDeps,
+  type AcpTurnEndHookContext,
   type AcpSessionResolution,
   type AcpSessionRuntimeOptions,
   type AcpSessionStatus,
@@ -307,7 +314,13 @@ export class AcpSessionManager {
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
           applyRuntimeControls: this.applyRuntimeControls.bind(this),
           setSessionState: this.setSessionState.bind(this),
-          recordTurnCompletion: this.recordTurnCompletion.bind(this),
+          recordTurnCompletion: async (completionParams) =>
+            await this.recordTurnCompletion({
+              sessionKey,
+              startedAt: completionParams.startedAt,
+              errorCode: completionParams.errorCode,
+              emitTurnEndHook: completionParams.emitTurnEndHook,
+            }),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
         }),
@@ -404,16 +417,45 @@ export class AcpSessionManager {
     }
   }
 
-  private recordTurnCompletion(params: { startedAt: number; errorCode?: AcpRuntimeError["code"] }) {
+  private async recordTurnCompletion(params: {
+    sessionKey: string;
+    startedAt: number;
+    errorCode?: AcpRuntimeError["code"];
+    emitTurnEndHook?: boolean;
+  }) {
     const durationMs = Math.max(0, Date.now() - params.startedAt);
     this.turnLatencyStats.totalMs += durationMs;
     this.turnLatencyStats.maxMs = Math.max(this.turnLatencyStats.maxMs, durationMs);
     if (params.errorCode) {
       this.turnLatencyStats.failed += 1;
       this.recordErrorCode(params.errorCode);
-      return;
+    } else {
+      this.turnLatencyStats.completed += 1;
     }
-    this.turnLatencyStats.completed += 1;
+    const context = {
+      sessionKey: params.sessionKey,
+      success: !params.errorCode,
+      durationMs,
+      ...(params.errorCode ? { errorCode: params.errorCode } : {}),
+    } satisfies AcpTurnEndHookContext;
+    if (params.emitTurnEndHook !== false) {
+      this.emitTurnEndHook(context);
+    }
+  }
+
+  private emitTurnEndHook(context: AcpTurnEndHookContext): void {
+    fireAndForgetBoundedHook(
+      () =>
+        triggerInternalHook(
+          createInternalHookEvent(
+            "agent",
+            "turn:end",
+            context.sessionKey,
+            context satisfies AgentTurnEndHookContext,
+          ),
+        ),
+      "agent:turn:end internal hook failed",
+    );
   }
 
   private recordErrorCode(code: string): void {
