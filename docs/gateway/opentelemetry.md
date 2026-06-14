@@ -355,10 +355,10 @@ to them directly without OTLP export.
 
 **Model usage**
 
-- `model.usage` — emitted after each agent turn. Fields:
+- `model.usage` — emitted after each agent turn when diagnostics are enabled and usage is nonzero. Fields:
   - `type`: `"model.usage"`
   - `sessionKey`: session identifier string
-  - `sessionId`: numeric session id
+  - `sessionId`: session identifier string
   - `channel`: originating channel (e.g. `"telegram"`, `"discord"`, `"web"`)
   - `agentId`: active agent id
   - `provider`: model provider name (e.g. `"openai"`, `"anthropic"`)
