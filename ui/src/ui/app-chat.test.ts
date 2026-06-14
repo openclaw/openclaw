@@ -1232,6 +1232,7 @@ describe("refreshChat", () => {
   });
 });
 
+
 describe("handleSendChat", () => {
   beforeAll(async () => {
     await loadChatHelpers();
@@ -1245,6 +1246,30 @@ describe("handleSendChat", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("forwards numeric-only chatMessage to chat.send unchanged", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-1" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:main",
+      chatMessage: "123456789",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main",
+        message: "123456789",
+      }),
+    );
   });
 
   it("cancels button-triggered /new resets when confirmation is declined", async () => {
