@@ -261,6 +261,7 @@ describe("performIMessageCatchup", () => {
 
   it("skips is_from_me rows but still advances the cursor past them", async () => {
     const dispatch = alwaysOk();
+    const observeSkippedFromMe = vi.fn();
     const fetch = fetchOf([
       row({ guid: "A", rowid: 10, isFromMe: true }),
       row({ guid: "B", rowid: 11, isFromMe: false }),
@@ -272,12 +273,16 @@ describe("performIMessageCatchup", () => {
       now,
       fetch,
       dispatch,
+      observeSkippedFromMe,
     });
 
     expect(summary.skippedFromMe).toBe(1);
     expect(summary.replayed).toBe(1);
     expect(summary.cursorAfter.lastSeenRowid).toBe(11);
     expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(observeSkippedFromMe).toHaveBeenCalledWith(
+      expect.objectContaining({ guid: "A", rowid: 10, isFromMe: true }),
+    );
   });
 
   it("drops rows older than the maxAgeMinutes ceiling and advances past them", async () => {

@@ -82,6 +82,39 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).toContain("Mode: prefer");
   });
 
+  it("uses deferred capability names without listing them as visible tools", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              delegationMode: "prefer",
+            },
+          },
+        },
+      },
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        agentId: "main",
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [{ name: "tool_search" } as never],
+      capabilityToolNames: ["sessions_spawn"],
+      userTimezone: "UTC",
+    });
+
+    expect(prompt).toContain("## Sub-Agent Delegation");
+    expect(prompt).toContain("Mode: prefer");
+    expect(prompt).not.toContain("- sessions_spawn: spawn an isolated sub-agent session");
+  });
+
   it("adds workspace-only scratch path guidance when fs workspaceOnly is enabled", () => {
     // The prompt must steer writes toward workspace-local scratch paths when
     // filesystem tools are constrained to the workspace.

@@ -310,6 +310,11 @@ export type MsgContext = {
    */
   ExplicitDeliverRoute?: boolean;
   /**
+   * Internal flag for channels that emit message_received through a channel-specific
+   * privacy gate before entering the shared reply dispatcher.
+   */
+  SuppressMessageReceivedHooks?: boolean;
+  /**
    * Provider-specific parent conversation id for threaded contexts.
    * For Discord threads, this is the parent channel id.
    */

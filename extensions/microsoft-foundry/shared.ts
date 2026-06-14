@@ -6,7 +6,13 @@ import {
   type ProviderAuthResult,
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  resolveClaudeFable5ModelIdentity,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeXhighEffort,
+  type ModelApi,
+  type ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -15,8 +21,17 @@ import {
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
 export const DEFAULT_GPT5_API = "openai-responses";
+export const ANTHROPIC_MESSAGES_API = "anthropic-messages";
 export const COGNITIVE_SERVICES_RESOURCE = "https://cognitiveservices.azure.com";
+export const FOUNDRY_ANTHROPIC_SCOPE = "https://ai.azure.com/.default";
 export const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+export const MAI_IMAGE_MODELS = [
+  "MAI-Image-2.5-Flash",
+  "MAI-Image-2.5",
+  "MAI-Image-2e",
+  "MAI-Image-2",
+] as const;
+export const MAI_DEFAULT_IMAGE_MODEL = "MAI-Image-2.5";
 
 export interface AzAccount {
   name: string;
@@ -73,7 +88,10 @@ export type CachedTokenEntry = {
   expiresAt: number;
 };
 
-export type FoundryProviderApi = typeof DEFAULT_API | typeof DEFAULT_GPT5_API;
+export type FoundryProviderApi =
+  | typeof DEFAULT_API
+  | typeof DEFAULT_GPT5_API
+  | typeof ANTHROPIC_MESSAGES_API;
 
 type FoundryDeploymentConfigInput = {
   name: string;
@@ -87,7 +105,14 @@ type FoundryModelCapabilities = {
   reasoning: boolean;
   thinkingLevelMap?: Record<string, string | null>;
   input: Array<"text" | "image">;
+  contextWindow: number;
+  maxTokens: number;
   compat?: FoundryModelCompat;
+};
+
+type FoundryProviderConfigPatch = Omit<ModelProviderConfig, "apiKey" | "headers"> & {
+  apiKey?: SecretInput | undefined;
+  headers?: Record<string, SecretInput> | undefined;
 };
 
 function normalizeModelInput(input?: unknown): Array<"text" | "image"> {
@@ -111,9 +136,28 @@ type FoundryConfigShape = {
   };
 };
 
+type FoundryImageDefaultPatch = {
+  agents?: {
+    defaults?: {
+      imageGenerationModel?: {
+        primary: string;
+      };
+    };
+  };
+};
+
 function normalizeFoundryModelName(value?: string | null): string | undefined {
   const trimmed = normalizeLowercaseStringOrEmpty(value);
   return trimmed || undefined;
+}
+
+export function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(modelName);
+  return normalized ? normalized.startsWith("claude") : false;
+}
+
+export function isFoundryClaudeMythosPreview(value?: string | null): boolean {
+  return normalizeFoundryModelName(value) === "claude-mythos-preview";
 }
 
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
@@ -131,18 +175,90 @@ export function usesFoundryResponsesByDefault(value?: string | null): boolean {
   );
 }
 
+export function isFoundryMaiImageModel(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "mai-image-2.5-flash" ||
+    normalized === "mai-image-2.5" ||
+    normalized === "mai-image-2e" ||
+    normalized === "mai-image-2" ||
+    normalized === "mai-image-2-efficient"
+  );
+}
+
+export function supportsFoundryReasoningContent(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  return normalized === "mai-ds-r1" || normalized === "mai-thinking-1";
+}
+
 export function supportsFoundryImageInput(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {
     return false;
   }
   return (
+    isAnthropicFoundryDeployment(normalized) ||
     normalized.startsWith("gpt-") ||
     normalized.startsWith("o1") ||
     normalized.startsWith("o3") ||
     normalized.startsWith("o4") ||
     normalized === "computer-use-preview"
   );
+}
+
+export function requiresFoundryEntraIdClaudeAuth(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  return normalized
+    ? normalized === "claude-mythos-preview" || normalized.startsWith("claude-mythos-")
+    : false;
+}
+
+export function requiresFoundryMandatoryAdaptiveClaudeThinking(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  return normalized
+    ? resolveClaudeFable5ModelIdentity({ id: normalized }) !== undefined ||
+        normalized === "claude-mythos-preview" ||
+        normalized.startsWith("claude-mythos-")
+    : false;
+}
+
+function supportsFoundryManualClaudeThinking(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value)?.replace(/\./g, "-");
+  return normalized
+    ? /(?:^|-)claude-(?:opus-4-(?:1|5)|sonnet-4-5|haiku-4-5)(?=$|[^a-z0-9])/.test(normalized)
+    : false;
+}
+
+function resolveFoundryModelTokenLimits(value?: string | null): {
+  contextWindow: number;
+  maxTokens: number;
+} {
+  const normalized = normalizeFoundryModelName(value);
+  const normalizedVersion = normalized?.replace(/\./g, "-");
+  if (
+    normalized &&
+    (supportsClaudeAdaptiveThinking({ id: normalized }) ||
+      requiresFoundryMandatoryAdaptiveClaudeThinking(normalized))
+  ) {
+    return { contextWindow: 1_000_000, maxTokens: 128_000 };
+  }
+  if (
+    normalizedVersion === "claude-opus-4-5" ||
+    normalizedVersion === "claude-sonnet-4-5" ||
+    normalizedVersion === "claude-haiku-4-5"
+  ) {
+    return { contextWindow: 200_000, maxTokens: 64_000 };
+  }
+  if (normalizedVersion === "claude-opus-4-1") {
+    return { contextWindow: 200_000, maxTokens: 32_000 };
+  }
+  if (normalized === "mai-ds-r1") {
+    return { contextWindow: 163_840, maxTokens: 163_840 };
+  }
+  return { contextWindow: 128_000, maxTokens: 16_384 };
 }
 
 export function requiresFoundryMaxCompletionTokens(value?: string | null): boolean {
@@ -220,7 +336,15 @@ function buildFoundryThinkingLevelMap(
 }
 
 export function isFoundryProviderApi(value?: string | null): value is FoundryProviderApi {
-  return value === DEFAULT_API || value === DEFAULT_GPT5_API;
+  return value === DEFAULT_API || value === DEFAULT_GPT5_API || value === ANTHROPIC_MESSAGES_API;
+}
+
+export function formatFoundryApiLabel(api: FoundryProviderApi): string {
+  return api === DEFAULT_GPT5_API
+    ? "Responses"
+    : api === ANTHROPIC_MESSAGES_API
+      ? "Anthropic Messages"
+      : "Chat Completions";
 }
 
 export function normalizeFoundryEndpoint(endpoint: string): string {
@@ -232,17 +356,24 @@ export function normalizeFoundryEndpoint(endpoint: string): string {
     const parsed = new URL(trimmed);
     parsed.search = "";
     parsed.hash = "";
-    const normalizedPath = parsed.pathname.replace(/\/openai(?:$|\/).*/i, "").replace(/\/+$/, "");
+    const normalizedPath = parsed.pathname
+      .replace(/\/(?:openai|anthropic)(?:$|\/).*/i, "")
+      .replace(/\/+$/, "");
     return `${parsed.origin}${normalizedPath && normalizedPath !== "/" ? normalizedPath : ""}`;
   } catch {
     const withoutQuery = trimmed.replace(/[?#].*$/, "").replace(/\/+$/, "");
-    return withoutQuery.replace(/\/openai(?:$|\/).*/i, "");
+    return withoutQuery.replace(/\/(?:openai|anthropic)(?:$|\/).*/i, "");
   }
 }
 
 function buildFoundryV1BaseUrl(endpoint: string): string {
   const base = normalizeFoundryEndpoint(endpoint);
   return base.endsWith("/openai/v1") ? base : `${base}/openai/v1`;
+}
+
+function buildFoundryAnthropicBaseUrl(endpoint: string): string {
+  const base = normalizeFoundryEndpoint(endpoint);
+  return base.endsWith("/anthropic") ? base : `${base}/anthropic`;
 }
 
 export function resolveFoundryApi(
@@ -254,16 +385,22 @@ export function resolveFoundryApi(
     return configuredApi;
   }
   const configuredModelName = resolveConfiguredModelNameHint(modelId, modelNameHint);
+  if (isAnthropicFoundryDeployment(configuredModelName)) {
+    return ANTHROPIC_MESSAGES_API;
+  }
   return usesFoundryResponsesByDefault(configuredModelName) ? DEFAULT_GPT5_API : DEFAULT_API;
 }
 
 export function buildFoundryProviderBaseUrl(
   endpoint: string,
-  _modelId: string,
-  _modelNameHint?: string | null,
-  _configuredApi?: ModelApi | null,
+  modelId: string,
+  modelNameHint?: string | null,
+  configuredApi?: ModelApi | null,
 ): string {
-  return buildFoundryV1BaseUrl(endpoint);
+  const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
+  return resolvedApi === ANTHROPIC_MESSAGES_API
+    ? buildFoundryAnthropicBaseUrl(endpoint)
+    : buildFoundryV1BaseUrl(endpoint);
 }
 
 export function extractFoundryEndpoint(baseUrl: string | null | undefined): string | undefined {
@@ -283,6 +420,9 @@ function buildFoundryModelCompat(
   configuredApi?: ModelApi | null,
 ): FoundryModelCompat | undefined {
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
+  if (resolvedApi === ANTHROPIC_MESSAGES_API) {
+    return undefined;
+  }
   const configuredModelName = resolveConfiguredModelNameHint(modelId, modelNameHint);
   const needsMaxCompletionTokens = requiresFoundryMaxCompletionTokens(configuredModelName);
   const supportsReasoningEffort = supportsFoundryReasoningEffort(configuredModelName);
@@ -311,18 +451,44 @@ export function resolveFoundryModelCapabilities(
   const api = resolveFoundryApi(modelId, modelName, configuredApi);
   const normalizedInput = normalizeModelInput(existingInput);
   const supportedReasoningEfforts = resolveFoundryReasoningEfforts(modelName);
+  const isAnthropic = api === ANTHROPIC_MESSAGES_API || isAnthropicFoundryDeployment(modelName);
+  const supportsClaudeThinking =
+    isAnthropic &&
+    (supportsClaudeAdaptiveThinking({ id: modelName }) ||
+      supportsFoundryManualClaudeThinking(modelName) ||
+      requiresFoundryMandatoryAdaptiveClaudeThinking(modelName));
+  const supportsClaudeXhighThinking =
+    isAnthropic && supportsClaudeNativeXhighEffort({ id: modelName });
+  const tokenLimits = resolveFoundryModelTokenLimits(modelName);
   return {
     modelName,
     api,
-    reasoning: supportsFoundryReasoningEffort(modelName),
-    ...(supportedReasoningEfforts
-      ? { thinkingLevelMap: buildFoundryThinkingLevelMap(supportedReasoningEfforts) }
-      : {}),
+    reasoning:
+      supportsClaudeThinking ||
+      supportsFoundryReasoningEffort(modelName) ||
+      supportsFoundryReasoningContent(modelName),
+    ...(supportsClaudeXhighThinking
+      ? { thinkingLevelMap: { xhigh: "xhigh", max: "max" } }
+      : supportedReasoningEfforts
+        ? { thinkingLevelMap: buildFoundryThinkingLevelMap(supportedReasoningEfforts) }
+        : {}),
     input:
       normalizedInput.includes("image") || supportsFoundryImageInput(modelName)
         ? ["text", "image"]
         : normalizedInput,
+    contextWindow: tokenLimits.contextWindow,
+    maxTokens: tokenLimits.maxTokens,
     compat: buildFoundryModelCompat(modelId, modelName, api),
+  };
+}
+
+export function mergeFoundryCanonicalModelParams(
+  params: Record<string, unknown> | undefined,
+  modelName: string,
+): Record<string, unknown> {
+  return {
+    ...params,
+    canonicalModelId: modelName,
   };
 }
 
@@ -344,13 +510,9 @@ function buildFoundryProviderConfig(
   modelNameHint?: string | null,
   options?: {
     api?: FoundryProviderApi;
-    authMethod?: "api-key" | "entra-id";
-    apiKey?: SecretInput;
     deployments?: FoundryDeploymentConfigInput[];
   },
-): ModelProviderConfig {
-  const runtimeApiKey = options?.authMethod === "api-key" ? options.apiKey : undefined;
-  const isApiKeyAuth = options?.authMethod === "api-key";
+): FoundryProviderConfigPatch {
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, options?.api);
   const deployments = options?.deployments?.length
     ? options.deployments
@@ -358,37 +520,81 @@ function buildFoundryProviderConfig(
   return {
     baseUrl: buildFoundryProviderBaseUrl(endpoint, modelId, modelNameHint, resolvedApi),
     api: resolvedApi,
-    ...(isApiKeyAuth
-      ? {
-          authHeader: false,
-          ...(runtimeApiKey !== undefined
-            ? { apiKey: runtimeApiKey, headers: { "api-key": runtimeApiKey } }
-            : {}),
-        }
-      : {}),
+    authHeader: undefined,
+    apiKey: undefined,
+    headers: undefined,
     models: deployments.map((deployment) => {
       const capabilities = resolveFoundryModelCapabilities(
         deployment.name,
         deployment.modelName,
         deployment.api ?? resolvedApi,
       );
+      const modelBaseUrl = buildFoundryProviderBaseUrl(
+        endpoint,
+        deployment.name,
+        capabilities.modelName,
+        capabilities.api,
+      );
       return Object.assign(
         {
           id: deployment.name,
           name: capabilities.modelName,
           api: capabilities.api,
+          baseUrl: modelBaseUrl,
           reasoning: capabilities.reasoning,
           ...(capabilities.thinkingLevelMap
             ? { thinkingLevelMap: capabilities.thinkingLevelMap }
             : {}),
+          params: mergeFoundryCanonicalModelParams(undefined, capabilities.modelName),
           input: capabilities.input,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128e3,
-          maxTokens: 16384,
+          contextWindow: capabilities.contextWindow,
+          maxTokens: capabilities.maxTokens,
         },
         capabilities.compat ? { compat: capabilities.compat } : {},
       );
     }),
+  };
+}
+
+function resolveSelectedDeploymentModelName(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+  deployments?: FoundryDeploymentConfigInput[];
+}): string | undefined {
+  const selectedDeployment = params.deployments?.find(
+    (deployment) => deployment.name === params.modelId,
+  );
+  return resolveConfiguredModelNameHint(
+    params.modelId,
+    selectedDeployment?.modelName ?? params.modelNameHint,
+  );
+}
+
+function isSelectedMaiImageDeployment(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+  deployments?: FoundryDeploymentConfigInput[];
+}): boolean {
+  return isFoundryMaiImageModel(resolveSelectedDeploymentModelName(params));
+}
+
+function buildFoundryImageDefaultPatch(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+  deployments?: FoundryDeploymentConfigInput[];
+}): FoundryImageDefaultPatch {
+  if (!isSelectedMaiImageDeployment(params)) {
+    return {};
+  }
+  return {
+    agents: {
+      defaults: {
+        imageGenerationModel: {
+          primary: `${PROVIDER_ID}/${params.modelId}`,
+        },
+      },
+    },
   };
 }
 
@@ -485,6 +691,10 @@ export function buildFoundryAuthResult(params: {
   currentProviderProfileIds?: string[];
   deployments?: FoundryDeploymentConfigInput[];
 }): ProviderAuthResult {
+  const imageDefaultPatch = buildFoundryImageDefaultPatch(params);
+  const defaultModel = isSelectedMaiImageDeployment(params)
+    ? undefined
+    : `${PROVIDER_ID}/${params.modelId}`;
   return {
     profiles: [
       {
@@ -511,6 +721,7 @@ export function buildFoundryAuthResult(params: {
         profileId: params.profileId,
         currentProviderProfileIds: params.currentProviderProfileIds,
       }),
+      ...imageDefaultPatch,
       models: {
         providers: {
           [PROVIDER_ID]: buildFoundryProviderConfig(
@@ -519,16 +730,14 @@ export function buildFoundryAuthResult(params: {
             params.modelNameHint,
             {
               api: params.api,
-              authMethod: params.authMethod,
-              apiKey: params.apiKey,
               deployments: params.deployments,
             },
-          ),
+          ) as unknown as ModelProviderConfig,
         },
       },
       ...buildPluginsAllowPatch(params.currentPluginsAllow),
     },
-    defaultModel: `${PROVIDER_ID}/${params.modelId}`,
+    ...(defaultModel ? { defaultModel } : {}),
     notes: params.notes,
   };
 }

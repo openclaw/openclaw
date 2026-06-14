@@ -86,16 +86,29 @@ function isCrossContextTarget(params: {
   target: string;
   toolContext?: ChannelThreadingToolContext;
 }): boolean {
-  const currentTarget = params.toolContext?.currentChannelId?.trim();
-  if (!currentTarget) {
+  if (
+    params.toolContext &&
+    getChannelPlugin(params.channel)?.threading?.matchesToolContextTarget?.({
+      target: params.target,
+      toolContext: params.toolContext,
+    })
+  ) {
+    return false;
+  }
+  const currentTargets = [
+    params.toolContext?.currentMessagingTarget?.trim(),
+    params.toolContext?.currentChannelId?.trim(),
+  ].filter((target): target is string => Boolean(target));
+  if (currentTargets.length === 0) {
     return false;
   }
   const normalizedTarget = normalizeTarget(params.channel, params.target);
-  const normalizedCurrent = normalizeTarget(params.channel, currentTarget);
-  if (!normalizedTarget || !normalizedCurrent) {
+  if (!normalizedTarget) {
     return false;
   }
-  return normalizedTarget !== normalizedCurrent;
+  return !currentTargets.some(
+    (currentTarget) => normalizeTarget(params.channel, currentTarget) === normalizedTarget,
+  );
 }
 
 function resolveAgentMessageToolsConfig(
@@ -198,7 +211,9 @@ export function enforceCrossContextPolicy(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
 }): void {
-  const currentTarget = params.toolContext?.currentChannelId?.trim();
+  const currentTarget =
+    params.toolContext?.currentChannelId?.trim() ??
+    params.toolContext?.currentMessagingTarget?.trim();
   if (!currentTarget) {
     return;
   }
@@ -257,11 +272,13 @@ export async function buildCrossContextDecoration(params: {
   accountId?: string | null;
   agentId?: string | null;
 }): Promise<CrossContextDecoration | null> {
-  if (!params.toolContext?.currentChannelId) {
+  const currentTarget =
+    params.toolContext?.currentChannelId ?? params.toolContext?.currentMessagingTarget;
+  if (!currentTarget) {
     return null;
   }
   // Direct tool sends are authored for their destination, not forwarded from a bound context.
-  if (params.toolContext.skipCrossContextDecoration) {
+  if (params.toolContext?.skipCrossContextDecoration) {
     return null;
   }
   if (!isCrossContextTarget(params)) {
@@ -280,13 +297,13 @@ export async function buildCrossContextDecoration(params: {
     (await lookupDirectoryDisplay({
       cfg: params.cfg,
       channel: params.channel,
-      targetId: params.toolContext.currentChannelId,
+      targetId: currentTarget,
       accountId: params.accountId ?? undefined,
-    })) ?? params.toolContext.currentChannelId;
+    })) ?? currentTarget;
   // Don't force group formatting here; currentChannelId can be a DM or a group.
   const originLabel = formatTargetDisplay({
     channel: params.channel,
-    target: params.toolContext.currentChannelId,
+    target: currentTarget,
     display: currentName,
   });
   const prefixTemplate = markerConfig?.prefix ?? "[from {channel}] ";

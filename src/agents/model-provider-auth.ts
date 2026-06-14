@@ -127,6 +127,7 @@ export async function hasAuthForModelProvider(params: {
   store?: AuthProfileStore;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
+  allowPreparedRuntimeAuth?: boolean;
   runtimeAuthLookup?: RuntimeProviderAuthLookup;
   resolveRuntimeAuthLookup?: () => RuntimeProviderAuthLookup;
 }): Promise<boolean> {
@@ -162,8 +163,8 @@ export async function hasAuthForModelProvider(params: {
     configFingerprint === preparedState.configFingerprint &&
     workspaceDir === expectedWorkspaceDir &&
     (params.agentDir === undefined || params.agentDir === expectedAgentDir) &&
-    params.discoverExternalCliAuth !== false &&
-    params.allowPluginSyntheticAuth !== false &&
+    (params.allowPreparedRuntimeAuth === true ||
+      (params.discoverExternalCliAuth !== false && params.allowPluginSyntheticAuth !== false)) &&
     params.env === undefined &&
     params.store === undefined &&
     params.modelApi === undefined;
@@ -227,6 +228,7 @@ export function createProviderAuthChecker(params: {
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
+  allowPreparedRuntimeAuth?: boolean;
 }): (provider: string, modelApi?: string) => Promise<boolean> {
   const authCache = new Map<string, boolean>();
   let runtimeAuthLookup: RuntimeProviderAuthLookup | undefined;
@@ -247,6 +249,7 @@ export function createProviderAuthChecker(params: {
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
       discoverExternalCliAuth: params.discoverExternalCliAuth,
+      allowPreparedRuntimeAuth: params.allowPreparedRuntimeAuth,
       resolveRuntimeAuthLookup: () =>
         (runtimeAuthLookup ??= createRuntimeProviderAuthLookup({
           cfg: params.cfg,

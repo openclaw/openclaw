@@ -17,15 +17,21 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import {
+  canUseCodexModelBackedApprovalsReviewerForModel,
   readCodexPluginConfig,
+  resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexModelBackedReviewerPolicyContext,
   shouldAutoApproveCodexAppServerApprovals,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
+import { resolveCodexMessageToolProvider } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolErrorDiagnostic,
   emitDynamicToolStartedDiagnostic,
@@ -66,7 +72,7 @@ import {
 import { rememberCodexRateLimits, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { readCodexAppServerBinding } from "./session-binding.js";
+import { isCodexAppServerNativeAuthProfile, readCodexAppServerBinding } from "./session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
@@ -74,7 +80,9 @@ import {
 import {
   buildCodexRuntimeThreadConfig,
   CODEX_NATIVE_PERSONALITY_NONE,
+  resolveCodexAppServerRequestModelSelection,
   resolveCodexAppServerModelProvider,
+  resolveCodexBindingModelProviderFallback,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
@@ -147,8 +155,56 @@ export async function runCodexAppServerSideQuestion(
   }
 
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+    approvals: loadExecApprovals(),
+    config: params.cfg,
+    agentId: sessionAgentId,
+  });
   const authProfileId = params.authProfileId ?? binding.authProfileId;
+  const modelProvider =
+    resolveCodexAppServerModelProvider({
+      provider: params.provider,
+      authProfileId,
+      agentDir: params.agentDir,
+      config: params.cfg,
+    }) ??
+    resolveCodexBindingModelProviderFallback({
+      provider: params.provider,
+      currentModel: params.model,
+      bindingModel: binding.model,
+      bindingModelProvider: binding.modelProvider,
+    });
+  const modelSelection = resolveCodexAppServerRequestModelSelection({
+    model: params.model,
+    modelProvider,
+    authProfileId,
+    agentDir: params.agentDir,
+    config: params.cfg,
+  });
+  const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
+    provider: params.provider,
+    model: params.model,
+    bindingModelProvider: binding.modelProvider,
+    bindingModel: binding.model,
+    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
+      authProfileId,
+      agentDir: params.agentDir,
+      config: params.cfg,
+    }),
+  });
+  const appServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig,
+    execPolicy,
+    modelProvider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.cfg,
+    agentDir: params.agentDir,
+  });
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
@@ -176,13 +232,27 @@ export async function runCodexAppServerSideQuestion(
   try {
     const cwd = binding.cwd || params.workspaceDir || process.cwd();
     const sideRunParams = buildSideRunAttemptParams(params, { cwd, authProfileId });
-    const approvalPolicy = binding.approvalPolicy ?? appServer.approvalPolicy;
-    const sandbox = binding.sandbox ?? appServer.sandbox;
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
+    const modelScopedAppServer = resolveCodexAppServerForModelProvider({
+      appServer,
+      provider: reviewerPolicyContext.modelProvider,
+      model: reviewerPolicyContext.model,
       config: params.cfg,
-      agentId: params.agentId,
+      env: process.env,
+      agentDir: params.agentDir,
     });
+    const useModelScopedPolicy = !canUseCodexModelBackedApprovalsReviewerForModel({
+      modelProvider: reviewerPolicyContext.modelProvider,
+      model: reviewerPolicyContext.model,
+      config: params.cfg,
+      env: process.env,
+      agentDir: params.agentDir,
+    });
+    const approvalPolicy = useModelScopedPolicy
+      ? modelScopedAppServer.approvalPolicy
+      : (binding.approvalPolicy ?? modelScopedAppServer.approvalPolicy);
+    const sandbox = useModelScopedPolicy
+      ? modelScopedAppServer.sandbox
+      : (binding.sandbox ?? modelScopedAppServer.sandbox);
     const toolBridge = await createCodexSideToolBridge({
       params,
       cwd,
@@ -224,6 +294,9 @@ export async function runCodexAppServerSideQuestion(
           threadId: childThreadId,
           turnId,
           nativeHookRelay,
+          execPolicy,
+          execReviewerAgentId: sessionAgentId,
+          internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
           autoApprove: shouldAutoApproveCodexAppServerApprovals({ approvalPolicy, sandbox }),
           signal: runAbortController.signal,
         });
@@ -315,23 +388,17 @@ export async function runCodexAppServerSideQuestion(
     });
     const threadConfig =
       mergeCodexThreadConfigs(nativeHookRelayConfig, runtimeThreadConfig) ?? runtimeThreadConfig;
-    const modelProvider = resolveCodexAppServerModelProvider({
-      provider: params.provider,
-      authProfileId,
-      agentDir: params.agentDir,
-      config: params.cfg,
-    });
     const forkResponse = assertCodexThreadForkResponse(
       await forkCodexSideThread(
         client,
         {
           threadId: binding.threadId,
-          model: params.model,
-          ...(modelProvider ? { modelProvider } : {}),
+          model: modelSelection.model,
+          ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
           personality: CODEX_NATIVE_PERSONALITY_NONE,
           cwd,
           approvalPolicy,
-          approvalsReviewer: appServer.approvalsReviewer,
+          approvalsReviewer: modelScopedAppServer.approvalsReviewer,
           sandbox,
           ...(serviceTier ? { serviceTier } : {}),
           config: threadConfig,
@@ -353,7 +420,7 @@ export async function runCodexAppServerSideQuestion(
       { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
     );
 
-    const effort = resolveReasoningEffort(params.resolvedThinkLevel ?? "off", params.model);
+    const effort = resolveReasoningEffort(params.resolvedThinkLevel ?? "off", modelSelection.model);
     const turnResponse = assertCodexTurnStartResponse(
       await client.request(
         "turn/start",
@@ -361,14 +428,14 @@ export async function runCodexAppServerSideQuestion(
           threadId: childThreadId,
           input: [{ type: "text", text: params.question.trim(), text_elements: [] }],
           cwd,
-          model: params.model,
+          model: modelSelection.model,
           personality: CODEX_NATIVE_PERSONALITY_NONE,
           ...(serviceTier ? { serviceTier } : {}),
           effort,
           collaborationMode: {
             mode: "default",
             settings: {
-              model: params.model,
+              model: modelSelection.model,
               reasoning_effort: effort,
               developer_instructions: null,
             },
@@ -530,6 +597,7 @@ async function createCodexSideToolBridge(input: {
   const runtimeModel =
     input.params.runtimeModel ??
     ({ id: input.params.model, provider: input.params.provider } as never);
+  const messageToolProvider = resolveCodexMessageToolProvider(input.params);
   let tools: AnyAgentTool[] = [];
   if (supportsModelTools(runtimeModel)) {
     const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
@@ -571,7 +639,10 @@ async function createCodexSideToolBridge(input: {
         workspaceDir: input.cwd,
       }),
       ...(input.params.messageProvider || input.params.messageChannel
-        ? { messageProvider: input.params.messageProvider ?? input.params.messageChannel }
+        ? {
+            messageProvider: messageToolProvider,
+            toolPolicyMessageProvider: input.params.messageProvider ?? input.params.messageChannel,
+          }
         : {}),
       ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
       hookChannelId: buildAgentHookContextChannelFields({
@@ -607,6 +678,7 @@ async function createCodexSideToolBridge(input: {
       sessionId: input.params.sessionId,
       sessionKey: input.params.sessionKey,
       runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
+      currentChannelProvider: messageToolProvider,
       ...hookChannelFields,
     },
   });

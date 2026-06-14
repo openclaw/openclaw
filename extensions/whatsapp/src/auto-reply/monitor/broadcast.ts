@@ -9,14 +9,14 @@ import {
   normalizeAgentId,
 } from "openclaw/plugin-sdk/routing";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
+import type { WebInboundMessage } from "../../inbound/types.js";
 import { formatError } from "../../session.js";
 import { whatsappInboundLog } from "../loggers.js";
-import type { WebInboundMsg } from "../types.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 
 function buildBroadcastRouteKeys(params: {
   cfg: OpenClawConfig;
-  msg: WebInboundMsg;
+  msg: WebInboundMessage;
   route: ReturnType<typeof resolveAgentRoute>;
   peerId: string;
   agentId: string;
@@ -49,13 +49,13 @@ function buildBroadcastRouteKeys(params: {
 
 export async function maybeBroadcastMessage(params: {
   cfg: OpenClawConfig;
-  msg: WebInboundMsg;
+  msg: WebInboundMessage;
   peerId: string;
   route: ReturnType<typeof resolveAgentRoute>;
   groupHistoryKey: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   processMessage: (
-    msg: WebInboundMsg,
+    msg: WebInboundMessage,
     route: ReturnType<typeof resolveAgentRoute>,
     groupHistoryKey: string,
     opts?: {

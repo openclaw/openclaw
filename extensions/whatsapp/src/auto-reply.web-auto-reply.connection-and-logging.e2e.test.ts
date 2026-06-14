@@ -13,7 +13,6 @@ import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js"
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   createWebInboundDeliverySpies,
-  createAcceptedWhatsAppSendResult,
   createMockWebListener,
   createScriptedWebListenerFactory,
   createWebListenerFactoryCapture,
@@ -28,6 +27,11 @@ import {
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
 import { waitForWaConnection } from "./session.js";
+import {
+  createTestLegacyFlatWebInboundMessage,
+  createTestWebInboundMessage,
+} from "./inbound/test-message.test-helper.js";
+import type { WebInboundMessageInput } from "./inbound/types.js";
 
 type DrainSelectionEntry = {
   channel: string;
@@ -967,6 +971,35 @@ describe("web auto-reply connection", () => {
     expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
+  it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
+    const capture = createWebListenerFactoryCapture();
+    const { reply } = createWebInboundDeliverySpies();
+
+    await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
+      text: "ok",
+    }));
+    const onMessage = requireOnMessage(capture.getOnMessage());
+    const msg = createTestLegacyFlatWebInboundMessage({
+      from: "+1",
+      conversationId: "+1",
+      chatId: "+1",
+      to: "+2",
+      reply,
+    });
+
+    expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
+    await onMessage(msg);
+
+    expect(reply).toHaveBeenCalledWith("ok", undefined);
+    await expect(
+      onMessage({
+        ...msg,
+        id: "partial-msg",
+        payload: { body: "partial nested" },
+      } as unknown as WebInboundMessageInput),
+    ).rejects.toThrow(/legacy flat or canonical nested/);
+  });
+
   it("processes inbound messages without batching and preserves timestamps", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
       const originalMax = process.getMaxListeners();
@@ -977,9 +1010,7 @@ describe("web auto-reply connection", () => {
       });
 
       try {
-        const sendMedia = vi.fn();
-        const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
-        const sendComposing = vi.fn();
+        const { sendMedia, reply, sendComposing } = createWebInboundDeliverySpies();
         const resolver = vi.fn().mockResolvedValue({ text: "ok" });
 
         const capture = createWebListenerFactoryCapture();
@@ -1100,19 +1131,27 @@ describe("web auto-reply connection", () => {
     await monitorWebChannel(false, capture.listenerFactory as never, false, resolver as never);
     const capturedOnMessage = requireOnMessage(capture.getOnMessage());
 
-    await capturedOnMessage({
-      body: "hello",
-      from: "+1",
-      conversationId: "+1",
-      to: "+2",
-      accountId: "default",
-      chatType: "direct",
-      chatId: "+1",
-      id: "msg1",
-      sendComposing: vi.fn(),
-      reply: vi.fn(),
-      sendMedia: vi.fn(),
-    });
+    await capturedOnMessage(
+      createTestWebInboundMessage({
+        event: {
+          id: "msg1",
+        },
+        payload: {
+          body: "hello",
+        },
+        platform: {
+          chatJid: "+1",
+          recipientJid: "+2",
+          sendComposing: vi.fn(),
+          reply: vi.fn(),
+          sendMedia: vi.fn(),
+        },
+        from: "+1",
+        conversationId: "+1",
+        accountId: "default",
+        chatType: "direct",
+      }),
+    );
 
     const content = await fs.readFile(logPath, "utf-8");
     expect(content).toMatch(/web-auto-reply/);
@@ -1131,9 +1170,7 @@ describe("web auto-reply connection", () => {
       markDispatchIdle,
       cleanup: vi.fn(),
     };
-    const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
-    const sendComposing = vi.fn().mockResolvedValue(undefined);
-    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
+    const { reply, sendComposing, sendMedia } = createWebInboundDeliverySpies();
 
     const replyResolver = vi.fn().mockImplementation(async (ctx, opts) => {
       void ctx;
@@ -1150,20 +1187,28 @@ describe("web auto-reply connection", () => {
     await monitorWebChannel(
       false,
       async ({ onMessage }) => {
-        await onMessage({
-          id: "m1",
-          from: "+1000",
-          conversationId: "+1000",
-          to: "+2000",
-          body: "hello",
-          timestamp: Date.now(),
-          chatType: "direct",
-          chatId: "direct:+1000",
-          accountId: "default",
-          sendComposing,
-          reply,
-          sendMedia,
-        });
+        await onMessage(
+          createTestWebInboundMessage({
+            event: {
+              id: "m1",
+              timestamp: Date.now(),
+            },
+            payload: {
+              body: "hello",
+            },
+            platform: {
+              chatJid: "direct:+1000",
+              recipientJid: "+2000",
+              sendComposing,
+              reply,
+              sendMedia,
+            },
+            from: "+1000",
+            conversationId: "+1000",
+            chatType: "direct",
+            accountId: "default",
+          }),
+        );
         return createMockWebListener();
       },
       false,

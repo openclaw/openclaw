@@ -17,6 +17,11 @@ For most users, the upgrade is in place:
 - runtime state stays under `~/.openclaw/matrix/`
 
 You do not need to rename config keys or reinstall the plugin under a new name.
+The root `openclaw` package no longer bundles Matrix runtime code or Matrix SDK
+dependencies. If `openclaw channels status` shows Matrix is configured but the
+plugin is missing after an update, run `openclaw doctor --fix` or
+`openclaw plugins install @openclaw/matrix`; do not install Matrix SDK packages
+into the root OpenClaw package.
 
 ## What the migration does automatically
 

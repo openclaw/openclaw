@@ -404,6 +404,17 @@ export async function resolveImplicitMantleProvider(params: {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
     },
+    {
+      id: "anthropic.claude-mythos-preview",
+      name: "Claude Mythos Preview",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-preview" },
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    },
   ];
   const allModels = [...models, ...claudeModels];
 

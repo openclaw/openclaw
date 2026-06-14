@@ -1,18 +1,19 @@
-// Message-tool terminal tests cover message_tool_only delivery, where a
-// successful source message send should end the run without duplicate replies.
+// Message-tool delivery tests cover message_tool_only delivery, where a
+// successful source message send records source reply evidence without ending
+// the run before the model can observe the tool result.
 import type { Agent, AfterToolCallContext } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   installMessageToolOnlyTerminalHook,
-  shouldTerminateAfterMessageToolOnlySend,
+  isDeliveredMessageToolOnlySourceReply,
 } from "./message-tool-terminal.js";
 
-describe("message-tool-only terminal sends", () => {
-  it("marks successful message-tool-only sends as terminal", () => {
+describe("message-tool-only source replies", () => {
+  it("marks successful message-tool-only sends as delivered source replies", () => {
     // Direct send evidence can come from the tool result or hook result; either
     // path means the source reply was delivered and no automatic reply is needed.
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -21,7 +22,7 @@ describe("message-tool-only terminal sends", () => {
       }),
     ).toBe(true);
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -31,7 +32,7 @@ describe("message-tool-only terminal sends", () => {
       }),
     ).toBe(true);
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -43,9 +44,9 @@ describe("message-tool-only terminal sends", () => {
     ).toBe(true);
   });
 
-  it("does not terminate automatic delivery, non-send actions, explicit routes, or failed sends", () => {
+  it("ignores automatic delivery, non-send actions, explicit routes, or failed sends", () => {
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "automatic",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -54,7 +55,7 @@ describe("message-tool-only terminal sends", () => {
       }),
     ).toBe(false);
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -63,7 +64,7 @@ describe("message-tool-only terminal sends", () => {
       }),
     ).toBe(false);
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -72,7 +73,7 @@ describe("message-tool-only terminal sends", () => {
       }),
     ).toBe(false);
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "sessions_send",
@@ -81,7 +82,7 @@ describe("message-tool-only terminal sends", () => {
       }),
     ).toBe(false);
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -92,11 +93,11 @@ describe("message-tool-only terminal sends", () => {
     ).toBe(false);
   });
 
-  it("does not terminate dry-run or non-delivered sends", () => {
+  it("ignores dry-run or non-delivered sends", () => {
     // Dry runs and suppressed sends are observable tool activity, not delivered
     // replies, so they cannot close the turn.
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -105,7 +106,7 @@ describe("message-tool-only terminal sends", () => {
       }),
     ).toBe(false);
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -123,7 +124,7 @@ describe("message-tool-only terminal sends", () => {
       }),
     ).toBe(false);
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -133,7 +134,7 @@ describe("message-tool-only terminal sends", () => {
       }),
     ).toBe(false);
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -147,9 +148,9 @@ describe("message-tool-only terminal sends", () => {
     ).toBe(false);
   });
 
-  it("does not terminate suppressed sends without delivery evidence", () => {
+  it("ignores suppressed sends without delivery evidence", () => {
     expect(
-      shouldTerminateAfterMessageToolOnlySend({
+      isDeliveredMessageToolOnlySourceReply({
         sourceReplyDeliveryMode: "message_tool_only",
         context: createAfterToolCallContext({
           toolName: "message",
@@ -160,7 +161,7 @@ describe("message-tool-only terminal sends", () => {
     ).toBe(false);
   });
 
-  it("preserves existing after-tool-call output while adding the terminal hint", async () => {
+  it("preserves existing after-tool-call output while recording delivered source replies", async () => {
     const previousAfterToolCall = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "rewritten" }],
       details: { rewritten: true },
@@ -183,9 +184,28 @@ describe("message-tool-only terminal sends", () => {
     ).resolves.toEqual({
       content: [{ type: "text", text: "rewritten" }],
       details: { rewritten: true },
-      terminate: true,
     });
     expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("records delivery evidence without rewriting the default result", async () => {
+    const agent = {} as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
+    installMessageToolOnlyTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
+    });
+
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", message: "visible reply" },
+        }),
+      ),
+    ).resolves.toBeUndefined();
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
   });
 

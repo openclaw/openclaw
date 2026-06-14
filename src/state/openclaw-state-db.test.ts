@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import {
   executeSqliteQuerySync,
@@ -29,8 +29,21 @@ function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-db-"));
 }
 
+function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
+  return {
+    type,
+    bsize: 1024,
+    blocks: 1,
+    bfree: 1,
+    bavail: 1,
+    files: 0,
+    ffree: 0,
+  };
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
 });
 
 describe("openclaw state database", () => {
@@ -314,6 +327,21 @@ describe("openclaw state database", () => {
       | { journal_mode?: string }
       | undefined;
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("wal");
+  });
+
+  it("uses rollback journaling for shared state databases on NFS-backed volumes", () => {
+    const stateDir = createTempStateDir();
+    const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x6969));
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    const journalMode = database.db.prepare("PRAGMA journal_mode").get() as
+      | { journal_mode?: string }
+      | undefined;
+    expect(journalMode?.journal_mode?.toLowerCase()).toBe("delete");
+    expect(statfs).toHaveBeenCalledWith(path.join(stateDir, "state"));
   });
 
   it("records durable schema metadata", () => {

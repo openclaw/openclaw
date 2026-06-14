@@ -56,14 +56,33 @@ function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
   };
 }
 
-function buildManagedMcpResponse(
+async function ensureGlobalFetchResponse(response: Response): Promise<Response> {
+  const init = {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  };
+  if (response.body != null) {
+    return new Response(response.body, init);
+  }
+  if (response.status === 204 || response.status === 205 || response.status === 304) {
+    return new Response(null, init);
+  }
+  if (typeof response.text === "function") {
+    const text = await response.text();
+    return new Response(text, init);
+  }
+  return new Response(null, init);
+}
+
+async function buildManagedMcpResponse(
   response: Response,
   release: () => Promise<void>,
   refreshTimeout?: () => void,
-): Response {
+): Promise<Response> {
   if (!response.body) {
     void release();
-    return response;
+    return await ensureGlobalFetchResponse(response);
   }
 
   const source = response.body;
@@ -107,11 +126,13 @@ function buildManagedMcpResponse(
     },
   });
   managedMcpResponseCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
-  return new Response(wrappedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return await ensureGlobalFetchResponse(
+    new Response(wrappedBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+  );
 }
 
 /** Builds an MCP fetch function with optional TLS/client-cert dispatcher support. */
@@ -155,7 +176,7 @@ export function buildMcpHttpFetch(params: {
       ...(needsCustomDispatcher ? { resolveDispatcherPolicy: resolveCustomDispatcherPolicy } : {}),
     };
     const guarded = await fetchWithSsrFGuard(guardedFetchOptions);
-    return buildManagedMcpResponse(guarded.response, guarded.release, guarded.refreshTimeout);
+    return await buildManagedMcpResponse(guarded.response, guarded.release, guarded.refreshTimeout);
   };
 }
 

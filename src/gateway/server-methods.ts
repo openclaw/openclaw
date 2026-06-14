@@ -157,6 +157,10 @@ const loadSendHandlers = lazyHandlerModule(
   () => import("./server-methods/send.js"),
   (module) => module.sendHandlers,
 );
+const loadSessionsFilesHandlers = lazyHandlerModule(
+  () => import("./server-methods/sessions-files.js"),
+  (module) => module.sessionsFilesHandlers,
+);
 const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
@@ -574,6 +578,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
     loadHandlers: loadArtifactsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.files.list", "sessions.files.get"],
+    loadHandlers: loadSessionsFilesHandlers,
   }),
 };
 

@@ -234,6 +234,7 @@ export type AppViewState = {
   configActiveSection: string | null;
   configActiveSubsection: string | null;
   pendingUpdateExpectedVersion: string | null;
+  pendingUpdateHandoff: boolean;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   communicationsFormMode: "form" | "raw";
   communicationsSearchQuery: string;

@@ -551,6 +551,47 @@ export function sanitizeRuntimeProviderRequestOverrides(
   };
 }
 
+/** Applies provider-prepared runtime auth overrides to a resolved model. */
+export function applyPreparedRuntimeAuthToModel<
+  T extends {
+    provider: string;
+    api?: RequestApi;
+    baseUrl?: string;
+    headers?: Record<string, string>;
+  },
+>(
+  model: T,
+  preparedAuth:
+    | { baseUrl?: string; request?: ModelProviderRequestTransportOverrides }
+    | null
+    | undefined,
+): T {
+  if (!preparedAuth?.baseUrl && !preparedAuth?.request) {
+    return model;
+  }
+  const providerHeaders = preparedAuth.request?.auth
+    ? Object.fromEntries(
+        Object.entries(model.headers ?? {}).filter(
+          ([key]) => !["authorization", "api-key", "x-api-key"].includes(key.toLowerCase()),
+        ),
+      )
+    : model.headers;
+  const requestConfig = resolveProviderRequestConfig({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: preparedAuth.baseUrl ?? model.baseUrl,
+    providerHeaders,
+    request: sanitizeRuntimeProviderRequestOverrides(preparedAuth.request),
+    capability: "llm",
+    transport: "stream",
+  });
+  return {
+    ...model,
+    ...(preparedAuth.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
+    headers: requestConfig.headers,
+  };
+}
+
 function resolveProxyOverride(
   request: ProviderRequestTransportOverrides | undefined,
 ): ResolvedProviderRequestProxyConfig {

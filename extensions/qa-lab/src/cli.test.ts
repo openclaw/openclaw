@@ -662,6 +662,7 @@ describe("qa cli registration", () => {
 
     const options = requireQaSuiteOptions();
     expect(options.allowFailures).toBe(true);
+    expect(options.providerMode).toBeUndefined();
   });
 
   it("forwards --pack for suite runs", async () => {

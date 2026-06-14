@@ -649,6 +649,40 @@ describe("failover-error", () => {
     ).toBe("model_not_found");
   });
 
+  it("uses structured OpenAI-compatible param detail for model-not-found 400s", () => {
+    const err = Object.assign(new Error("400 Param Incorrect"), {
+      status: 400,
+      code: "400",
+      param: "Not supported model some-model-id",
+      error: {
+        code: "400",
+        message: "Param Incorrect",
+        param: "Not supported model some-model-id",
+      },
+    });
+
+    expect(resolveFailoverReasonFromError(err)).toBe("model_not_found");
+    expect(describeFailoverError(err)).toMatchObject({
+      message: "400 Param Incorrect",
+      reason: "model_not_found",
+      status: 400,
+      code: "400",
+    });
+  });
+
+  it("keeps unsupported capability details classified as format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "400 Param Incorrect",
+        error: {
+          message: "Param Incorrect",
+          param: "This model is not supported for tool calling.",
+        },
+      }),
+    ).toBe("format");
+  });
+
   it("treats HTTP 422 as format error", () => {
     expect(
       resolveFailoverReasonFromError({
