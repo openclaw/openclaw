@@ -13,6 +13,7 @@ import {
   runRuntimePostBuild,
   writeLegacyCliExitCompatChunks,
   writeLegacyRootRuntimeCompatAliases,
+  writeNestedStableRootChunkAliases,
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
@@ -751,6 +752,27 @@ describe("runtime postbuild static assets", () => {
     );
     expect(await fs.readFile(path.join(distDir, "server-close-DvAvfgr8.js"), "utf8")).toBe(
       'export * from "./server-close.runtime.js";\n',
+    );
+    expect(await fs.readFile(path.join(distDir, "hook-runner-global-B8rMIo8I.js"), "utf8")).toBe(
+      'export * from "./plugins/hook-runner-global.js";\n',
+    );
+  });
+
+  it("repairs the stable gateway shutdown hook runner alias from a hashed root chunk", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(path.join(distDir, "plugins"), { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "hook-runner-global-NewHash.js"),
+      "export const runGlobalGatewayStopSafely = true;\nexport const initializeGlobalHookRunner = true;\n",
+      "utf8",
+    );
+
+    writeNestedStableRootChunkAliases({ rootDir });
+    writeLegacyRootRuntimeCompatAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "plugins", "hook-runner-global.js"), "utf8")).toBe(
+      'export * from "./../hook-runner-global-NewHash.js";\n',
     );
     expect(await fs.readFile(path.join(distDir, "hook-runner-global-B8rMIo8I.js"), "utf8")).toBe(
       'export * from "./plugins/hook-runner-global.js";\n',
