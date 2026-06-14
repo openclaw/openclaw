@@ -274,6 +274,9 @@ describe("single gateway session row child-session cache", () => {
         expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(
           1,
         );
+        expect(
+          subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
+        ).not.toHaveBeenCalled();
 
         vi.clearAllMocks();
 
