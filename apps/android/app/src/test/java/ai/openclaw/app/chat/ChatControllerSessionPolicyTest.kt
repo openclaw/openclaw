@@ -59,4 +59,61 @@ class ChatControllerSessionPolicyTest {
       ),
     )
   }
+
+  @Test
+  fun sessionMergeClearsUsageWhenNewSnapshotOmitsUsageMetadata() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        displayName = "Phone",
+        totalTokens = 41_000L,
+        totalTokensFresh = true,
+        contextTokens = 100_000L,
+      )
+    val next =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        displayName = "Phone renamed",
+        hasContextUsageMetadata = false,
+      )
+
+    val merged = mergeChatSessionEntry(existing, next)
+
+    assertEquals("agent:main:phone", merged.key)
+    assertEquals(2L, merged.updatedAtMs)
+    assertEquals("Phone renamed", merged.displayName)
+    assertEquals(null, merged.totalTokens)
+    assertEquals(null, merged.totalTokensFresh)
+    assertEquals(null, merged.contextTokens)
+    assertFalse(merged.hasContextUsageMetadata)
+  }
+
+  @Test
+  fun sessionMergeAppliesExplicitStaleUsageMetadata() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        totalTokens = 41_000L,
+        totalTokensFresh = true,
+        contextTokens = 100_000L,
+      )
+    val next =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        totalTokens = 82_000L,
+        totalTokensFresh = false,
+        contextTokens = 100_000L,
+      )
+
+    val merged = mergeChatSessionEntry(existing, next)
+
+    assertEquals(82_000L, merged.totalTokens)
+    assertEquals(false, merged.totalTokensFresh)
+    assertEquals(100_000L, merged.contextTokens)
+    assertTrue(merged.hasContextUsageMetadata)
+  }
 }

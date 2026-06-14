@@ -443,6 +443,7 @@ class NodeRuntime(
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
+          subscribeOperatorSessionEvents()
           refreshHomeCanvasOverviewIfConnected()
           if (voiceReplySpeakerLazy.isInitialized()) {
             voiceReplySpeaker.refreshConfig()
@@ -484,6 +485,14 @@ class NodeRuntime(
         handleGatewayEvent(event, payloadJson)
       },
     )
+
+  private suspend fun subscribeOperatorSessionEvents() {
+    try {
+      operatorSession.request("sessions.subscribe", null)
+    } catch (err: Throwable) {
+      Log.d("OpenClawRuntime", "sessions.subscribe failed: ${err.message ?: err::class.java.simpleName}")
+    }
+  }
 
   private val nodeSession =
     GatewaySession(
