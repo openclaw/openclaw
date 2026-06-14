@@ -15,6 +15,7 @@ import {
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerNativeHomeDir,
@@ -180,6 +181,39 @@ async function writeCodexCliApiKeyAuthFile(codexHome: string): Promise<void> {
 }
 
 describe("bridgeCodexAppServerStartOptions", () => {
+  it("preserves persisted provenance when preparing a supplied base store", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const authProfileStore = { version: 1, profiles: {} };
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          expires: Date.now() + 60_000,
+        },
+      });
+
+      const prepared = resolveCodexAppServerAuthProfileStore({
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+
+      expect(prepared).not.toBe(authProfileStore);
+      expect(prepared.runtimePersistedProfileIds).toContain("openai:work");
+      expect(prepared.profiles["openai:work"]).toMatchObject({
+        access: "persisted-access",
+        refresh: "persisted-refresh",
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("sets agent-owned CODEX_HOME without overriding HOME for local app-server launches", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions();
@@ -743,6 +777,121 @@ describe("bridgeCodexAppServerStartOptions", () => {
           accountId: "persisted-account",
         },
       );
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a prepared persisted store aligned across rotating refresh tokens", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    oauthMocks.refreshOpenAICodexToken
+      .mockResolvedValueOnce({
+        access: "first-rotated-access",
+        refresh: "first-rotated-refresh",
+        expires: Date.now() + 60_000,
+      })
+      .mockResolvedValueOnce({
+        access: "second-rotated-access",
+        refresh: "second-rotated-refresh",
+        expires: Date.now() + 60_000,
+      });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "initial-access",
+          refresh: "initial-refresh",
+          expires: Date.now() + 60_000,
+        },
+      });
+      const authProfileStore = resolveCodexAppServerAuthProfileStore({
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore: { version: 1, profiles: {} },
+      });
+
+      await refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+      await refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken.mock.calls).toEqual([
+        ["initial-refresh"],
+        ["first-rotated-refresh"],
+      ]);
+      expect(authProfileStore.profiles["openai:work"]).toMatchObject({
+        access: "second-rotated-access",
+        refresh: "second-rotated-refresh",
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not replace a prepared persisted store changed during refresh", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    let resolveRefresh:
+      | ((value: { access: string; refresh: string; expires: number }) => void)
+      | undefined;
+    oauthMocks.refreshOpenAICodexToken.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:work",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "initial-access",
+          refresh: "initial-refresh",
+          expires: Date.now() + 60_000,
+        },
+      });
+      const authProfileStore = resolveCodexAppServerAuthProfileStore({
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore: { version: 1, profiles: {} },
+      });
+
+      const refresh = refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore,
+      });
+      await vi.waitFor(() => expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledTimes(1));
+      authProfileStore.profiles["openai:work"] = {
+        type: "oauth",
+        provider: "openai",
+        access: "replacement-access",
+        refresh: "replacement-refresh",
+        expires: Date.now() + 60_000,
+        accountId: "replacement-account",
+      };
+      resolveRefresh?.({
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+        expires: Date.now() + 60_000,
+      });
+
+      await refresh;
+      expect(authProfileStore.profiles["openai:work"]).toMatchObject({
+        access: "replacement-access",
+        refresh: "replacement-refresh",
+        accountId: "replacement-account",
+      });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

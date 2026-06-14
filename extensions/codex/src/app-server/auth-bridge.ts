@@ -142,7 +142,7 @@ function ensureCodexAppServerAuthProfileStore(params: {
   });
 }
 
-function resolveCodexAppServerAuthProfileStore(params: {
+export function resolveCodexAppServerAuthProfileStore(params: {
   agentDir?: string;
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
@@ -173,13 +173,41 @@ function resolveCodexAppServerAuthProfileStore(params: {
           ...params.authProfileStore.order,
         }
       : undefined;
+  const profiles = {
+    ...overlaidStore.profiles,
+    ...params.authProfileStore.profiles,
+  };
+  const suppliedProfileIds = new Set(Object.keys(params.authProfileStore.profiles));
+  const mergeRuntimeProfileIds = (overlaidIds?: string[], suppliedIds?: string[]) => [
+    ...(overlaidIds ?? []).filter((profileId) => !suppliedProfileIds.has(profileId)),
+    ...(suppliedIds ?? []),
+  ];
+  const runtimePersistedProfileIds = mergeRuntimeProfileIds(
+    overlaidStore.runtimePersistedProfileIds,
+    params.authProfileStore.runtimePersistedProfileIds,
+  ).filter((profileId) => profiles[profileId]);
+  const runtimeExternalProfileIds = mergeRuntimeProfileIds(
+    overlaidStore.runtimeExternalProfileIds,
+    params.authProfileStore.runtimeExternalProfileIds,
+  ).filter((profileId) => profiles[profileId]);
+  const runtimeExternalProfileIdsAuthoritative =
+    overlaidStore.runtimeExternalProfileIdsAuthoritative === true ||
+    params.authProfileStore.runtimeExternalProfileIdsAuthoritative === true;
   return {
     ...params.authProfileStore,
     ...(order ? { order } : {}),
-    profiles: {
-      ...overlaidStore.profiles,
-      ...params.authProfileStore.profiles,
-    },
+    profiles,
+    ...(runtimePersistedProfileIds.length > 0
+      ? { runtimePersistedProfileIds: [...new Set(runtimePersistedProfileIds)] }
+      : {}),
+    ...(runtimeExternalProfileIds.length > 0 || runtimeExternalProfileIdsAuthoritative
+      ? {
+          runtimeExternalProfileIds: [...new Set(runtimeExternalProfileIds)],
+          ...(runtimeExternalProfileIdsAuthoritative
+            ? { runtimeExternalProfileIdsAuthoritative: true }
+            : {}),
+        }
+      : {}),
   };
 }
 
@@ -652,14 +680,22 @@ async function resolveOAuthCredentialForCodexAppServer(
   const refreshed = useScopedCredential
     ? undefined
     : loadAuthProfileStoreForSecretsRuntime(ownerAgentDir).profiles[profileId];
-  const storedCredential = store.profiles[profileId];
-  const candidate =
+  const refreshedOAuthCredential =
     refreshed?.type === "oauth" && isCodexAppServerAuthProvider(refreshed.provider, params.config)
       ? refreshed
-      : storedCredential?.type === "oauth" &&
-          isCodexAppServerAuthProvider(storedCredential.provider, params.config)
-        ? storedCredential
-        : credential;
+      : undefined;
+  if (refreshedOAuthCredential && isDeepStrictEqual(params.store.profiles[profileId], credential)) {
+    // Persisted refreshes rotate refresh tokens. Keep an isolated prepared
+    // store aligned without reverting a concurrent caller-owned replacement.
+    params.store.profiles[profileId] = refreshedOAuthCredential;
+  }
+  const storedCredential = store.profiles[profileId];
+  const candidate = refreshedOAuthCredential
+    ? refreshedOAuthCredential
+    : storedCredential?.type === "oauth" &&
+        isCodexAppServerAuthProvider(storedCredential.provider, params.config)
+      ? storedCredential
+      : credential;
   return resolved?.apiKey ? { ...candidate, access: resolved.apiKey } : candidate;
 }
 
@@ -725,6 +761,11 @@ async function resolveScopedOAuthCredential(params: {
     const refreshed = await refreshOAuthCredentialForRuntime({ credential });
     if (!refreshed?.access?.trim()) {
       throw new Error(`Codex app-server auth profile "${params.profileId}" could not refresh.`);
+    }
+    if (!isDeepStrictEqual(params.store.profiles[params.profileId], credential)) {
+      throw new Error(
+        `Codex app-server auth profile "${params.profileId}" changed while refreshing.`,
+      );
     }
     params.store.profiles[params.profileId] = refreshed;
     return refreshed;

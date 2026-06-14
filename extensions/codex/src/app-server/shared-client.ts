@@ -8,6 +8,7 @@ import {
   bridgeCodexAppServerStartOptions,
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
@@ -122,6 +123,7 @@ type ResolvedCodexAppServerClientStartContext = {
   agentDir: string;
   usesNativeAuth: boolean;
   authProfileId: string | undefined;
+  authProfileStore: AuthProfileStore | undefined;
   startOptions: CodexAppServerStartOptions;
 };
 
@@ -132,13 +134,22 @@ async function resolveCodexAppServerClientStartContext(
   const usesNativeAuth = options?.authProfileId === null;
   const requestedAuthProfileId =
     options?.authProfileId === null ? undefined : options?.authProfileId;
+  const authProfileStore =
+    !usesNativeAuth && options?.authProfileStore
+      ? resolveCodexAppServerAuthProfileStore({
+          agentDir,
+          authProfileId: requestedAuthProfileId,
+          authProfileStore: options.authProfileStore,
+          config: options.config,
+        })
+      : options?.authProfileStore;
   const authProfileId = usesNativeAuth
     ? undefined
     : resolveCodexAppServerAuthProfileIdForAgent({
         authProfileId: requestedAuthProfileId,
         agentDir,
         config: options?.config,
-        ...(options?.authProfileStore ? { authProfileStore: options.authProfileStore } : {}),
+        ...(authProfileStore ? { authProfileStore } : {}),
       });
   const requestedStartOptions =
     options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
@@ -148,9 +159,9 @@ async function resolveCodexAppServerClientStartContext(
     agentDir,
     authProfileId: usesNativeAuth ? null : authProfileId,
     config: options?.config,
-    ...(options?.authProfileStore ? { authProfileStore: options.authProfileStore } : {}),
+    ...(authProfileStore ? { authProfileStore } : {}),
   });
-  return { agentDir, usesNativeAuth, authProfileId, startOptions };
+  return { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions };
 }
 
 /** Gets or starts a shared Codex app-server client without retaining a lease. */
@@ -278,7 +289,7 @@ async function acquireSharedCodexAppServerClient(
 export async function createIsolatedCodexAppServerClient(
   options?: IsolatedCodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
-  const { agentDir, usesNativeAuth, authProfileId, startOptions } =
+  const { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions } =
     await resolveCodexAppServerClientStartContext(options);
   const client = CodexAppServerClient.start(startOptions);
   if (authProfileId) {
@@ -291,7 +302,7 @@ export async function createIsolatedCodexAppServerClient(
       return await refreshCodexAppServerAuthTokens({
         agentDir,
         authProfileId,
-        ...(options?.authProfileStore ? { authProfileStore: options.authProfileStore } : {}),
+        ...(authProfileStore ? { authProfileStore } : {}),
         config: options?.config,
       });
     });
@@ -305,7 +316,7 @@ export async function createIsolatedCodexAppServerClient(
       authProfileId: usesNativeAuth ? null : authProfileId,
       startOptions,
       config: options?.config,
-      ...(options?.authProfileStore ? { authProfileStore: options.authProfileStore } : {}),
+      ...(authProfileStore ? { authProfileStore } : {}),
     });
     return client;
   } catch (error) {
