@@ -619,6 +619,12 @@ export async function runPreparedCliAgent(
           };
     const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
     const assistantText = output.text.trim();
+    // An empty CLI turn (including a verifiably tool-only one — see
+    // output.hadToolCalls) is treated as intentional silence only when the
+    // caller opted in via allowEmptyAssistantReplyAsSilent. Otherwise it keeps
+    // the prior behavior and fails over, so existing fallback chains are not
+    // silently swallowed. The streamed-text preservation in the parser still
+    // ensures genuinely-streamed replies never reach this branch empty.
     if (!assistantText && params.allowEmptyAssistantReplyAsSilent !== true) {
       throw new FailoverError("CLI backend returned an empty response.", {
         reason: "empty_response",
