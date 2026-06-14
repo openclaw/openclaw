@@ -11,6 +11,19 @@ import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js"
 
 const decisionLog = createSubsystemLogger("model-fallback").child("decision");
 
+/**
+ * Throttle duplicate fallback decision logs to prevent spam when auth tokens
+ * expire. Key: `${decision}:${provider}:${reason}`. Each unique key is logged
+ * at most once per window; subsequent duplicates are counted and the count is
+ * surfaced when the window expires.
+ */
+const LOG_THROTTLE_WINDOW_MS = 60_000;
+const recentDecisionLogs = new Map<string, { lastLoggedAt: number; suppressed: number }>();
+
+function buildThrottleKey(decision: string, provider: string, reason: string | null | undefined): string {
+  return `${decision}:${provider}:${reason ?? "unknown"}`;
+}
+
 /** Return whether fallback decision logging is enabled for warn-level events. */
 export function isModelFallbackDecisionLogEnabled(): boolean {
   return decisionLog.isEnabled("warn");
@@ -158,6 +171,21 @@ export function logModelFallbackDecision(
     ? ` providerErrorType=${sanitizeForLog(observedError.providerErrorType)}`
     : "";
   const detailSuffix = detailText ? ` detail=${sanitizeForLog(detailText)}` : "";
+
+  // Throttle duplicate decision logs to prevent spam when auth tokens expire.
+  // The same (decision, provider, reason) combination is logged at most once
+  // per window; subsequent duplicates are counted and surfaced on the next
+  // allowed log.
+  const throttleKey = buildThrottleKey(params.decision, params.candidate.provider, params.reason);
+  const now = Date.now();
+  const recent = recentDecisionLogs.get(throttleKey);
+  if (recent && now - recent.lastLoggedAt < LOG_THROTTLE_WINDOW_MS) {
+    recent.suppressed += 1;
+    return fallbackStepFields;
+  }
+  const suppressedCount = recent?.suppressed ?? 0;
+  recentDecisionLogs.set(throttleKey, { lastLoggedAt: now, suppressed: 0 });
+
   decisionLog.warn("model fallback decision", {
     event: "model_fallback_decision",
     tags: ["error_handling", "model_fallback", params.decision],
@@ -183,6 +211,7 @@ export function logModelFallbackDecision(
     fallbackConfigured: params.fallbackConfigured,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     profileCount: params.profileCount,
+    suppressedDuplicateCount: suppressedCount || undefined,
     previousAttempts: params.previousAttempts?.map((attempt) => ({
       provider: attempt.provider,
       model: attempt.model,
@@ -193,7 +222,8 @@ export function logModelFallbackDecision(
     })),
     consoleMessage:
       `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
-      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}`,
+      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}` +
+      (suppressedCount > 0 ? ` (${suppressedCount} duplicates suppressed in last ${LOG_THROTTLE_WINDOW_MS / 1000}s)` : ""),
   });
   return fallbackStepFields;
 }
