@@ -207,6 +207,12 @@ async function waitForTrajectoryExportInstructionText(params: {
     if (eventText) {
       return eventText;
     }
+    const sessionEventText = params.events
+      .map((event) => extractChatFinalTextForSession(event, params.sessionKey))
+      .find((text) => text?.includes(params.expectedText));
+    if (sessionEventText) {
+      return sessionEventText;
+    }
     const history: { messages?: unknown[] } = await params.client.request(
       "chat.history",
       {
@@ -242,6 +248,25 @@ function extractChatFinalText(event: EventFrame, runId: string): string | undefi
   if (record.runId !== runId || record.state !== "final") {
     return undefined;
   }
+  return extractChatFinalRecordText(record);
+}
+
+function extractChatFinalTextForSession(event: EventFrame, sessionKey: string): string | undefined {
+  if (event.event !== "chat") {
+    return undefined;
+  }
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record.sessionKey !== sessionKey || record.state !== "final") {
+    return undefined;
+  }
+  return extractChatFinalRecordText(record);
+}
+
+function extractChatFinalRecordText(record: Record<string, unknown>): string | undefined {
   const message = record.message;
   if (!message || typeof message !== "object") {
     return undefined;
