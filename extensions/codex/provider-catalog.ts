@@ -16,6 +16,8 @@ export const CODEX_APP_SERVER_AUTH_MARKER = "codex-app-server";
 
 const DEFAULT_CONTEXT_WINDOW = 272_000;
 const DEFAULT_MAX_TOKENS = 128_000;
+const SPARK_CONTEXT_WINDOW = 128_000;
+const SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 
 /** Offline fallback catalog used when live app-server discovery is unavailable. */
 export const FALLBACK_CODEX_MODELS = [
@@ -36,6 +38,15 @@ export const FALLBACK_CODEX_MODELS = [
     inputModalities: ["text", "image"],
     supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
   },
+  {
+    id: SPARK_MODEL_ID,
+    model: SPARK_MODEL_ID,
+    displayName: "GPT-5.3-Codex-Spark",
+    description: "Ultra-fast coding model.",
+    inputModalities: ["text"],
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    defaultReasoningEffort: "high",
+  },
 ] satisfies CodexAppServerModel[];
 
 /**
@@ -49,6 +60,8 @@ export function buildCodexModelDefinition(model: {
   supportedReasoningEfforts: string[];
 }): ModelDefinitionConfig {
   const id = model.id.trim() || model.model.trim();
+  const contextWindow =
+    id.toLowerCase() === SPARK_MODEL_ID ? SPARK_CONTEXT_WINDOW : DEFAULT_CONTEXT_WINDOW;
   return {
     id,
     name: model.displayName?.trim() || id,
@@ -56,7 +69,8 @@ export function buildCodexModelDefinition(model: {
     reasoning: model.supportedReasoningEfforts.length > 0 || shouldDefaultToReasoningModel(id),
     input: model.inputModalities.includes("image") ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
+    contextWindow,
+    contextTokens: contextWindow,
     maxTokens: DEFAULT_MAX_TOKENS,
     compat: {
       supportsReasoningEffort: model.supportedReasoningEfforts.length > 0,

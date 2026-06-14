@@ -3451,6 +3451,88 @@ describe("resolveModel", () => {
     );
   });
 
+  it("does not prepare openai fallback for native inline gpt-5.3-codex-spark", async () => {
+    mockOpenAICodexTemplateModel(discoverModels);
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai:codex": { provider: "openai", mode: "oauth" },
+        },
+        order: {
+          openai: ["openai:codex"],
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                ...makeModel("gpt-5.3-codex-spark"),
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const baseRuntimeHooks = createRuntimeHooks();
+    const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
+    const runProviderDynamicModel = vi.fn(baseRuntimeHooks.runProviderDynamicModel);
+
+    const result = await resolveModelAsync("openai", "gpt-5.3-codex-spark", "/tmp/agent", cfg, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+      },
+    });
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    );
+    expect(prepareProviderDynamicModel).not.toHaveBeenCalled();
+    expect(runProviderDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("does not prepare openai fallback for mixed-case auth-order API-key gpt-5.3-codex-spark", async () => {
+    mockOpenAICodexTemplateModel(discoverModels);
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai:api": { provider: "openai", mode: "api_key" },
+          "openai:codex": { provider: "openai", mode: "oauth" },
+        },
+        order: {
+          OpenAI: ["openai:api", "openai:codex"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const baseRuntimeHooks = createRuntimeHooks();
+    const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
+    const runProviderDynamicModel = vi.fn(baseRuntimeHooks.runProviderDynamicModel);
+
+    const result = await resolveModelAsync("openai", "gpt-5.3-codex-spark", "/tmp/agent", cfg, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+      },
+    });
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    );
+    expect(prepareProviderDynamicModel).not.toHaveBeenCalled();
+    expect(runProviderDynamicModel).not.toHaveBeenCalled();
+  });
+
   it("rejects stale openai gpt-5.3-codex-spark discovery rows", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",

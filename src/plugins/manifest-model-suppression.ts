@@ -1,5 +1,6 @@
 // Resolves model suppression metadata declared by plugin manifests.
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -63,7 +64,7 @@ function normalizeSuppressionHost(host: string): string {
 function resolveConfiguredProviderValue(params: {
   provider: string;
   config?: OpenClawConfig;
-}): { api?: string; baseUrl?: string } | undefined {
+}): { api?: string; auth?: string; baseUrl?: string } | undefined {
   const providers = params.config?.models?.providers;
   if (!providers) {
     return undefined;
@@ -74,15 +75,116 @@ function resolveConfiguredProviderValue(params: {
     }
     return {
       api: normalizeLowercaseStringOrEmpty(entry?.api),
+      auth: normalizeLowercaseStringOrEmpty(entry?.auth),
       baseUrl: typeof entry?.baseUrl === "string" ? entry.baseUrl : undefined,
     };
   }
   return undefined;
 }
 
-function manifestSuppressionMatchesConditions(params: {
+function resolveConfiguredAuthProfileMode(params: {
+  provider: string;
+  config?: OpenClawConfig;
+}): string {
+  const auth = params.config?.auth;
+  const profiles = auth?.profiles;
+  if (!profiles) {
+    return "";
+  }
+  const orderedProfileIds = findNormalizedProviderValue(auth?.order, params.provider) ?? [];
+  for (const profileId of orderedProfileIds) {
+    const profile = profiles[profileId];
+    if (normalizeLowercaseStringOrEmpty(profile?.provider) !== params.provider) {
+      continue;
+    }
+    const mode = normalizeLowercaseStringOrEmpty(profile?.mode);
+    if (mode) {
+      return mode;
+    }
+  }
+  const providerModes = Object.values(profiles)
+    .filter((profile) => normalizeLowercaseStringOrEmpty(profile?.provider) === params.provider)
+    .map((profile) => normalizeLowercaseStringOrEmpty(profile?.mode));
+  if (providerModes.some((mode) => mode === "oauth" || mode === "token")) {
+    return "oauth";
+  }
+  if (providerModes.includes("api_key")) {
+    return "api_key";
+  }
+  if (providerModes.includes("aws-sdk")) {
+    return "aws-sdk";
+  }
+  return "";
+}
+
+function isOpenAINativeApiDefault(params: {
+  provider: string;
+  api?: string | null;
+  configuredProvider?: { api?: string; auth?: string; baseUrl?: string };
+  configuredAuthProfileMode?: string;
+}): boolean {
+  if (params.provider !== "openai") {
+    return false;
+  }
+  const explicitApi = normalizeLowercaseStringOrEmpty(params.api);
+  if (explicitApi === "openai-responses" || explicitApi === "openai-completions") {
+    return true;
+  }
+  if (!params.configuredProvider) {
+    return params.configuredAuthProfileMode === "api_key";
+  }
+  if (normalizeBaseUrlHost(params.configuredProvider.baseUrl)) {
+    return false;
+  }
+  const api = normalizeLowercaseStringOrEmpty(params.configuredProvider.api);
+  if (api === "openai-responses" || api === "openai-completions") {
+    return true;
+  }
+  if (!api && params.configuredAuthProfileMode === "api_key") {
+    return true;
+  }
+  return !api && normalizeLowercaseStringOrEmpty(params.configuredProvider.auth) === "api-key";
+}
+
+function resolveEffectiveProviderApi(params: {
+  provider: string;
+  api?: string | null;
+  configuredProvider?: { api?: string; auth?: string; baseUrl?: string };
+  configuredAuthProfileMode?: string;
+}): string {
+  const explicitApi = normalizeLowercaseStringOrEmpty(params.api);
+  if (explicitApi) {
+    return explicitApi;
+  }
+  const configuredApi = normalizeLowercaseStringOrEmpty(params.configuredProvider?.api);
+  if (configuredApi) {
+    return configuredApi;
+  }
+  // OpenAI API-key auth without a custom base URL uses the native Responses API.
+  if (isOpenAINativeApiDefault(params)) {
+    return "openai-responses";
+  }
+  return params.configuredProvider ? "" : params.provider;
+}
+
+function resolveEffectiveBaseUrl(params: {
+  provider: string;
+  api?: string | null;
+  baseUrl?: string | null;
+  configuredProvider?: { api?: string; auth?: string; baseUrl?: string };
+  configuredAuthProfileMode?: string;
+}): string | null | undefined {
+  const explicitBaseUrl = params.baseUrl ?? params.configuredProvider?.baseUrl;
+  if (explicitBaseUrl) {
+    return explicitBaseUrl;
+  }
+  return isOpenAINativeApiDefault(params) ? "https://api.openai.com" : explicitBaseUrl;
+}
+
+export function manifestSuppressionMatchesConditions(params: {
   suppression: ManifestModelCatalogSuppressionEntry;
   provider: string;
+  api?: string | null;
   baseUrl?: string | null;
   config?: OpenClawConfig;
 }): boolean {
@@ -94,17 +196,32 @@ function manifestSuppressionMatchesConditions(params: {
     provider: params.provider,
     config: params.config,
   });
+  const configuredAuthProfileMode = resolveConfiguredAuthProfileMode({
+    provider: params.provider,
+    config: params.config,
+  });
   if (when.providerConfigApiIn?.length) {
     const allowedApis = new Set(when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty));
-    const effectiveApi = configuredProvider
-      ? normalizeLowercaseStringOrEmpty(configuredProvider.api)
-      : params.provider;
+    const effectiveApi = resolveEffectiveProviderApi({
+      provider: params.provider,
+      api: params.api,
+      configuredProvider,
+      configuredAuthProfileMode,
+    });
     if (!effectiveApi || !allowedApis.has(effectiveApi)) {
       return false;
     }
   }
   if (when.baseUrlHosts?.length) {
-    const baseUrlHost = normalizeBaseUrlHost(params.baseUrl ?? configuredProvider?.baseUrl);
+    const baseUrlHost = normalizeBaseUrlHost(
+      resolveEffectiveBaseUrl({
+        provider: params.provider,
+        api: params.api,
+        baseUrl: params.baseUrl,
+        configuredProvider,
+        configuredAuthProfileMode,
+      }),
+    );
     if (!baseUrlHost) {
       return false;
     }
@@ -130,6 +247,7 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
   return (input: {
     provider?: string | null;
     id?: string | null;
+    api?: string | null;
     baseUrl?: string | null;
     unconditionalOnly?: boolean;
   }) => {
@@ -146,6 +264,7 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
         manifestSuppressionMatchesConditions({
           suppression: entry,
           provider,
+          api: input.api,
           baseUrl: input.baseUrl,
           config: params.config,
         }),
@@ -178,6 +297,7 @@ export function resolveManifestBuiltInModelSuppression(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   baseUrl?: string | null;
+  api?: string | null;
   unconditionalOnly?: boolean;
 }) {
   const resolver = buildManifestBuiltInModelSuppressionResolver({
@@ -188,6 +308,7 @@ export function resolveManifestBuiltInModelSuppression(params: {
   return resolver({
     provider: params.provider,
     id: params.id,
+    api: params.api,
     baseUrl: params.baseUrl,
     unconditionalOnly: params.unconditionalOnly,
   });

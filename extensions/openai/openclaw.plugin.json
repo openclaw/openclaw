@@ -215,7 +215,19 @@
       {
         "provider": "openai",
         "model": "gpt-5.3-codex-spark",
-        "reason": "gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use openai/gpt-5.5."
+        "reason": "gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use the Codex harness route when your signed-in account exposes it.",
+        "when": {
+          "baseUrlHosts": ["api.openai.com"]
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.3-codex-spark",
+        "reason": "gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use the Codex harness route when your signed-in account exposes it.",
+        "when": {
+          "providerConfigApiIn": ["openai-responses", "openai-completions"],
+          "baseUrlHosts": ["api.openai.com"]
+        }
       },
       {
         "provider": "azure-openai-responses",

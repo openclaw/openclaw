@@ -579,6 +579,11 @@ describe("buildOpenAIProvider", () => {
     expect(provider.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
     expect(provider.models.length).toBeGreaterThan(0);
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
+    expect(provider.models.find((model) => model.id === "gpt-5.3-codex-spark")).toMatchObject({
+      input: ["text"],
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -804,6 +809,28 @@ describe("buildOpenAIProvider", () => {
       authProfileId: "openai:work",
       authProfileMode: "oauth",
     } as never);
+    const mixedCaseApiKeyOrderModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelRegistry: { find: () => null },
+      config: {
+        auth: {
+          profiles: {
+            "openai:api": {
+              provider: "openai",
+              mode: "api_key",
+            },
+            "openai:codex": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+          order: {
+            OpenAI: ["openai:api"],
+          },
+        },
+      },
+    } as never);
 
     expectFields(openaiModel, {
       provider: "openai",
@@ -826,6 +853,14 @@ describe("buildOpenAIProvider", () => {
       id: "gpt-5.4",
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+    expectFields(mixedCaseApiKeyOrderModel, {
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
@@ -1066,6 +1101,12 @@ describe("buildOpenAIProvider", () => {
       codexProvider.isModernModelRef?.({
         provider: "openai",
         modelId: "gpt-5.5",
+      } as never),
+    ).toBe(true);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.3-codex-spark",
       } as never),
     ).toBe(true);
   });
