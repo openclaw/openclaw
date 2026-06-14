@@ -41,6 +41,21 @@ const MISSING_CONFIG_MAX_RETRIES = 2;
 const WATCHER_RECREATE_MAX_RETRIES = 3;
 const WATCHER_RECREATE_BACKOFF_MS = [500, 2000, 5000] as const;
 
+function resolveChokidarUsePolling(degradedToPolling: boolean): boolean {
+  const envPoll = process.env.CHOKIDAR_USEPOLLING;
+  if (envPoll !== undefined) {
+    const envLower = envPoll.toLowerCase();
+    if (envLower === "false" || envLower === "0") {
+      return false;
+    }
+    if (envLower === "true" || envLower === "1") {
+      return true;
+    }
+    return Boolean(envLower);
+  }
+  return Boolean(process.env.VITEST) || degradedToPolling;
+}
+
 /**
  * Paths under `skills.*` always change the snapshot that sessions cache in
  * sessions.json. Any prefix match here (for example `skills.allowBundled`,
@@ -409,15 +424,17 @@ export function startGatewayConfigReloader(opts: {
   let watcherRecreateTimer: ReturnType<typeof setTimeout> | null = null;
   let hotReloadStatus: GatewayHotReloadStatus = "active";
   let degradedToPolling = false;
+  let watcherUsesPolling = false;
 
   const createWatcher = () => {
     if (stopped) {
       return;
     }
+    const usePolling = resolveChokidarUsePolling(degradedToPolling);
     const next = chokidar.watch(opts.watchPath, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-      usePolling: Boolean(process.env.VITEST) || degradedToPolling,
+      usePolling,
     });
     next.on("add", scheduleFromWatcher);
     next.on("change", scheduleFromWatcher);
@@ -426,6 +443,7 @@ export function startGatewayConfigReloader(opts: {
       handleWatcherError(next, err);
     });
     watcher = next;
+    watcherUsesPolling = usePolling;
     hotReloadStatus = "active";
   };
 
@@ -434,13 +452,15 @@ export function startGatewayConfigReloader(opts: {
     if (stopped || source !== watcher) {
       return;
     }
+    const failedWatcherUsedPolling = watcherUsesPolling;
     watcher = null;
+    watcherUsesPolling = false;
     void source?.close().catch(() => {});
     if (watcherRecreateRetries >= WATCHER_RECREATE_MAX_RETRIES) {
       // All native (inotify/kqueue) retries exhausted — fall back to polling
       // mode so config hot-reload survives on hosts where inotify resources
       // are constrained (e.g. low fs.inotify.max_user_watches).
-      if (!degradedToPolling) {
+      if (!failedWatcherUsedPolling && resolveChokidarUsePolling(true)) {
         degradedToPolling = true;
         watcherRecreateRetries = 0;
         opts.log.warn(
@@ -452,9 +472,10 @@ export function startGatewayConfigReloader(opts: {
         }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
         return;
       }
+      const mode = failedWatcherUsedPolling ? "polling mode" : "native mode";
       hotReloadStatus = "disabled";
       opts.log.error(
-        `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts in polling mode: ${String(err)}`,
+        `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts in ${mode}: ${String(err)}`,
       );
       return;
     }
