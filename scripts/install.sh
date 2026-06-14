@@ -107,6 +107,14 @@ is_non_interactive_shell() {
     return 1
 }
 
+# Returns true when stdin should be isolated from the script stream.
+# Checks stdin directly (not stdout) and respects NO_PROMPT so that
+# stdout redirection (e.g. install.sh > log.txt) does not suppress
+# interactive prompts.
+needs_stdin_isolation() {
+    [[ ! -t 0 ]] || [[ "${NO_PROMPT:-0}" == "1" ]]
+}
+
 has_controlling_tty() {
     if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
         return 1
@@ -450,13 +458,23 @@ run_with_spinner() {
         local gum_err gum_out
         gum_err="$(mktempfile)"
         gum_out="$(mktempfile)"
-        if "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err"; then
+        local gum_status=0
+        if needs_stdin_isolation; then
+            "$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?
+        else
+            "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?
+        fi
+        if [[ "$gum_status" -eq 0 ]]; then
             if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
                 GUM=""
                 GUM_STATUS="skipped"
                 GUM_REASON="gum raw mode unavailable"
                 ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-                "$@"
+                if needs_stdin_isolation; then
+                    "$@" < /dev/null
+                else
+                    "$@"
+                fi
                 return $?
             fi
             if [[ -s "$gum_out" ]]; then
@@ -464,13 +482,16 @@ run_with_spinner() {
             fi
             return 0
         fi
-        local gum_status=$?
         if is_gum_raw_mode_failure "$gum_err" || is_gum_raw_mode_failure "$gum_out"; then
             GUM=""
             GUM_STATUS="skipped"
             GUM_REASON="gum raw mode unavailable"
             ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-            "$@"
+            if needs_stdin_isolation; then
+                "$@" < /dev/null
+            else
+                "$@"
+            fi
             return $?
         fi
         if [[ -s "$gum_err" ]]; then
@@ -479,7 +500,14 @@ run_with_spinner() {
         return "$gum_status"
     fi
 
-    "$@"
+    # Redirect stdin from /dev/null so subprocesses cannot consume the script
+    # stream when the installer is piped via curl | bash.  When running
+    # interactively, preserve terminal stdin for commands that need it.
+    if needs_stdin_isolation; then
+        "$@" < /dev/null
+    else
+        "$@"
+    fi
 }
 
 run_quiet_step() {
@@ -508,8 +536,14 @@ run_quiet_step() {
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
         showed_progress=true
-        if "$@" >"$log" 2>&1; then
-            return 0
+        if needs_stdin_isolation; then
+            if "$@" < /dev/null >"$log" 2>&1; then
+                return 0
+            fi
+        else
+            if "$@" >"$log" 2>&1; then
+                return 0
+            fi
         fi
     fi
 
@@ -876,7 +910,7 @@ run_npm_global_install() {
     LAST_NPM_INSTALL_CMD="${cmd_display% }"
 
     if [[ "$VERBOSE" == "1" ]]; then
-        "${cmd[@]}" 2>&1 | tee "$log"
+        "${cmd[@]}" < /dev/null 2>&1 | tee "$log"
         return $?
     fi
 
@@ -890,7 +924,7 @@ run_npm_global_install() {
     fi
 
     ui_info "Installing OpenClaw package"
-    "${cmd[@]}" >"$log" 2>&1
+    "${cmd[@]}" < /dev/null >"$log" 2>&1
 }
 
 extract_npm_debug_log_path() {
@@ -1983,7 +2017,7 @@ fix_npm_permissions() {
     ui_warn "The installer will switch npm's user prefix to ${HOME}/.npm-global; npm normally writes that setting to ~/.npmrc."
     ui_info "Configuring npm for user-local installs"
     mkdir -p "$HOME/.npm-global"
-    npm config set prefix "$HOME/.npm-global"
+    npm config set prefix "$HOME/.npm-global" < /dev/null
     ui_warn "Avoid sudo npm i -g for future OpenClaw updates; use npm i -g openclaw@latest so npm keeps using this user prefix instead of a different global prefix."
 
     persist_shell_path_prepend "$HOME/.npm-global/bin" "\$HOME/.npm-global/bin" || true
@@ -2829,7 +2863,7 @@ maybe_open_dashboard() {
     if ! "$claw" dashboard --help >/dev/null 2>&1; then
         return 0
     fi
-    "$claw" dashboard || true
+    "$claw" dashboard < /dev/null || true
 }
 
 resolve_workspace_dir() {
@@ -2888,7 +2922,7 @@ run_bootstrap_onboarding_if_needed() {
         return
     fi
 
-    "$claw" onboard || {
+    "$claw" onboard < /dev/tty || {
         local user_claw
         user_claw="$(openclaw_command_for_user "$claw")"
         ui_error "Onboarding failed; run ${user_claw} onboard to retry"
@@ -3277,7 +3311,7 @@ main() {
             fi
             if (( doctor_ok )); then
                 ui_info "Updating plugins"
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all < /dev/null || true
             else
                 ui_warn "Doctor failed; skipping plugin updates"
             fi
@@ -3334,7 +3368,7 @@ main() {
                 ui_info "Gateway daemon detected; would restart (openclaw daemon restart)"
             else
                 ui_info "Gateway daemon detected; restarting"
-                if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart >/dev/null 2>&1; then
+                if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart < /dev/null >/dev/null 2>&1; then
                     ui_success "Gateway restarted"
                 else
                     ui_warn "Gateway restart failed; try: openclaw daemon restart"
