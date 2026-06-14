@@ -300,6 +300,37 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
+# Optionally install Anthropic Claude Code CLI for the claude-cli agent runtime
+# (Claude Max/Pro subscription reuse). Build with:
+#   docker build --build-arg OPENCLAW_INSTALL_CLAUDE_CLI=1 ...
+# Override version with --build-arg OPENCLAW_CLAUDE_CLI_VERSION=<semver> and
+# its matching --build-arg OPENCLAW_CLAUDE_CLI_INTEGRITY=sha512-<base64>.
+# Get the integrity for a version with:
+#   npm view @anthropic-ai/claude-code@<semver> dist.integrity
+# Requires `~/.claude` and `~/.claude.json` from the host to be bind-mounted at
+# runtime for credential reuse. Adds ~230MB (bundled native binaries per arch).
+ARG OPENCLAW_INSTALL_CLAUDE_CLI=""
+ARG OPENCLAW_CLAUDE_CLI_VERSION="2.1.154"
+ARG OPENCLAW_CLAUDE_CLI_INTEGRITY="sha512-1LSc7Jtm7Jy/GgqzoC4jDtTeV4GphGdB2+r49QDJnDa4fDsJfxVHR4TQNETeyNtGw/uD1+voo7f2Vhjldyqe8w=="
+RUN --mount=type=cache,id=openclaw-npm-cache,target=/root/.npm,sharing=locked \
+    if [ -n "$OPENCLAW_INSTALL_CLAUDE_CLI" ]; then \
+      set -eu; \
+      tarball="$(npm pack "@anthropic-ai/claude-code@${OPENCLAW_CLAUDE_CLI_VERSION}" --silent)"; \
+      # Verify the downloaded tarball against the pinned subresource integrity
+      # before letting it install. Refuses any registry-served bytes whose
+      # SHA-512 does not match the build-time pin (mirrors the Docker apt key
+      # fingerprint-check pattern above).
+      expected="${OPENCLAW_CLAUDE_CLI_INTEGRITY#sha512-}"; \
+      actual="$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"; \
+      if [ "$actual" != "$expected" ]; then \
+        echo "ERROR: @anthropic-ai/claude-code@${OPENCLAW_CLAUDE_CLI_VERSION} integrity mismatch" >&2; \
+        echo "  expected sha512-$expected" >&2; \
+        echo "  actual   sha512-$actual" >&2; \
+        exit 1; \
+      fi; \
+      npm install -g "./$tarball" && rm -f "$tarball"; \
+    fi
+
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs

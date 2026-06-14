@@ -29,10 +29,11 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
-    agentHarnesses: normalizeSortedUniqueStringEntries([
-      ...(record.activation?.onAgentHarnesses ?? []),
-      ...(record.cliBackends ?? []),
-    ]),
+    // Only manifest-declared agent harnesses belong here. CLI backends are auth
+    // backends (e.g. anthropic's `claude-cli`), not agent harness runtimes;
+    // folding them in made startup planning treat a login backend as a required
+    // harness, which then failed harness selection with "not registered".
+    agentHarnesses: normalizeSortedUniqueStringEntries(record.activation?.onAgentHarnesses ?? []),
     configPaths: normalizeSortedUniqueStringEntries(record.activation?.onConfigPaths),
   };
 }

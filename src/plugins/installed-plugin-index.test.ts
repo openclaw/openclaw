@@ -250,6 +250,12 @@ describe("installed plugin index", () => {
         "provider-auth-env-vars",
       ],
     });
+    // Startup harness runtimes come only from `activation.onAgentHarnesses`.
+    // CLI backends (e.g. `demo-cli`) are auth backends, not harness runtimes, so
+    // they must not leak into `startup.agentHarnesses` (regression: a folded
+    // `claude-cli` made startup treat a login backend as a required harness and
+    // failed harness selection with "not registered").
+    expect(readRecordField(plugin, "startup", "startup info").agentHarnesses).toEqual(["codex"]);
     expectRecordFields(readRecordField(plugin, "packageInstall", "package install"), {
       defaultChoice: "npm",
       npm: {
