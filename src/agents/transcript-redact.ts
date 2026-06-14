@@ -190,21 +190,107 @@ type TranscriptValueLocation =
   | "assistant-content-block"
   | "nested";
 
-function isCanonicalBase64Signature(value: string): boolean {
-  const compact = value.trim().replace(/\s+/g, "");
-  if (!compact || !/^[A-Za-z0-9+/=_-]+$/.test(compact)) {
-    return false;
-  }
-  const encoding = compact.includes("-") || compact.includes("_") ? "base64url" : "base64";
-  try {
-    const encoded = Buffer.from(compact, encoding).toString(encoding);
-    return encoded.replace(/=+$/g, "") === compact.replace(/=+$/g, "");
-  } catch {
-    return false;
-  }
+type TranscriptAssistantRoute = {
+  api?: string;
+  model?: string;
+  provider?: string;
+};
+
+const OPENAI_RESPONSES_APIS = new Set([
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-chatgpt-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
+const GOOGLE_REASONING_APIS = new Set([
+  "google-generative-ai",
+  "google-vertex",
+  "google-gemini-cli",
+  "openclaw-google-generative-ai-transport",
+]);
+const ANTHROPIC_REASONING_APIS = new Set([
+  "anthropic-messages",
+  "bedrock-converse-stream",
+  "openclaw-anthropic-messages-transport",
+]);
+const OPENAI_COMPLETIONS_APIS = new Set([
+  "openai-completions",
+  "openclaw-openai-completions-transport",
+]);
+const OPAQUE_REPLAY_TOKEN_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
+const OPENAI_REPLAY_CONTEXT_HASH_RE = /^[a-f0-9]{16}$/;
+
+function isOpenAIResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
+  return typeof route?.api === "string" && OPENAI_RESPONSES_APIS.has(route.api);
 }
 
-function isOpenAITextSignature(value: string): boolean {
+function isGoogleReasoningRoute(route: TranscriptAssistantRoute | undefined): boolean {
+  return typeof route?.api === "string" && GOOGLE_REASONING_APIS.has(route.api);
+}
+
+function isAnthropicReasoningRoute(route: TranscriptAssistantRoute | undefined): boolean {
+  return typeof route?.api === "string" && ANTHROPIC_REASONING_APIS.has(route.api);
+}
+
+function isOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
+  return typeof route?.api === "string" && OPENAI_COMPLETIONS_APIS.has(route.api);
+}
+
+function isCustomProviderRoute(route: TranscriptAssistantRoute | undefined): boolean {
+  return (
+    Boolean(route?.api && route.model && route.provider) &&
+    route?.api !== "mistral-conversations" &&
+    !isOpenAIResponsesRoute(route) &&
+    !isGoogleReasoningRoute(route) &&
+    !isAnthropicReasoningRoute(route) &&
+    !isOpenAICompletionsRoute(route)
+  );
+}
+
+function isGitHubCopilotResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
+  return (
+    (route?.api === "openai-responses" || route?.api === "openclaw-openai-responses-transport") &&
+    route.provider === "github-copilot"
+  );
+}
+
+function isOpaqueReplayToken(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value !== value.trim() ||
+    !OPAQUE_REPLAY_TOKEN_RE.test(value) ||
+    value.includes("\u2026")
+  ) {
+    return false;
+  }
+  // OpenAI encrypted reasoning is commonly Fernet-shaped and intentionally
+  // matches the generic gAAAA secret detector. Other known credential forms
+  // must never gain a transcript-redaction bypass.
+  return value.startsWith("gAAAA") || redactSensitiveText(value, { mode: "tools" }) === value;
+}
+
+function isSafeReplayIdentifier(value: string, maxLength = 512): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= maxLength &&
+    value === value.trim() &&
+    /^[A-Za-z0-9+/_:.=-]+$/.test(value) &&
+    redactSensitiveText(value, { mode: "tools" }) === value
+  );
+}
+
+function isOpenAIResponseItemId(
+  value: string,
+  route: TranscriptAssistantRoute | undefined,
+): boolean {
+  return isSafeReplayIdentifier(value, isGitHubCopilotResponsesRoute(route) ? 64 : 512);
+}
+
+function isOpenAITextSignature(
+  value: string,
+  route: TranscriptAssistantRoute | undefined,
+): boolean {
   if (value.startsWith("{")) {
     try {
       const parsed = JSON.parse(value) as unknown;
@@ -214,19 +300,21 @@ function isOpenAITextSignature(value: string): boolean {
       if (!Object.keys(parsed).every((key) => key === "v" || key === "id" || key === "phase")) {
         return false;
       }
-      const id = typeof parsed.id === "string" && parsed.id.length > 0 ? parsed.id : undefined;
+      const id =
+        typeof parsed.id === "string" && isOpenAIResponseItemId(parsed.id, route)
+          ? parsed.id
+          : undefined;
       const phase =
         parsed.phase === "commentary" || parsed.phase === "final_answer" ? parsed.phase : undefined;
+      if (parsed.id !== undefined && id === undefined) {
+        return false;
+      }
       return parsed.v === 1 && (id !== undefined || phase !== undefined);
     } catch {
       return false;
     }
   }
-  return /^msg_[A-Za-z0-9_-]+$/.test(value);
-}
-
-function isReplayableTextSignature(value: string): boolean {
-  return isOpenAITextSignature(value) || isCanonicalBase64Signature(value);
+  return isOpenAIResponseItemId(value, route);
 }
 
 const OPENAI_REASONING_REPLAY_METADATA_KEYS = new Set([
@@ -243,19 +331,33 @@ const OPENAI_REASONING_REPLAY_METADATA_KEY = "__openclaw_replay";
 
 function sanitizeOpenAIReasoningReplayMetadata(
   value: unknown,
+  route: TranscriptAssistantRoute | undefined,
 ): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || !isPlainTranscriptObject(value)) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !isPlainTranscriptObject(value) ||
+    !route?.api ||
+    !route.model ||
+    !route.provider
+  ) {
     return undefined;
   }
   if (
     value.v !== 1 ||
     value.source !== "openai-responses" ||
-    typeof value.provider !== "string" ||
-    typeof value.api !== "string" ||
-    typeof value.model !== "string" ||
-    (value.baseUrlHash !== undefined && typeof value.baseUrlHash !== "string") ||
-    (value.sessionHash !== undefined && typeof value.sessionHash !== "string") ||
-    (value.authProfileHash !== undefined && typeof value.authProfileHash !== "string")
+    value.provider !== route?.provider ||
+    value.api !== route.api ||
+    value.model !== route.model ||
+    (value.baseUrlHash !== undefined &&
+      (typeof value.baseUrlHash !== "string" ||
+        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.baseUrlHash))) ||
+    (value.sessionHash !== undefined &&
+      (typeof value.sessionHash !== "string" ||
+        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.sessionHash))) ||
+    (value.authProfileHash !== undefined &&
+      (typeof value.authProfileHash !== "string" ||
+        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.authProfileHash)))
   ) {
     return undefined;
   }
@@ -279,27 +381,39 @@ function shouldPreserveOpaqueProviderPayload(
   key: string,
   item: unknown,
   location: TranscriptValueLocation,
+  route: TranscriptAssistantRoute | undefined,
 ): boolean {
-  if (location !== "assistant-content-block" || typeof item !== "string") {
+  if (
+    location !== "assistant-content-block" ||
+    typeof item !== "string" ||
+    !isOpaqueReplayToken(item)
+  ) {
     return false;
   }
   const type = source.type;
+  const customRoute = isCustomProviderRoute(route);
   return (
-    (type === "text" && key === "textSignature" && isReplayableTextSignature(item)) ||
+    (type === "text" &&
+      key === "textSignature" &&
+      (isGoogleReasoningRoute(route) || customRoute)) ||
     (type === "thinking" &&
-      ((key === "thinkingSignature" && !item.trimStart().startsWith("{")) ||
-        key === "signature" ||
-        key === "thought_signature")) ||
+      ((key === "thinkingSignature" &&
+        (isAnthropicReasoningRoute(route) || isGoogleReasoningRoute(route) || customRoute)) ||
+        (key === "signature" && (isAnthropicReasoningRoute(route) || customRoute)) ||
+        (key === "thought_signature" && (isGoogleReasoningRoute(route) || customRoute)))) ||
     (type === "redacted_thinking" &&
-      (key === "data" ||
-        key === "signature" ||
-        key === "thinkingSignature" ||
-        key === "thought_signature")) ||
-    (type === "toolCall" && key === "thoughtSignature")
+      (isAnthropicReasoningRoute(route) || customRoute) &&
+      (key === "data" || key === "signature" || key === "thinkingSignature")) ||
+    (type === "toolCall" &&
+      key === "thoughtSignature" &&
+      (isGoogleReasoningRoute(route) || isOpenAICompletionsRoute(route) || customRoute))
   );
 }
 
-function sanitizeOpenAIReasoningSignature(value: string): string | undefined {
+function sanitizeOpenAIReasoningSignature(
+  value: string,
+  route: TranscriptAssistantRoute | undefined,
+): string | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -320,11 +434,14 @@ function sanitizeOpenAIReasoningSignature(value: string): string | undefined {
   if (
     encryptedContent !== undefined &&
     encryptedContent !== null &&
-    typeof encryptedContent !== "string"
+    (typeof encryptedContent !== "string" || !isOpaqueReplayToken(encryptedContent))
   ) {
     return undefined;
   }
-  if (parsed.id !== undefined && typeof parsed.id !== "string") {
+  if (
+    parsed.id !== undefined &&
+    (typeof parsed.id !== "string" || !isOpenAIResponseItemId(parsed.id, route))
+  ) {
     return undefined;
   }
   if (
@@ -340,6 +457,7 @@ function sanitizeOpenAIReasoningSignature(value: string): string | undefined {
   }
   const replayMetadata = sanitizeOpenAIReasoningReplayMetadata(
     parsed[OPENAI_REASONING_REPLAY_METADATA_KEY],
+    route,
   );
   return JSON.stringify({
     ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
@@ -351,6 +469,42 @@ function sanitizeOpenAIReasoningSignature(value: string): string | undefined {
   });
 }
 
+function sanitizeOpenAICompletionsToolSignature(value: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !isPlainTranscriptObject(parsed) ||
+    parsed.type !== "reasoning.encrypted" ||
+    typeof parsed.data !== "string" ||
+    !isOpaqueReplayToken(parsed.data) ||
+    (parsed.id !== undefined &&
+      parsed.id !== null &&
+      (typeof parsed.id !== "string" || !isSafeReplayIdentifier(parsed.id))) ||
+    (parsed.format !== undefined &&
+      parsed.format !== null &&
+      (typeof parsed.format !== "string" ||
+        parsed.format.length > 64 ||
+        !/^[a-z0-9.-]+$/.test(parsed.format))) ||
+    (parsed.index !== undefined &&
+      (!Number.isSafeInteger(parsed.index) || (parsed.index as number) < 0))
+  ) {
+    return undefined;
+  }
+  return JSON.stringify({
+    type: "reasoning.encrypted",
+    data: parsed.data,
+    ...(parsed.id !== undefined ? { id: parsed.id } : {}),
+    ...(parsed.format !== undefined ? { format: parsed.format } : {}),
+    ...(parsed.index !== undefined ? { index: parsed.index } : {}),
+  });
+}
+
 function redactTranscriptStructuredValue(
   value: unknown,
   cfg?: OpenClawConfig,
@@ -358,6 +512,7 @@ function redactTranscriptStructuredValue(
   seen: WeakSet<object> = new WeakSet<object>(),
   preserveImageDataUrlFields = false,
   location: TranscriptValueLocation = "nested",
+  assistantRoute?: TranscriptAssistantRoute,
 ): unknown {
   if (typeof value === "string") {
     if (fieldKey) {
@@ -379,6 +534,7 @@ function redactTranscriptStructuredValue(
         seen,
         preserveImageDataUrlFields,
         location === "assistant-content-array" ? "assistant-content-block" : "nested",
+        assistantRoute,
       );
       changed ||= next !== item;
       return next;
@@ -403,6 +559,14 @@ function redactTranscriptStructuredValue(
   seen.add(value);
   const sanitizedImageRecord = sanitizeImageRecord(value);
   const source = sanitizedImageRecord ?? value;
+  const currentAssistantRoute =
+    location === "root" && source.role === "assistant"
+      ? {
+          ...(typeof source.api === "string" ? { api: source.api } : {}),
+          ...(typeof source.model === "string" ? { model: source.model } : {}),
+          ...(typeof source.provider === "string" ? { provider: source.provider } : {}),
+        }
+      : assistantRoute;
   let next: Record<string, unknown> | null = null;
   if (source !== value) {
     next = { ...source };
@@ -410,10 +574,12 @@ function redactTranscriptStructuredValue(
   for (const [key, item] of Object.entries(source)) {
     if (
       location === "assistant-content-block" &&
+      (isOpenAIResponsesRoute(currentAssistantRoute) ||
+        isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "thinking" &&
       key === "openclawReasoningReplay"
     ) {
-      const sanitizedMetadata = sanitizeOpenAIReasoningReplayMetadata(item);
+      const sanitizedMetadata = sanitizeOpenAIReasoningReplayMetadata(item, currentAssistantRoute);
       if (sanitizedMetadata !== undefined) {
         if (sanitizedMetadata !== item) {
           next ??= { ...source };
@@ -424,11 +590,41 @@ function redactTranscriptStructuredValue(
     }
     if (
       location === "assistant-content-block" &&
+      (isOpenAIResponsesRoute(currentAssistantRoute) ||
+        isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "thinking" &&
       key === "thinkingSignature" &&
       typeof item === "string"
     ) {
-      const sanitizedSignature = sanitizeOpenAIReasoningSignature(item);
+      const sanitizedSignature = sanitizeOpenAIReasoningSignature(item, currentAssistantRoute);
+      if (sanitizedSignature !== undefined) {
+        if (sanitizedSignature !== item) {
+          next ??= { ...source };
+          next[key] = sanitizedSignature;
+        }
+        continue;
+      }
+    }
+    if (
+      location === "assistant-content-block" &&
+      (isOpenAIResponsesRoute(currentAssistantRoute) ||
+        isCustomProviderRoute(currentAssistantRoute)) &&
+      source.type === "text" &&
+      key === "textSignature" &&
+      typeof item === "string" &&
+      isOpenAITextSignature(item, currentAssistantRoute)
+    ) {
+      continue;
+    }
+    if (
+      location === "assistant-content-block" &&
+      (isOpenAICompletionsRoute(currentAssistantRoute) ||
+        isCustomProviderRoute(currentAssistantRoute)) &&
+      source.type === "toolCall" &&
+      key === "thoughtSignature" &&
+      typeof item === "string"
+    ) {
+      const sanitizedSignature = sanitizeOpenAICompletionsToolSignature(item);
       if (sanitizedSignature !== undefined) {
         if (sanitizedSignature !== item) {
           next ??= { ...source };
@@ -438,7 +634,7 @@ function redactTranscriptStructuredValue(
       }
     }
     // Provider-signed/encrypted bytes must remain exact or replayed tool turns fail.
-    if (shouldPreserveOpaqueProviderPayload(source, key, item, location)) {
+    if (shouldPreserveOpaqueProviderPayload(source, key, item, location, currentAssistantRoute)) {
       continue;
     }
     if (typeof item === "string") {
@@ -468,6 +664,7 @@ function redactTranscriptStructuredValue(
       location === "root" && source.role === "assistant" && key === "content" && Array.isArray(item)
         ? "assistant-content-array"
         : "nested",
+      currentAssistantRoute,
     );
     if (redacted === item) {
       continue;
