@@ -5,6 +5,7 @@ import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
   collectErrorGraphCandidates,
+  extractErrorCode,
   formatErrorMessage,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
@@ -136,13 +137,14 @@ const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
 );
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
+const ERR_MODULE_NOT_FOUND_CODE = "ERR_MODULE_NOT_FOUND";
 
 function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
 }
 
 type NonRetryableSpooledUpdateFailure = {
-  reason: "missing-agent-harness" | "dispatch-dedupe-rollback-failed";
+  reason: "missing-agent-harness" | "dispatch-dedupe-rollback-failed" | "module-not-found";
   message: string;
 };
 
@@ -158,6 +160,12 @@ function resolveNonRetryableSpooledUpdateFailure(
       // A committed dispatch key that cannot be rolled back makes retry unsafe:
       // the next replay can be duplicate-suppressed and then deleted.
       return { reason: "dispatch-dedupe-rollback-failed", message };
+    }
+    if (extractErrorCode(candidate) === ERR_MODULE_NOT_FOUND_CODE) {
+      // Module-not-found errors are permanent — the loaded agent JavaScript is
+      // missing and no retry can resolve it. Dead-letter so later same-lane
+      // spooled updates can drain. (#92980)
+      return { reason: "module-not-found", message };
     }
     if (
       readErrorName(candidate) === MISSING_AGENT_HARNESS_ERROR_NAME ||
