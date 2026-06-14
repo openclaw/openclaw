@@ -17,7 +17,9 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   hasAnyAuthProfileStoreSource,
   listProfilesForProvider,
+  resolveAuthProfileOrder,
 } from "../auth-profiles.js";
+import { evaluateStoredCredentialEligibility } from "../auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "../auth-profiles/external-cli-sync.js";
 import { overlayRuntimeExternalOAuthProfiles } from "../auth-profiles/oauth-shared.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
@@ -173,13 +175,16 @@ function overlayExternalCliAuthStoreForProvider(params: {
 
 function hasAuthProfileTypeInStore(params: {
   provider: string;
+  cfg?: OpenClawConfig;
   store: AuthProfileStore;
   type: AuthProfileCredential["type"] | readonly AuthProfileCredential["type"][];
 }): boolean {
   const types = Array.isArray(params.type) ? params.type : [params.type];
-  return listProfilesForProvider(params.store, params.provider).some((profileId) =>
-    types.includes(params.store.profiles[profileId]?.type),
-  );
+  return resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store: params.store,
+    provider: params.provider,
+  }).some((profileId) => types.includes(params.store.profiles[profileId]?.type));
 }
 
 function hasAuthProfileTypeForProvider(params: {
@@ -268,7 +273,10 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
       store,
     });
     if (reference.kind === "profile") {
-      return reference.credential.type === "api_key";
+      return (
+        reference.credential.type === "api_key" &&
+        evaluateStoredCredentialEligibility({ credential: reference.credential }).eligible
+      );
     }
     if (reference.kind === "profile-incompatible") {
       return false;

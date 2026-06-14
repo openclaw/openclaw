@@ -210,6 +210,17 @@ vi.mock("../auth-profiles.js", () => ({
     Object.entries(store.profiles ?? {})
       .filter(([, profile]) => profile?.provider === provider)
       .map(([profileId]) => profileId),
+  resolveAuthProfileOrder: (params: {
+    cfg?: OpenClawConfig;
+    store: { profiles?: Record<string, { provider?: string }> };
+    provider: string;
+  }) => {
+    const profiles = Object.entries(params.store.profiles ?? {})
+      .filter(([, profile]) => profile?.provider === params.provider)
+      .map(([profileId]) => profileId);
+    const configured = params.cfg?.auth?.order?.[params.provider];
+    return configured ? configured.filter((profileId) => profiles.includes(profileId)) : profiles;
+  },
 }));
 
 vi.mock("../auth-profiles/external-cli-sync.js", () => ({

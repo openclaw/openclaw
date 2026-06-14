@@ -159,6 +159,49 @@ describe("resolveOpenAiImageMediaCandidate", () => {
     expect(resolveMedia({ authStore })).toEqual(openAiKeep);
   });
 
+  it("uses Codex when an ineligible direct API key profile is stale", () => {
+    const authStore = store({
+      "openai:api-key": { provider: "openai", type: "api_key" },
+      "openai:chatgpt": oauth("openai"),
+    });
+
+    expect(hasDirectOpenAiKey({ authStore })).toBe(false);
+    expect(resolveMedia({ authStore })).toEqual(codexSubstitute);
+  });
+
+  it("honors auth order when choosing between direct OpenAI and Codex media", () => {
+    const cfg: OpenClawConfig = {
+      auth: {
+        order: {
+          openai: ["openai:chatgpt"],
+        },
+      },
+    };
+    const authStore = store({
+      "openai:api-key": apiKey("openai"),
+      "openai:chatgpt": oauth("openai"),
+    });
+
+    expect(hasDirectOpenAiKey({ cfg, authStore })).toBe(false);
+    expect(resolveMedia({ cfg, authStore })).toEqual(codexSubstitute);
+  });
+
+  it("drops Codex media when auth order excludes subscription-style auth", () => {
+    const cfg: OpenClawConfig = {
+      auth: {
+        order: {
+          openai: ["openai:api-key"],
+        },
+      },
+    };
+    const authStore = store({
+      "openai:api-key": { provider: "openai", type: "api_key" },
+      "openai:chatgpt": oauth("openai"),
+    });
+
+    expect(resolveMedia({ cfg, authStore })).toEqual(drop);
+  });
+
   it("does not treat provider apiKey OAuth profile references as direct OpenAI media auth", () => {
     const authStore = store({ "openai:default": oauth("openai") });
 
@@ -171,5 +214,15 @@ describe("resolveOpenAiImageMediaCandidate", () => {
 
     expect(hasDirectOpenAiKey({ cfg: openAiRefCfg, authStore })).toBe(true);
     expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(openAiKeep);
+  });
+
+  it("does not treat unresolved provider apiKey profile references as direct auth", () => {
+    const authStore = store({
+      "openai:default": { provider: "openai", type: "api_key" },
+      "openai:chatgpt": oauth("openai"),
+    });
+
+    expect(hasDirectOpenAiKey({ cfg: openAiRefCfg, authStore })).toBe(false);
+    expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(codexSubstitute);
   });
 });
