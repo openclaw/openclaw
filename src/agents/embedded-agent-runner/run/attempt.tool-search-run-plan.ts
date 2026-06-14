@@ -5,6 +5,7 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import {
+  collectUniqueCatalogToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -137,7 +138,7 @@ export function buildToolSearchRunPlan(params: {
     }
   }
   const liveAllowedToolNames = params.deferredToolsCallable
-    ? collectAllowedToolNames({ tools: params.uncompactedTools })
+    ? collectUniqueCatalogToolNames(params.uncompactedTools)
     : visibleAllowedToolNames;
   if (params.deferredToolsCallable) {
     // Deferred resolution can hydrate catalog tools, but Tool Search controls

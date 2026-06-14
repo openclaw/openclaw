@@ -335,4 +335,33 @@ describe("buildToolSearchRunPlan", () => {
     ]);
     expect([...plan.capabilityToolNames]).toEqual(["fake_plugin_tool"]);
   });
+
+  it("keeps ambiguous deferred directory names out of live calls", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [
+        { name: "tool_search" },
+        { name: "tool_describe" },
+        { name: "tool_call" },
+      ] as never,
+      uncompactedTools: [
+        { name: "fake_plugin_tool" },
+        { name: "sessions_spawn" },
+        { name: "sessions_spawn" },
+      ] as never,
+      clientToolsCataloged: false,
+      catalogToolCount: 3,
+      controlsEnabled: true,
+      deferredToolsCallable: true,
+      controlNames: ["tool_search", "tool_describe", "tool_call"],
+      explicitAllowlistSources: [],
+    });
+
+    expect([...plan.liveAllowedToolNames]).toEqual([
+      "fake_plugin_tool",
+      "tool_search",
+      "tool_describe",
+      "tool_call",
+    ]);
+    expect([...plan.replayAllowedToolNames]).toContain("sessions_spawn");
+  });
 });

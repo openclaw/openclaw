@@ -703,7 +703,7 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
   return true;
 }
 
-function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): Set<string> {
+export function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): Set<string> {
   const nameCounts = new Map<string, number>();
   for (const tool of tools) {
     if (shouldCatalogTool(tool)) {
