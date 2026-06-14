@@ -344,16 +344,20 @@ function collectSessionEntrySlotKeys(
 ): Set<string> {
   const slotKeys = new Set<string>();
   for (const registration of registry?.sessionExtensions ?? []) {
-    if (!shouldCleanPlugin(registration.pluginId, pluginId)) {
+    try {
+      if (!shouldCleanPlugin(registration.pluginId, pluginId)) {
+        continue;
+      }
+      const slotKey = registration.extension.sessionEntrySlotKey;
+      if (slotKey === undefined) {
+        continue;
+      }
+      const normalized = normalizeSessionEntrySlotKey(slotKey);
+      if (normalized.ok) {
+        slotKeys.add(normalized.key);
+      }
+    } catch {
       continue;
-    }
-    const slotKey = registration.extension.sessionEntrySlotKey;
-    if (slotKey === undefined) {
-      continue;
-    }
-    const normalized = normalizeSessionEntrySlotKey(slotKey);
-    if (normalized.ok) {
-      slotKeys.add(normalized.key);
     }
   }
   return slotKeys;
@@ -425,14 +429,35 @@ export async function runPluginHostCleanup(params: {
       if (!shouldCleanup()) {
         return { cleanupCount, failures };
       }
-      if (!shouldCleanPlugin(registration.pluginId, params.pluginId)) {
+      let pluginId: string;
+      let hookId: string;
+      let cleanup:
+        | ((params: {
+            reason: PluginHostCleanupReason;
+            sessionKey?: string;
+          }) => void | Promise<void>)
+        | undefined;
+      let failurePluginId = params.pluginId ?? "plugin-host";
+      try {
+        pluginId = registration.pluginId;
+        failurePluginId = pluginId;
+        if (!shouldCleanPlugin(pluginId, params.pluginId)) {
+          continue;
+        }
+        const extension = registration.extension;
+        cleanup = extension.cleanup;
+        hookId = `session:${extension.namespace}`;
+      } catch (error) {
+        failures.push({
+          pluginId: failurePluginId,
+          hookId: "session:unknown",
+          error,
+        });
         continue;
       }
-      const cleanup = registration.extension.cleanup;
       if (!cleanup) {
         continue;
       }
-      const hookId = `session:${registration.extension.namespace}`;
       try {
         await withPluginHostCleanupTimeout(hookId, () =>
           cleanup({
@@ -443,7 +468,7 @@ export async function runPluginHostCleanup(params: {
         cleanupCount += 1;
       } catch (error) {
         failures.push({
-          pluginId: registration.pluginId,
+          pluginId,
           hookId,
           error,
         });
