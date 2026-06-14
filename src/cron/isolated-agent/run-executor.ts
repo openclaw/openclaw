@@ -35,6 +35,7 @@ import type {
   PersistCronSessionEntry,
 } from "./run-session-state.js";
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
+import { resolveFallbackCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
@@ -140,9 +141,10 @@ export function createCronPromptExecutor(params: {
     accountId?: string;
     to?: string;
     threadId?: string | number;
+    ok?: boolean;
   };
   deliveryRequested?: boolean;
-  sourceDelivery: SourceDeliveryPlan;
+  sourceDelivery?: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
@@ -183,8 +185,16 @@ export function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
-  const sourceReplyDeliveryMode = params.sourceDelivery.sourceReplyDeliveryMode;
-  const messageChannel = params.sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
+  if (!params.sourceDelivery) {
+    logWarn(
+      `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
+    );
+  }
+  const sourceDelivery =
+    params.sourceDelivery ??
+    resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
+  const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
+  const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
 
   const runPrompt = async (promptText: string) => {
     const fallbackResult = await runWithModelFallback({
@@ -330,9 +340,9 @@ export function createCronPromptExecutor(params: {
             : undefined,
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
-          requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
-          disableMessageTool: !params.sourceDelivery.messageTool.enabled,
-          forceMessageTool: params.sourceDelivery.messageTool.force,
+          requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+          disableMessageTool: !sourceDelivery.messageTool.enabled,
+          forceMessageTool: sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
@@ -383,9 +393,10 @@ export async function executeCronRun(params: {
     accountId?: string;
     to?: string;
     threadId?: string | number;
+    ok?: boolean;
   };
   deliveryRequested?: boolean;
-  sourceDelivery: SourceDeliveryPlan;
+  sourceDelivery?: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
@@ -421,6 +432,14 @@ export async function executeCronRun(params: {
     sessionId: params.cronSession.sessionEntry.sessionId,
     verboseLevel: resolvedVerboseLevel,
   });
+  if (!params.sourceDelivery) {
+    logWarn(
+      `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
+    );
+  }
+  const sourceDelivery =
+    params.sourceDelivery ??
+    resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
   const executor = createCronPromptExecutor({
     cfg: params.cfg,
     cfgWithAgentDefaults: params.cfgWithAgentDefaults,
@@ -438,7 +457,7 @@ export async function executeCronRun(params: {
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,
     deliveryRequested: params.deliveryRequested,
-    sourceDelivery: params.sourceDelivery,
+    sourceDelivery,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
     useSubagentFallbacks: params.useSubagentFallbacks,
