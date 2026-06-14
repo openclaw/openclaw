@@ -3,6 +3,19 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
+import { telegramMessagingForTest } from "./targets.test-helpers.js";
+
+function normalizeTelegramTargetForCoreSendTest(raw: string): string | undefined {
+  const parsed = telegramMessagingForTest.parseExplicitTarget?.({ raw });
+  if (!parsed?.to) {
+    return undefined;
+  }
+  const threadSuffix =
+    typeof parsed.threadId === "number" && Number.isFinite(parsed.threadId)
+      ? `:topic:${parsed.threadId}`
+      : "";
+  return `telegram:${parsed.to}${threadSuffix}`;
+}
 
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
@@ -125,7 +138,34 @@ describe("runMessageAction core send routing", () => {
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
-    setActivePluginRegistry(createTestRegistry([]));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({
+                channel: "telegram",
+                messageId: "t1",
+                chatId: "-1001234567890",
+              }),
+            },
+            messaging: {
+              ...telegramMessagingForTest,
+              normalizeTarget: normalizeTelegramTargetForCoreSendTest,
+              targetResolver: {
+                looksLikeId: (_raw, normalized) =>
+                  Boolean(normalized ?? normalizeTelegramTargetForCoreSendTest(_raw)),
+                hint: "<chatId>",
+              },
+            },
+          }),
+        },
+      ]),
+    );
 
     const result = await runMessageAction({
       cfg: {
