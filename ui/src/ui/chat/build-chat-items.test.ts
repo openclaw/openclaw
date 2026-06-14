@@ -456,6 +456,33 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("deduplicates adjacent relay copies by transcript metadata id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          senderLabel: "Parzival",
+          content: [{ type: "text", text: "Parzival There it is..." }],
+          timestamp: 1,
+          __openclaw: { id: "msg-agent-meta-1", seq: 7 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "There it is..." }],
+          timestamp: 2,
+          __openclaw: { id: "msg-agent-meta-1", seq: 7 },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "There it is..." },
+    ]);
+  });
+
   it("keeps relay-labeled assistant messages with different ids separate", () => {
     const groups = messageGroups({
       messages: [

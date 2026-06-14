@@ -268,7 +268,8 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
 
 function collapseDuplicateTranscriptKey(message: unknown): string | null {
   const marker = asRecord(message)?.["__openclaw"];
-  if (asRecord(marker)?.kind === "pending-send") {
+  const markerRecord = asRecord(marker);
+  if (markerRecord?.kind === "pending-send") {
     return null;
   }
   const raw = asRecord(message);
@@ -288,7 +289,9 @@ function collapseDuplicateTranscriptKey(message: unknown): string | null {
       ? raw.id.trim()
       : typeof raw.messageId === "string" && raw.messageId.trim()
         ? raw.messageId.trim()
-        : "";
+        : typeof markerRecord?.id === "string" && markerRecord.id.trim()
+          ? markerRecord.id.trim()
+          : "";
   return id ? `${role}:${id}` : null;
 }
 
