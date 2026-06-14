@@ -217,6 +217,47 @@ describe("createEmbeddedLobsterRunner", () => {
     }
   });
 
+  it("detects existing workflow file paths that contain spaces", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
+    const workflowPath = path.join(tempDir, "daily inbox.lobster");
+    await fs.writeFile(workflowPath, "steps: []\n", "utf8");
+
+    try {
+      const runtime = {
+        runToolRequest: vi.fn().mockResolvedValue({
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: [],
+          requiresApproval: null,
+        }),
+        resumeToolRequest: vi.fn(),
+      };
+
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await runner.run({
+        action: "run",
+        pipeline: "daily inbox.lobster",
+        cwd: tempDir,
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      });
+
+      expect(runtime.runToolRequest).toHaveBeenCalledOnce();
+      const request = requireRecord(
+        requireFirstCallParam(runtime.runToolRequest.mock.calls, "workflow file with spaces"),
+        "workflow file with spaces",
+      );
+      expect(request.filePath).toBe(workflowPath);
+      expect(request.pipeline).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ["missing.lobster", "missing.lobster"],
     ["nested/missing.yaml", path.join("nested", "missing.yaml")],

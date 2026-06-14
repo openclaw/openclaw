@@ -237,16 +237,35 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
   return resolved;
 }
 
-function isBareWorkflowFileInput(candidate: string) {
-  return !/[\s|]/.test(candidate) && workflowExts.has(path.extname(candidate).toLowerCase());
+function isMissingPathError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function hasWorkflowFileExtension(candidate: string) {
+  return workflowExts.has(path.extname(candidate).toLowerCase());
 }
 
 async function detectWorkflowFile(candidate: string, cwd: string) {
   const trimmed = candidate.trim();
-  if (!trimmed || !isBareWorkflowFileInput(trimmed)) {
+  if (!trimmed || trimmed.includes("|") || !hasWorkflowFileExtension(trimmed)) {
     return null;
   }
-  return await resolveWorkflowFile(trimmed, cwd);
+  if (!/\s/.test(trimmed)) {
+    return await resolveWorkflowFile(trimmed, cwd);
+  }
+  try {
+    return await resolveWorkflowFile(trimmed, cwd);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function parseWorkflowArgs(argsJson: string) {
