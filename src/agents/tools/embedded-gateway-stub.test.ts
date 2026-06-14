@@ -131,6 +131,7 @@ describe("embedded gateway stub", () => {
         mode: "recent",
         maxMessages: 200,
         maxBytes: 1024 * 1024,
+        allowResetArchiveFallback: true,
       },
     );
     expect(result.messages).toEqual(projectedMessages);
@@ -193,6 +194,7 @@ describe("embedded gateway stub", () => {
         mode: "recent",
         maxMessages: 1,
         maxBytes: 1024 * 1024,
+        allowResetArchiveFallback: true,
       },
     );
   });
@@ -222,6 +224,7 @@ describe("embedded gateway stub", () => {
         mode: "recent",
         maxMessages: 2,
         maxBytes: 1024 * 1024,
+        allowResetArchiveFallback: true,
       },
     );
   });
