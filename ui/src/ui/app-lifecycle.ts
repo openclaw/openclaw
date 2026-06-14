@@ -1,4 +1,5 @@
 // Control UI module implements app lifecycle behavior.
+import { resetChatRunWatchdog, scheduleChatRunWatchdog } from "./app-chat.ts";
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -76,6 +77,10 @@ type LifecycleHost = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
+  chatRunId?: string | null;
+  chatRunLastActivityAt?: number | null;
+  chatRunWatchdogTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
+  chatRunWatchdogProbeInFlight?: boolean;
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
@@ -211,6 +216,7 @@ export function handleDisconnected(host: LifecycleHost) {
   host.chatScrollTimeout = null;
   clearHostGlobalTimeout(host.sessionsChangedReloadTimer);
   host.sessionsChangedReloadTimer = null;
+  resetChatRunWatchdog(host as unknown as Parameters<typeof resetChatRunWatchdog>[0]);
   host.realtimeTalkSession?.stop();
   host.realtimeTalkSession = null;
   host.realtimeTalkActive = false;
@@ -229,6 +235,13 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (changed.has("chatRunId")) {
+    if (host.chatRunId) {
+      scheduleChatRunWatchdog(host as unknown as Parameters<typeof scheduleChatRunWatchdog>[0]);
+    } else {
+      resetChatRunWatchdog(host as unknown as Parameters<typeof resetChatRunWatchdog>[0]);
+    }
+  }
   if (changed.has("chatQueue")) {
     clearPendingChatComposerPersistence(host);
     persistChatComposerState(host);
