@@ -140,7 +140,6 @@ function isExpectedPackageDistInventoryEntry(relativePath) {
   return (
     relativePath.startsWith("dist/") &&
     !relativePath.endsWith("/") &&
-    !relativePath.endsWith(".map") &&
     !PACKAGE_DIST_INVENTORY_METADATA_FILES.has(relativePath) &&
     !FORBIDDEN_LOCAL_BUILD_METADATA_FILES.has(relativePath) &&
     !isAllowedMissingContentInventoryEntry(relativePath)

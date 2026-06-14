@@ -294,7 +294,7 @@ describe("package dist inventory", () => {
       const [omittedBuildStamp, omittedRuntimePostBuildStamp] = LOCAL_BUILD_METADATA_DIST_PATHS.map(
         (relativePath) => path.join(packageRoot, relativePath),
       );
-      const omittedMap = path.join(packageRoot, "dist", "feature.runtime.js.map");
+      const packagedMap = path.join(packageRoot, "dist", "feature.runtime.js.map");
       await fs.mkdir(path.dirname(packagedQaChannelRuntime), { recursive: true });
       await fs.mkdir(path.dirname(packagedQaLabRuntime), { recursive: true });
       await fs.mkdir(path.dirname(omittedQaMatrixChunk), { recursive: true });
@@ -315,9 +315,10 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedQaRuntimeChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedBuildStamp, "{}\n", "utf8");
       await fs.writeFile(omittedRuntimePostBuildStamp, "{}\n", "utf8");
-      await fs.writeFile(omittedMap, "{}", "utf8");
+      await fs.writeFile(packagedMap, "{}", "utf8");
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([
+        "dist/feature.runtime.js.map",
         "dist/plugin-sdk/provider-entry.d.ts",
       ]);
     });
@@ -379,6 +380,13 @@ describe("package dist inventory", () => {
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/plugin-sdk/runtime.js",
+      ]);
+      await expect(
+        collectPackageDistInventory(packageRoot, { includeSourceMaps: true }),
+      ).resolves.toEqual([
+        "dist/plugin-sdk/runtime.js",
+        "dist/plugin-sdk/runtime.js.map",
+        "dist/runtime.js.map",
       ]);
     });
   });

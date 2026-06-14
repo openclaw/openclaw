@@ -97,6 +97,9 @@ type PackageDistInventoryRules = {
   externalizedExtensionIds: ExternalizedBundledExtensionIds;
   exclusions: PackageDistExclusionRules;
 };
+type CollectPackageDistInventoryOptions = {
+  includeSourceMaps?: boolean;
+};
 type PackageDistInventoryScanContext = {
   activeFsOps: number;
   fsConcurrency: number;
@@ -296,14 +299,19 @@ function isPackageFilesExcludedDistPath(
   );
 }
 
-function isPackagedDistPath(relativePath: string, rules: PackageDistInventoryRules): boolean {
+function isPackagedDistPath(
+  relativePath: string,
+  rules: PackageDistInventoryRules,
+  options: CollectPackageDistInventoryOptions,
+): boolean {
   if (!relativePath.startsWith("dist/")) {
     return false;
   }
   if (isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds)) {
     return false;
   }
-  if (isPackageFilesExcludedDistPath(relativePath, rules.exclusions)) {
+  const includeSourceMap = options.includeSourceMaps === true && relativePath.endsWith(".map");
+  if (isPackageFilesExcludedDistPath(relativePath, rules.exclusions) && !includeSourceMap) {
     return false;
   }
   if (isLegacyPluginDependencyDirPath(relativePath)) {
@@ -316,9 +324,6 @@ function isPackagedDistPath(relativePath: string, rules: PackageDistInventoryRul
     return false;
   }
   if (isLocalBuildMetadataDistPath(relativePath)) {
-    return false;
-  }
-  if (relativePath.endsWith(".map")) {
     return false;
   }
   if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
@@ -356,6 +361,7 @@ async function collectRelativeFiles(
   rootDir: string,
   baseDir: string,
   rules: PackageDistInventoryRules,
+  options: CollectPackageDistInventoryOptions,
   context: PackageDistInventoryScanContext,
 ): Promise<string[]> {
   const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
@@ -380,10 +386,10 @@ async function collectRelativeFiles(
           throw new Error(`Unsafe package dist path: ${relativePath}`);
         }
         if (entry.isDirectory()) {
-          return await collectRelativeFiles(entryPath, baseDir, rules, context);
+          return await collectRelativeFiles(entryPath, baseDir, rules, options, context);
         }
         if (entry.isFile()) {
-          return isPackagedDistPath(relativePath, rules) ? [relativePath] : [];
+          return isPackagedDistPath(relativePath, rules, options) ? [relativePath] : [];
         }
         return [];
       }),
@@ -398,13 +404,17 @@ async function collectRelativeFiles(
 }
 
 /** Collects package dist files that should be present after install/update publication. */
-export async function collectPackageDistInventory(packageRoot: string): Promise<string[]> {
+export async function collectPackageDistInventory(
+  packageRoot: string,
+  options: CollectPackageDistInventoryOptions = {},
+): Promise<string[]> {
   const rules = await collectPackageDistInventoryRulesForRoot(packageRoot);
   const scanContext = createPackageDistInventoryScanContext();
   return await collectRelativeFiles(
     path.join(packageRoot, "dist"),
     packageRoot,
     rules,
+    options,
     scanContext,
   );
 }

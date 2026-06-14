@@ -433,6 +433,45 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("captures and reapplies locally added source maps excluded from package files", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-source-map-" }, async (base) => {
+      const packageRoot = path.join(base, "package");
+      const sourceMapPath = path.join(packageRoot, "dist", "index.js.map");
+      const writePackageJson = async (version: string) => {
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version, files: ["dist/", "!dist/**/*.map"] }),
+          "utf8",
+        );
+      };
+      await writePackageRoot(packageRoot, "1.0.0");
+      await writePackageJson("1.0.0");
+      await writePackageDistInventory(packageRoot);
+      await fs.writeFile(sourceMapPath, '{"version":3,"sources":["index.ts"]}\n', "utf8");
+
+      const plan = await captureLocalPackageOverrides({ packageRoot });
+      expect(plan).not.toBeNull();
+      expect(plan?.result.added).toBe(1);
+
+      await writePackageRoot(packageRoot, "2.0.0");
+      await writePackageJson("2.0.0");
+      await fs.rm(sourceMapPath);
+      await writePackageDistInventory(packageRoot);
+
+      const result = await applyLocalPackageOverrides({
+        packageRoot,
+        plan,
+        reapply: true,
+      });
+
+      expect(result.status).toBe("applied");
+      expect(result.applied).toBe(1);
+      await expect(fs.readFile(sourceMapPath, "utf8")).resolves.toBe(
+        '{"version":3,"sources":["index.ts"]}\n',
+      );
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "does not reapply overrides after an unrecorded installed mode change",
     async () => {

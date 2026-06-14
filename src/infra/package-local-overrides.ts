@@ -704,7 +704,9 @@ export async function captureLocalPackageOverrides(params: {
     );
   }
 
-  const actualFiles = await collectPackageDistInventory(params.packageRoot);
+  const actualFiles = await collectPackageDistInventory(params.packageRoot, {
+    includeSourceMaps: true,
+  });
   const actualSet = new Set(actualFiles);
   const changes: LocalPackageOverrideChange[] = [];
   let recoveryDir: string | null = null;

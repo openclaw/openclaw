@@ -230,6 +230,25 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("rejects packaged source maps omitted from the dist inventories", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "dist/index.js.map": '{"version":3,"sources":["index.ts"]}\n',
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("inventory omits packaged dist file dist/index.js.map");
+        expect(result.stderr).toContain(
+          "content inventory omits packaged dist file dist/index.js.map",
+        );
+      },
+    );
+  });
+
   it.each(["2026.6.7", "2026.6.10-alpha.3"])(
     "rejects missing content inventory for package %s",
     (version) => {
