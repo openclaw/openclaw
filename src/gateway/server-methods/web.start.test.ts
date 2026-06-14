@@ -180,6 +180,70 @@ describe("webHandlers web.login.start", () => {
       undefined,
     );
   });
+
+  it("skips unreadable web login gateway descriptor rows while preserving healthy providers", async () => {
+    const poisonedDescriptor = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("web login descriptor name exploded");
+      },
+    }) as { name: string };
+    const poisonedDescriptorRows = Object.defineProperty([], "0", {
+      get() {
+        throw new Error("web login descriptor row exploded");
+      },
+    }) as { name: string }[];
+    poisonedDescriptorRows.length = 1;
+    const loginWithQrStart = vi.fn().mockResolvedValue({
+      connected: true,
+      message: "connected",
+    });
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "broken",
+        gatewayMethodDescriptors: [poisonedDescriptor],
+        gateway: {
+          loginWithQrStart: vi.fn(),
+        },
+      },
+      {
+        id: "broken-row",
+        gatewayMethodDescriptors: poisonedDescriptorRows,
+        gateway: {
+          loginWithQrStart: vi.fn(),
+        },
+      },
+      {
+        id: "whatsapp",
+        gatewayMethodDescriptors: [{ name: "web.login.start" }],
+        gateway: { loginWithQrStart },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await webHandlers["web.login.start"](
+      createOptions(
+        { accountId: "default" },
+        {
+          respond,
+        },
+      ),
+    );
+
+    expect(loginWithQrStart).toHaveBeenCalledWith({
+      accountId: "default",
+      force: false,
+      timeoutMs: undefined,
+      verbose: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        connected: true,
+        message: "connected",
+      },
+      undefined,
+    );
+  });
 });
 
 describe("webHandlers web.login.wait", () => {

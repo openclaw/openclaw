@@ -14,13 +14,52 @@ import { assertValidParams } from "./validation.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
+type WebLoginChannelPlugin = ReturnType<typeof listChannelPlugins>[number];
+
+function listGatewayMethodNames(plugin: WebLoginChannelPlugin): string[] {
+  const names: string[] = [];
+  let methodCount = 0;
+  try {
+    methodCount = plugin.gatewayMethods?.length ?? 0;
+  } catch {
+    // Web login discovery must not let one plugin-owned metadata row hide a
+    // later healthy provider that can complete the login flow.
+  }
+  for (let index = 0; index < methodCount; index += 1) {
+    try {
+      const method = plugin.gatewayMethods?.[index];
+      if (typeof method === "string") {
+        names.push(method);
+      }
+    } catch {
+      // Skip only the unreadable method row.
+    }
+  }
+  let descriptorCount = 0;
+  try {
+    descriptorCount = plugin.gatewayMethodDescriptors?.length ?? 0;
+  } catch {
+    // Web login discovery must not let one plugin-owned metadata row hide a
+    // later healthy provider that can complete the login flow.
+  }
+  for (let index = 0; index < descriptorCount; index += 1) {
+    try {
+      const descriptor = plugin.gatewayMethodDescriptors?.[index];
+      const name = descriptor?.name;
+      if (typeof name === "string") {
+        names.push(name);
+      }
+    } catch {
+      // Skip only the unreadable descriptor row.
+    }
+  }
+  return names;
+}
+
 /** Resolves the channel plugin that currently owns web QR-login methods. */
 const resolveWebLoginProvider = () =>
   listChannelPlugins().find((plugin) =>
-    [
-      ...(plugin.gatewayMethods ?? []),
-      ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
-    ].some((method) => WEB_LOGIN_METHODS.has(method)),
+    listGatewayMethodNames(plugin).some((method) => WEB_LOGIN_METHODS.has(method)),
   ) ?? null;
 
 type WebLoginProvider = NonNullable<ReturnType<typeof resolveWebLoginProvider>>;
