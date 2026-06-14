@@ -326,12 +326,13 @@ export function removeSystemEvents(
     }
     return true;
   });
-  if (entry.queue.length === 0) {
-    queues.delete(key);
-  } else if (removed.length > 0) {
-    // Reset dedup state to reflect actual queue contents.
-    const last = entry.queue[entry.queue.length - 1];
-    entry.lastContextKey = last.contextKey ?? null;
+  if (removed.length > 0) {
+    // Reset dedup state to reflect actual queue contents. `resetQueueState`
+    // deletes the now-empty queue, or restores `lastContextKey` to the last
+    // *non-null* contextKey (matching `applyContextKeyPolicy`'s enqueue policy),
+    // rather than naively taking the final event's key — which would wipe a
+    // still-valid key when the last remaining event has `contextKey: null`.
+    resetQueueState(key, entry);
   }
   return removed;
 }
