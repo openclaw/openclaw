@@ -48,6 +48,7 @@ const {
 } = getTelegramSendTestMocks();
 const telegramSendModule = await importTelegramSendModule();
 const { resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env");
+const { TELEGRAM_LEGACY_TEXT_LIMIT } = await import("./rich-message.js");
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
@@ -974,6 +975,27 @@ describe("sendMessageTelegram", () => {
       link_preview_options: { is_disabled: true },
       parse_mode: "HTML",
     });
+  });
+
+  it("re-chunks rich text send fallback to Telegram's legacy text limit", async () => {
+    botRawApi.sendRichMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Call to 'sendRichMessage' failed! (404: Not Found)"), {
+        error_code: 404,
+      }),
+    );
+    botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
+    const text = "A".repeat(TELEGRAM_LEGACY_TEXT_LIMIT + 12);
+
+    await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(botApi.sendMessage.mock.calls.every((call) => String(call[1]).length <= 4_096)).toBe(
+      true,
+    );
   });
 
   it("does not fall back from ambiguous rich text send network errors", async () => {

@@ -5,7 +5,7 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
-import { markdownToTelegramHtml } from "../format.js";
+import { markdownToTelegramHtml, telegramHtmlToPlainTextFallback } from "../format.js";
 import {
   isSafeToRetrySendError,
   isTelegramRateLimitError,
@@ -20,6 +20,8 @@ import {
   buildTelegramRichMessage,
   getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
+  splitTelegramRichTextChunks,
+  TELEGRAM_LEGACY_TEXT_LIMIT,
   toTelegramRichMessageContextParams,
 } from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
@@ -147,7 +149,7 @@ export async function sendTelegramText(
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
     return res.message_id;
   };
-  const sendFormattedFallback = async () => {
+  const sendFormattedFallback = async (chunkLegacyFallback = false) => {
     // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
     if (!htmlText.trim()) {
       if (!hasFallbackText) {
@@ -156,6 +158,68 @@ export async function sendTelegramText(
         );
       }
       return await sendPlainFallback();
+    }
+    if (chunkLegacyFallback) {
+      let lastMessageId: number | undefined;
+      const chunks = splitTelegramRichTextChunks({
+        text,
+        textLimit: TELEGRAM_LEGACY_TEXT_LIMIT,
+        textMode,
+        chunkMode: "length",
+      });
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index] ?? "";
+        const chunkHtml = textMode === "html" ? chunk : markdownToTelegramHtml(chunk);
+        const chunkPlain = textMode === "html" ? telegramHtmlToPlainTextFallback(chunkHtml) : chunk;
+        try {
+          const res = await sendTelegramWithThreadFallback({
+            operation: "sendMessage",
+            runtime,
+            thread: opts?.thread,
+            requestParams: baseParams,
+            shouldLog: (err) => {
+              const errText = formatErrorMessage(err);
+              return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
+            },
+            send: (effectiveParams) =>
+              bot.api.sendMessage(chatId, chunkHtml, {
+                parse_mode: "HTML",
+                ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+                ...(index === chunks.length - 1 && opts?.replyMarkup
+                  ? { reply_markup: opts.replyMarkup }
+                  : {}),
+                ...effectiveParams,
+              }),
+          });
+          lastMessageId = res.message_id;
+        } catch (err) {
+          const errText = formatErrorMessage(err);
+          if (!PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText)) {
+            throw err;
+          }
+          const res = await sendTelegramWithThreadFallback({
+            operation: "sendMessage-plain",
+            runtime,
+            thread: opts?.thread,
+            requestParams: baseParams,
+            send: (effectiveParams) =>
+              bot.api.sendMessage(chatId, chunkPlain, {
+                ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+                ...(index === chunks.length - 1 && opts?.replyMarkup
+                  ? { reply_markup: opts.replyMarkup }
+                  : {}),
+                ...effectiveParams,
+              }),
+          });
+          lastMessageId = res.message_id;
+        }
+      }
+      if (lastMessageId == null) {
+        throw new Error(
+          "telegram sendMessage failed: empty formatted text and empty plain fallback",
+        );
+      }
+      return lastMessageId;
     }
     try {
       const res = await sendTelegramWithThreadFallback({
@@ -220,7 +284,7 @@ export async function sendTelegramText(
           err,
         )}`,
       );
-      return await sendFormattedFallback();
+      return await sendFormattedFallback(true);
     }
   }
   return await sendFormattedFallback();

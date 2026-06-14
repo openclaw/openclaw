@@ -58,6 +58,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
+const { TELEGRAM_LEGACY_TEXT_LIMIT } = await import("../rich-message.js");
 
 vi.mock("grammy", () => ({
   API_CONSTANTS: {
@@ -947,6 +948,7 @@ describe("deliverReplies", () => {
       runtime,
       bot,
       linkPreview: false,
+      richMessages: true,
     });
 
     expect(raw.sendRichMessage).toHaveBeenCalledTimes(1);
@@ -954,6 +956,59 @@ describe("deliverReplies", () => {
       link_preview_options: { is_disabled: true },
       parse_mode: "HTML",
     });
+  });
+
+  it("re-chunks rich final delivery fallback to Telegram's legacy text limit", async () => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+    const raw = (bot.api as unknown as { raw: { sendRichMessage: ReturnType<typeof vi.fn> } }).raw;
+    raw.sendRichMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Call to 'sendRichMessage' failed! (404: Not Found)"), {
+        error_code: 404,
+      }),
+    );
+    const text = "A".repeat(TELEGRAM_LEGACY_TEXT_LIMIT + 9);
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+      textLimit: 100_000,
+    });
+
+    expect(raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls.every((call) => String(call[1]).length <= 4_096)).toBe(true);
+  });
+
+  it("does not replay delivered chunks when one legacy fallback chunk needs plain text", async () => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+    const raw = (bot.api as unknown as { raw: { sendRichMessage: ReturnType<typeof vi.fn> } }).raw;
+    raw.sendRichMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Call to 'sendRichMessage' failed! (404: Not Found)"), {
+        error_code: 404,
+      }),
+    );
+    sendMessage
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 2, chat: { id: "123" } });
+    const text = "A".repeat(TELEGRAM_LEGACY_TEXT_LIMIT + 9);
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+      textLimit: 100_000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(String(sendMessage.mock.calls[0]?.[1]).length).toBeLessThanOrEqual(
+      TELEGRAM_LEGACY_TEXT_LIMIT,
+    );
+    expect(String(sendMessage.mock.calls[2]?.[1]).length).toBe(9);
+    expect(mockCallArg(sendMessage, 2, 2)).not.toHaveProperty("parse_mode");
   });
 
   it("includes message_thread_id for DM topics", async () => {

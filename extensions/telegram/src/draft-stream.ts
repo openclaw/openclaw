@@ -6,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
-import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
+import {
+  renderTelegramHtmlText,
+  splitTelegramHtmlChunks,
+  telegramHtmlToPlainTextFallback,
+} from "./format.js";
 import {
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
@@ -22,6 +26,7 @@ import {
   buildTelegramRichMarkdown,
   getTelegramRichRawApi,
   isTelegramRichMessageWithinStructuralLimits,
+  TELEGRAM_LEGACY_TEXT_LIMIT,
   TELEGRAM_RICH_TEXT_LIMIT,
   type TelegramInputRichMessage,
   type TelegramSendRichMessageParams,
@@ -120,6 +125,32 @@ function normalizeTelegramDraftTransportPreview(
   return {
     text: preview.text,
     plainText: preview.text,
+  };
+}
+
+function capTelegramLegacyTransportPreview(
+  preview: TelegramDraftPreview,
+): TelegramDraftTransportPreview {
+  const transportPreview = normalizeTelegramDraftTransportPreview(preview);
+  if (
+    transportPreview.text.length <= TELEGRAM_LEGACY_TEXT_LIMIT &&
+    transportPreview.plainText.length <= TELEGRAM_LEGACY_TEXT_LIMIT
+  ) {
+    return transportPreview;
+  }
+  if (transportPreview.parseMode === "HTML") {
+    const text =
+      splitTelegramHtmlChunks(transportPreview.text, TELEGRAM_LEGACY_TEXT_LIMIT)[0] ?? "";
+    return {
+      text,
+      parseMode: "HTML",
+      plainText: telegramHtmlToPlainTextFallback(text).slice(0, TELEGRAM_LEGACY_TEXT_LIMIT),
+    };
+  }
+  const text = transportPreview.text.slice(0, TELEGRAM_LEGACY_TEXT_LIMIT);
+  return {
+    text,
+    plainText: text,
   };
 }
 
@@ -238,7 +269,7 @@ export function createTelegramDraftStream(params: {
     sendGeneration: number;
   };
   const sendLegacyRenderedMessage = async (preview: TelegramDraftPreview) => {
-    const transportPreview = normalizeTelegramDraftTransportPreview(preview);
+    const transportPreview = capTelegramLegacyTransportPreview(preview);
     const sendPlain = async () =>
       await params.api.sendMessage(chatId, transportPreview.plainText, sendMessageParams);
     if (transportPreview.parseMode !== "HTML") {
@@ -286,24 +317,28 @@ export function createTelegramDraftStream(params: {
     preview,
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
+    const editLegacyRenderedMessage = async () => {
+      const legacyPreview = capTelegramLegacyTransportPreview(preview);
+      if (legacyPreview.parseMode === "HTML") {
+        try {
+          await params.api.editMessageText(chatId, streamMessageId!, legacyPreview.text, {
+            parse_mode: "HTML" as const,
+          });
+        } catch (err) {
+          if (!isTelegramHtmlParseError(err)) {
+            throw err;
+          }
+          await params.api.editMessageText(chatId, streamMessageId!, legacyPreview.plainText);
+        }
+      } else {
+        await params.api.editMessageText(chatId, streamMessageId!, legacyPreview.text);
+      }
+    };
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
       if (richMessages) {
         if (richPreviewUnavailable) {
-          if (transportPreview.parseMode === "HTML") {
-            try {
-              await params.api.editMessageText(chatId, streamMessageId, transportPreview.text, {
-                parse_mode: "HTML" as const,
-              });
-            } catch (err) {
-              if (!isTelegramHtmlParseError(err)) {
-                throw err;
-              }
-              await params.api.editMessageText(chatId, streamMessageId, transportPreview.plainText);
-            }
-          } else {
-            await params.api.editMessageText(chatId, streamMessageId, transportPreview.text);
-          }
+          await editLegacyRenderedMessage();
           return true;
         }
         try {
@@ -322,20 +357,7 @@ export function createTelegramDraftStream(params: {
               err,
             )}`,
           );
-          if (transportPreview.parseMode === "HTML") {
-            try {
-              await params.api.editMessageText(chatId, streamMessageId, transportPreview.text, {
-                parse_mode: "HTML" as const,
-              });
-            } catch (htmlErr) {
-              if (!isTelegramHtmlParseError(htmlErr)) {
-                throw htmlErr;
-              }
-              await params.api.editMessageText(chatId, streamMessageId, transportPreview.plainText);
-            }
-          } else {
-            await params.api.editMessageText(chatId, streamMessageId, transportPreview.text);
-          }
+          await editLegacyRenderedMessage();
         }
         return true;
       }

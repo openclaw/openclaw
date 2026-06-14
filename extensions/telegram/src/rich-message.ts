@@ -27,6 +27,7 @@ type TelegramRichMessageReplyMarkup =
   | ForceReply;
 
 export const TELEGRAM_RICH_TEXT_LIMIT = 32_768;
+export const TELEGRAM_LEGACY_TEXT_LIMIT = 4_096;
 export const TELEGRAM_RICH_BLOCK_LIMIT = 500;
 export const TELEGRAM_RICH_MEDIA_LIMIT = 50;
 export const TELEGRAM_RICH_NESTING_LIMIT = 16;
