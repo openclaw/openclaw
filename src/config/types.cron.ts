@@ -1,3 +1,4 @@
+// Defines cron scheduling configuration types.
 import type { SecretInput } from "./types.secrets.js";
 
 /** Error types that can trigger retries for one-shot jobs. */
@@ -16,6 +17,7 @@ export type CronFailureAlertConfig = {
   enabled?: boolean;
   after?: number;
   cooldownMs?: number;
+  includeSkipped?: boolean;
   mode?: "announce" | "webhook";
   accountId?: string;
 };
@@ -34,8 +36,10 @@ export type CronConfig = {
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;
   /**
-   * Deprecated legacy fallback webhook URL used only for stored jobs with notify=true.
-   * Prefer per-job delivery.mode="webhook" with delivery.to.
+   * @deprecated Legacy fallback webhook URL used by doctor to migrate stored
+   * jobs with notify=true. Runtime delivery uses per-job delivery.mode="webhook"
+   * with delivery.to, or delivery.completionDestination when preserving announce
+   * delivery.
    */
   webhook?: string;
   /** Bearer token for cron webhook POST delivery. */
@@ -47,7 +51,8 @@ export type CronConfig = {
    */
   sessionRetention?: string | false;
   /**
-   * Run-log pruning controls for `cron/runs/<jobId>.jsonl`.
+   * Run-history pruning controls. History is stored in SQLite; maxBytes is
+   * retained for compatibility with older file-backed run logs.
    * Defaults: `maxBytes=2_000_000`, `keepLines=2000`.
    */
   runLog?: {

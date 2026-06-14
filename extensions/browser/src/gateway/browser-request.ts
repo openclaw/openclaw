@@ -1,25 +1,32 @@
+/**
+ * Gateway handler for browser.request, including optional node-host proxy
+ * dispatch and local Browser control route dispatch.
+ */
 import crypto from "node:crypto";
+import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ErrorCodes,
   applyBrowserProxyPaths,
   createBrowserControlContext,
   createBrowserRouteDispatcher,
   errorShape,
+  getRuntimeConfig,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
-  loadConfig,
   persistBrowserProxyFiles,
   resolveNodeCommandAllowlist,
   resolveRequestedBrowserProfile,
   respondUnavailableOnNodeInvokeError,
   safeParseJson,
   startBrowserControlServiceFromConfig,
+  withTimeout,
   type GatewayRequestHandlers,
   type NodeSession,
+  type OpenClawConfig,
 } from "../core-api.js";
 
 type BrowserRequestParams = {
@@ -87,7 +94,7 @@ function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | 
 }
 
 function resolveBrowserNodeTarget(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   nodes: NodeSession[];
 }): NodeSession | null {
   const policy = params.cfg.gateway?.nodes?.browser;
@@ -127,6 +134,7 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
   applyBrowserProxyPaths(result, mapping);
 }
 
+/** Handles one browser.request gateway call and streams a success/error response. */
 export async function handleBrowserGatewayRequest({
   params,
   respond,
@@ -137,10 +145,7 @@ export async function handleBrowserGatewayRequest({
   const path = normalizeOptionalString(typed.path) ?? "";
   const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
   const body = typed.body;
-  const timeoutMs =
-    typeof typed.timeoutMs === "number" && Number.isFinite(typed.timeoutMs)
-      ? Math.max(1, Math.floor(typed.timeoutMs))
-      : undefined;
+  const timeoutMs = clampTimerTimeoutMs(typed.timeoutMs);
 
   if (!methodRaw || !path) {
     respond(
@@ -170,8 +175,8 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  const cfg = loadConfig();
-  let nodeTarget: NodeSession | null = null;
+  const cfg = getRuntimeConfig();
+  let nodeTarget: NodeSession | null;
   try {
     nodeTarget = resolveBrowserNodeTarget({
       cfg,
@@ -246,12 +251,31 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  const result = await dispatcher.dispatch({
-    method: methodRaw,
-    path,
-    query,
-    body,
-  });
+  let result;
+  try {
+    result = timeoutMs
+      ? await withTimeout(
+          (signal) =>
+            dispatcher.dispatch({
+              method: methodRaw,
+              path,
+              query,
+              body,
+              signal,
+            }),
+          timeoutMs,
+          "browser request",
+        )
+      : await dispatcher.dispatch({
+          method: methodRaw,
+          path,
+          query,
+          body,
+        });
+  } catch (err) {
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    return;
+  }
 
   if (result.status >= 400) {
     const message =
@@ -266,6 +290,7 @@ export async function handleBrowserGatewayRequest({
   respond(true, result.body);
 }
 
+/** Gateway request handler map contributed by the Browser plugin. */
 export const browserHandlers: GatewayRequestHandlers = {
   "browser.request": handleBrowserGatewayRequest,
 };

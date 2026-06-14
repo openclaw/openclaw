@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+// Qa Lab tests cover bus state plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 
 describe("qa-bus state", () => {
@@ -24,7 +26,7 @@ describe("qa-bus state", () => {
     expect(snapshot.messages.map((message) => message.id)).toEqual([inbound.id, outbound.id]);
   });
 
-  it("creates threads and mutates message state", async () => {
+  it("creates threads and mutates message state", () => {
     const state = createQaBusState();
 
     const thread = state.createThread({
@@ -52,17 +54,16 @@ describe("qa-bus state", () => {
 
     const snapshot = state.getSnapshot();
     expect(snapshot.threads).toHaveLength(1);
-    expect(snapshot.threads[0]).toMatchObject({
-      id: thread.id,
-      conversationId: "qa-room",
-      title: "QA thread",
-    });
-    expect(snapshot.messages[0]).toMatchObject({
-      id: message.id,
-      text: "inside thread (edited)",
-      deleted: true,
-      reactions: [{ emoji: "eyes", senderId: "alice" }],
-    });
+    expect(snapshot.threads[0]?.id).toBe(thread.id);
+    expect(snapshot.threads[0]?.conversationId).toBe("qa-room");
+    expect(snapshot.threads[0]?.title).toBe("QA thread");
+    expect(snapshot.messages[0]?.id).toBe(message.id);
+    expect(snapshot.messages[0]?.text).toBe("inside thread (edited)");
+    expect(snapshot.messages[0]?.deleted).toBe(true);
+    expect(snapshot.messages[0]?.reactions).toHaveLength(1);
+    expect(snapshot.messages[0]?.reactions[0]?.emoji).toBe("eyes");
+    expect(snapshot.messages[0]?.reactions[0]?.senderId).toBe("alice");
+    expect(typeof snapshot.messages[0]?.reactions[0]?.timestamp).toBe("number");
   });
 
   it("waits for a text match and rejects on timeout", async () => {
@@ -92,6 +93,75 @@ describe("qa-bus state", () => {
     ).rejects.toThrow("qa-bus wait timeout");
   });
 
+  it("caps oversized wait timers", async () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const state = createQaBusState();
+      const pendingMessage = state.waitFor({
+        kind: "message-text",
+        textIncludes: "missing",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      const pendingCursor = state.waitForCursorAdvance(0, Number.MAX_SAFE_INTEGER);
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(timeoutSpy).toHaveBeenCalledTimes(2);
+
+      pendingMessage.catch(() => undefined);
+      pendingCursor.catch(() => undefined);
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps account-scoped cursor waits blocked on unrelated account traffic", async () => {
+    const state = createQaBusState();
+    const pending = state.waitForCursorAdvance(0, 500, (snapshot) => {
+      return snapshot.events.some((event) => event.accountId === "acct-a" && event.cursor > 0);
+    });
+
+    state.addInboundMessage({
+      accountId: "acct-b",
+      conversation: { id: "other", kind: "direct" },
+      senderId: "acct-b-user",
+      text: "unrelated",
+    });
+
+    const beforeMatch = await Promise.race([
+      pending.then(() => "resolved"),
+      new Promise((resolve) => {
+        setTimeout(() => resolve("still-waiting"), 20);
+      }),
+    ]);
+    expect(beforeMatch).toBe("still-waiting");
+
+    state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "target", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "matched",
+    });
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it("wakes default-account cursor waits when accountId is omitted", async () => {
+    const state = createQaBusState();
+    const pending = state.waitForCursorAdvance(0, 500, (snapshot) => {
+      return snapshot.events.some((event) => event.accountId === "default" && event.cursor > 0);
+    });
+
+    state.addInboundMessage({
+      conversation: { id: "target", kind: "direct" },
+      senderId: "default-user",
+      text: "matched",
+    });
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
   it("preserves inline attachments and lets search match attachment metadata", () => {
     const state = createQaBusState();
 
@@ -112,20 +182,60 @@ describe("qa-bus state", () => {
 
     const readback = state.readMessage({ messageId: outbound.id });
     expect(readback.attachments).toHaveLength(1);
-    expect(readback.attachments?.[0]).toMatchObject({
-      kind: "image",
-      fileName: "qa-screenshot.png",
-      altText: "QA dashboard screenshot",
-    });
+    const attachment = readback.attachments?.[0];
+    expect(attachment?.kind).toBe("image");
+    expect(attachment?.fileName).toBe("qa-screenshot.png");
+    expect(attachment?.altText).toBe("QA dashboard screenshot");
 
     const byFilename = state.searchMessages({
       query: "screenshot",
     });
-    expect(byFilename.some((message) => message.id === outbound.id)).toBe(true);
+    expect(byFilename.map((message) => message.id)).toContain(outbound.id);
 
     const byAltText = state.searchMessages({
       query: "dashboard",
     });
-    expect(byAltText.some((message) => message.id === outbound.id)).toBe(true);
+    expect(byAltText.map((message) => message.id)).toContain(outbound.id);
+  });
+
+  it("preserves sanitized tool-call traces on bus messages", () => {
+    const state = createQaBusState();
+
+    const outbound = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "used a tool",
+      toolCalls: [
+        {
+          name: "exec",
+          arguments: {
+            command: "pwd",
+            apiToken: "secret-token",
+          },
+        },
+      ],
+    });
+
+    const readback = state.readMessage({ messageId: outbound.id });
+    expect(readback.toolCalls).toEqual([
+      {
+        name: "exec",
+        arguments: {
+          command: "[redacted]",
+          apiToken: "[redacted]",
+        },
+      },
+    ]);
+    expect(state.searchMessages({ query: "exec" }).map((message) => message.id)).toContain(
+      outbound.id,
+    );
+
+    const readbackArguments = readback.toolCalls?.[0]?.arguments;
+    if (!readbackArguments) {
+      throw new Error("expected tool-call arguments");
+    }
+    readbackArguments.command = "mutated";
+    expect(state.readMessage({ messageId: outbound.id }).toolCalls?.[0]?.arguments?.command).toBe(
+      "[redacted]",
+    );
   });
 });

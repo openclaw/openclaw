@@ -1,3 +1,5 @@
+// Type declarations for repo scripts imported by tests without publishing them
+// as normal TypeScript modules.
 declare module "../../scripts/watch-node.mjs" {
   export function resolveWatchLockPath(cwd: string, args?: string[]): string;
   export function runWatchMain(params?: {
@@ -26,5 +28,9 @@ declare module "../../scripts/ci-changed-scope.mjs" {
     runSkillsPython: boolean;
     runChangedSmoke: boolean;
     runControlUiI18n: boolean;
+  };
+  export function detectInstallSmokeScope(paths: string[]): {
+    runFastInstallSmoke: boolean;
+    runFullInstallSmoke: boolean;
   };
 }

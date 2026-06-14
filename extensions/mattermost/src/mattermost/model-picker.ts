@@ -1,17 +1,18 @@
+// Mattermost plugin module implements model picker behavior.
 import { createHash } from "node:crypto";
+import {
+  resolveStoredModelOverride,
+  type ModelsProviderData,
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MattermostInteractiveButtonInput } from "./interactions.js";
-import {
-  loadSessionStore,
-  normalizeProviderId,
-  resolveStorePath,
-  resolveStoredModelOverride,
-  type ModelsProviderData,
-  type OpenClawConfig,
-} from "./runtime-api.js";
 
 const MATTERMOST_MODEL_PICKER_CONTEXT_KEY = "oc_model_picker";
 const MODELS_PAGE_SIZE = 8;
@@ -22,18 +23,18 @@ const ACTION_IDS = {
   back: "mdlback",
 } as const;
 
-export type MattermostModelPickerEntry =
+type MattermostModelPickerEntry =
   | { kind: "summary" }
   | { kind: "providers" }
   | { kind: "models"; provider: string };
 
-export type MattermostModelPickerState =
+type MattermostModelPickerState =
   | { action: "providers"; ownerUserId: string }
   | { action: "back"; ownerUserId: string }
   | { action: "list"; ownerUserId: string; provider: string; page: number }
   | { action: "select"; ownerUserId: string; provider: string; page: number; model: string };
 
-export type MattermostModelPickerRenderedView = {
+type MattermostModelPickerRenderedView = {
   text: string;
   buttons: MattermostInteractiveButtonInput[][];
 };
@@ -64,10 +65,7 @@ function readContextNumber(context: Record<string, unknown>, key: string): numbe
     return value;
   }
   if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+    return parseStrictInteger(value);
   }
   return undefined;
 }
@@ -276,6 +274,7 @@ export function renderMattermostModelSummaryView(params: {
       "",
       "Tap below to browse models, or use:",
       "/oc_model <provider/model> to switch",
+      "Browse keeps the current runtime; use /oc_model <provider/model> --runtime <runtime> to switch runtime too",
       "/oc_model status for details",
     ].join("\n"),
     buttons: [
@@ -344,7 +343,7 @@ export function renderMattermostModelsPickerView(params: {
 
   const page = paginateItems(models, params.page);
   const rows: MattermostInteractiveButtonInput[][] = page.items.map((model) => {
-    const isCurrent = current?.provider === provider && current.model === model;
+    const isCurrent = current?.provider === provider && current?.model === model;
     return [
       buildButton({
         action: "select",

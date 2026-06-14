@@ -1,4 +1,5 @@
-import type { RuntimeEnv } from "../../api.js";
+// Tlon plugin module implements approval runtime behavior.
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { PendingApproval, TlonSettingsStore } from "../settings.js";
 import { normalizeShip } from "../targets.js";
 import { sendDm } from "../urbit/send.js";
@@ -352,6 +353,7 @@ export function createTlonApprovalRuntime(params: {
         return true;
       }
     }
+    throw new Error("Unsupported Tlon admin command");
   };
 
   return {

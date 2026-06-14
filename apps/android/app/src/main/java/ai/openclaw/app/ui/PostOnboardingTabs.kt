@@ -1,13 +1,16 @@
 package ai.openclaw.app.ui
 
-import androidx.compose.foundation.background
+import ai.openclaw.app.HomeDestination
+import ai.openclaw.app.MainViewModel
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -17,7 +20,6 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
@@ -30,8 +32,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,13 +43,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import ai.openclaw.app.HomeDestination
-import ai.openclaw.app.MainViewModel
+import androidx.compose.ui.zIndex
 
 private enum class HomeTab(
   val label: String,
@@ -68,8 +68,12 @@ private enum class StatusVisual {
   Offline,
 }
 
+/** Legacy tab scaffold used by the mobile post-onboarding experience. */
 @Composable
-fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) {
+fun PostOnboardingTabs(
+  viewModel: MainViewModel,
+  modifier: Modifier = Modifier,
+) {
   var activeTab by rememberSaveable { mutableStateOf(HomeTab.Connect) }
   var chatTabStarted by rememberSaveable { mutableStateOf(false) }
   var screenTabStarted by rememberSaveable { mutableStateOf(false) }
@@ -147,6 +151,8 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
           .background(mobileBackgroundGradient),
     ) {
       if (chatTabStarted) {
+        // Keep chat mounted after first use so session state and scroll position
+        // survive tab switches.
         Box(
           modifier =
             Modifier
@@ -159,6 +165,8 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       }
 
       if (screenTabStarted) {
+        // Canvas can be expensive to initialize; keep it mounted once visited
+        // and hide it by alpha/z-order instead of destroying the view tree.
         ScreenTabScreen(
           viewModel = viewModel,
           visible = activeTab == HomeTab.Screen,
@@ -181,8 +189,13 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
   }
 }
 
+/** Screen tab wrapper that refreshes canvas data once per gateway connection. */
 @Composable
-private fun ScreenTabScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
+private fun ScreenTabScreen(
+  viewModel: MainViewModel,
+  visible: Boolean,
+  modifier: Modifier = Modifier,
+) {
   val isConnected by viewModel.isConnected.collectAsState()
   var refreshedForCurrentConnection by rememberSaveable(isConnected) { mutableStateOf(false) }
 
@@ -198,6 +211,7 @@ private fun ScreenTabScreen(viewModel: MainViewModel, visible: Boolean, modifier
   }
 }
 
+/** Top status chip derived from gateway connection text. */
 @Composable
 private fun TopStatusBar(
   statusText: String,
@@ -288,6 +302,7 @@ private fun TopStatusBar(
   }
 }
 
+/** Bottom navigation for the legacy tab scaffold. */
 @Composable
 private fun BottomTabBar(
   activeTab: HomeTab,

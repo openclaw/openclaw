@@ -12,15 +12,16 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   readStringValue,
-} from "openclaw/plugin-sdk/text-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
-import {
-  createFixedWindowRateLimiter,
-  readJsonBodyWithLimit,
-  requestBodyErrorToText,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
+import {
+  createFixedWindowRateLimiter,
+  getPluginRuntimeGatewayRequestScope,
+  readJsonBodyWithLimit,
+  requestBodyErrorToText,
+} from "./nostr-profile-http-runtime.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
@@ -103,9 +104,6 @@ async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Prom
   }
 }
 
-// Export for use in import validation
-export { validateUrlSafety };
-
 // ============================================================================
 // Validation Schemas
 // ============================================================================
@@ -127,6 +125,8 @@ const ProfileUpdateSchema = NostrProfileSchema.extend({
   nip05: nip05FormatSchema,
   lud16: lud16FormatSchema,
 });
+
+const PROFILE_MUTATION_SCOPE = "operator.admin";
 
 // ============================================================================
 // Request Helpers
@@ -298,6 +298,21 @@ function enforceLoopbackMutationGuards(
   return true;
 }
 
+function enforceGatewayMutationScope(
+  ctx: NostrProfileHttpContext,
+  accountId: string,
+  res: ServerResponse,
+): boolean {
+  const runtimeScopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
+  const scopes = Array.isArray(runtimeScopes) ? runtimeScopes : [];
+  if (scopes.includes(PROFILE_MUTATION_SCOPE)) {
+    return true;
+  }
+  ctx.log?.warn?.(`[${accountId}] Rejected profile mutation missing ${PROFILE_MUTATION_SCOPE}`);
+  sendJson(res, 403, { ok: false, error: `missing scope: ${PROFILE_MUTATION_SCOPE}` });
+  return false;
+}
+
 // ============================================================================
 // HTTP Handler
 // ============================================================================
@@ -380,6 +395,9 @@ async function handleUpdateProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }
@@ -483,6 +501,9 @@ async function handleImportProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }

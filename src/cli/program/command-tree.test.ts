@@ -1,3 +1,4 @@
+// Command tree tests cover CLI command hierarchy construction and lookup.
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { removeCommand, removeCommandByName } from "./command-tree.js";
@@ -26,6 +27,15 @@ describe("command-tree", () => {
     program.command("beta");
 
     expect(removeCommandByName(program, "alpha")).toBe(true);
+    expect(program.commands.map((command) => command.name())).toEqual(["beta"]);
+  });
+
+  it("removes by command alias", () => {
+    const program = new Command();
+    program.command("alpha").alias("a");
+    program.command("beta");
+
+    expect(removeCommandByName(program, "a")).toBe(true);
     expect(program.commands.map((command) => command.name())).toEqual(["beta"]);
   });
 

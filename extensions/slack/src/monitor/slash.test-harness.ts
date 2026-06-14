@@ -1,4 +1,7 @@
+// Slack plugin module implements slash harness behavior.
 import { vi } from "vitest";
+
+type AsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
 
 const mocks = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
@@ -7,20 +10,20 @@ const mocks = vi.hoisted(() => ({
   resolveAgentRouteMock: vi.fn(),
   finalizeInboundContextMock: vi.fn(),
   resolveConversationLabelMock: vi.fn(),
-  recordSessionMetaFromInboundMock: vi.fn(),
+  recordSessionMetaFromInboundMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   resolveStorePathMock: vi.fn(),
+  deliverSlackSlashRepliesMock: vi.fn<(params: unknown) => Promise<unknown>>(async () => {}),
 }));
 
-vi.mock("./slash-dispatch.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./slash-dispatch.runtime.js")>(
-    "./slash-dispatch.runtime.js",
-  );
+vi.mock("./slash-dispatch.runtime.js", () => {
   return {
-    ...actual,
+    deliverSlackSlashReplies: (params: unknown) => mocks.deliverSlackSlashRepliesMock(params),
     dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
     finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
     resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
+    resolveChunkMode: vi.fn(() => "auto"),
     resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
+    resolveMarkdownTableMode: vi.fn(() => "auto"),
     recordInboundSessionMetaSafe: (...args: unknown[]) =>
       mocks.recordSessionMetaFromInboundMock(...args),
   };
@@ -33,8 +36,9 @@ type SlashHarnessMocks = {
   resolveAgentRouteMock: ReturnType<typeof vi.fn>;
   finalizeInboundContextMock: ReturnType<typeof vi.fn>;
   resolveConversationLabelMock: ReturnType<typeof vi.fn>;
-  recordSessionMetaFromInboundMock: ReturnType<typeof vi.fn>;
+  recordSessionMetaFromInboundMock: AsyncMock;
   resolveStorePathMock: ReturnType<typeof vi.fn>;
+  deliverSlackSlashRepliesMock: AsyncMock;
 };
 
 export function getSlackSlashMocks(): SlashHarnessMocks {
@@ -54,4 +58,5 @@ export function resetSlackSlashMocks() {
   mocks.resolveConversationLabelMock.mockReset().mockReturnValue(undefined);
   mocks.recordSessionMetaFromInboundMock.mockReset().mockResolvedValue(undefined);
   mocks.resolveStorePathMock.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
+  mocks.deliverSlackSlashRepliesMock.mockReset().mockResolvedValue(undefined);
 }

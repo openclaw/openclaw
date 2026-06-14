@@ -1,7 +1,13 @@
+// Qa Lab plugin module implements docker harness behavior.
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
+import {
+  createQaChannelGatewayConfig,
+  QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+} from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
 const QA_LAB_INTERNAL_PORT = 43123;
@@ -32,7 +38,6 @@ function renderCompose(params: {
   bindUiDist: boolean;
   gatewayPort: number;
   qaLabPort: number;
-  gatewayToken: string;
   includeQaLabUi: boolean;
 }) {
   const imageBlock = renderImageBlock(params);
@@ -55,6 +60,9 @@ ${imageBlock}    pull_policy: never
       timeout: 5s
       retries: 6
       start_period: 3s
+    environment:
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+      OPENCLAW_PROFILE: ""
     command:
       - node
       - dist/index.js
@@ -69,8 +77,10 @@ ${
     ? `  qa-lab:
 ${imageBlock}    pull_policy: never
     ports:
-      - "${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
-${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
+      - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
+    volumes:
+      - ./state:/opt/openclaw-scaffold:ro
+${params.bindUiDist ? `      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
       test:
         - CMD
         - node
@@ -81,34 +91,17 @@ ${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY
       retries: 6
       start_period: 5s
     environment:
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+      OPENCLAW_CONFIG_PATH: /opt/openclaw-scaffold/openclaw.json
+      OPENCLAW_STATE_DIR: /tmp/openclaw/state
       OPENCLAW_SKIP_GMAIL_WATCHER: "1"
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
       OPENCLAW_SKIP_CANVAS_HOST: "1"
       OPENCLAW_PROFILE: ""
     command:
-      - node
-      - dist/index.js
-      - qa
-      - ui
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "${QA_LAB_INTERNAL_PORT}"
-      - --advertise-host
-      - "127.0.0.1"
-      - --advertise-port
-      - "${params.qaLabPort}"
-      - --control-ui-url
-      - "http://127.0.0.1:${params.gatewayPort}/"
-      - --control-ui-proxy-target
-      - "http://openclaw-qa-gateway:18789/"
-      - --control-ui-token
-      - "${params.gatewayToken}"
-${params.bindUiDist ? `      - --ui-dist-dir\n      - "${QA_LAB_UI_OVERLAY_DIR}"\n` : ""}      - --auto-kickoff-target
-      - direct
-      - --send-kickoff-on-start
-      - --embedded-gateway
-      - disabled
+      - sh
+      - -lc
+      - OPENCLAW_QA_CONTROL_UI_PROXY_TOKEN="$(node -e 'const fs=require("node:fs");const cfg=JSON.parse(fs.readFileSync("/opt/openclaw-scaffold/openclaw.json","utf8"));process.stdout.write(cfg.gateway?.auth?.token ?? "")')" exec node dist/index.js qa ui --host 0.0.0.0 --port ${QA_LAB_INTERNAL_PORT} --advertise-host 127.0.0.1 --advertise-port ${params.qaLabPort} --control-ui-url http://127.0.0.1:${params.gatewayPort}/ --control-ui-proxy-target http://openclaw-qa-gateway:18789/${params.bindUiDist ? ` --ui-dist-dir ${QA_LAB_UI_OVERLAY_DIR}` : ""} --auto-kickoff-target direct --send-kickoff-on-start --embedded-gateway disabled
     depends_on:
       qa-mock-openai:
         condition: service_healthy
@@ -119,7 +112,7 @@ ${imageBlock}    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${params.gatewayPort}:18789"
+      - "127.0.0.1:${params.gatewayPort}:18789"
     environment:
       OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json
       OPENCLAW_STATE_DIR: /tmp/openclaw/state
@@ -257,9 +250,12 @@ export async function writeQaDockerHarnessFiles(params: {
     gatewayPort: 18789,
     gatewayToken,
     providerBaseUrl,
-    qaBusBaseUrl,
     workspaceDir: "/tmp/openclaw/workspace",
     controlUiRoot: "/app/dist/control-ui",
+    transportPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+    transportConfig: createQaChannelGatewayConfig({
+      baseUrl: qaBusBaseUrl,
+    }),
   });
 
   const files = [
@@ -280,7 +276,6 @@ export async function writeQaDockerHarnessFiles(params: {
         bindUiDist,
         gatewayPort,
         qaLabPort,
-        gatewayToken,
         includeQaLabUi,
       }),
       "utf8",
@@ -345,11 +340,10 @@ export async function buildQaDockerHarnessImage(
   const runCommand =
     deps?.runCommand ??
     (async (command: string, args: string[], cwd: string) => {
-      const { execFile } = await import("node:child_process");
       return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
         execFile(command, args, { cwd }, (error, stdout, stderr) => {
           if (error) {
-            reject(error);
+            reject(toLintErrorObject(error, "Non-Error rejection"));
             return;
           }
           resolve({ stdout, stderr });
@@ -373,4 +367,18 @@ export async function buildQaDockerHarnessImage(
   );
 
   return { imageName };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

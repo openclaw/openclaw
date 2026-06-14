@@ -1,9 +1,12 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
+// Control UI controller manages dreaming gateway state.
+import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
+import { isPluginEnabledInConfigSnapshot } from "../plugin-activation.ts";
 import type { ConfigSnapshot } from "../types.ts";
 
 export type DreamingPhaseId = "light" | "deep" | "rem";
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
 const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
+const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 
 type DreamingPhaseStatusBase = {
   enabled: boolean;
@@ -24,6 +27,7 @@ type DeepDreamingStatus = DreamingPhaseStatusBase & {
   minUniqueQueries: number;
   recencyHalfLifeDays: number;
   maxAgeDays?: number;
+  maxPromotedSnippetTokens?: number;
 };
 
 type RemDreamingStatus = DreamingPhaseStatusBase & {
@@ -79,6 +83,86 @@ export type DreamingStatus = {
   };
 };
 
+export type WikiImportInsightItem = {
+  pagePath: string;
+  title: string;
+  riskLevel: "low" | "medium" | "high" | "unknown";
+  riskReasons: string[];
+  labels: string[];
+  topicKey: string;
+  topicLabel: string;
+  digestStatus: "available" | "withheld";
+  activeBranchMessages: number;
+  userMessageCount: number;
+  assistantMessageCount: number;
+  firstUserLine?: string;
+  lastUserLine?: string;
+  assistantOpener?: string;
+  summary: string;
+  candidateSignals: string[];
+  correctionSignals: string[];
+  preferenceSignals: string[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type WikiImportInsightCluster = {
+  key: string;
+  label: string;
+  itemCount: number;
+  highRiskCount: number;
+  withheldCount: number;
+  preferenceSignalCount: number;
+  updatedAt?: string;
+  items: WikiImportInsightItem[];
+};
+
+export type WikiImportInsights = {
+  sourceType: "chatgpt";
+  totalItems: number;
+  totalClusters: number;
+  clusters: WikiImportInsightCluster[];
+};
+
+export type WikiMemoryPalaceItem = {
+  pagePath: string;
+  title: string;
+  kind: "entity" | "concept" | "source" | "synthesis" | "report";
+  id?: string;
+  updatedAt?: string;
+  sourceType?: string;
+  claimCount: number;
+  questionCount: number;
+  contradictionCount: number;
+  claims: string[];
+  questions: string[];
+  contradictions: string[];
+  snippet?: string;
+};
+
+export type WikiMemoryPalaceCluster = {
+  key: WikiMemoryPalaceItem["kind"];
+  label: string;
+  itemCount: number;
+  claimCount: number;
+  questionCount: number;
+  contradictionCount: number;
+  updatedAt?: string;
+  items: WikiMemoryPalaceItem[];
+};
+
+export type WikiMemoryPalacePageCounts = Record<WikiMemoryPalaceItem["kind"], number>;
+
+export type WikiMemoryPalace = {
+  totalItems: number;
+  totalPages: number;
+  pageCounts: WikiMemoryPalacePageCounts;
+  totalClaims: number;
+  totalQuestions: number;
+  totalContradictions: number;
+  clusters: WikiMemoryPalaceCluster[];
+};
+
 type DoctorMemoryStatusPayload = {
   dreaming?: unknown;
 };
@@ -92,27 +176,150 @@ type DoctorMemoryDreamDiaryPayload = {
 type DoctorMemoryDreamActionPayload = {
   action?: unknown;
   removedEntries?: unknown;
+  dedupedEntries?: unknown;
+  keptEntries?: unknown;
   written?: unknown;
   replaced?: unknown;
   removedShortTermEntries?: unknown;
+  changed?: unknown;
+  archiveDir?: unknown;
+  archivedSessionCorpus?: unknown;
+  archivedSessionIngestion?: unknown;
+  archivedDreamsDiary?: unknown;
+  warnings?: unknown;
+};
+
+type WikiImportInsightsPayload = {
+  sourceType?: unknown;
+  totalItems?: unknown;
+  totalClusters?: unknown;
+  clusters?: unknown;
+};
+
+type WikiMemoryPalacePayload = {
+  totalItems?: unknown;
+  totalPages?: unknown;
+  pageCounts?: unknown;
+  totalClaims?: unknown;
+  totalQuestions?: unknown;
+  totalContradictions?: unknown;
+  clusters?: unknown;
 };
 
 export type DreamingState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  hello: GatewayHelloOk | null;
   configSnapshot: ConfigSnapshot | null;
   applySessionKey: string;
+  selectedAgentId: string | null;
+  dreamingStatusRequestAgentId?: string | null;
+  dreamingStatusRequestGeneration?: number;
+  dreamingStatusActiveRequestGeneration?: number | null;
+  dreamingStatusAgentId?: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: DreamingStatus | null;
   dreamingModeSaving: boolean;
+  dreamDiaryRequestAgentId?: string | null;
+  dreamDiaryRequestGeneration?: number;
+  dreamDiaryActiveRequestGeneration?: number | null;
+  dreamDiaryAgentId?: string | null;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: WikiImportInsights | null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: WikiMemoryPalace | null;
   lastError: string | null;
 };
+
+function confirmDreamingAction(message: string): boolean {
+  if (typeof globalThis.confirm !== "function") {
+    return true;
+  }
+  return globalThis.confirm(message);
+}
+
+function isMemoryWikiEnabled(state: DreamingState): boolean {
+  return isPluginEnabledInConfigSnapshot(state.configSnapshot, MEMORY_WIKI_PLUGIN_ID, {
+    enabledByDefault: false,
+  });
+}
+
+function hasGatewayMethod(state: DreamingState, method: string): boolean | null {
+  const methods = state.hello?.features?.methods;
+  if (!Array.isArray(methods)) {
+    return null;
+  }
+  return methods.includes(method);
+}
+
+function canCallMemoryWikiMethod(state: DreamingState, method: string): boolean {
+  const available = hasGatewayMethod(state, method);
+  if (available !== null) {
+    return available;
+  }
+  return isMemoryWikiEnabled(state);
+}
+
+function buildDreamDiaryActionSuccessMessage(
+  method:
+    | "doctor.memory.backfillDreamDiary"
+    | "doctor.memory.resetDreamDiary"
+    | "doctor.memory.resetGroundedShortTerm"
+    | "doctor.memory.repairDreamingArtifacts"
+    | "doctor.memory.dedupeDreamDiary",
+  payload: DoctorMemoryDreamActionPayload | undefined,
+): string {
+  switch (method) {
+    case "doctor.memory.dedupeDreamDiary": {
+      const removed =
+        typeof payload?.dedupedEntries === "number"
+          ? payload.dedupedEntries
+          : typeof payload?.removedEntries === "number"
+            ? payload.removedEntries
+            : 0;
+      const kept = typeof payload?.keptEntries === "number" ? payload.keptEntries : undefined;
+      return kept !== undefined
+        ? `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"} and kept ${kept}.`
+        : `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"}.`;
+    }
+    case "doctor.memory.repairDreamingArtifacts": {
+      const actions: string[] = [];
+      const archiveDir = normalizeTrimmedString(payload?.archiveDir);
+      if (payload?.archivedSessionCorpus === true) {
+        actions.push("archived session corpus");
+      }
+      if (payload?.archivedSessionIngestion === true) {
+        actions.push("archived ingestion state");
+      }
+      if (payload?.archivedDreamsDiary === true) {
+        actions.push("archived dream diary");
+      }
+      if (actions.length === 0) {
+        return "Dream cache repair finished with no changes.";
+      }
+      return archiveDir
+        ? `Dream cache repair complete: ${actions.join(", ")}. Archive: ${archiveDir}`
+        : `Dream cache repair complete: ${actions.join(", ")}.`;
+    }
+    case "doctor.memory.backfillDreamDiary":
+      return `Backfilled ${typeof payload?.written === "number" ? payload.written : 0} dream diary entries.`;
+    case "doctor.memory.resetDreamDiary":
+      return `Removed ${typeof payload?.removedEntries === "number" ? payload.removedEntries : 0} backfilled dream diary entries.`;
+    case "doctor.memory.resetGroundedShortTerm":
+      return `Cleared ${typeof payload?.removedShortTermEntries === "number" ? payload.removedShortTermEntries : 0} replayed short-term entries.`;
+  }
+  return "Dream diary action complete.";
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -127,6 +334,22 @@ function normalizeTrimmedString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveSelectedAgentId(state: DreamingState): string | null {
+  return normalizeTrimmedString(state.selectedAgentId) ?? null;
+}
+
+function buildSelectedAgentPayloadForAgentId(
+  agentId: string | null,
+): { agentId: string } | Record<string, never> {
+  return agentId ? { agentId } : {};
+}
+
+function buildSelectedAgentPayload(
+  state: DreamingState,
+): { agentId: string } | Record<string, never> {
+  return buildSelectedAgentPayloadForAgentId(resolveSelectedAgentId(state));
 }
 
 function normalizeBoolean(value: unknown, fallback = false): boolean {
@@ -232,6 +455,273 @@ function normalizeDreamingEntries(raw: unknown): DreamingEntry[] {
     .map((entry) => normalizeDreamingEntry(entry))
     .filter((entry): entry is DreamingEntry => entry !== null);
 }
+
+function normalizeStringArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
+}
+
+function normalizeWikiImportInsightItem(raw: unknown): WikiImportInsightItem | null {
+  const record = asRecord(raw);
+  const pagePath = normalizeTrimmedString(record?.pagePath);
+  const title = normalizeTrimmedString(record?.title);
+  const riskLevel = normalizeTrimmedString(record?.riskLevel);
+  const topicKey = normalizeTrimmedString(record?.topicKey);
+  const topicLabel = normalizeTrimmedString(record?.topicLabel);
+  const digestStatus = normalizeTrimmedString(record?.digestStatus);
+  const summary = normalizeTrimmedString(record?.summary);
+  if (
+    !pagePath ||
+    !title ||
+    !topicKey ||
+    !topicLabel ||
+    !summary ||
+    (riskLevel !== "low" &&
+      riskLevel !== "medium" &&
+      riskLevel !== "high" &&
+      riskLevel !== "unknown") ||
+    (digestStatus !== "available" && digestStatus !== "withheld")
+  ) {
+    return null;
+  }
+  return {
+    pagePath,
+    title,
+    riskLevel,
+    riskReasons: normalizeStringArray(record?.riskReasons),
+    labels: normalizeStringArray(record?.labels),
+    topicKey,
+    topicLabel,
+    digestStatus,
+    activeBranchMessages: normalizeFiniteInt(record?.activeBranchMessages, 0),
+    userMessageCount: normalizeFiniteInt(record?.userMessageCount, 0),
+    assistantMessageCount: normalizeFiniteInt(record?.assistantMessageCount, 0),
+    ...(normalizeTrimmedString(record?.firstUserLine)
+      ? { firstUserLine: normalizeTrimmedString(record?.firstUserLine) }
+      : {}),
+    ...(normalizeTrimmedString(record?.lastUserLine)
+      ? { lastUserLine: normalizeTrimmedString(record?.lastUserLine) }
+      : {}),
+    ...(normalizeTrimmedString(record?.assistantOpener)
+      ? { assistantOpener: normalizeTrimmedString(record?.assistantOpener) }
+      : {}),
+    summary,
+    candidateSignals: normalizeStringArray(record?.candidateSignals),
+    correctionSignals: normalizeStringArray(record?.correctionSignals),
+    preferenceSignals: normalizeStringArray(record?.preferenceSignals),
+    ...(normalizeTrimmedString(record?.createdAt)
+      ? { createdAt: normalizeTrimmedString(record?.createdAt) }
+      : {}),
+    ...(normalizeTrimmedString(record?.updatedAt)
+      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
+      : {}),
+  };
+}
+
+function normalizeWikiImportInsightCluster(raw: unknown): WikiImportInsightCluster | null {
+  const record = asRecord(raw);
+  const key = normalizeTrimmedString(record?.key);
+  const label = normalizeTrimmedString(record?.label);
+  if (!key || !label) {
+    return null;
+  }
+  const items = Array.isArray(record?.items)
+    ? record.items
+        .map((entry) => normalizeWikiImportInsightItem(entry))
+        .filter((entry): entry is WikiImportInsightItem => entry !== null)
+    : [];
+  return {
+    key,
+    label,
+    itemCount: normalizeFiniteInt(record?.itemCount, items.length),
+    highRiskCount: normalizeFiniteInt(
+      record?.highRiskCount,
+      items.filter((entry) => entry.riskLevel === "high").length,
+    ),
+    withheldCount: normalizeFiniteInt(
+      record?.withheldCount,
+      items.filter((entry) => entry.digestStatus === "withheld").length,
+    ),
+    preferenceSignalCount: normalizeFiniteInt(
+      record?.preferenceSignalCount,
+      items.reduce((sum, entry) => sum + entry.preferenceSignals.length, 0),
+    ),
+    ...(normalizeTrimmedString(record?.updatedAt)
+      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
+      : {}),
+    items,
+  };
+}
+
+function normalizeWikiImportInsights(raw: unknown): WikiImportInsights {
+  const record = asRecord(raw);
+  const clusters = Array.isArray(record?.clusters)
+    ? record.clusters
+        .map((entry) => normalizeWikiImportInsightCluster(entry))
+        .filter((entry): entry is WikiImportInsightCluster => entry !== null)
+    : [];
+  return {
+    sourceType: record?.sourceType === "chatgpt" ? "chatgpt" : "chatgpt",
+    totalItems: normalizeFiniteInt(
+      record?.totalItems,
+      clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
+    ),
+    totalClusters: normalizeFiniteInt(record?.totalClusters, clusters.length),
+    clusters,
+  };
+}
+
+function normalizeWikiPageKind(value: unknown): WikiMemoryPalaceItem["kind"] | undefined {
+  return value === "entity" ||
+    value === "concept" ||
+    value === "source" ||
+    value === "synthesis" ||
+    value === "report"
+    ? value
+    : undefined;
+}
+
+function createEmptyWikiMemoryPalacePageCounts(): WikiMemoryPalacePageCounts {
+  return {
+    synthesis: 0,
+    entity: 0,
+    concept: 0,
+    source: 0,
+    report: 0,
+  };
+}
+
+function normalizeWikiMemoryPalacePageCounts(
+  raw: unknown,
+  fallback: WikiMemoryPalacePageCounts,
+): WikiMemoryPalacePageCounts {
+  const record = asRecord(raw);
+  return {
+    synthesis: normalizeFiniteInt(record?.synthesis, fallback.synthesis),
+    entity: normalizeFiniteInt(record?.entity, fallback.entity),
+    concept: normalizeFiniteInt(record?.concept, fallback.concept),
+    source: normalizeFiniteInt(record?.source, fallback.source),
+    report: normalizeFiniteInt(record?.report, fallback.report),
+  };
+}
+
+function sumWikiMemoryPalacePageCounts(pageCounts: WikiMemoryPalacePageCounts): number {
+  return (
+    pageCounts.synthesis +
+    pageCounts.entity +
+    pageCounts.concept +
+    pageCounts.source +
+    pageCounts.report
+  );
+}
+
+function normalizeWikiMemoryPalaceItem(raw: unknown): WikiMemoryPalaceItem | null {
+  const record = asRecord(raw);
+  const pagePath = normalizeTrimmedString(record?.pagePath);
+  const title = normalizeTrimmedString(record?.title);
+  const kind = normalizeWikiPageKind(record?.kind);
+  if (!pagePath || !title || !kind) {
+    return null;
+  }
+  return {
+    pagePath,
+    title,
+    kind,
+    ...(normalizeTrimmedString(record?.id) ? { id: normalizeTrimmedString(record?.id) } : {}),
+    ...(normalizeTrimmedString(record?.updatedAt)
+      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
+      : {}),
+    ...(normalizeTrimmedString(record?.sourceType)
+      ? { sourceType: normalizeTrimmedString(record?.sourceType) }
+      : {}),
+    claimCount: normalizeFiniteInt(record?.claimCount, 0),
+    questionCount: normalizeFiniteInt(record?.questionCount, 0),
+    contradictionCount: normalizeFiniteInt(record?.contradictionCount, 0),
+    claims: normalizeStringArray(record?.claims),
+    questions: normalizeStringArray(record?.questions),
+    contradictions: normalizeStringArray(record?.contradictions),
+    ...(normalizeTrimmedString(record?.snippet)
+      ? { snippet: normalizeTrimmedString(record?.snippet) }
+      : {}),
+  };
+}
+
+function normalizeWikiMemoryPalaceCluster(raw: unknown): WikiMemoryPalaceCluster | null {
+  const record = asRecord(raw);
+  const key = normalizeWikiPageKind(record?.key);
+  const label = normalizeTrimmedString(record?.label);
+  if (!key || !label) {
+    return null;
+  }
+  const items = Array.isArray(record?.items)
+    ? record.items
+        .map((entry) => normalizeWikiMemoryPalaceItem(entry))
+        .filter((entry): entry is WikiMemoryPalaceItem => entry !== null)
+    : [];
+  return {
+    key,
+    label,
+    itemCount: normalizeFiniteInt(record?.itemCount, items.length),
+    claimCount: normalizeFiniteInt(
+      record?.claimCount,
+      items.reduce((sum, item) => sum + item.claimCount, 0),
+    ),
+    questionCount: normalizeFiniteInt(
+      record?.questionCount,
+      items.reduce((sum, item) => sum + item.questionCount, 0),
+    ),
+    contradictionCount: normalizeFiniteInt(
+      record?.contradictionCount,
+      items.reduce((sum, item) => sum + item.contradictionCount, 0),
+    ),
+    ...(normalizeTrimmedString(record?.updatedAt)
+      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
+      : {}),
+    items,
+  };
+}
+
+function normalizeWikiMemoryPalace(raw: unknown): WikiMemoryPalace {
+  const record = asRecord(raw);
+  const clusters = Array.isArray(record?.clusters)
+    ? record.clusters
+        .map((entry) => normalizeWikiMemoryPalaceCluster(entry))
+        .filter((entry): entry is WikiMemoryPalaceCluster => entry !== null)
+    : [];
+  const totalItems = normalizeFiniteInt(
+    record?.totalItems,
+    clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
+  );
+  const fallbackPageCounts = createEmptyWikiMemoryPalacePageCounts();
+  for (const cluster of clusters) {
+    fallbackPageCounts[cluster.key] += cluster.itemCount;
+  }
+  const pageCounts = normalizeWikiMemoryPalacePageCounts(record?.pageCounts, fallbackPageCounts);
+  const fallbackTotalPages = sumWikiMemoryPalacePageCounts(pageCounts) || totalItems;
+  return {
+    totalItems,
+    totalPages: normalizeFiniteInt(record?.totalPages, fallbackTotalPages),
+    pageCounts,
+    totalClaims: normalizeFiniteInt(
+      record?.totalClaims,
+      clusters.reduce((sum, cluster) => sum + cluster.claimCount, 0),
+    ),
+    totalQuestions: normalizeFiniteInt(
+      record?.totalQuestions,
+      clusters.reduce((sum, cluster) => sum + cluster.questionCount, 0),
+    ),
+    totalContradictions: normalizeFiniteInt(
+      record?.totalContradictions,
+      clusters.reduce((sum, cluster) => sum + cluster.contradictionCount, 0),
+    ),
+    clusters,
+  };
+}
+
 function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const record = asRecord(raw);
   if (!record) {
@@ -258,6 +748,15 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
             recencyHalfLifeDays: normalizeFiniteInt(deepRecord.recencyHalfLifeDays, 0),
             ...(typeof deepRecord.maxAgeDays === "number" && Number.isFinite(deepRecord.maxAgeDays)
               ? { maxAgeDays: normalizeFiniteInt(deepRecord.maxAgeDays, 0) }
+              : {}),
+            ...(typeof deepRecord.maxPromotedSnippetTokens === "number" &&
+            Number.isFinite(deepRecord.maxPromotedSnippetTokens)
+              ? {
+                  maxPromotedSnippetTokens: normalizeFiniteInt(
+                    deepRecord.maxPromotedSnippetTokens,
+                    0,
+                  ),
+                }
               : {}),
           },
           rem: {
@@ -302,35 +801,83 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
 }
 
 export async function loadDreamingStatus(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.dreamingStatusLoading) {
+  if (!state.client || !state.connected) {
     return;
   }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.dreamingStatusLoading && state.dreamingStatusRequestAgentId === agentId) {
+    return;
+  }
+  if (state.dreamingStatusAgentId !== agentId) {
+    state.dreamingStatus = null;
+  }
+  const requestGeneration = (state.dreamingStatusRequestGeneration ?? 0) + 1;
+  state.dreamingStatusRequestGeneration = requestGeneration;
+  state.dreamingStatusActiveRequestGeneration = requestGeneration;
+  state.dreamingStatusRequestAgentId = agentId;
   state.dreamingStatusLoading = true;
   state.dreamingStatusError = null;
   try {
     const payload = await state.client.request<DoctorMemoryStatusPayload>(
       "doctor.memory.status",
-      {},
+      buildSelectedAgentPayloadForAgentId(agentId),
     );
+    if (
+      state.dreamingStatusActiveRequestGeneration !== requestGeneration ||
+      state.dreamingStatusRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     state.dreamingStatus = normalizeDreamingStatus(payload?.dreaming);
+    state.dreamingStatusAgentId = agentId;
   } catch (err) {
-    state.dreamingStatusError = String(err);
+    if (
+      state.dreamingStatusActiveRequestGeneration === requestGeneration &&
+      state.dreamingStatusRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.dreamingStatusError = String(err);
+    }
   } finally {
-    state.dreamingStatusLoading = false;
+    if (state.dreamingStatusActiveRequestGeneration === requestGeneration) {
+      state.dreamingStatusLoading = false;
+      state.dreamingStatusRequestAgentId = null;
+      state.dreamingStatusActiveRequestGeneration = null;
+    }
   }
 }
 
 export async function loadDreamDiary(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.dreamDiaryLoading) {
+  if (!state.client || !state.connected) {
     return;
   }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.dreamDiaryLoading && state.dreamDiaryRequestAgentId === agentId) {
+    return;
+  }
+  if (state.dreamDiaryAgentId !== agentId) {
+    state.dreamDiaryPath = null;
+    state.dreamDiaryContent = null;
+  }
+  const requestGeneration = (state.dreamDiaryRequestGeneration ?? 0) + 1;
+  state.dreamDiaryRequestGeneration = requestGeneration;
+  state.dreamDiaryActiveRequestGeneration = requestGeneration;
+  state.dreamDiaryRequestAgentId = agentId;
   state.dreamDiaryLoading = true;
   state.dreamDiaryError = null;
   try {
     const payload = await state.client.request<DoctorMemoryDreamDiaryPayload>(
       "doctor.memory.dreamDiary",
-      {},
+      buildSelectedAgentPayloadForAgentId(agentId),
     );
+    if (
+      state.dreamDiaryActiveRequestGeneration !== requestGeneration ||
+      state.dreamDiaryRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     const path = normalizeTrimmedString(payload?.path) ?? DEFAULT_DREAM_DIARY_PATH;
     const found = payload?.found === true;
     if (found) {
@@ -340,10 +887,66 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
       state.dreamDiaryPath = path;
       state.dreamDiaryContent = null;
     }
+    state.dreamDiaryAgentId = agentId;
   } catch (err) {
-    state.dreamDiaryError = String(err);
+    if (
+      state.dreamDiaryActiveRequestGeneration === requestGeneration &&
+      state.dreamDiaryRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.dreamDiaryError = String(err);
+    }
   } finally {
-    state.dreamDiaryLoading = false;
+    if (state.dreamDiaryActiveRequestGeneration === requestGeneration) {
+      state.dreamDiaryLoading = false;
+      state.dreamDiaryRequestAgentId = null;
+      state.dreamDiaryActiveRequestGeneration = null;
+    }
+  }
+}
+
+export async function loadWikiImportInsights(state: DreamingState): Promise<void> {
+  if (!state.client || !state.connected || state.wikiImportInsightsLoading) {
+    return;
+  }
+  if (!canCallMemoryWikiMethod(state, "wiki.importInsights")) {
+    state.wikiImportInsights = null;
+    state.wikiImportInsightsError = null;
+    return;
+  }
+  state.wikiImportInsightsLoading = true;
+  state.wikiImportInsightsError = null;
+  try {
+    const payload = await state.client.request<WikiImportInsightsPayload>(
+      "wiki.importInsights",
+      {},
+    );
+    state.wikiImportInsights = normalizeWikiImportInsights(payload);
+  } catch (err) {
+    state.wikiImportInsightsError = String(err);
+  } finally {
+    state.wikiImportInsightsLoading = false;
+  }
+}
+
+export async function loadWikiMemoryPalace(state: DreamingState): Promise<void> {
+  if (!state.client || !state.connected || state.wikiMemoryPalaceLoading) {
+    return;
+  }
+  if (!canCallMemoryWikiMethod(state, "wiki.palace")) {
+    state.wikiMemoryPalace = null;
+    state.wikiMemoryPalaceError = null;
+    return;
+  }
+  state.wikiMemoryPalaceLoading = true;
+  state.wikiMemoryPalaceError = null;
+  try {
+    const payload = await state.client.request<WikiMemoryPalacePayload>("wiki.palace", {});
+    state.wikiMemoryPalace = normalizeWikiMemoryPalace(payload);
+  } catch (err) {
+    state.wikiMemoryPalaceError = String(err);
+  } finally {
+    state.wikiMemoryPalaceLoading = false;
   }
 }
 
@@ -352,7 +955,9 @@ async function runDreamDiaryAction(
   method:
     | "doctor.memory.backfillDreamDiary"
     | "doctor.memory.resetDreamDiary"
-    | "doctor.memory.resetGroundedShortTerm",
+    | "doctor.memory.resetGroundedShortTerm"
+    | "doctor.memory.repairDreamingArtifacts"
+    | "doctor.memory.dedupeDreamDiary",
   options?: {
     reloadDiary?: boolean;
   },
@@ -360,20 +965,51 @@ async function runDreamDiaryAction(
   if (!state.client || !state.connected || state.dreamDiaryActionLoading) {
     return false;
   }
+  if (
+    method === "doctor.memory.repairDreamingArtifacts" &&
+    !confirmDreamingAction(
+      "Repair Dream Cache? This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
+    )
+  ) {
+    return false;
+  }
+  if (
+    method === "doctor.memory.dedupeDreamDiary" &&
+    !confirmDreamingAction(
+      "Dedupe Dream Diary? This rewrites DREAMS.md and removes only exact duplicate diary entries.",
+    )
+  ) {
+    return false;
+  }
   state.dreamDiaryActionLoading = true;
   state.dreamingStatusError = null;
   state.dreamDiaryError = null;
+  state.dreamDiaryActionMessage = null;
+  state.dreamDiaryActionArchivePath = null;
   try {
-    await state.client.request<DoctorMemoryDreamActionPayload>(method, {});
+    const payload = await state.client.request<DoctorMemoryDreamActionPayload>(
+      method,
+      buildSelectedAgentPayload(state),
+    );
     if (options?.reloadDiary !== false) {
       await loadDreamDiary(state);
     }
     await loadDreamingStatus(state);
+    state.dreamDiaryActionArchivePath =
+      method === "doctor.memory.repairDreamingArtifacts"
+        ? (normalizeTrimmedString(payload?.archiveDir) ?? null)
+        : null;
+    state.dreamDiaryActionMessage = {
+      kind: "success",
+      text: buildDreamDiaryActionSuccessMessage(method, payload),
+    };
     return true;
   } catch (err) {
     const message = String(err);
     state.dreamingStatusError = message;
     state.lastError = message;
+    state.dreamDiaryActionArchivePath = null;
+    state.dreamDiaryActionMessage = { kind: "error", text: message };
     return false;
   } finally {
     state.dreamDiaryActionLoading = false;
@@ -392,6 +1028,44 @@ export async function resetGroundedShortTerm(state: DreamingState): Promise<bool
   return runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm", {
     reloadDiary: false,
   });
+}
+
+export async function repairDreamingArtifacts(state: DreamingState): Promise<boolean> {
+  return runDreamDiaryAction(state, "doctor.memory.repairDreamingArtifacts", {
+    reloadDiary: false,
+  });
+}
+
+export async function copyDreamingArchivePath(state: DreamingState): Promise<boolean> {
+  const path = state.dreamDiaryActionArchivePath;
+  if (!path) {
+    return false;
+  }
+  if (!globalThis.navigator?.clipboard?.writeText) {
+    state.dreamDiaryActionMessage = {
+      kind: "error",
+      text: "Could not copy archive path.",
+    };
+    return false;
+  }
+  try {
+    await globalThis.navigator.clipboard.writeText(path);
+    state.dreamDiaryActionMessage = {
+      kind: "success",
+      text: "Archive path copied.",
+    };
+    return true;
+  } catch {
+    state.dreamDiaryActionMessage = {
+      kind: "error",
+      text: "Could not copy archive path.",
+    };
+    return false;
+  }
+}
+
+export async function dedupeDreamDiary(state: DreamingState): Promise<boolean> {
+  return runDreamDiaryAction(state, "doctor.memory.dedupeDreamDiary");
 }
 
 async function writeDreamingPatch(

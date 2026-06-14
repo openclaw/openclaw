@@ -1,4 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
+// Gateway startup session-store migration runner.
+// Keeps old orphaned session keys from surviving process upgrades.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { migrateOrphanedSessionKeys } from "../infra/state-migrations.js";
 
 type SessionMigrationLogger = {

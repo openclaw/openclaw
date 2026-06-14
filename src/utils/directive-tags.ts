@@ -1,4 +1,5 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Directive tag helpers parse inline directive tags from user text.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type InlineDirectiveParseResult = {
   text: string;
@@ -20,6 +21,7 @@ const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
   /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi;
+const MAX_REPLY_DIRECTIVE_ID_LENGTH = 256;
 
 function replacementPreservesWordBoundary(source: string, offset: number, length: number): string {
   const before = source[offset - 1];
@@ -92,6 +94,33 @@ export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDir
   };
 }
 
+function stripUnsafeReplyDirectiveChars(value: string): string {
+  let next = "";
+  for (const ch of value) {
+    const code = ch.charCodeAt(0);
+    if ((code >= 0 && code <= 31) || code === 127 || ch === "[" || ch === "]") {
+      continue;
+    }
+    next += ch;
+  }
+  return next;
+}
+
+export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefined {
+  const trimmed = rawReplyToId?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const sanitized = stripUnsafeReplyDirectiveChars(trimmed).trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  if (sanitized.length > MAX_REPLY_DIRECTIVE_ID_LENGTH) {
+    return sanitized.slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH);
+  }
+  return sanitized;
+}
+
 export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
@@ -109,8 +138,11 @@ function isMessageTextPart(part: MessagePart): part is MessageTextPart {
 }
 
 /**
- * Strips inline directive tags from message text blocks while preserving message shape.
+ * Strips inline directive tags from text content while preserving message shape.
  * Empty post-strip text stays empty-string to preserve caller semantics.
+ * Returns the input message reference (including the original content array) when
+ * no text part changed, and reuses unchanged text-part references in mixed content,
+ * so identity-equality consumers avoid spurious churn.
  */
 export function stripInlineDirectiveTagsFromMessageForDisplay(
   message: DisplayMessageWithContent | undefined,
@@ -121,16 +153,29 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
   if (!Array.isArray(message.content)) {
     return message;
   }
-  const cleaned = message.content.map((part) => {
-    if (!part || typeof part !== "object") {
-      return part;
+  let cleaned: unknown[] | undefined;
+  for (let i = 0; i < message.content.length; i++) {
+    const part = message.content[i];
+    let next: unknown = part;
+    if (part && typeof part === "object" && isMessageTextPart(part as MessagePart)) {
+      const record = part as MessageTextPart;
+      const stripped = stripInlineDirectiveTagsForDisplay(record.text);
+      if (stripped.changed) {
+        next = { ...record, text: stripped.text };
+      }
     }
-    const record = part as MessagePart;
-    if (!isMessageTextPart(record)) {
-      return part;
+    if (next === part) {
+      cleaned?.push(part);
+      continue;
     }
-    return { ...record, text: stripInlineDirectiveTagsForDisplay(record.text).text };
-  });
+    if (!cleaned) {
+      cleaned = message.content.slice(0, i);
+    }
+    cleaned.push(next);
+  }
+  if (!cleaned) {
+    return message;
+  }
   return { ...message, content: cleaned };
 }
 

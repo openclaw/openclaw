@@ -31,6 +31,7 @@ private data class ToolDisplayConfig(
   val tools: Map<String, ToolDisplaySpec>? = null,
 )
 
+/** Compact UI summary for a running or pending tool call. */
 data class ToolDisplaySummary(
   val name: String,
   val emoji: String,
@@ -39,6 +40,7 @@ data class ToolDisplaySummary(
   val verb: String?,
   val detail: String?,
 ) {
+  /** Optional second-line detail assembled from the action verb and best argument preview. */
   val detailLine: String?
     get() {
       val parts = mutableListOf<String>()
@@ -47,16 +49,20 @@ data class ToolDisplaySummary(
       return if (parts.isEmpty()) null else parts.joinToString(" · ")
     }
 
+  /** Single-line fallback for compact tool rows that do not render detail separately. */
   val summaryLine: String
-    get() = if (detailLine != null) "${emoji} ${label}: ${detailLine}" else "${emoji} ${label}"
+    get() = if (detailLine != null) "$emoji $label: $detailLine" else "$emoji $label"
 }
 
+/** Resolves tool-call names and args into user-facing Android display text. */
 object ToolDisplayRegistry {
   private const val CONFIG_ASSET = "tool-display.json"
 
   private val json = Json { ignoreUnknownKeys = true }
+
   @Volatile private var cachedConfig: ToolDisplayConfig? = null
 
+  /** Resolves a raw tool call into stable, bounded UI text for pending-tool surfaces. */
   fun resolve(
     context: Context,
     name: String?,
@@ -85,6 +91,8 @@ object ToolDisplayRegistry {
       detail = pathDetail(args)
     }
 
+    // Action-specific detail keys win over tool defaults so commands like
+    // read/write can surface the most useful argument for that action.
     val detailKeys = actionSpec?.detailKeys ?: spec?.detailKeys ?: fallback?.detailKeys ?: emptyList()
     if (detail == null) {
       detail = firstValue(args, detailKeys)
@@ -112,11 +120,17 @@ object ToolDisplayRegistry {
     val existing = cachedConfig
     if (existing != null) return existing
     return try {
-      val jsonString = context.assets.open(CONFIG_ASSET).bufferedReader().use { it.readText() }
+      val jsonString =
+        context.assets
+          .open(CONFIG_ASSET)
+          .bufferedReader()
+          .use { it.readText() }
       val decoded = json.decodeFromString(ToolDisplayConfig.serializer(), jsonString)
       cachedConfig = decoded
       decoded
     } catch (_: Throwable) {
+      // The chat UI should still render pending tools if the asset is absent or
+      // malformed in debug builds.
       val fallback = ToolDisplayConfig()
       cachedConfig = fallback
       fallback
@@ -130,8 +144,11 @@ object ToolDisplayRegistry {
       .split(Regex("\\s+"))
       .joinToString(" ") { part ->
         val upper = part.uppercase()
-        if (part.length <= 2 && part == upper) part
-        else upper.firstOrNull()?.toString().orEmpty() + part.lowercase().drop(1)
+        if (part.length <= 2 && part == upper) {
+          part
+        } else {
+          upper.firstOrNull()?.toString().orEmpty() + part.lowercase().drop(1)
+        }
       }
   }
 
@@ -147,17 +164,18 @@ object ToolDisplayRegistry {
     val limit = args["limit"].asNumberOrNull()
     return if (offset != null && limit != null) {
       val end = offset + limit
-      "${path}:${offset.toInt()}-${end.toInt()}"
+      "$path:${offset.toInt()}-${end.toInt()}"
     } else {
       path
     }
   }
 
-  private fun pathDetail(args: JsonObject?): String? {
-    return args?.get("path")?.asStringOrNull()
-  }
+  private fun pathDetail(args: JsonObject?): String? = args?.get("path")?.asStringOrNull()
 
-  private fun firstValue(args: JsonObject?, keys: List<String>): String? {
+  private fun firstValue(
+    args: JsonObject?,
+    keys: List<String>,
+  ): String? {
     for (key in keys) {
       val value = valueForPath(args, key)
       val rendered = renderValue(value)
@@ -166,7 +184,10 @@ object ToolDisplayRegistry {
     return null
   }
 
-  private fun valueForPath(args: JsonObject?, path: String): JsonElement? {
+  private fun valueForPath(
+    args: JsonObject?,
+    path: String,
+  ): JsonElement? {
     var current: JsonElement? = args
     for (segment in path.split(".")) {
       if (segment.isBlank()) return null
@@ -182,7 +203,12 @@ object ToolDisplayRegistry {
       if (value.isString) {
         val trimmed = value.contentOrNull?.trim().orEmpty()
         if (trimmed.isEmpty()) return null
-        val firstLine = trimmed.lineSequence().firstOrNull()?.trim().orEmpty()
+        val firstLine =
+          trimmed
+            .lineSequence()
+            .firstOrNull()
+            ?.trim()
+            .orEmpty()
         if (firstLine.isEmpty()) return null
         return if (firstLine.length > 160) "${firstLine.take(157)}…" else firstLine
       }
@@ -195,16 +221,18 @@ object ToolDisplayRegistry {
       val items = value.mapNotNull { renderValue(it) }
       if (items.isEmpty()) return null
       val preview = items.take(3).joinToString(", ")
-      return if (items.size > 3) "${preview}…" else preview
+      return if (items.size > 3) "$preview…" else preview
     }
     return null
   }
 
   private fun shortenHomeInString(value: String): String {
-    val home = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
-      ?: System.getenv("HOME")?.takeIf { it.isNotBlank() }
+    val home =
+      System.getProperty("user.home")?.takeIf { it.isNotBlank() }
+        ?: System.getenv("HOME")?.takeIf { it.isNotBlank() }
     if (home.isNullOrEmpty()) return value
-    return value.replace(home, "~")
+    return value
+      .replace(home, "~")
       .replace(Regex("/Users/[^/]+"), "~")
       .replace(Regex("/home/[^/]+"), "~")
   }

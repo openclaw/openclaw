@@ -1,5 +1,7 @@
+// Feishu tests cover monitor.webhook security plugin behavior.
+import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
   createFeishuRuntimeMockModule,
@@ -28,6 +30,16 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   ),
 }));
 
+vi.mock("./monitor.state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor.state.js")>();
+  return {
+    ...actual,
+    FEISHU_WEBHOOK_BODY_TIMEOUT_MS: 50,
+  };
+});
+
+import type { RuntimeEnv } from "../runtime-api.js";
+import { resolveRequestClientIp } from "./monitor-transport-runtime-api.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
@@ -35,6 +47,12 @@ import {
   monitorFeishuProvider,
   stopFeishuMonitor,
 } from "./monitor.js";
+import { buildFeishuWebhookRateLimitKeyForTest, monitorWebhook } from "./monitor.transport.js";
+import type { ResolvedFeishuAccount } from "./types.js";
+
+beforeAll(async () => {
+  await import("./monitor.account.js");
+});
 
 async function waitForSlowBodyTimeoutResponse(
   url: string,
@@ -62,7 +80,7 @@ async function waitForSlowBodyTimeoutResponse(
     socket.setEncoding("utf8");
     socket.on("error", () => {});
     socket.on("data", (chunk) => {
-      response += chunk;
+      response += chunk.toString();
       if (response.includes("Request body timeout")) {
         clearTimeout(failTimer);
         socket.destroy();
@@ -77,9 +95,87 @@ async function waitForSlowBodyTimeoutResponse(
   });
 }
 
-afterEach(() => {
+async function waitForOversizedBodyResponse(url: string): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const target = new URL(url);
+    const body = JSON.stringify({ payload: "x".repeat(70 * 1024) });
+    let response = "";
+    let settled = false;
+    const socket = createConnection(
+      {
+        host: target.hostname,
+        port: Number(target.port),
+      },
+      () => {
+        socket.write(`POST ${target.pathname} HTTP/1.1\r\n`);
+        socket.write(`Host: ${target.hostname}\r\n`);
+        socket.write("Content-Type: application/json\r\n");
+        socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n`);
+        socket.write("\r\n");
+        socket.write(body);
+      },
+    );
+
+    const finish = (result: string) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(failTimer);
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+      if (response.includes("Payload too large")) {
+        finish(response);
+      }
+    });
+    socket.on("close", () => {
+      if (response.includes("Payload too large")) {
+        finish(response);
+      }
+    });
+    socket.on("error", (error: NodeJS.ErrnoException) => {
+      if (response.includes("Payload too large")) {
+        finish(response);
+        return;
+      }
+      if (error.code === "ECONNRESET") {
+        finish("ECONNRESET");
+        return;
+      }
+      reject(error);
+    });
+
+    const failTimer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("payload-too-large response did not arrive within 1000ms"));
+    }, 1_000);
+  });
+}
+
+function resolveTestClientIp(remoteAddress: string | undefined): string | undefined {
+  return resolveRequestClientIp({
+    headers: {},
+    socket: { remoteAddress },
+  } as IncomingMessage);
+}
+
+afterEach(async () => {
   clearFeishuWebhookRateLimitStateForTest();
-  stopFeishuMonitor();
+  await stopFeishuMonitor();
+});
+
+afterAll(() => {
+  vi.doUnmock("./probe.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("@larksuiteoapi/node-sdk");
+  vi.doUnmock("./monitor.state.js");
+  vi.resetModules();
 });
 
 describe("Feishu webhook security hardening", () => {
@@ -108,6 +204,33 @@ describe("Feishu webhook security hardening", () => {
     });
 
     await expect(monitorFeishuProvider({ config: cfg })).rejects.toThrow(/requires encryptKey/i);
+  });
+
+  it("refuses to start the webhook transport without encryptKey", async () => {
+    const account = {
+      accountId: "transport-missing-encrypt-key",
+      config: {
+        enabled: true,
+        connectionMode: "webhook",
+        webhookHost: "127.0.0.1",
+        webhookPort: await getFreePort(),
+        webhookPath: "/hook-transport-missing-encrypt",
+      },
+    } as ResolvedFeishuAccount;
+
+    await expect(
+      monitorWebhook({
+        account,
+        accountId: account.accountId,
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        } as RuntimeEnv,
+        abortSignal: new AbortController().signal,
+        eventDispatcher: {} as never,
+      }),
+    ).rejects.toThrow(/requires encryptKey/i);
   });
 
   it("returns 415 for POST requests without json content type", async () => {
@@ -144,14 +267,14 @@ describe("Feishu webhook security hardening", () => {
       },
       monitorFeishuProvider,
       async (url) => {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ payload: "x".repeat(70 * 1024) }),
-        });
+        const response = await waitForOversizedBodyResponse(url);
 
-        expect(response.status).toBe(413);
-        expect(await response.text()).toBe("Payload too large");
+        if (response === "ECONNRESET") {
+          expect(response).toBe("ECONNRESET");
+        } else {
+          expect(response).toContain("413 Payload Too Large");
+          expect(response).toContain("Payload too large");
+        }
       },
     );
   });
@@ -167,10 +290,10 @@ describe("Feishu webhook security hardening", () => {
       },
       monitorFeishuProvider,
       async (url) => {
-        const result = await waitForSlowBodyTimeoutResponse(url, 15_000);
+        const result = await waitForSlowBodyTimeoutResponse(url, 1_000);
         expect(result.body).toContain("408 Request Timeout");
         expect(result.body).toContain("Request body timeout");
-        expect(result.elapsedMs).toBeLessThan(12_000);
+        expect(result.elapsedMs).toBeLessThan(500);
       },
     );
   });
@@ -202,6 +325,51 @@ describe("Feishu webhook security hardening", () => {
 
         expect(saw429).toBe(true);
       },
+    );
+  });
+
+  it("uses one webhook rate-limit key for loopback address-family variants", () => {
+    const base = {
+      accountId: "rate-limit-key",
+      path: "/hook-rate-limit-key",
+    };
+
+    expect([
+      buildFeishuWebhookRateLimitKeyForTest({
+        ...base,
+        clientIp: resolveTestClientIp("127.0.0.1"),
+      }),
+      buildFeishuWebhookRateLimitKeyForTest({
+        ...base,
+        clientIp: resolveTestClientIp("127.0.0.42"),
+      }),
+      buildFeishuWebhookRateLimitKeyForTest({
+        ...base,
+        clientIp: resolveTestClientIp("::ffff:127.0.0.1"),
+      }),
+      buildFeishuWebhookRateLimitKeyForTest({
+        ...base,
+        clientIp: resolveTestClientIp("::1"),
+      }),
+    ]).toEqual([
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+    ]);
+  });
+
+  it("keeps non-loopback and unknown webhook rate-limit key suffixes distinct", () => {
+    const base = {
+      accountId: "rate-limit-key",
+      path: "/hook-rate-limit-key",
+    };
+
+    expect(buildFeishuWebhookRateLimitKeyForTest({ ...base, clientIp: "10.0.0.1" })).toBe(
+      "rate-limit-key:/hook-rate-limit-key:10.0.0.1",
+    );
+    expect(buildFeishuWebhookRateLimitKeyForTest(base)).toBe(
+      "rate-limit-key:/hook-rate-limit-key:unknown",
     );
   });
 

@@ -1,3 +1,4 @@
+/** Builds the ACP available-command list exposed to compatible clients. */
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import { getChatCommands } from "../auto-reply/commands-registry.data.js";
 
@@ -27,6 +28,7 @@ const BASE_AVAILABLE_COMMANDS: AvailableCommand[] = [
     description: "Set thinking level (off|minimal|low|medium|high|xhigh).",
   },
   { name: "verbose", description: "Set verbose mode (on|full|off)." },
+  { name: "trace", description: "Set plugin trace mode (on|off)." },
   { name: "reasoning", description: "Toggle reasoning output (on|off|stream)." },
   { name: "elevated", description: "Toggle elevated mode (on|off)." },
   { name: "model", description: "Select a model (list|status|<name>)." },
@@ -44,6 +46,7 @@ function listDockAvailableCommands(): AvailableCommand[] {
     }));
 }
 
+/** Returns static ACP commands plus plugin-registered dock commands. */
 export function getAvailableCommands(): AvailableCommand[] {
   return [...BASE_AVAILABLE_COMMANDS, ...listDockAvailableCommands()];
 }

@@ -1,7 +1,8 @@
+// Msteams plugin module implements storage behavior.
 import path from "node:path";
 import { getMSTeamsRuntime } from "./runtime.js";
 
-export type MSTeamsStorePathOptions = {
+type MSTeamsStorePathOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;

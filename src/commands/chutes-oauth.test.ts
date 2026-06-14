@@ -1,3 +1,4 @@
+// Chutes OAuth tests cover OAuth endpoints, local callback handling, and fetch preconnect behavior.
 import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
@@ -78,7 +79,10 @@ describe("loginChutes", () => {
       app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
       onAuth: async ({ url }) => {
         const state = new URL(url).searchParams.get("state");
-        expect(state).toBeTruthy();
+        if (state === null) {
+          throw new Error("expected OAuth state");
+        }
+        expect(state).toMatch(/\S/u);
         await fetch(`${redirectUri}?code=code_local&state=${state}`);
       },
       onPrompt,

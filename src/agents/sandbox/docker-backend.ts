@@ -1,10 +1,15 @@
+/**
+ * Docker sandbox backend implementation.
+ *
+ * Creates/reuses Docker containers and exposes backend-neutral exec and shell-command handles.
+ */
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
+import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
-  SandboxBackendManager,
-  SandboxBackendCommandParams,
   SandboxBackendHandle,
-} from "./backend.js";
+  SandboxBackendManager,
+} from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   dockerContainerState,
@@ -22,8 +27,6 @@ function resolveConfiguredDockerRuntimeImage(params: {
   switch (params.configLabelKind) {
     case "BrowserImage":
       return sandboxCfg.browser.image;
-    case "Image":
-    case undefined:
     default:
       return sandboxCfg.docker.image;
   }
@@ -36,6 +39,7 @@ export async function createDockerSandboxBackend(
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     cfg: params.cfg,
   });
   return createDockerSandboxBackendHandle({
@@ -46,7 +50,7 @@ export async function createDockerSandboxBackend(
   });
 }
 
-export function createDockerSandboxBackendHandle(params: {
+function createDockerSandboxBackendHandle(params: {
   containerName: string;
   workdir: string;
   env?: Record<string, string>;
@@ -141,10 +145,13 @@ export const dockerSandboxBackendManager: SandboxBackendManager = {
     };
   },
   async removeRuntime({ entry }) {
-    try {
-      await execDocker(["rm", "-f", entry.containerName], { allowFailure: true });
-    } catch {
-      // ignore removal failures
+    const result = await execDocker(["rm", "-f", entry.containerName], { allowFailure: true });
+    if (result.code !== 0) {
+      const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
+      if (/No such (container|object)/iu.test(detail)) {
+        return;
+      }
+      throw new Error(`Failed to remove Docker sandbox runtime ${entry.containerName}: ${detail}`);
     }
   },
 };

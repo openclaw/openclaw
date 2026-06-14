@@ -1,3 +1,4 @@
+// Run-main profile env tests cover profile environment handling in the CLI entrypoint.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fileState = vi.hoisted(() => ({
@@ -41,6 +42,8 @@ vi.mock("./dotenv.js", () => ({
 }));
 
 vi.mock("../infra/env.js", () => ({
+  isTruthyEnvValue: (value?: string) =>
+    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
   normalizeEnv: vi.fn(),
 }));
 

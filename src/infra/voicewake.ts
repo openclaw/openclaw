@@ -1,9 +1,11 @@
+// Stores voice wake trigger configuration.
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
-export type VoiceWakeConfig = {
+// Voice wake config stores trigger words used by local voice integrations.
+type VoiceWakeConfig = {
   triggers: string[];
   updatedAtMs: number;
 };
@@ -24,13 +26,15 @@ function sanitizeTriggers(triggers: string[] | undefined | null): string[] {
 
 const withLock = createAsyncLock();
 
+/** Return the built-in voice wake trigger list. */
 export function defaultVoiceWakeTriggers() {
   return [...DEFAULT_TRIGGERS];
 }
 
+/** Load persisted voice wake triggers, falling back to defaults. */
 export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeConfig> {
   const filePath = resolvePath(baseDir);
-  const existing = await readJsonFile<VoiceWakeConfig>(filePath);
+  const existing = await tryReadJson<VoiceWakeConfig>(filePath);
   if (!existing) {
     return { triggers: defaultVoiceWakeTriggers(), updatedAtMs: 0 };
   }
@@ -43,6 +47,7 @@ export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeCo
   };
 }
 
+/** Persist the configured voice wake trigger list. */
 export async function setVoiceWakeTriggers(
   triggers: string[],
   baseDir?: string,
@@ -54,7 +59,7 @@ export async function setVoiceWakeTriggers(
       triggers: sanitized,
       updatedAtMs: Date.now(),
     };
-    await writeJsonAtomic(filePath, next);
+    await writeJson(filePath, next);
     return next;
   });
 }

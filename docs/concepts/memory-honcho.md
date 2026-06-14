@@ -1,12 +1,10 @@
 ---
-title: "Honcho Memory"
 summary: "AI-native cross-session memory via the Honcho plugin"
+title: "Honcho memory"
 read_when:
   - You want persistent memory that works across sessions and channels
   - You want AI-powered recall and user modeling
 ---
-
-# Honcho Memory
 
 [Honcho](https://honcho.dev) adds AI-native memory to OpenClaw. It persists
 conversations to a dedicated service and builds user and agent models over time,
@@ -138,3 +136,9 @@ openclaw honcho search <query> [-k N] [-d D] # Semantic search over memory
 - [Honcho OpenClaw integration guide](https://docs.honcho.dev/v3/guides/integrations/openclaw)
 - [Memory](/concepts/memory) -- OpenClaw memory overview
 - [Context Engines](/concepts/context-engine) -- how plugin context engines work
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [QMD memory engine](/concepts/memory-qmd)

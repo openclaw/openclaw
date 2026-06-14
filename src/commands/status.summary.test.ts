@@ -1,12 +1,60 @@
+// Status summary tests cover aggregate status text for channels, sessions, tasks, and audit findings.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
+import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
-  hasPotentialConfiguredChannels: vi.fn(() => true),
+  hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
+  readSessionStoreReadOnly: vi.fn(() => ({})),
+  resolveProviderStaticModel: vi.fn(),
+  configureTaskRegistryMaintenance: vi.fn(),
+  taskRegistrySummary: {
+    total: 0,
+    active: 0,
+    terminal: 0,
+    failures: 0,
+    byStatus: {
+      queued: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      timed_out: 0,
+      cancelled: 0,
+      lost: 0,
+    },
+    byRuntime: {
+      subagent: 0,
+      acp: 0,
+      cli: 0,
+      cron: 0,
+    },
+  } as TaskRegistrySummary,
+  getInspectableTaskRegistrySummary: vi.fn(() => statusSummaryMocks.taskRegistrySummary),
+  taskAuditFindings: [
+    {
+      severity: "warn",
+      code: "delivery_failed",
+      detail: "terminal update delivery failed",
+      task: {
+        taskId: "task-delivery",
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        scopeKind: "session",
+        task: "Deliver update",
+        status: "failed",
+        deliveryStatus: "failed",
+        notifyPolicy: "done_only",
+        createdAt: 1,
+      },
+    },
+  ] as TaskAuditFinding[],
+  getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: statusSummaryMocks.hasPotentialConfiguredChannels,
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
 }));
 
 vi.mock("./status.summary.runtime.js", () => ({
@@ -14,24 +62,54 @@ vi.mock("./status.summary.runtime.js", () => ({
     classifySessionKey: vi.fn(() => "direct"),
     resolveConfiguredStatusModelRef: vi.fn(() => ({
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
     })),
     resolveSessionModelRef: vi.fn(() => ({
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
     })),
+    resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Default"),
     resolveContextTokensForModel: vi.fn(() => 200_000),
   },
 }));
 
 vi.mock("../agents/defaults.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 200_000,
-  DEFAULT_MODEL: "gpt-5.4",
+  DEFAULT_MODEL: "gpt-5.5",
   DEFAULT_PROVIDER: "openai",
+}));
+
+vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: vi.fn(() =>
+    vi.fn(({ provider, modelId }) =>
+      provider === "openai" && modelId === "gpt-5.5"
+        ? { contextWindow: 1_000_000, contextTokens: 272_000 }
+        : undefined,
+    ),
+  ),
+  createBundledProviderStaticCatalogModelResolver: vi.fn(
+    () => statusSummaryMocks.resolveProviderStaticModel,
+  ),
+  createBundledProviderStaticCatalogContextResolver: vi.fn(
+    () => statusSummaryMocks.resolveProviderStaticModel,
+  ),
 }));
 
 vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+  projectConfigOntoRuntimeSourceSnapshot: vi.fn((config) => config),
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+}));
+
+vi.mock("../config/sessions/store-read.js", () => ({
+  readSessionStoreReadOnly: statusSummaryMocks.readSessionStoreReadOnly,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -58,40 +136,9 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  getInspectableTaskRegistrySummary: vi.fn(() => ({
-    total: 0,
-    active: 0,
-    terminal: 0,
-    failures: 0,
-    byStatus: {
-      queued: 0,
-      running: 0,
-      succeeded: 0,
-      failed: 0,
-      timed_out: 0,
-      cancelled: 0,
-      lost: 0,
-    },
-    byRuntime: {
-      subagent: 0,
-      acp: 0,
-      cli: 0,
-      cron: 0,
-    },
-  })),
-  getInspectableTaskAuditSummary: vi.fn(() => ({
-    total: 1,
-    warnings: 1,
-    errors: 0,
-    byCode: {
-      stale_queued: 0,
-      stale_running: 0,
-      lost: 0,
-      delivery_failed: 1,
-      missing_cleanup: 0,
-      inconsistent_timestamps: 0,
-    },
-  })),
+  configureTaskRegistryMaintenance: statusSummaryMocks.configureTaskRegistryMaintenance,
+  getInspectableTaskRegistrySummary: statusSummaryMocks.getInspectableTaskRegistrySummary,
+  getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
 }));
 
 vi.mock("../routing/session-key.js", () => ({
@@ -125,8 +172,56 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    statusSummaryMocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    statusSummaryMocks.taskRegistrySummary = {
+      total: 0,
+      active: 0,
+      terminal: 0,
+      failures: 0,
+      byStatus: {
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 0,
+      },
+      byRuntime: {
+        subagent: 0,
+        acp: 0,
+        cli: 0,
+        cron: 0,
+      },
+    };
+    statusSummaryMocks.taskAuditFindings = [
+      {
+        severity: "warn",
+        code: "delivery_failed",
+        detail: "terminal update delivery failed",
+        task: {
+          taskId: "task-delivery",
+          runtime: "subagent",
+          ownerKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          scopeKind: "session",
+          task: "Deliver update",
+          status: "failed",
+          deliveryStatus: "failed",
+          notifyPolicy: "done_only",
+          createdAt: 1,
+        },
+      },
+    ];
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
+    statusSummaryMocks.resolveProviderStaticModel.mockReset();
+    statusSummaryMocks.resolveProviderStaticModel.mockImplementation(
+      async ({ provider, modelId }) =>
+        provider === "google" && modelId === "gemini-3.1-pro-preview"
+          ? { contextWindow: 1_048_576 }
+          : undefined,
+    );
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -139,13 +234,83 @@ describe("getStatusSummary", () => {
     expect(summary.taskAudit.warnings).toBe(1);
   });
 
-  it("skips channel summary imports when no channels are configured", async () => {
-    statusSummaryMocks.hasPotentialConfiguredChannels.mockReturnValue(false);
+  it("keeps retained lost tasks out of default status audit counts", async () => {
+    const cleanupAfter = Date.now() + 60_000;
+    statusSummaryMocks.taskRegistrySummary = {
+      ...statusSummaryMocks.taskRegistrySummary,
+      total: 1,
+      terminal: 1,
+      failures: 1,
+      byStatus: {
+        ...statusSummaryMocks.taskRegistrySummary.byStatus,
+        lost: 1,
+      },
+    };
+    statusSummaryMocks.taskAuditFindings = [
+      {
+        severity: "warn",
+        code: "lost",
+        detail: "task lost its backing session and is retained until cleanupAfter",
+        task: {
+          taskId: "task-lost-retained",
+          runtime: "subagent",
+          ownerKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          scopeKind: "session",
+          task: "Retained lost",
+          status: "lost",
+          deliveryStatus: "pending",
+          notifyPolicy: "done_only",
+          createdAt: cleanupAfter - 60_000,
+          endedAt: cleanupAfter - 60_000,
+          cleanupAfter,
+        },
+      },
+    ];
 
     const summary = await getStatusSummary();
 
-    expect(summary.channelSummary).toEqual([]);
+    expect(summary.tasks.failures).toBe(0);
+    expect(summary.tasks.byStatus.lost).toBe(1);
+    expect(summary.taskAudit).toEqual({
+      total: 0,
+      warnings: 0,
+      errors: 0,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 0,
+        lost: 0,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
+    expect(summary.taskAuditRetainedLost).toEqual({
+      count: 1,
+      nextCleanupAfter: cleanupAfter,
+    });
+  });
+
+  it("skips channel summary imports when no channels are configured", async () => {
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(false);
+
+    const summary = await getStatusSummary();
+
+    expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
+      config: {},
+    });
+    expect(buildChannelSummary).not.toHaveBeenCalled();
+    expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
+  it("skips channel summary imports when explicitly disabled", async () => {
+    const summary = await getStatusSummary({ includeChannelSummary: false });
+
+    expect(summary.channelSummary).toStrictEqual([]);
+    expect(summary.linkChannel).toBeUndefined();
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(buildChannelSummary).not.toHaveBeenCalled();
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
   });
@@ -153,8 +318,235 @@ describe("getStatusSummary", () => {
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 
-    expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
-      expect.objectContaining({ allowAsyncLoad: false }),
+    const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
+      .calls[0]?.[0];
+    expect(contextCall?.allowAsyncLoad).toBe(false);
+    expect(contextCall).toMatchObject({
+      modelContextWindow: 1_000_000,
+      modelContextTokens: 272_000,
+    });
+  });
+
+  it("uses bundled provider static catalogs for cold status context", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+
+    await getStatusSummary();
+
+    expect(
+      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock.calls[0]?.[0],
+    ).toMatchObject({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      modelContextWindow: 1_048_576,
+      allowAsyncLoad: false,
+    });
+  });
+
+  it("uses context-only static metadata for nested provider-owned model refs", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "google-gemini-cli",
+      model: "google/gemini-3.1-pro-preview",
+    });
+    statusSummaryMocks.resolveProviderStaticModel.mockResolvedValueOnce({
+      contextWindow: 1_048_576,
+    });
+
+    await getStatusSummary();
+
+    expect(statusSummaryMocks.resolveProviderStaticModel).toHaveBeenCalledWith({
+      provider: "google-gemini-cli",
+      modelId: "google/gemini-3.1-pro-preview",
+    });
+    expect(
+      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock.calls[0]?.[0],
+    ).toMatchObject({
+      provider: "google-gemini-cli",
+      model: "google/gemini-3.1-pro-preview",
+      modelContextWindow: 1_048_576,
+      allowAsyncLoad: false,
+    });
+  });
+
+  it("keeps status available when static catalog lookup fails", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "broken-provider",
+      model: "broken-model",
+    });
+    statusSummaryMocks.resolveProviderStaticModel.mockRejectedValueOnce(
+      new Error("static catalog unavailable"),
     );
+
+    await expect(getStatusSummary()).resolves.toMatchObject({
+      sessions: {
+        defaults: {
+          model: "broken-model",
+          contextTokens: 200_000,
+        },
+      },
+    });
+  });
+
+  it("includes the selected agent runtime on recent sessions", async () => {
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
+  });
+
+  it("hydrates only recent session rows while preserving total counts", async () => {
+    const store = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => {
+        const number = index + 1;
+        return [
+          `agent:main:session-${number}`,
+          {
+            sessionId: `session-${number}`,
+            updatedAt: number,
+          },
+        ];
+      }),
+    );
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue(store);
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.count).toBe(12);
+    expect(summary.sessions.byAgent[0]?.count).toBe(12);
+    expect(summary.sessions.recent.map((session) => session.key)).toEqual([
+      "agent:main:session-12",
+      "agent:main:session-11",
+      "agent:main:session-10",
+      "agent:main:session-9",
+      "agent:main:session-8",
+      "agent:main:session-7",
+      "agent:main:session-6",
+      "agent:main:session-5",
+      "agent:main:session-4",
+      "agent:main:session-3",
+    ]);
+    expect(summary.sessions.byAgent[0]?.recent.map((session) => session.key)).toEqual(
+      summary.sessions.recent.map((session) => session.key),
+    );
+
+    const hydratedKeys = vi
+      .mocked(statusSummaryRuntime.resolveSessionRuntimeLabel)
+      .mock.calls.map(([params]) => params.sessionKey);
+    expect(hydratedKeys).not.toContain("agent:main:session-1");
+    expect(hydratedKeys).not.toContain("agent:main:session-2");
+  });
+
+  it("includes configured and selected model labels for pinned sessions", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "zhipu",
+      model: "glm-4.5-air",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "user",
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBe("session override");
+  });
+
+  it("does not mark runtime-only model snapshots as pinned session selections", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "zhipu",
+      model: "glm-4.5-air",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
+  });
+
+  it("does not mark auto fallback model overrides as pinned session selections", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "zhipu",
+      model: "glm-4.5-air",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+    });
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "zhipu",
+        modelOverrideFallbackOriginModel: "glm-4.5-air",
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("zhipu/glm-4.5-air");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
+  });
+
+  it("does not mark runtime-equivalent provider aliases as pinned mismatches", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.5-codex",
+    });
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.5-codex",
+    });
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5-codex",
+        modelOverrideSource: "user",
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.configuredModel).toBe("openai/gpt-5.5-codex");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("openai/gpt-5.5-codex");
+    expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
   });
 });

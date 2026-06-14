@@ -1,4 +1,9 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+/**
+ * Playwright-backed browser interaction tools, including clicks, form input,
+ * screenshots, batch actions, and SSRF-aware post-interaction navigation checks.
+ */
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -10,14 +15,22 @@ import {
   resolveActInteractionTimeoutMs,
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
-import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
+import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
+import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
+  createObservedDialogAbortSignalForPage,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
+  isBrowserObservedDialogBlockedError,
+  markObservedDialogsHandledRemotelyForPage,
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
@@ -28,6 +41,15 @@ import {
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
 import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-core.snapshot.js";
+import {
+  ANNOTATION_MAX_LABELS_DEFAULT,
+  type AnnotationItem,
+  buildOverlayClearScript,
+  buildOverlayInjectionScript,
+  type CoordinateSpace,
+  planAnnotations,
+  type RawAnnotationInput,
+} from "./screenshot-annotate.js";
 
 type TargetOpts = {
   cdpUrl: string;
@@ -60,6 +82,16 @@ async function getRestoredPageForTarget(opts: TargetOpts) {
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   return page;
+}
+
+function toFriendlyInteractionError(err: unknown, label: string): Error {
+  return isBrowserObservedDialogBlockedError(err) ? err : toAIFriendlyError(err, label);
+}
+
+function reconcileRemoteDialogAfterActionSettled(page: Page, signal?: AbortSignal): void {
+  if (isBrowserObservedDialogBlockedError(signal?.reason)) {
+    markObservedDialogsHandledRemotelyForPage(page);
+  }
 }
 
 const resolveInteractionTimeoutMs = resolveActInteractionTimeoutMs;
@@ -119,20 +151,84 @@ function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): bo
   return frame === page.mainFrame();
 }
 
+async function assertSubframeNavigationAllowed(
+  frameUrl: string,
+  ssrfPolicy?: SsrFPolicy,
+): Promise<void> {
+  if (!ssrfPolicy || (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://"))) {
+    // Non-network frame URLs like about:blank and about:srcdoc do not cross the
+    // browser SSRF boundary, so they should not trigger the navigation policy.
+    return;
+  }
+
+  await assertBrowserNavigationResultAllowed({
+    url: frameUrl,
+    ...withBrowserNavigationPolicy(ssrfPolicy),
+  });
+}
+
+type ObservedDelayedNavigations = {
+  mainFrameNavigated: boolean;
+  subframes: string[];
+};
+
+function snapshotNetworkFrameUrl(frame: Frame): string | null {
+  try {
+    const frameUrl = frame.url();
+    return frameUrl.startsWith("http://") || frameUrl.startsWith("https://") ? frameUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+async function assertObservedDelayedNavigations(opts: {
+  cdpUrl: string;
+  page: Page;
+  ssrfPolicy?: SsrFPolicy;
+  targetId?: string;
+  observed: ObservedDelayedNavigations;
+}): Promise<void> {
+  let subframeError: unknown;
+  try {
+    for (const frameUrl of opts.observed.subframes) {
+      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+    }
+  } catch (err) {
+    subframeError = err;
+  }
+  if (opts.observed.mainFrameNavigated) {
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  }
+  if (subframeError) {
+    throw toLintErrorObject(subframeError, "Non-Error thrown");
+  }
+}
+
 function observeDelayedInteractionNavigation(
   page: NavigationObservablePage,
   previousUrl: string,
-): Promise<boolean> {
+): Promise<ObservedDelayedNavigations> {
   if (didCrossDocumentUrlChange(page, previousUrl)) {
-    return Promise.resolve(true);
+    return Promise.resolve({ mainFrameNavigated: true, subframes: [] });
   }
   if (typeof page.on !== "function" || typeof page.off !== "function") {
-    return Promise.resolve(false);
+    return Promise.resolve({ mainFrameNavigated: false, subframes: [] });
   }
 
-  return new Promise<boolean>((resolve) => {
+  return new Promise<ObservedDelayedNavigations>((resolve) => {
+    const subframes: string[] = [];
     const onFrameNavigated = (frame: Frame) => {
       if (!isMainFrameNavigation(page, frame)) {
+        const frameUrl = snapshotNetworkFrameUrl(frame);
+        if (frameUrl) {
+          subframes.push(frameUrl);
+        }
         return;
       }
       // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
@@ -142,11 +238,14 @@ function observeDelayedInteractionNavigation(
         return;
       }
       cleanup();
-      resolve(true);
+      resolve({ mainFrameNavigated: true, subframes });
     };
     const timeout = setTimeout(() => {
       cleanup();
-      resolve(didCrossDocumentUrlChange(page, previousUrl));
+      resolve({
+        mainFrameNavigated: didCrossDocumentUrlChange(page, previousUrl),
+        subframes,
+      });
     }, INTERACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
@@ -191,13 +290,18 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
     const settle = (err?: unknown) => {
       cleanup();
       if (err) {
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
     };
+    const subframes: string[] = [];
     const onFrameNavigated = (frame: Frame) => {
       if (!isMainFrameNavigation(page, frame)) {
+        const frameUrl = snapshotNetworkFrameUrl(frame);
+        if (frameUrl) {
+          subframes.push(frameUrl);
+        }
         return;
       }
       // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
@@ -207,16 +311,26 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
         return;
       }
       cleanup();
-      void assertPageNavigationCompletedSafely({
+      void assertObservedDelayedNavigations({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
-        response: null,
         ssrfPolicy: opts.ssrfPolicy,
         targetId: opts.targetId,
+        observed: { mainFrameNavigated: true, subframes },
       }).then(() => settle(), settle);
     };
     const timeout = setTimeout(() => {
-      settle();
+      cleanup();
+      void assertObservedDelayedNavigations({
+        cdpUrl: opts.cdpUrl,
+        page: opts.page,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+        observed: {
+          mainFrameNavigated: didCrossDocumentUrlChange(page, opts.previousUrl),
+          subframes,
+        },
+      }).then(() => settle(), settle);
     }, INTERACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
@@ -248,8 +362,13 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   // slow interactions, silently bypassing the SSRF guard.
   const navPage = opts.page as unknown as NavigationObservablePage;
   let navigatedDuringAction = false;
+  const subframeNavigationsDuringAction: string[] = [];
   const onFrameNavigated = (frame: Frame) => {
     if (!isMainFrameNavigation(navPage, frame)) {
+      const frameUrl = snapshotNetworkFrameUrl(frame);
+      if (frameUrl) {
+        subframeNavigationsDuringAction.push(frameUrl);
+      }
       return;
     }
     // Use isHashOnlyNavigation rather than didCrossDocumentUrlChange: the event
@@ -278,6 +397,15 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   const navigationObserved =
     navigatedDuringAction || didCrossDocumentUrlChange(opts.page, opts.previousUrl);
 
+  let subframeError: unknown;
+  try {
+    for (const frameUrl of subframeNavigationsDuringAction) {
+      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+    }
+  } catch (err) {
+    subframeError = err;
+  }
+
   if (navigationObserved) {
     await assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
@@ -290,17 +418,14 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
     // Preserve the action-error path semantics: if a rejected click/evaluate still
     // triggers a delayed navigation, the SSRF block must win over the original
     // action error instead of surfacing a stale interaction failure.
-    const delayedNavigationObserved = await observeDelayedInteractionNavigation(
-      opts.page,
-      opts.previousUrl,
-    );
-    if (delayedNavigationObserved) {
-      await assertPageNavigationCompletedSafely({
+    const observed = await observeDelayedInteractionNavigation(opts.page, opts.previousUrl);
+    if (observed.mainFrameNavigated || observed.subframes.length > 0) {
+      await assertObservedDelayedNavigations({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
-        response: null,
         ssrfPolicy: opts.ssrfPolicy,
         targetId: opts.targetId,
+        observed,
       });
     }
   } else {
@@ -316,8 +441,12 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
     });
   }
 
+  if (subframeError) {
+    throw toLintErrorObject(subframeError, "Non-Error thrown");
+  }
+
   if (actionError) {
-    throw actionError;
+    throw toLintErrorObject(actionError, "Non-Error thrown");
   }
   return result as T;
 }
@@ -325,6 +454,7 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
 async function awaitActionWithAbort<T>(
   actionPromise: Promise<T>,
   abortPromise?: Promise<never>,
+  onActionResolvedAfterAbort?: () => void,
 ): Promise<T> {
   if (!abortPromise) {
     return await actionPromise;
@@ -333,7 +463,10 @@ async function awaitActionWithAbort<T>(
     return await Promise.race([actionPromise, abortPromise]);
   } catch (err) {
     // If abort wins the race, the action may reject later; avoid unhandled rejections.
-    void actionPromise.catch(() => {});
+    void actionPromise.then(
+      () => onActionResolvedAfterAbort?.(),
+      () => {},
+    );
     throw err;
   }
 }
@@ -347,7 +480,7 @@ function createAbortPromise(signal?: AbortSignal): {
 
 function createAbortPromiseWithListener(
   signal?: AbortSignal,
-  onAbort?: () => void,
+  onAbort?: (reason: unknown) => void,
 ): {
   abortPromise?: Promise<never>;
   cleanup: () => void;
@@ -358,13 +491,15 @@ function createAbortPromiseWithListener(
   let abortListener: (() => void) | undefined;
   const abortPromise: Promise<never> = signal.aborted
     ? (() => {
-        onAbort?.();
-        return Promise.reject(signal.reason ?? new Error("aborted"));
+        onAbort?.(signal.reason);
+        return Promise.reject(
+          toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+        );
       })()
     : new Promise((_, reject) => {
         abortListener = () => {
-          onAbort?.();
-          reject(signal.reason ?? new Error("aborted"));
+          onAbort?.(signal.reason);
+          reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
         };
         signal.addEventListener("abort", abortListener, { once: true });
       });
@@ -379,25 +514,7 @@ function createAbortPromiseWithListener(
     },
   };
 }
-
-async function assertPostInteractionNavigationSafe(opts: {
-  cdpUrl: string;
-  page: Awaited<ReturnType<typeof getPageForTargetId>>;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<void> {
-  if (!opts.ssrfPolicy) {
-    return;
-  }
-  await assertPageNavigationCompletedSafely({
-    cdpUrl: opts.cdpUrl,
-    page: opts.page,
-    response: null,
-    ssrfPolicy: opts.ssrfPolicy,
-    targetId: opts.targetId,
-  });
-}
-
+/** Highlights a role ref in the target page for visual inspection. */
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -408,10 +525,11 @@ export async function highlightViaPlaywright(opts: {
   try {
     await refLocator(page, ref).highlight();
   } catch (err) {
-    throw toAIFriendlyError(err, ref);
+    throw toFriendlyInteractionError(err, ref);
   }
 }
 
+/** Clicks or double-clicks a role ref or selector with dialog and navigation guards. */
 export async function clickViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -423,6 +541,7 @@ export async function clickViaPlaywright(opts: {
   delayMs?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
@@ -432,6 +551,41 @@ export async function clickViaPlaywright(opts: {
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const previousUrl = page.url();
+  const signal = opts.signal;
+  let abortListener: (() => void) | undefined;
+  let abortReject: ((reason: unknown) => void) | undefined;
+  let abortPromise: Promise<never> | undefined;
+  if (signal) {
+    abortPromise = new Promise((_, reject) => {
+      abortReject = reject;
+    });
+    void abortPromise.catch(() => {});
+    const disconnect = () => {
+      if (isBrowserObservedDialogBlockedError(signal.reason)) {
+        return;
+      }
+      void forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        ssrfPolicy: opts.ssrfPolicy,
+        reason: "click aborted",
+      }).catch(() => {});
+    };
+    if (signal.aborted) {
+      disconnect();
+      throw signal.reason ?? new Error("aborted");
+    }
+    abortListener = () => {
+      disconnect();
+      abortReject?.(signal.reason ?? new Error("aborted"));
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted) {
+      abortListener();
+      throw signal.reason ?? new Error("aborted");
+    }
+  }
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
   try {
     await assertInteractionNavigationCompletedSafely({
       action: async () => {
@@ -441,22 +595,36 @@ export async function clickViaPlaywright(opts: {
           ACT_MAX_CLICK_DELAY_MS,
         );
         if (delayMs > 0) {
-          await locator.hover({ timeout });
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await awaitActionWithAbort(
+            locator.hover({ timeout }),
+            abortPromise,
+            reconcileRemoteDialog,
+          );
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
         }
         if (opts.doubleClick) {
-          await locator.dblclick({
+          await awaitActionWithAbort(
+            locator.dblclick({
+              timeout,
+              button: opts.button,
+              modifiers: opts.modifiers,
+            }),
+            abortPromise,
+            reconcileRemoteDialog,
+          );
+          return;
+        }
+        await awaitActionWithAbort(
+          locator.click({
             timeout,
             button: opts.button,
             modifiers: opts.modifiers,
-          });
-          return;
-        }
-        await locator.click({
-          timeout,
-          button: opts.button,
-          modifiers: opts.modifiers,
-        });
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        );
       },
       cdpUrl: opts.cdpUrl,
       page,
@@ -465,16 +633,59 @@ export async function clickViaPlaywright(opts: {
       targetId: opts.targetId,
     });
   } catch (err) {
-    throw toAIFriendlyError(err, label);
+    throw toFriendlyInteractionError(err, label);
+  } finally {
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
   }
 }
 
+/** Clicks absolute page coordinates with optional double-click and navigation guard. */
+export async function clickCoordsViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  x: number;
+  y: number;
+  doubleClick?: boolean;
+  button?: "left" | "right" | "middle";
+  delayMs?: number;
+  timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const page = await getRestoredPageForTarget(opts);
+  const previousUrl = page.url();
+  const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
+  await assertInteractionNavigationCompletedSafely({
+    action: async () => {
+      await awaitActionWithAbort(
+        page.mouse.click(opts.x, opts.y, {
+          button: opts.button,
+          clickCount: opts.doubleClick ? 2 : 1,
+          delay: resolveBoundedDelayMs(opts.delayMs, "clickCoords delayMs", ACT_MAX_CLICK_DELAY_MS),
+        }),
+        abortPromise,
+        reconcileRemoteDialog,
+      );
+    },
+    cdpUrl: opts.cdpUrl,
+    page,
+    previousUrl,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
+  }).finally(cleanup);
+}
+
+/** Hovers a role ref or selector on the target page. */
 export async function hoverViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   ref?: string;
   selector?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
@@ -482,15 +693,24 @@ export async function hoverViaPlaywright(opts: {
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
+  const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await locator.hover({
-      timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
-    });
+    await awaitActionWithAbort(
+      locator.hover({
+        timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+      }),
+      abortPromise,
+      reconcileRemoteDialog,
+    );
   } catch (err) {
-    throw toAIFriendlyError(err, label);
+    throw toFriendlyInteractionError(err, label);
+  } finally {
+    cleanup();
   }
 }
 
+/** Drags from one role ref or selector to another. */
 export async function dragViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -499,6 +719,7 @@ export async function dragViaPlaywright(opts: {
   endRef?: string;
   endSelector?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   const resolvedStart = requireRefOrSelector(opts.startRef, opts.startSelector);
   const resolvedEnd = requireRefOrSelector(opts.endRef, opts.endSelector);
@@ -511,15 +732,24 @@ export async function dragViaPlaywright(opts: {
     : page.locator(resolvedEnd.selector!);
   const startLabel = resolvedStart.ref ?? resolvedStart.selector!;
   const endLabel = resolvedEnd.ref ?? resolvedEnd.selector!;
+  const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await startLocator.dragTo(endLocator, {
-      timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
-    });
+    await awaitActionWithAbort(
+      startLocator.dragTo(endLocator, {
+        timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+      }),
+      abortPromise,
+      reconcileRemoteDialog,
+    );
   } catch (err) {
-    throw toAIFriendlyError(err, `${startLabel} -> ${endLabel}`);
+    throw toFriendlyInteractionError(err, `${startLabel} -> ${endLabel}`);
+  } finally {
+    cleanup();
   }
 }
 
+/** Selects one or more option values on a select-like element. */
 export async function selectOptionViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -527,6 +757,8 @@ export async function selectOptionViaPlaywright(opts: {
   selector?: string;
   values: string[];
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   if (!opts.values?.length) {
@@ -537,21 +769,41 @@ export async function selectOptionViaPlaywright(opts: {
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
+  const previousUrl = page.url();
+  const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await locator.selectOption(opts.values, {
-      timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+    await assertInteractionNavigationCompletedSafely({
+      action: async () => {
+        await awaitActionWithAbort(
+          locator.selectOption(opts.values, {
+            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        );
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
     });
   } catch (err) {
-    throw toAIFriendlyError(err, label);
+    throw toFriendlyInteractionError(err, label);
+  } finally {
+    cleanup();
   }
 }
 
+/** Presses a keyboard key against a ref, selector, or focused page. */
 export async function pressKeyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   key: string;
   delayMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const key = normalizeOptionalString(opts.key) ?? "";
   if (!key) {
@@ -559,17 +811,32 @@ export async function pressKeyViaPlaywright(opts: {
   }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  await page.keyboard.press(key, {
-    delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
-  });
-  await assertPostInteractionNavigationSafe({
-    cdpUrl: opts.cdpUrl,
-    page,
-    ssrfPolicy: opts.ssrfPolicy,
-    targetId: opts.targetId,
-  });
+  const previousUrl = page.url();
+  const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
+  try {
+    await assertInteractionNavigationCompletedSafely({
+      action: async () => {
+        await awaitActionWithAbort(
+          page.keyboard.press(key, {
+            delay: resolveNonNegativeIntegerOption(opts.delayMs, 0),
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        );
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  } finally {
+    cleanup();
+  }
 }
 
+/** Types text into a ref, selector, or focused page. */
 export async function typeViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -580,76 +847,155 @@ export async function typeViaPlaywright(opts: {
   slowly?: boolean;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
-  const text = String(opts.text ?? "");
+  const text = opts.text ?? "";
   const page = await getRestoredPageForTarget(opts);
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
+  const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
+    const previousUrl = page.url();
     if (opts.slowly) {
-      await locator.click({ timeout });
-      await locator.type(text, { timeout, delay: 75 });
-    } else {
-      await locator.fill(text, { timeout });
-    }
-    if (opts.submit) {
-      await locator.press("Enter", { timeout });
-      await assertPostInteractionNavigationSafe({
+      await assertInteractionNavigationCompletedSafely({
+        action: async () => {
+          await awaitActionWithAbort(
+            locator.click({ timeout }),
+            abortPromise,
+            reconcileRemoteDialog,
+          );
+          await awaitActionWithAbort(
+            locator.type(text, { timeout, delay: 75 }),
+            abortPromise,
+            reconcileRemoteDialog,
+          );
+          if (opts.submit) {
+            await awaitActionWithAbort(
+              locator.press("Enter", { timeout }),
+              abortPromise,
+              reconcileRemoteDialog,
+            );
+          }
+        },
         cdpUrl: opts.cdpUrl,
         page,
+        previousUrl,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
+    } else {
+      await assertInteractionNavigationCompletedSafely({
+        action: async () => {
+          await awaitActionWithAbort(
+            locator.fill(text, { timeout }),
+            abortPromise,
+            reconcileRemoteDialog,
+          );
+          if (opts.submit) {
+            await awaitActionWithAbort(
+              locator.press("Enter", { timeout }),
+              abortPromise,
+              reconcileRemoteDialog,
+            );
+          }
+        },
+        cdpUrl: opts.cdpUrl,
+        page,
+        previousUrl,
         ssrfPolicy: opts.ssrfPolicy,
         targetId: opts.targetId,
       });
     }
   } catch (err) {
-    throw toAIFriendlyError(err, label);
+    throw toFriendlyInteractionError(err, label);
+  } finally {
+    cleanup();
   }
 }
 
+/** Fills multiple form fields with per-field selector/ref/type support. */
 export async function fillFormViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   fields: BrowserFormField[];
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const page = await getRestoredPageForTarget(opts);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
-  for (const field of opts.fields) {
-    const ref = field.ref.trim();
-    const type = (field.type || DEFAULT_FILL_FIELD_TYPE).trim() || DEFAULT_FILL_FIELD_TYPE;
-    const rawValue = field.value;
-    const value =
-      typeof rawValue === "string"
-        ? rawValue
-        : typeof rawValue === "number" || typeof rawValue === "boolean"
-          ? String(rawValue)
-          : "";
-    if (!ref) {
-      continue;
-    }
-    const locator = refLocator(page, ref);
-    if (type === "checkbox" || type === "radio") {
-      const checked =
-        rawValue === true || rawValue === 1 || rawValue === "1" || rawValue === "true";
-      try {
-        await locator.setChecked(checked, { timeout });
-      } catch (err) {
-        throw toAIFriendlyError(err, ref);
+  const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
+  try {
+    for (const field of opts.fields) {
+      const ref = field.ref.trim();
+      const type = (field.type || DEFAULT_FILL_FIELD_TYPE).trim() || DEFAULT_FILL_FIELD_TYPE;
+      const rawValue = field.value;
+      const value =
+        typeof rawValue === "string"
+          ? rawValue
+          : typeof rawValue === "number" || typeof rawValue === "boolean"
+            ? String(rawValue)
+            : "";
+      if (!ref) {
+        continue;
       }
-      continue;
+      const locator = refLocator(page, ref);
+      if (type === "checkbox" || type === "radio") {
+        const checked =
+          rawValue === true || rawValue === 1 || rawValue === "1" || rawValue === "true";
+        try {
+          const previousUrl = page.url();
+          await assertInteractionNavigationCompletedSafely({
+            action: async () => {
+              await awaitActionWithAbort(
+                locator.setChecked(checked, { timeout }),
+                abortPromise,
+                reconcileRemoteDialog,
+              );
+            },
+            cdpUrl: opts.cdpUrl,
+            page,
+            previousUrl,
+            ssrfPolicy: opts.ssrfPolicy,
+            targetId: opts.targetId,
+          });
+        } catch (err) {
+          throw toFriendlyInteractionError(err, ref);
+        }
+        continue;
+      }
+      try {
+        const previousUrl = page.url();
+        await assertInteractionNavigationCompletedSafely({
+          action: async () => {
+            await awaitActionWithAbort(
+              locator.fill(value, { timeout }),
+              abortPromise,
+              reconcileRemoteDialog,
+            );
+          },
+          cdpUrl: opts.cdpUrl,
+          page,
+          previousUrl,
+          ssrfPolicy: opts.ssrfPolicy,
+          targetId: opts.targetId,
+        });
+      } catch (err) {
+        throw toFriendlyInteractionError(err, ref);
+      }
     }
-    try {
-      await locator.fill(value, { timeout });
-    } catch (err) {
-      throw toAIFriendlyError(err, ref);
-    }
+  } finally {
+    cleanup();
   }
 }
 
+/** Evaluates JavaScript in the page after browser action policy validation. */
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -663,6 +1009,10 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  const fnSource = normalizeBrowserEvaluateFunctionSource(
+    fnText,
+    opts.ref ? { argumentName: "el" } : undefined,
+  );
   const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations
@@ -678,10 +1028,14 @@ export async function evaluateViaPlaywright(opts: {
   evaluateTimeout = Math.min(evaluateTimeout, outerTimeout);
 
   const signal = opts.signal;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, () => {
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, (reason) => {
+    if (isBrowserObservedDialogBlockedError(reason)) {
+      return;
+    }
     void forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
       reason: "evaluate aborted",
     }).catch(() => {});
   });
@@ -690,19 +1044,32 @@ export async function evaluateViaPlaywright(opts: {
   }
 
   try {
+    const previousUrl = page.url();
+    if (opts.ssrfPolicy) {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response: null,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
+    }
+
     if (opts.ref) {
       const locator = refLocator(page, opts.ref);
-      const previousUrl = page.url();
       // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
       const elementEvaluator = new Function(
         "el",
         "args",
         `
         "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate(el) : candidate;
+          var candidate = eval("(" + fnSource + ")");
+          if (typeof candidate !== "function") {
+            throw new Error("evaluate source did not produce a function");
+          }
+          var result = candidate(el);
           if (result && typeof result.then === "function") {
             return Promise.race([
               result,
@@ -716,13 +1083,14 @@ export async function evaluateViaPlaywright(opts: {
           throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
         }
         `,
-      ) as (el: Element, args: { fnBody: string; timeoutMs: number }) => unknown;
+      ) as (el: Element, args: { fnSource: string; timeoutMs: number }) => unknown;
       const evalPromise = locator.evaluate(elementEvaluator, {
-        fnBody: fnText,
+        fnSource,
         timeoutMs: evaluateTimeout,
       });
+      const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
       const result = await assertInteractionNavigationCompletedSafely({
-        action: () => awaitActionWithAbort(evalPromise, abortPromise),
+        action: () => awaitActionWithAbort(evalPromise, abortPromise, reconcileRemoteDialog),
         cdpUrl: opts.cdpUrl,
         page,
         previousUrl,
@@ -732,16 +1100,18 @@ export async function evaluateViaPlaywright(opts: {
       return result;
     }
 
-    const previousUrl = page.url();
     // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
     const browserEvaluator = new Function(
       "args",
       `
         "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate() : candidate;
+          var candidate = eval("(" + fnSource + ")");
+          if (typeof candidate !== "function") {
+            throw new Error("evaluate source did not produce a function");
+          }
+          var result = candidate();
           if (result && typeof result.then === "function") {
             return Promise.race([
               result,
@@ -755,13 +1125,14 @@ export async function evaluateViaPlaywright(opts: {
           throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
         }
       `,
-    ) as (args: { fnBody: string; timeoutMs: number }) => unknown;
+    ) as (args: { fnSource: string; timeoutMs: number }) => unknown;
     const evalPromise = page.evaluate(browserEvaluator, {
-      fnBody: fnText,
+      fnSource,
       timeoutMs: evaluateTimeout,
     });
+    const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
     const result = await assertInteractionNavigationCompletedSafely({
-      action: () => awaitActionWithAbort(evalPromise, abortPromise),
+      action: () => awaitActionWithAbort(evalPromise, abortPromise, reconcileRemoteDialog),
       cdpUrl: opts.cdpUrl,
       page,
       previousUrl,
@@ -774,12 +1145,14 @@ export async function evaluateViaPlaywright(opts: {
   }
 }
 
+/** Scrolls a role ref or selector into view. */
 export async function scrollIntoViewViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   ref?: string;
   selector?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
@@ -789,13 +1162,22 @@ export async function scrollIntoViewViaPlaywright(opts: {
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
+  const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await locator.scrollIntoViewIfNeeded({ timeout });
+    await awaitActionWithAbort(
+      locator.scrollIntoViewIfNeeded({ timeout }),
+      abortPromise,
+      reconcileRemoteDialog,
+    );
   } catch (err) {
-    throw toAIFriendlyError(err, label);
+    throw toFriendlyInteractionError(err, label);
+  } finally {
+    cleanup();
   }
 }
 
+/** Waits for load state, timeout, URL, text, ref, or selector conditions. */
 export async function waitForViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -813,8 +1195,9 @@ export async function waitForViaPlaywright(opts: {
   ensurePageState(page);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
+  const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
-    await awaitActionWithAbort(stepPromise, abortPromise);
+    await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
   };
 
   try {
@@ -867,6 +1250,7 @@ export async function waitForViaPlaywright(opts: {
   }
 }
 
+/** Captures a screenshot from the target page or element. */
 export async function takeScreenshotViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -874,6 +1258,7 @@ export async function takeScreenshotViaPlaywright(opts: {
   element?: string;
   fullPage?: boolean;
   type?: "png" | "jpeg";
+  timeoutMs?: number;
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -884,7 +1269,7 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = refLocator(page, opts.ref);
-    const buffer = await locator.screenshot({ type });
+    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer };
   }
   if (opts.element) {
@@ -892,23 +1277,34 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = page.locator(opts.element).first();
-    const buffer = await locator.screenshot({ type });
+    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer };
   }
   const buffer = await page.screenshot({
     type,
     fullPage: Boolean(opts.fullPage),
+    timeout: opts.timeoutMs,
   });
   return { buffer };
 }
 
+/** Captures a screenshot with Browser plugin labels over interactive elements. */
 export async function screenshotWithLabelsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   maxLabels?: number;
   type?: "png" | "jpeg";
-}): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
+  timeoutMs?: number;
+  fullPage?: boolean;
+  ref?: string;
+  element?: string;
+}): Promise<{
+  buffer: Buffer;
+  labels: number;
+  skipped: number;
+  annotations: AnnotationItem[];
+}> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -916,119 +1312,152 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   const maxLabels =
     typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
       ? Math.max(1, Math.floor(opts.maxLabels))
-      : 150;
+      : ANNOTATION_MAX_LABELS_DEFAULT;
 
-  const viewport = await page.evaluate(() => ({
-    scrollX: window.scrollX || 0,
-    scrollY: window.scrollY || 0,
+  const refKey = normalizeOptionalString(opts.ref) ?? undefined;
+  const elementSelector = normalizeOptionalString(opts.element) ?? undefined;
+  const space: CoordinateSpace = opts.fullPage
+    ? "fullpage"
+    : refKey || elementSelector
+      ? "element"
+      : "viewport";
+
+  // Read scroll + viewport size. Scroll converts Playwright's viewport-space
+  // boundingBoxes into document-space inputs; the viewport size lets the helper
+  // restore the shipped `labelsSkipped` semantics by counting off-viewport refs
+  // as skipped (in viewport capture mode).
+  const view = await page.evaluate(() => ({
+    x: window.scrollX || 0,
+    y: window.scrollY || 0,
     width: window.innerWidth || 0,
     height: window.innerHeight || 0,
   }));
+  const scroll = { x: view.x, y: view.y };
 
-  const refs = Object.keys(opts.refs ?? {});
-  const boxes: Array<{ ref: string; x: number; y: number; w: number; h: number }> = [];
-  let skipped = 0;
-
-  for (const ref of refs) {
-    if (boxes.length >= maxLabels) {
-      skipped += 1;
-      continue;
+  let elementRect: { x: number; y: number; width: number; height: number } | undefined;
+  if (space === "element") {
+    const box = await resolveElementBoundingBoxForLabels(page, refKey, elementSelector);
+    if (!box) {
+      throw new Error(
+        `screenshotWithLabelsViaPlaywright: element not found for ${
+          refKey ? `ref="${refKey}"` : `selector="${elementSelector ?? ""}"`
+        }`,
+      );
     }
-    try {
-      const box = await refLocator(page, ref).boundingBox();
-      if (!box) {
-        skipped += 1;
-        continue;
-      }
-      const x0 = box.x;
-      const y0 = box.y;
-      const x1 = box.x + box.width;
-      const y1 = box.y + box.height;
-      const vx0 = viewport.scrollX;
-      const vy0 = viewport.scrollY;
-      const vx1 = viewport.scrollX + viewport.width;
-      const vy1 = viewport.scrollY + viewport.height;
-      if (x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1) {
-        skipped += 1;
-        continue;
-      }
-      boxes.push({
-        ref,
-        x: x0 - viewport.scrollX,
-        y: y0 - viewport.scrollY,
-        w: Math.max(1, box.width),
-        h: Math.max(1, box.height),
-      });
-    } catch {
-      skipped += 1;
-    }
+    // Convert viewport-space bbox to document space.
+    elementRect = {
+      x: box.x + scroll.x,
+      y: box.y + scroll.y,
+      width: box.width,
+      height: box.height,
+    };
   }
 
-  try {
-    if (boxes.length > 0) {
-      await page.evaluate((labels) => {
-        const existing = document.querySelectorAll("[data-openclaw-labels]");
-        existing.forEach((el) => el.remove());
-
-        const root = document.createElement("div");
-        root.setAttribute("data-openclaw-labels", "1");
-        root.style.position = "fixed";
-        root.style.left = "0";
-        root.style.top = "0";
-        root.style.zIndex = "2147483647";
-        root.style.pointerEvents = "none";
-        root.style.fontFamily =
-          '"SF Mono","SFMono-Regular",Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace';
-
-        const clamp = (value: number, min: number, max: number) =>
-          Math.min(max, Math.max(min, value));
-
-        for (const label of labels) {
-          const box = document.createElement("div");
-          box.setAttribute("data-openclaw-labels", "1");
-          box.style.position = "absolute";
-          box.style.left = `${label.x}px`;
-          box.style.top = `${label.y}px`;
-          box.style.width = `${label.w}px`;
-          box.style.height = `${label.h}px`;
-          box.style.border = "2px solid #ffb020";
-          box.style.boxSizing = "border-box";
-
-          const tag = document.createElement("div");
-          tag.setAttribute("data-openclaw-labels", "1");
-          tag.textContent = label.ref;
-          tag.style.position = "absolute";
-          tag.style.left = `${label.x}px`;
-          tag.style.top = `${clamp(label.y - 18, 0, 20000)}px`;
-          tag.style.background = "#ffb020";
-          tag.style.color = "#1a1a1a";
-          tag.style.fontSize = "12px";
-          tag.style.lineHeight = "14px";
-          tag.style.padding = "1px 4px";
-          tag.style.borderRadius = "3px";
-          tag.style.boxShadow = "0 1px 2px rgba(0,0,0,0.35)";
-          tag.style.whiteSpace = "nowrap";
-
-          root.appendChild(box);
-          root.appendChild(tag);
-        }
-
-        document.documentElement.appendChild(root);
-      }, boxes);
+  const refKeys = Object.keys(opts.refs ?? {});
+  const inputs: RawAnnotationInput[] = [];
+  let bboxFailures = 0;
+  for (const ref of refKeys) {
+    const box = await refLocator(page, ref)
+      .boundingBox()
+      .catch(() => null);
+    if (!box) {
+      bboxFailures += 1;
+      continue;
     }
+    inputs.push({
+      ref,
+      role: opts.refs[ref].role,
+      name: opts.refs[ref].name,
+      doc: {
+        x: box.x + scroll.x,
+        y: box.y + scroll.y,
+        width: box.width,
+        height: box.height,
+      },
+    });
+  }
 
-    const buffer = await page.screenshot({ type });
-    return { buffer, labels: boxes.length, skipped };
+  const plan = planAnnotations({
+    inputs,
+    space,
+    scroll,
+    viewport: { width: view.width, height: view.height },
+    elementRect,
+    maxLabels,
+  });
+
+  try {
+    if (plan.overlayItems.length > 0) {
+      const captureY = space === "element" ? elementRect?.y : space === "viewport" ? scroll.y : 0;
+      await page.evaluate(buildOverlayInjectionScript({ items: plan.overlayItems, captureY }));
+    }
+    const buffer =
+      space === "element"
+        ? await captureElementScreenshotForLabels(
+            page,
+            refKey,
+            elementSelector,
+            type,
+            opts.timeoutMs,
+          )
+        : await page.screenshot({
+            type,
+            fullPage: Boolean(opts.fullPage),
+            timeout: opts.timeoutMs,
+          });
+    return {
+      // `labels` reports overlay boxes actually drawn on the captured image
+      // (in-viewport, within budget); off-viewport refs are surfaced via
+      // `annotations` but not drawn, and are reflected in `skipped`.
+      buffer,
+      labels: plan.overlayItems.length,
+      skipped: plan.skipped + bboxFailures,
+      annotations: plan.annotations,
+    };
   } finally {
-    await page
-      .evaluate(() => {
-        const existing = document.querySelectorAll("[data-openclaw-labels]");
-        existing.forEach((el) => el.remove());
-      })
-      .catch(() => {});
+    await page.evaluate(buildOverlayClearScript()).catch(() => {});
   }
 }
 
+async function resolveElementBoundingBoxForLabels(
+  page: Page,
+  refKey: string | undefined,
+  cssSelector: string | undefined,
+): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  if (refKey) {
+    try {
+      return await refLocator(page, refKey).boundingBox();
+    } catch {
+      return null;
+    }
+  }
+  if (cssSelector) {
+    try {
+      return await page.locator(cssSelector).first().boundingBox();
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function captureElementScreenshotForLabels(
+  page: Page,
+  refKey: string | undefined,
+  cssSelector: string | undefined,
+  type: "png" | "jpeg",
+  timeoutMs: number | undefined,
+): Promise<Buffer> {
+  if (refKey) {
+    return await refLocator(page, refKey).screenshot({ type, timeout: timeoutMs });
+  }
+  if (cssSelector) {
+    return await page.locator(cssSelector).first().screenshot({ type, timeout: timeoutMs });
+  }
+  throw new Error("captureElementScreenshotForLabels: requires refKey or cssSelector");
+}
+
+/** Sets file inputs for a role ref or selector with strict existing-path checks. */
 export async function setInputFilesViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1052,20 +1481,16 @@ export async function setInputFilesViaPlaywright(opts: {
   }
 
   const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
-  const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-    rootDir: DEFAULT_UPLOAD_DIR,
-    requestedPaths: opts.paths,
-    scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-  });
-  if (!uploadPathsResult.ok) {
-    throw new Error(uploadPathsResult.error);
+  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+  if (!resolvedResult.ok) {
+    throw new Error(resolvedResult.error);
   }
-  const resolvedPaths = uploadPathsResult.paths;
+  const resolvedPaths = resolvedResult.paths;
 
   try {
     await locator.setInputFiles(resolvedPaths);
   } catch (err) {
-    throw toAIFriendlyError(err, inputRef || element);
+    throw toFriendlyInteractionError(err, inputRef || element);
   }
   try {
     const handle = await locator.elementHandle();
@@ -1108,6 +1533,21 @@ async function executeSingleAction(
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,
+        signal,
+      });
+      break;
+    case "clickCoords":
+      await clickCoordsViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        x: action.x,
+        y: action.y,
+        doubleClick: action.doubleClick,
+        button: action.button as "left" | "right" | "middle" | undefined,
+        delayMs: action.delayMs,
+        timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+        signal,
       });
       break;
     case "type":
@@ -1121,6 +1561,7 @@ async function executeSingleAction(
         slowly: action.slowly,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,
+        signal,
       });
       break;
     case "press":
@@ -1130,6 +1571,7 @@ async function executeSingleAction(
         key: action.key,
         delayMs: action.delayMs,
         ssrfPolicy,
+        signal,
       });
       break;
     case "hover":
@@ -1139,6 +1581,7 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
+        signal,
       });
       break;
     case "scrollIntoView":
@@ -1148,6 +1591,7 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
+        signal,
       });
       break;
     case "drag":
@@ -1159,6 +1603,7 @@ async function executeSingleAction(
         endRef: action.endRef,
         endSelector: action.endSelector,
         timeoutMs: action.timeoutMs,
+        signal,
       });
       break;
     case "select":
@@ -1169,6 +1614,8 @@ async function executeSingleAction(
         selector: action.selector,
         values: action.values,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+        signal,
       });
       break;
     case "fill":
@@ -1177,6 +1624,8 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         fields: action.fields,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+        signal,
       });
       break;
     case "resize":
@@ -1242,6 +1691,7 @@ async function executeSingleAction(
   return undefined;
 }
 
+/** Executes one high-level browser act request with bounded recursive actions. */
 export async function executeActViaPlaywright(opts: {
   cdpUrl: string;
   action: BrowserActRequest;
@@ -1252,34 +1702,55 @@ export async function executeActViaPlaywright(opts: {
 }): Promise<{
   result?: unknown;
   results?: Array<{ ok: boolean; error?: string }>;
+  blockedByDialog?: boolean;
+  browserState?: unknown;
 }> {
-  if (opts.action.kind === "batch") {
-    const batch = await batchViaPlaywright({
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      ssrfPolicy: opts.ssrfPolicy,
-      actions: opts.action.actions,
-      stopOnError: opts.action.stopOnError,
-      evaluateEnabled: opts.evaluateEnabled,
-      signal: opts.signal,
-    });
-    return { results: batch.results };
+  const page = await getPageForTargetId({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    ssrfPolicy: opts.ssrfPolicy,
+  });
+  const dialogAbort = createObservedDialogAbortSignalForPage({
+    page,
+    parentSignal: opts.signal,
+  });
+  try {
+    if (opts.action.kind === "batch") {
+      const batch = await batchViaPlaywright({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        ssrfPolicy: opts.ssrfPolicy,
+        actions: opts.action.actions,
+        stopOnError: opts.action.stopOnError,
+        evaluateEnabled: opts.evaluateEnabled,
+        signal: dialogAbort.signal,
+      });
+      return { results: batch.results };
+    }
+    const result = await executeSingleAction(
+      opts.action,
+      opts.cdpUrl,
+      opts.targetId,
+      opts.evaluateEnabled,
+      opts.ssrfPolicy,
+      0,
+      dialogAbort.signal,
+    );
+    if (opts.action.kind === "evaluate") {
+      return { result };
+    }
+    return {};
+  } catch (err) {
+    if (isBrowserObservedDialogBlockedError(err)) {
+      return { blockedByDialog: true, browserState: err.browserState };
+    }
+    throw err;
+  } finally {
+    dialogAbort.cleanup();
   }
-  const result = await executeSingleAction(
-    opts.action,
-    opts.cdpUrl,
-    opts.targetId,
-    opts.evaluateEnabled,
-    opts.ssrfPolicy,
-    0,
-    opts.signal,
-  );
-  if (opts.action.kind === "evaluate") {
-    return { result };
-  }
-  return {};
 }
 
+/** Executes a bounded sequence of browser actions and returns per-step results. */
 export async function batchViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1314,6 +1785,9 @@ export async function batchViaPlaywright(opts: {
       );
       results.push({ ok: true });
     } catch (err) {
+      if (isBrowserObservedDialogBlockedError(err)) {
+        throw err;
+      }
       const message = formatErrorMessage(err);
       results.push({ ok: false, error: message });
       if (opts.stopOnError !== false) {
@@ -1322,4 +1796,18 @@ export async function batchViaPlaywright(opts: {
     }
   }
   return { results };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -1,9 +1,11 @@
 #!/usr/bin/env -S node --import tsx
+// Plugin Npm Release Check script supports OpenClaw repository automation.
 
 import { pathToFileURL } from "node:url";
 import {
   collectChangedExtensionIdsFromGitRange,
   collectPublishablePluginPackages,
+  assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
@@ -11,7 +13,19 @@ import {
 
 export function runPluginNpmReleaseCheck(argv: string[]) {
   const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
-  const publishable = collectPublishablePluginPackages();
+  const changedExtensionIds =
+    baseRef && headRef
+      ? collectChangedExtensionIdsFromGitRange({
+          gitRange: { baseRef, headRef },
+        })
+      : [];
+  const publishable = collectPublishablePluginPackages(".", {
+    extensionIds:
+      selectionMode === "all-publishable" || !(baseRef && headRef)
+        ? undefined
+        : changedExtensionIds,
+    packageNames: selection.length > 0 ? selection : undefined,
+  });
   const selected =
     selectionMode === "all-publishable"
       ? publishable
@@ -23,11 +37,13 @@ export function runPluginNpmReleaseCheck(argv: string[]) {
         : baseRef && headRef
           ? resolveChangedPublishablePluginPackages({
               plugins: publishable,
-              changedExtensionIds: collectChangedExtensionIdsFromGitRange({
-                gitRange: { baseRef, headRef },
-              }),
+              changedExtensionIds,
             })
           : publishable;
+
+  if (selectionMode !== undefined || selection.length > 0) {
+    assertPluginReleaseVersionFloors(selected, "plugin-npm-release-check");
+  }
 
   console.log("plugin-npm-release-check: publishable plugin metadata looks OK.");
   if (baseRef && headRef && selected.length === 0) {

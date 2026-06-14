@@ -1,12 +1,19 @@
+// Generic current-conversation bindings persist lightweight conversation ->
+// session links for plugin channels without a custom binding adapter.
 import fs from "node:fs";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
-import { writeJsonFileAtomically } from "../../plugin-sdk/json-store.js";
-import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-state.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { saveJsonFile } from "../../plugin-sdk/json-store.js";
+import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
   ConversationRef,
@@ -14,7 +21,7 @@ import type {
   SessionBindingCapabilities,
   SessionBindingRecord,
   SessionBindingUnbindInput,
-} from "./session-binding-service.js";
+} from "./session-binding.types.js";
 
 type PersistedCurrentConversationBindingsFile = {
   version: 1;
@@ -25,7 +32,6 @@ const CURRENT_BINDINGS_FILE_VERSION = 1;
 const CURRENT_BINDINGS_ID_PREFIX = "generic:";
 
 let bindingsLoaded = false;
-let persistPromise: Promise<void> = Promise.resolve();
 const bindingsByConversationKey = new Map<string, SessionBindingRecord>();
 
 function buildConversationKey(ref: ConversationRef): string {
@@ -47,9 +53,15 @@ function resolveBindingsFilePath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boolean {
-  return typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt)
-    ? record.expiresAt <= now
-    : false;
+  if (record.expiresAt === undefined) {
+    return false;
+  }
+  const expiresAt = asDateTimestampMs(record.expiresAt);
+  if (expiresAt === undefined) {
+    return true;
+  }
+  const nowMs = asDateTimestampMs(now);
+  return nowMs !== undefined && !isFutureDateTimestampMs(expiresAt, { nowMs });
 }
 
 function toPersistedFile(): PersistedCurrentConversationBindingsFile {
@@ -76,24 +88,22 @@ function loadBindingsIntoMemory(): void {
     if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
       continue;
     }
-    bindingsByConversationKey.set(buildConversationKey(record.conversation), {
+    const conversation = normalizeConversationRef(record.conversation);
+    const targetSessionKey = record.targetSessionKey?.trim() ?? "";
+    if (!targetSessionKey) {
+      continue;
+    }
+    bindingsByConversationKey.set(buildConversationKey(conversation), {
       ...record,
-      conversation: normalizeConversationRef(record.conversation),
+      bindingId: buildBindingId(conversation),
+      targetSessionKey,
+      conversation,
     });
   }
 }
 
-async function persistBindingsToDisk(): Promise<void> {
-  await writeJsonFileAtomically(resolveBindingsFilePath(), toPersistedFile());
-}
-
-function enqueuePersist(): Promise<void> {
-  persistPromise = persistPromise
-    .catch(() => {})
-    .then(async () => {
-      await persistBindingsToDisk();
-    });
-  return persistPromise;
+function persistBindingsToDisk(): void {
+  saveJsonFile(resolveBindingsFilePath(), toPersistedFile());
 }
 
 function pruneExpiredBinding(key: string): SessionBindingRecord | null {
@@ -106,7 +116,7 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
     return record;
   }
   bindingsByConversationKey.delete(key);
-  void enqueuePersist();
+  persistBindingsToDisk();
   return null;
 }
 
@@ -117,7 +127,10 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   if (!normalized) {
     return false;
   }
-  const matchesPluginId = (plugin: { id: string; meta?: { aliases?: readonly string[] } }) =>
+  const matchesPluginId = (plugin: {
+    id?: string | null;
+    meta?: { aliases?: readonly string[] } | null;
+  }) =>
     plugin.id === normalized ||
     (plugin.meta?.aliases ?? []).some(
       (alias) => normalizeOptionalLowercaseString(alias) === normalized,
@@ -125,7 +138,7 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   // Read the already-installed runtime channel registry from shared state only.
   // Importing plugins/runtime here creates a module cycle through plugin-sdk
   // surfaces during bundled channel discovery.
-  const plugin = getActivePluginChannelRegistryFromState()?.channels.find((entry) =>
+  const plugin = (getActivePluginChannelRegistryFromState()?.channels ?? []).find((entry) =>
     matchesPluginId(entry.plugin),
   )?.plugin;
   if (plugin?.conversationBindings?.supportsCurrentConversationBinding === true) {
@@ -134,6 +147,7 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   return false;
 }
 
+/** Reports generic current-conversation binding support for plugin-owned channels. */
 export function getGenericCurrentConversationBindingCapabilities(params: {
   channel: string;
   accountId: string;
@@ -150,6 +164,7 @@ export function getGenericCurrentConversationBindingCapabilities(params: {
   };
 }
 
+/** Stores or replaces the current-conversation binding for a normalized conversation ref. */
 export async function bindGenericCurrentConversation(
   input: SessionBindingBindInput,
 ): Promise<SessionBindingRecord | null> {
@@ -159,11 +174,24 @@ export async function bindGenericCurrentConversation(
     return null;
   }
   loadBindingsIntoMemory();
-  const now = Date.now();
+  const rawNow = Date.now();
+  const now = asDateTimestampMs(rawNow);
+  if (now === undefined) {
+    return null;
+  }
   const ttlMs =
     typeof input.ttlMs === "number" && Number.isFinite(input.ttlMs)
       ? Math.max(0, Math.floor(input.ttlMs))
       : undefined;
+  const expiresAt =
+    ttlMs === undefined
+      ? undefined
+      : ttlMs === 0
+        ? now
+        : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (ttlMs !== undefined && expiresAt === undefined) {
+    return null;
+  }
   const key = buildConversationKey(conversation);
   const existing = pruneExpiredBinding(key);
   const record: SessionBindingRecord = {
@@ -173,7 +201,7 @@ export async function bindGenericCurrentConversation(
     conversation,
     status: "active",
     boundAt: now,
-    ...(ttlMs != null ? { expiresAt: now + ttlMs } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
     metadata: {
       ...existing?.metadata,
       ...input.metadata,
@@ -181,16 +209,18 @@ export async function bindGenericCurrentConversation(
     },
   };
   bindingsByConversationKey.set(key, record);
-  await enqueuePersist();
+  persistBindingsToDisk();
   return record;
 }
 
+/** Resolves a current-conversation binding and prunes it if its TTL has expired. */
 export function resolveGenericCurrentConversationBinding(
   ref: ConversationRef,
 ): SessionBindingRecord | null {
   return pruneExpiredBinding(buildConversationKey(ref));
 }
 
+/** Lists non-expired current-conversation bindings owned by one target session. */
 export function listGenericCurrentConversationBindingsBySession(
   targetSessionKey: string,
 ): SessionBindingRecord[] {
@@ -206,6 +236,7 @@ export function listGenericCurrentConversationBindingsBySession(
   return results;
 }
 
+/** Persists last-activity metadata for an existing generic current-conversation binding. */
 export function touchGenericCurrentConversationBinding(bindingId: string, at = Date.now()): void {
   loadBindingsIntoMemory();
   if (!bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
@@ -223,8 +254,10 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
       lastActivityAt: at,
     },
   });
+  persistBindingsToDisk();
 }
 
+/** Removes generic current-conversation bindings by binding id or target session key. */
 export async function unbindGenericCurrentConversationBindings(
   input: SessionBindingUnbindInput,
 ): Promise<SessionBindingRecord[]> {
@@ -238,7 +271,7 @@ export async function unbindGenericCurrentConversationBindings(
     if (record) {
       bindingsByConversationKey.delete(key);
       removed.push(record);
-      await enqueuePersist();
+      persistBindingsToDisk();
     }
     return removed;
   }
@@ -254,19 +287,18 @@ export async function unbindGenericCurrentConversationBindings(
     removed.push(record);
   }
   if (removed.length > 0) {
-    await enqueuePersist();
+    persistBindingsToDisk();
   }
   return removed;
 }
 
-export const __testing = {
+export const testing = {
   resetCurrentConversationBindingsForTests(params?: {
     deletePersistedFile?: boolean;
     env?: NodeJS.ProcessEnv;
   }) {
     bindingsLoaded = false;
     bindingsByConversationKey.clear();
-    persistPromise = Promise.resolve();
     if (params?.deletePersistedFile) {
       const filePath = resolveBindingsFilePath(params.env);
       try {
@@ -278,3 +310,4 @@ export const __testing = {
   },
   resolveBindingsFilePath,
 };
+export { testing as __testing };

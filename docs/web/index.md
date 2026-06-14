@@ -6,20 +6,24 @@ read_when:
 title: "Web"
 ---
 
-# Web (Gateway)
-
 The Gateway serves a small **browser Control UI** (Vite + Lit) from the same port as the Gateway WebSocket:
 
 - default: `http://<host>:18789/`
+- with `gateway.tls.enabled: true`: `https://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
-Capabilities live in [Control UI](/web/control-ui).
-This page focuses on bind modes, security, and web-facing surfaces.
+Capabilities live in [Control UI](/web/control-ui). The rest of this page focuses on bind modes, security, and web-facing surfaces.
 
 ## Webhooks
 
 When `hooks.enabled=true`, the Gateway also exposes a small webhook endpoint on the same HTTP server.
 See [Gateway configuration](/gateway/configuration) → `hooks` for auth + payloads.
+
+## Admin HTTP RPC
+
+Admin HTTP RPC exposes selected Gateway control-plane methods at `POST /api/v1/admin/rpc`.
+It is off by default and is registered only when the `admin-http-rpc` plugin is enabled.
+See [Admin HTTP RPC](/plugins/admin-http-rpc) for the auth model, allowed methods, and WebSocket comparison.
 
 ## Config (default-on)
 
@@ -102,10 +106,13 @@ Open:
   gateway token (even on loopback).
 - In shared-secret mode, the UI sends `connect.params.auth.token` or
   `connect.params.auth.password`.
+- When `gateway.tls.enabled: true`, local dashboard and status helpers render
+  `https://` dashboard URLs and `wss://` WebSocket URLs.
 - In identity-bearing modes such as Tailscale Serve or `trusted-proxy`, the
   WebSocket auth check is satisfied from request headers instead.
-- For non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`
-  explicitly (full origins). Without it, gateway startup is refused by default.
+- For public non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`
+  explicitly (full origins). Private same-origin LAN/Tailnet loads are accepted for loopback,
+  RFC1918/link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables
   Host-header origin fallback mode, but is a dangerous security downgrade.
 - With Serve, Tailscale identity headers can satisfy Control UI/WebSocket auth
@@ -122,5 +129,5 @@ Open:
 The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:build
 ```

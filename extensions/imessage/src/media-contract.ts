@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { mergeInboundPathRoots } from "openclaw/plugin-sdk/media-runtime";
+// Imessage plugin module implements media contract behavior.
+import { mergeInboundPathRoots } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveIMessageAccount } from "./accounts.js";
 
 export const DEFAULT_IMESSAGE_ATTACHMENT_ROOTS = ["/Users/*/Library/Messages/Attachments"] as const;

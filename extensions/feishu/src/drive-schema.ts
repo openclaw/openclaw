@@ -1,4 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
+// Feishu helper module supports drive schema behavior.
+import { Type, type Static } from "typebox";
 
 const FileType = Type.Union([
   Type.Literal("doc"),

@@ -1,3 +1,4 @@
+// Browser tests cover server context.reset plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,7 @@ function localOpenClawProfile(): Parameters<typeof createProfileResetOps>[0]["pr
     cdpPort: 18800,
     color: "#f60",
     driver: "openclaw",
+    headless: false,
     attachOnly: false,
   };
 }

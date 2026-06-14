@@ -1,25 +1,31 @@
+// Qa Lab plugin module implements manual lane behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
-import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import type { QaProviderMode } from "./model-selection.js";
+import { startQaProviderServer } from "./providers/server-runtime.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
+import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
 type QaManualLaneParams = {
   repoRoot: string;
-  providerMode: "mock-openai" | "live-frontier";
+  transportId?: QaTransportId;
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
   message: string;
   timeoutMs?: number;
+  replySettleMs?: number;
 };
 
 function resolveManualLaneTimeoutMs(params: {
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   timeoutMs?: number;
@@ -48,17 +54,16 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     repoRoot: params.repoRoot,
     embeddedGateway: "disabled",
   });
-  const mock =
-    params.providerMode === "mock-openai"
-      ? await startQaMockOpenAiServer({
-          host: "127.0.0.1",
-          port: 0,
-        })
-      : null;
+  const transport = createQaTransportAdapter({
+    id: params.transportId ?? "qa-channel",
+    state: lab.state,
+  });
+  const mock = await startQaProviderServer(params.providerMode);
   const gateway = await startQaGatewayChild({
     repoRoot: params.repoRoot,
     providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
-    qaBusBaseUrl: lab.listenUrl,
+    transport,
+    transportBaseUrl: lab.listenUrl,
     providerMode: params.providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
@@ -74,6 +79,9 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     timeoutMs: params.timeoutMs,
   });
   try {
+    const delivery = transport.buildAgentDelivery({
+      target: "dm:qa-operator",
+    });
     const started = (await gateway.call(
       "agent",
       {
@@ -82,10 +90,10 @@ export async function runQaManualLane(params: QaManualLaneParams) {
         sessionKey: `agent:qa:manual:${sessionSuffix}`,
         message: params.message,
         deliver: true,
-        channel: "qa-channel",
+        channel: delivery.channel,
         to: "dm:qa-operator",
-        replyChannel: "qa-channel",
-        replyTo: "dm:qa-operator",
+        replyChannel: delivery.replyChannel,
+        replyTo: delivery.replyTo,
       },
       { timeoutMs: 30_000 },
     )) as { runId?: string };
@@ -100,19 +108,21 @@ export async function runQaManualLane(params: QaManualLaneParams) {
         runId: started.runId,
         timeoutMs,
       },
-      { timeoutMs: timeoutMs + 5_000 },
+      { timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs) },
     )) as { status?: string; error?: string };
 
-    await sleep(500);
+    const replySettleMs = params.replySettleMs ?? 500;
+    if (replySettleMs > 0) {
+      await sleep(replySettleMs);
+    }
 
     const reply =
       lab.state
         .getSnapshot()
-        .messages.filter(
+        .messages.findLast(
           (candidate) =>
             candidate.direction === "outbound" && candidate.conversation.id === "qa-operator",
-        )
-        .at(-1)?.text ?? null;
+        )?.text ?? null;
 
     return {
       model: params.primaryModel,

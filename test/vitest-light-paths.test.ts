@@ -1,12 +1,13 @@
+// Vitest light path tests validate light test include path generation.
 import { describe, expect, it } from "vitest";
 import {
   isCommandsLightTarget,
   resolveCommandsLightIncludePattern,
-} from "../vitest.commands-light-paths.mjs";
+} from "./vitest/vitest.commands-light-paths.mjs";
 import {
   isPluginSdkLightTarget,
   resolvePluginSdkLightIncludePattern,
-} from "../vitest.plugin-sdk-paths.mjs";
+} from "./vitest/vitest.plugin-sdk-paths.mjs";
 
 describe("light vitest path routing", () => {
   it("maps plugin-sdk allowlist source and test files to sibling light tests", () => {
@@ -43,5 +44,14 @@ describe("light vitest path routing", () => {
   it("keeps non-allowlisted commands files off the light lane", () => {
     expect(isCommandsLightTarget("src/commands/channels.add.ts")).toBe(false);
     expect(resolveCommandsLightIncludePattern("src/commands/channels.add.ts")).toBeNull();
+  });
+
+  it("can route broad command test files without narrowing their source files", () => {
+    expect(isCommandsLightTarget("src/commands/auth-choice.test.ts")).toBe(true);
+    expect(resolveCommandsLightIncludePattern("src/commands/auth-choice.test.ts")).toBe(
+      "src/commands/auth-choice.test.ts",
+    );
+    expect(isCommandsLightTarget("src/commands/auth-choice.ts")).toBe(false);
+    expect(resolveCommandsLightIncludePattern("src/commands/auth-choice.ts")).toBeNull();
   });
 });

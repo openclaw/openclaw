@@ -1,3 +1,5 @@
+// Venice tests cover models plugin behavior.
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildVeniceModelDefinition,
@@ -110,6 +112,7 @@ function stubVeniceModelsFetch(rows: ModelSpecOverride[]) {
 
 describe("venice-models", () => {
   afterEach(() => {
+    clearLiveCatalogCacheForTests();
     vi.unstubAllGlobals();
     restoreDiscoveryEnv();
   });
@@ -139,7 +142,7 @@ describe("venice-models", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
     expect(attempts).toBe(3);
     expect(models.map((m) => m.id)).toContain("llama-3.3-70b");
   });
@@ -158,7 +161,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
     const llama = models.find((m) => m.id === "llama-3.3-70b");
     expect(llama?.maxTokens).toBe(2048);
   });
@@ -176,7 +179,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
     const qwen = models.find((m) => m.id === "qwen3-235b-a22b-instruct-2507");
     expect(qwen?.maxTokens).toBe(16384);
   });
@@ -202,7 +205,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
     const newModel = models.find((m) => m.id === "new-model-2026");
     expect(newModel?.maxTokens).toBe(50000);
     expect(newModel?.maxTokens).toBeLessThanOrEqual(newModel?.contextWindow ?? Infinity);
@@ -283,7 +286,7 @@ describe("venice-models", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels({ retryDelayMs: 0 }));
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(models).toHaveLength(VENICE_MODEL_CATALOG.length);
     expect(models.map((m) => m.id)).toEqual(VENICE_MODEL_CATALOG.map((m) => m.id));

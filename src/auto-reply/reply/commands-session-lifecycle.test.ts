@@ -1,8 +1,9 @@
+// Tests session lifecycle commands for fork, reset, restart, and cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { parseInlineDirectives } from "./directive-handling.js";
+import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
@@ -19,6 +20,16 @@ type ResolveCommandConversationParams = {
 
 function firstText(values: Array<string | undefined>): string | undefined {
   return values.map((value) => value?.trim() ?? "").find(Boolean) || undefined;
+}
+
+function normalizeCommandContextText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value).trim().toLowerCase();
+  }
+  return "";
 }
 
 function resolveThreadTargetId(raw?: string): string | undefined {
@@ -188,6 +199,8 @@ vi.mock("../../plugins/runtime.js", () => {
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (channelId: string) =>
     hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
+  getLoadedChannelPlugin: (channelId: string) =>
+    hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
   normalizeChannelId: (raw?: string | null) => {
     const normalized = raw?.trim().toLowerCase();
     return normalized || null;
@@ -282,24 +295,20 @@ function buildSessionCommandParams(
     CommandBody: commandBody,
     CommandSource: "text",
     CommandAuthorized: true,
-    Provider: "whatsapp",
-    Surface: "whatsapp",
+    Provider: "quietchat",
+    Surface: "quietchat",
     From: "+1222",
     To: "+1222",
     SenderId: "user-1",
     ...ctxOverrides,
   } as HandleCommandsParams["ctx"];
-  const channel = String(ctx.Provider ?? ctx.Surface ?? "")
-    .trim()
-    .toLowerCase();
+  const channel = normalizeCommandContextText(ctx.Provider ?? ctx.Surface);
   const senderId = typeof ctx.SenderId === "string" ? ctx.SenderId : undefined;
   return {
     ctx,
     cfg: baseCfg,
     command: {
-      surface: String(ctx.Surface ?? ctx.Provider ?? "")
-        .trim()
-        .toLowerCase(),
+      surface: normalizeCommandContextText(ctx.Surface ?? ctx.Provider),
       channel,
       channelId: channel,
       ownerList: [],
@@ -528,6 +537,20 @@ describe("/session idle and /session max-age", () => {
     );
   });
 
+  it("rejects unsafe bare-hour lifecycle durations", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
+
+    const result = await handleSessionCommand(
+      createThreadCommandParams("/session idle 9999999999999"),
+      true,
+    );
+
+    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toBe(
+      "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)",
+    );
+  });
+
   it("shows active idle timeout when no value is provided", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
@@ -546,6 +569,44 @@ describe("/session idle and /session max-age", () => {
     const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
     expect(result?.reply?.text).toContain("Idle timeout active (2h");
     expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
+  });
+
+  it("falls back to bind time when idle activity timestamp is out of range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createThreadBinding({
+        metadata: {
+          boundBy: "user-1",
+          lastActivityAt: 8_700_000_000_000_000,
+          idleTimeoutMs: 2 * 60 * 60 * 1000,
+          maxAgeMs: 0,
+        },
+      }),
+    );
+
+    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
+    expect(result?.reply?.text).toContain("Idle timeout active (2h");
+    expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
+  });
+
+  it("treats overflowed idle timeout metadata as disabled", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createThreadBinding({
+        metadata: {
+          boundBy: "user-1",
+          lastActivityAt: Date.now(),
+          idleTimeoutMs: Number.MAX_SAFE_INTEGER,
+          maxAgeMs: 0,
+        },
+      }),
+    );
+
+    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
+    expect(result?.reply?.text).toBe(
+      "ℹ️ Idle timeout is currently disabled for this focused session.",
+    );
   });
 
   it("sets max age for the focused thread-chat session", async () => {

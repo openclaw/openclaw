@@ -1,3 +1,4 @@
+// Msteams tests cover inbound media plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../attachments.js", () => ({
@@ -34,9 +35,26 @@ const baseParams = {
   log: { debug: vi.fn() },
 };
 
+function firstGraphMediaCall() {
+  const [call] = vi.mocked(downloadMSTeamsGraphMedia).mock.calls;
+  if (!call) {
+    throw new Error("expected Graph media download call");
+  }
+  return call[0];
+}
+
+function firstBotFrameworkAttachmentCall() {
+  const [call] = vi.mocked(downloadMSTeamsBotFrameworkAttachments).mock.calls;
+  if (!call) {
+    throw new Error("expected Bot Framework attachment download call");
+  }
+  return call[0];
+}
+
 describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
-  it("triggers Graph fallback when some attachments are text/html (some() behavior)", async () => {
+  it("triggers Graph fallback when HTML contains <attachment> tags", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce(["att-0"]);
     vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({
       media: [{ path: "/tmp/img.png", contentType: "image/png", placeholder: "[image]" }],
     });
@@ -44,8 +62,10 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     await resolveMSTeamsInboundMedia({
       ...baseParams,
       attachments: [
-        { contentType: "text/html", content: "<div><img src='x'/></div>" },
-        { contentType: "image/png", contentUrl: "https://example.com/img.png" },
+        {
+          contentType: "text/html",
+          content: '<div>A file <attachment id="att-0"></attachment></div>',
+        },
       ],
     });
 
@@ -53,8 +73,32 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
   });
 
+  it("does NOT trigger Graph fallback for mention-only HTML (no <attachment> tags)", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    // Mention cards include `<at>` markers but no `<attachment id="...">`,
+    // so the extractor returns an empty ID list. The fallback must skip.
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      attachments: [
+        {
+          contentType: "text/html",
+          content: '<div><at id="0">Bot</at> hello there</div>',
+        },
+      ],
+    });
+
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+    expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+  });
+
   it("does NOT trigger Graph fallback when no attachments are text/html", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    // No HTML attachments at all → extractor returns [].
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
     vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
 
@@ -77,10 +121,52 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
 
     await resolveMSTeamsInboundMedia({
       ...baseParams,
-      attachments: [{ contentType: "text/html", content: "<div><img src='x'/></div>" }],
+      attachments: [
+        {
+          contentType: "text/html",
+          content: '<div><attachment id="att-0"></attachment></div>',
+        },
+      ],
     });
 
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+  });
+
+  it("forwards log through to downloadMSTeamsGraphMedia for diagnostics", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce(["att-0"]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({ media: [] });
+    const log = { debug: vi.fn() };
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      log,
+      attachments: [
+        {
+          contentType: "text/html",
+          content: '<div><attachment id="att-0"></attachment></div>',
+        },
+      ],
+    });
+
+    const call = firstGraphMediaCall();
+    // The monitor handler's logger is forwarded so graph.ts can report
+    // message fetch failures instead of swallowing them (#51749).
+    expect(call?.logger).toBe(log);
+    expect(log.debug).toHaveBeenCalledWith("graph media fetch empty", {
+      attempts: [
+        {
+          url: "https://graph.microsoft.com/v1.0/chats/c/messages/m",
+          hostedStatus: undefined,
+          attachmentStatus: undefined,
+          hostedCount: undefined,
+          attachmentCount: undefined,
+          tokenError: undefined,
+        },
+      ],
+      attachmentIdCount: 1,
+    });
   });
 });
 
@@ -118,7 +204,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     });
 
     expect(downloadMSTeamsBotFrameworkAttachments).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(downloadMSTeamsBotFrameworkAttachments).mock.calls[0]?.[0];
+    const call = firstBotFrameworkAttachmentCall();
     expect(call?.serviceUrl).toBe(dmParams.serviceUrl);
     expect(call?.attachmentIds).toEqual(["att-0", "att-1"]);
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
@@ -172,23 +258,27 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
   });
 
-  it("logs when no attachment IDs are present on a BF DM with HTML content", async () => {
+  it("skips BF DM attachment fetch entirely when HTML has no <attachment> tags", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(downloadMSTeamsBotFrameworkAttachments).mockClear();
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    // Mention-only HTML (no `<attachment id="...">` tag) → extractor
+    // returns []. The fallback skips both the Bot Framework and Graph
+    // paths so we do not emit spurious 404 diagnostics (#58617).
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
-    const log = { debug: vi.fn() };
 
     await resolveMSTeamsInboundMedia({
       ...dmParams,
-      log,
-      attachments: [{ contentType: "text/html", content: "<div>no attachments here</div>" }],
+      attachments: [
+        {
+          contentType: "text/html",
+          content: '<div><at id="0">Bot</at> hello</div>',
+        },
+      ],
     });
 
     expect(downloadMSTeamsBotFrameworkAttachments).not.toHaveBeenCalled();
-    expect(log.debug).toHaveBeenCalledWith(
-      "bot framework attachment ids unavailable",
-      expect.objectContaining({ conversationType: "personal" }),
-    );
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
   });
 
   it("logs when serviceUrl is missing for a BF DM with HTML content", async () => {
@@ -216,10 +306,10 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
     expect(log.debug).toHaveBeenCalledWith(
       "bot framework attachment skipped (missing serviceUrl)",
-      expect.objectContaining({
+      {
         conversationType: "personal",
         conversationId: "a:bf-dm-id",
-      }),
+      },
     );
   });
 });

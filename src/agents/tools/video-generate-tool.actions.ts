@@ -1,10 +1,17 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * video_generate action result helpers.
+ *
+ * Formats provider listing, active-task status, and duplicate-guard responses for the tool.
+ */
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildVideoGenerationTaskStatusDetails,
   buildVideoGenerationTaskStatusText,
   findActiveVideoGenerationTaskForSession,
+  findDuplicateGuardVideoGenerationTaskForSession,
 } from "../video-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
@@ -21,11 +28,36 @@ function summarizeVideoGenerationCapabilities(
   const generate = provider.capabilities.generate;
   const imageToVideo = provider.capabilities.imageToVideo;
   const videoToVideo = provider.capabilities.videoToVideo;
+  // providerOptions may be declared at the mode level (generate) or at the flat
+  // provider-capabilities level. The runtime checks both; surface the union so
+  // the agent sees a single merged view of which opaque keys each provider
+  // actually accepts.
+  const declaredProviderOptions: Record<string, string> = {};
+  for (const [key, type] of Object.entries(provider.capabilities.providerOptions ?? {})) {
+    declaredProviderOptions[key] = type;
+  }
+  for (const [key, type] of Object.entries(generate?.providerOptions ?? {})) {
+    declaredProviderOptions[key] = type;
+  }
+  for (const [key, type] of Object.entries(imageToVideo?.providerOptions ?? {})) {
+    declaredProviderOptions[key] = type;
+  }
+  for (const [key, type] of Object.entries(videoToVideo?.providerOptions ?? {})) {
+    declaredProviderOptions[key] = type;
+  }
+  const maxInputAudios =
+    generate?.maxInputAudios ??
+    imageToVideo?.maxInputAudios ??
+    videoToVideo?.maxInputAudios ??
+    provider.capabilities.maxInputAudios;
   const capabilities = [
     supportedModes.length > 0 ? `modes=${supportedModes.join("/")}` : null,
     generate?.maxVideos ? `maxVideos=${generate.maxVideos}` : null,
     imageToVideo?.maxInputImages ? `maxInputImages=${imageToVideo.maxInputImages}` : null,
     videoToVideo?.maxInputVideos ? `maxInputVideos=${videoToVideo.maxInputVideos}` : null,
+    typeof maxInputAudios === "number" && maxInputAudios > 0
+      ? `maxInputAudios=${maxInputAudios}`
+      : null,
     generate?.maxDurationSeconds ? `maxDurationSeconds=${generate.maxDurationSeconds}` : null,
     generate?.supportedDurationSeconds?.length
       ? `supportedDurationSeconds=${generate.supportedDurationSeconds.join("/")}`
@@ -41,6 +73,11 @@ function summarizeVideoGenerationCapabilities(
     generate?.supportsSize ? "size" : null,
     generate?.supportsAudio ? "audio" : null,
     generate?.supportsWatermark ? "watermark" : null,
+    Object.keys(declaredProviderOptions).length > 0
+      ? `providerOptions={${Object.entries(declaredProviderOptions)
+          .map(([key, type]) => `${key}:${type}`)
+          .join(", ")}}`
+      : null,
   ]
     .filter((entry): entry is string => Boolean(entry))
     .join(", ");
@@ -49,11 +86,17 @@ function summarizeVideoGenerationCapabilities(
 
 export function createVideoGenerateListActionResult(
   config?: OpenClawConfig,
+  options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
 ): VideoGenerateActionResult {
   const providers = listRuntimeVideoGenerationProviders({ config });
   return createMediaGenerateProviderListActionResult({
+    kind: "video_generation",
     providers,
     emptyText: "No video-generation providers are registered.",
+    cfg: config,
+    workspaceDir: options?.workspaceDir,
+    agentDir: options?.agentDir,
+    authStore: options?.authStore,
     listModes: listSupportedVideoGenerationModes,
     summarizeCapabilities: summarizeVideoGenerationCapabilities,
   });
@@ -74,6 +117,26 @@ export function createVideoGenerateStatusActionResult(
 
 export function createVideoGenerateDuplicateGuardResult(
   sessionKey?: string,
+  params?: { prompt?: string; requestKey?: string },
 ): VideoGenerateActionResult | undefined {
-  return videoGenerateTaskStatusActions.createDuplicateGuardResult(sessionKey);
+  const blockingTask = findDuplicateGuardVideoGenerationTaskForSession(sessionKey, {
+    prompt: params?.prompt,
+    requestKey: params?.requestKey,
+  });
+  if (!blockingTask) {
+    return undefined;
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: buildVideoGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
+      },
+    ],
+    details: {
+      action: "status",
+      duplicateGuard: true,
+      ...buildVideoGenerationTaskStatusDetails(blockingTask),
+    },
+  };
 }

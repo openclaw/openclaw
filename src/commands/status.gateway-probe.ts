@@ -1,13 +1,15 @@
-import type { loadConfig } from "../config/config.js";
+// Gateway probe auth helpers used by status scans.
+// This module resolves probe credentials without exposing secret values to report builders.
+
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveGatewayProbeAuthSafeWithSecretInputs,
   resolveGatewayProbeTarget,
 } from "../gateway/probe-auth.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
-export async function resolveGatewayProbeAuthResolution(
-  cfg: ReturnType<typeof loadConfig>,
-): Promise<{
+/** Resolves gateway probe auth plus any non-secret warning about credential lookup. */
+export async function resolveGatewayProbeAuthResolution(cfg: OpenClawConfig): Promise<{
   auth: {
     token?: string;
     password?: string;
@@ -15,6 +17,7 @@ export async function resolveGatewayProbeAuthResolution(
   warning?: string;
 }> {
   const target = resolveGatewayProbeTarget(cfg);
+  // Probe auth resolution depends on local/remote mode because token/password sources differ.
   return resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,
     mode: target.mode,
@@ -22,7 +25,8 @@ export async function resolveGatewayProbeAuthResolution(
   });
 }
 
-export async function resolveGatewayProbeAuth(cfg: ReturnType<typeof loadConfig>): Promise<{
+/** Resolves only gateway probe auth material for callers that do not display warnings. */
+export async function resolveGatewayProbeAuth(cfg: OpenClawConfig): Promise<{
   token?: string;
   password?: string;
 }> {

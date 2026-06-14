@@ -1,3 +1,4 @@
+// Control UI module implements chat model select state behavior.
 import type { AppViewState } from "./app-view-state.ts";
 import {
   buildCatalogDisplayLookup,
@@ -6,7 +7,7 @@ import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "./chat-model-ref.ts";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import { pushUniqueTrimmedSelectOption } from "./select-options.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 
 type ChatModelSelectStateInput = Pick<
@@ -65,16 +66,7 @@ function buildChatModelOptions(
   const options: ChatModelSelectOption[] = [];
 
   const addOption = (value: string, label?: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return;
-    }
-    const key = normalizeLowercaseStringOrEmpty(trimmed);
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    options.push({ value: trimmed, label: label ?? trimmed });
+    pushUniqueTrimmedSelectOption(options, seen, value, (trimmed) => label ?? trimmed);
   };
 
   for (const entry of catalog) {

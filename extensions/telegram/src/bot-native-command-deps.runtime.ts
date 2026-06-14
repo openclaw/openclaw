@@ -1,7 +1,8 @@
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+// Telegram plugin module implements bot native command deps behavior.
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
@@ -10,8 +11,8 @@ export type TelegramNativeCommandDeps = Pick<
   TelegramBotDeps,
   | "dispatchReplyWithBufferedBlockDispatcher"
   | "editMessageTelegram"
+  | "getRuntimeConfig"
   | "listSkillCommandsForAgents"
-  | "loadConfig"
   | "readChannelAllowFromStore"
   | "syncTelegramMenuCommands"
 > & {
@@ -26,8 +27,8 @@ async function loadTelegramSendRuntime() {
 }
 
 export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps = {
-  get loadConfig() {
-    return loadConfig;
+  get getRuntimeConfig() {
+    return getRuntimeConfig;
   },
   get readChannelAllowFromStore() {
     return readChannelAllowFromStore;

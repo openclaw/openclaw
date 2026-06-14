@@ -1,8 +1,9 @@
+/** Evaluates node-host exec policy from security, approval, and allowlist context. */
 import { requiresExecApproval, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
 
-export type ExecApprovalDecision = "allow-once" | "allow-always" | null;
+type ExecApprovalDecision = "allow-once" | "allow-always" | null;
 
-export type SystemRunPolicyDecision = {
+type SystemRunPolicyDecision = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   shellWrapperBlocked: boolean;
@@ -21,6 +22,7 @@ export type SystemRunPolicyDecision = {
     }
 );
 
+/** Normalizes raw approval decisions from node-host payloads. */
 export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecision {
   if (value === "allow-once" || value === "allow-always") {
     return value;
@@ -49,6 +51,7 @@ export function formatSystemRunAllowlistMissMessage(params?: {
   return "SYSTEM_RUN_DENIED: allowlist miss";
 }
 
+/** Combines exec security, allowlist analysis, and approval state into an allow/deny decision. */
 export function evaluateSystemRunPolicy(params: {
   security: ExecSecurity;
   ask: ExecAsk;

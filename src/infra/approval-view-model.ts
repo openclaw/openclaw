@@ -1,94 +1,26 @@
-import type { ChannelApprovalKind } from "../channels/plugins/types.adapters.js";
+// Builds approval prompt view models from request and resolution events.
+import type {
+  ApprovalMetadataView,
+  ApprovalRequest,
+  ApprovalResolved,
+  ExecApprovalViewBase,
+  ExpiredApprovalView,
+  PendingApprovalView,
+  PluginApprovalViewBase,
+  ResolvedApprovalView,
+} from "./approval-view-model.types.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
-import {
-  buildExecApprovalActionDescriptors,
-  type ExecApprovalActionDescriptor,
-} from "./exec-approval-reply.js";
+import { buildExecApprovalActionDescriptors } from "./exec-approval-reply.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
-  type ExecApprovalDecision,
   type ExecApprovalRequest,
-  type ExecApprovalResolved,
 } from "./exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import {
+  resolvePluginApprovalRequestAllowedDecisions,
+  type PluginApprovalRequest,
+} from "./plugin-approvals.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 type ApprovalPhase = "pending" | "resolved" | "expired";
-
-export type ApprovalActionView = ExecApprovalActionDescriptor;
-
-export type ApprovalMetadataView = {
-  label: string;
-  value: string;
-};
-
-type ApprovalViewBase = {
-  approvalId: string;
-  approvalKind: ChannelApprovalKind;
-  phase: "pending" | "resolved" | "expired";
-  title: string;
-  description?: string | null;
-  metadata: ApprovalMetadataView[];
-};
-
-type ExecApprovalViewBase = ApprovalViewBase & {
-  approvalKind: "exec";
-  ask?: string | null;
-  agentId?: string | null;
-  commandText: string;
-  commandPreview?: string | null;
-  cwd?: string | null;
-  envKeys?: readonly string[];
-  host?: string | null;
-  nodeId?: string | null;
-  sessionKey?: string | null;
-};
-
-export type ExecApprovalPendingView = ExecApprovalViewBase & {
-  phase: "pending";
-  actions: ApprovalActionView[];
-  expiresAtMs: number;
-};
-
-export type ExecApprovalResolvedView = ExecApprovalViewBase & {
-  phase: "resolved";
-  decision: ExecApprovalDecision;
-  resolvedBy?: string | null;
-};
-
-export type ExecApprovalExpiredView = ExecApprovalViewBase & {
-  phase: "expired";
-};
-
-type PluginApprovalViewBase = ApprovalViewBase & {
-  approvalKind: "plugin";
-  agentId?: string | null;
-  pluginId?: string | null;
-  toolName?: string | null;
-  severity: "info" | "warning" | "critical";
-};
-
-export type PluginApprovalPendingView = PluginApprovalViewBase & {
-  phase: "pending";
-  actions: ApprovalActionView[];
-  expiresAtMs: number;
-};
-
-export type PluginApprovalResolvedView = PluginApprovalViewBase & {
-  phase: "resolved";
-  decision: ExecApprovalDecision;
-  resolvedBy?: string | null;
-};
-
-export type PluginApprovalExpiredView = PluginApprovalViewBase & {
-  phase: "expired";
-};
-
-export type PendingApprovalView = ExecApprovalPendingView | PluginApprovalPendingView;
-export type ResolvedApprovalView = ExecApprovalResolvedView | PluginApprovalResolvedView;
-export type ExpiredApprovalView = ExecApprovalExpiredView | PluginApprovalExpiredView;
-export type ApprovalViewModel = PendingApprovalView | ResolvedApprovalView | ExpiredApprovalView;
 
 function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[] {
   const metadata: ApprovalMetadataView[] = [];
@@ -140,6 +72,8 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     metadata: buildExecMetadata(request),
     ask: request.request.ask ?? null,
     agentId: request.request.agentId ?? null,
+    warningText: request.request.warningText ?? null,
+    commandAnalysis: request.request.commandAnalysis ?? null,
     commandText,
     commandPreview,
     cwd: request.request.cwd ?? null,
@@ -168,6 +102,7 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
   };
 }
 
+/** Builds the presentation model for an unresolved exec or plugin approval. */
 export function buildPendingApprovalView(request: ApprovalRequest): PendingApprovalView {
   if (request.id.startsWith("plugin:")) {
     const pluginRequest = request as PluginApprovalRequest;
@@ -175,6 +110,7 @@ export function buildPendingApprovalView(request: ApprovalRequest): PendingAppro
       ...buildPluginViewBase(pluginRequest, "pending"),
       actions: buildExecApprovalActionDescriptors({
         approvalCommandId: pluginRequest.id,
+        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(pluginRequest.request),
       }),
       expiresAtMs: pluginRequest.expiresAtMs,
     };
@@ -191,6 +127,7 @@ export function buildPendingApprovalView(request: ApprovalRequest): PendingAppro
   };
 }
 
+/** Builds the presentation model for an approval after a decision was recorded. */
 export function buildResolvedApprovalView(
   request: ApprovalRequest,
   resolved: ApprovalResolved,
@@ -211,6 +148,7 @@ export function buildResolvedApprovalView(
   };
 }
 
+/** Builds the presentation model shown when an approval can no longer be acted on. */
 export function buildExpiredApprovalView(request: ApprovalRequest): ExpiredApprovalView {
   if (request.id.startsWith("plugin:")) {
     return buildPluginViewBase(request as PluginApprovalRequest, "expired");

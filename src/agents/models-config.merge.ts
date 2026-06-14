@@ -1,7 +1,13 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+/**
+ * Merges generated model-provider config with explicit user config and
+ * preserved secret fields. Setup and doctor flows use this boundary to update
+ * model catalogs without discarding existing credentials.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
+/** Existing provider config shape that may carry persisted secret/base URL fields. */
 export type ExistingProviderConfig = ProviderConfig & {
   apiKey?: string;
   baseUrl?: string;
@@ -34,6 +40,7 @@ function getProviderModelId(model: unknown): string {
   return normalizeOptionalString(id) ?? "";
 }
 
+/** Merges implicit provider models with explicit config while preserving explicit fields. */
 export function mergeProviderModels(
   implicit: ProviderConfig,
   explicit: ProviderConfig,
@@ -97,14 +104,17 @@ export function mergeProviderModels(
       implicitValue: implicitModel.maxTokens,
     });
 
-    return {
-      ...explicitModel,
-      input: implicitModel.input,
-      reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
-      ...(contextWindow === undefined ? {} : { contextWindow }),
-      ...(contextTokens === undefined ? {} : { contextTokens }),
-      ...(maxTokens === undefined ? {} : { maxTokens }),
-    };
+    return Object.assign(
+      {},
+      explicitModel,
+      {
+        input: "input" in explicitModel ? explicitModel.input : implicitModel.input,
+        reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
+      },
+      contextWindow === undefined ? {} : { contextWindow },
+      contextTokens === undefined ? {} : { contextTokens },
+      maxTokens === undefined ? {} : { maxTokens },
+    );
   });
 
   for (const implicitModel of implicitModels) {
@@ -131,6 +141,7 @@ export function mergeProviderModels(
   };
 }
 
+/** Merges implicit and explicit provider config maps by provider id. */
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
@@ -196,17 +207,11 @@ function shouldPreserveExistingApiKey(params: {
 }
 
 function shouldPreserveExistingBaseUrl(params: {
-  providerKey: string;
   existing: ExistingProviderConfig;
   nextEntry: ProviderConfig;
-  explicitBaseUrlProviders: ReadonlySet<string>;
 }): boolean {
-  const { providerKey, existing, nextEntry, explicitBaseUrlProviders } = params;
-  if (
-    explicitBaseUrlProviders.has(providerKey) ||
-    typeof existing.baseUrl !== "string" ||
-    existing.baseUrl.length === 0
-  ) {
+  const { existing, nextEntry } = params;
+  if (typeof existing.baseUrl !== "string" || existing.baseUrl.length === 0) {
     return false;
   }
 
@@ -215,16 +220,25 @@ function shouldPreserveExistingBaseUrl(params: {
   return !existingApi || !nextApi || existingApi === nextApi;
 }
 
+function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean {
+  if (!Array.isArray(entry.models) || entry.models.length === 0) {
+    return true;
+  }
+  return Boolean(entry.baseUrl?.trim() && entry.apiKey);
+}
+
+/** Merges generated provider config with existing secrets safe to preserve. */
 export function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, ExistingProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
-  explicitBaseUrlProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders, secretRefManagedProviders, explicitBaseUrlProviders } =
-    params;
+  const { nextProviders, existingProviders, secretRefManagedProviders } = params;
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
+    if (!isExistingProviderSelfContained(entry)) {
+      continue;
+    }
     mergedProviders[key] = entry;
   }
   for (const [key, newEntry] of Object.entries(nextProviders)) {
@@ -246,10 +260,8 @@ export function mergeWithExistingProviderSecrets(params: {
     }
     if (
       shouldPreserveExistingBaseUrl({
-        providerKey: key,
         existing,
         nextEntry: newEntry,
-        explicitBaseUrlProviders,
       })
     ) {
       preserved.baseUrl = existing.baseUrl;

@@ -1,3 +1,4 @@
+// Allocates available local ports for tests that start servers.
 import { createServer } from "node:net";
 import { isMainThread, threadId } from "node:worker_threads";
 
@@ -48,14 +49,15 @@ export async function getDeterministicFreePortBlock(params?: {
 
   const workerIdRaw = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "";
   const workerId = Number.parseInt(workerIdRaw, 10);
+  const processShard = Math.abs(process.pid);
   const shard = Number.isFinite(workerId)
-    ? Math.max(0, workerId)
+    ? Math.max(0, workerId) + processShard
     : isMainThread
-      ? Math.abs(process.pid)
-      : Math.abs(threadId);
+      ? processShard
+      : processShard + Math.abs(threadId);
 
   const rangeSize = 1000;
-  const shardCount = 30;
+  const shardCount = 35;
   const base = 30_000 + (Math.abs(shard) % shardCount) * rangeSize; // <= 59_999
   const usable = rangeSize - maxOffset;
 

@@ -1,12 +1,10 @@
 ---
-summary: "RPC adapters for external CLIs (signal-cli, legacy imsg) and gateway patterns"
+summary: "RPC adapters for external CLIs (signal-cli, imsg) and gateway patterns"
 read_when:
   - Adding or changing external CLI integrations
   - Debugging RPC adapters (signal-cli, imsg)
-title: "RPC Adapters"
+title: "RPC adapters"
 ---
-
-# RPC adapters
 
 OpenClaw integrates external CLIs via JSON-RPC. Two patterns are used today.
 
@@ -19,11 +17,9 @@ OpenClaw integrates external CLIs via JSON-RPC. Two patterns are used today.
 
 See [Signal](/channels/signal) for setup and endpoints.
 
-## Pattern B: stdio child process (legacy: imsg)
+## Pattern B: stdio child process (imsg)
 
-> **Note:** For new iMessage setups, use [BlueBubbles](/channels/bluebubbles) instead.
-
-- OpenClaw spawns `imsg rpc` as a child process (legacy iMessage integration).
+- OpenClaw spawns `imsg rpc` as a child process for [iMessage](/channels/imessage).
 - JSON-RPC is line-delimited over stdin/stdout (one JSON object per line).
 - No TCP port, no daemon required.
 
@@ -41,3 +37,7 @@ See [iMessage](/channels/imessage) for legacy setup and addressing (`chat_id` pr
 - Gateway owns the process (start/stop tied to provider lifecycle).
 - Keep RPC clients resilient: timeouts, restart on exit.
 - Prefer stable IDs (e.g., `chat_id`) over display strings.
+
+## Related
+
+- [Gateway protocol](/gateway/protocol)

@@ -1,5 +1,6 @@
+// Slack tests cover provider.auth errors plugin behavior.
 import { describe, it, expect } from "vitest";
-import { isNonRecoverableSlackAuthError } from "./provider.js";
+import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 describe("isNonRecoverableSlackAuthError", () => {
   it.each([

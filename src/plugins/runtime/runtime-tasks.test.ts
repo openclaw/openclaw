@@ -1,4 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+// Runtime task tests cover plugin task runtime registration, invocation, and cleanup.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getDetachedTaskLifecycleRuntime,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/detached-task-runtime.js";
 import {
   getRuntimeTaskMocks,
   installRuntimeTaskDeliveryMock,
@@ -12,6 +17,30 @@ const runtimeTaskMocks = getRuntimeTaskMocks();
 afterEach(() => {
   resetRuntimeTaskTestState();
 });
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireRecordById(items: readonly unknown[], id: string): Record<string, unknown> {
+  for (const item of items) {
+    const record = requireRecord(item);
+    if (record.id === id) {
+      return record;
+    }
+  }
+  throw new Error(`Missing record ${id}`);
+}
+
+function requireCreatedFlow<T>(flow: T | null): T {
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
 
 describe("runtime tasks", () => {
   beforeEach(() => {
@@ -39,12 +68,14 @@ describe("runtime tasks", () => {
       sessionKey: "agent:main:other",
     });
 
-    const created = legacyTaskFlow.createManaged({
-      controllerId: "tests/runtime-tasks",
-      goal: "Review inbox",
-      currentStep: "triage",
-      stateJson: { lane: "priority" },
-    });
+    const created = requireCreatedFlow(
+      legacyTaskFlow.createManaged({
+        controllerId: "tests/runtime-tasks",
+        goal: "Review inbox",
+        currentStep: "triage",
+        stateJson: { lane: "priority" },
+      }),
+    );
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -61,59 +92,43 @@ describe("runtime tasks", () => {
       throw new Error("expected child task creation to succeed");
     }
 
-    expect(taskFlows.list()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: created.flowId,
-          ownerKey: "agent:main:main",
-          goal: "Review inbox",
-          currentStep: "triage",
-        }),
-      ]),
-    );
-    expect(taskFlows.get(created.flowId)).toMatchObject({
-      id: created.flowId,
-      ownerKey: "agent:main:main",
-      goal: "Review inbox",
-      currentStep: "triage",
-      state: { lane: "priority" },
-      taskSummary: {
-        total: 1,
-        active: 1,
-      },
-      tasks: [
-        expect.objectContaining({
-          id: child.task.taskId,
-          flowId: created.flowId,
-          title: "Review PR 1",
-          label: "Inbox triage",
-          runId: "runtime-task-run",
-        }),
-      ],
-    });
-    expect(taskRuns.list()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: child.task.taskId,
-          flowId: created.flowId,
-          sessionKey: "agent:main:main",
-          title: "Review PR 1",
-          status: "running",
-        }),
-      ]),
-    );
-    expect(taskRuns.get(child.task.taskId)).toMatchObject({
-      id: child.task.taskId,
-      flowId: created.flowId,
-      title: "Review PR 1",
-      progressSummary: "Inspecting",
-    });
+    const listedFlow = requireRecordById(taskFlows.list(), created.flowId);
+    expect(listedFlow.ownerKey).toBe("agent:main:main");
+    expect(listedFlow.goal).toBe("Review inbox");
+    expect(listedFlow.currentStep).toBe("triage");
+
+    const flow = requireRecord(taskFlows.get(created.flowId));
+    expect(flow.id).toBe(created.flowId);
+    expect(flow.ownerKey).toBe("agent:main:main");
+    expect(flow.goal).toBe("Review inbox");
+    expect(flow.currentStep).toBe("triage");
+    expect(flow.state).toEqual({ lane: "priority" });
+    const taskSummary = requireRecord(flow.taskSummary);
+    expect(taskSummary.total).toBe(1);
+    expect(taskSummary.active).toBe(1);
+    const flowTasks = flow.tasks;
+    expect(Array.isArray(flowTasks)).toBe(true);
+    const flowTask = requireRecordById(flowTasks as unknown[], child.task.taskId);
+    expect(flowTask.flowId).toBe(created.flowId);
+    expect(flowTask.title).toBe("Review PR 1");
+    expect(flowTask.label).toBe("Inbox triage");
+    expect(flowTask.runId).toBe("runtime-task-run");
+
+    const listedRun = requireRecordById(taskRuns.list(), child.task.taskId);
+    expect(listedRun.flowId).toBe(created.flowId);
+    expect(listedRun.sessionKey).toBe("agent:main:main");
+    expect(listedRun.title).toBe("Review PR 1");
+    expect(listedRun.status).toBe("running");
+    const taskRun = requireRecord(taskRuns.get(child.task.taskId));
+    expect(taskRun.id).toBe(child.task.taskId);
+    expect(taskRun.flowId).toBe(created.flowId);
+    expect(taskRun.title).toBe("Review PR 1");
+    expect(taskRun.progressSummary).toBe("Inspecting");
     expect(taskRuns.findLatest()?.id).toBe(child.task.taskId);
     expect(taskRuns.resolve("runtime-task-run")?.id).toBe(child.task.taskId);
-    expect(taskFlows.getTaskSummary(created.flowId)).toMatchObject({
-      total: 1,
-      active: 1,
-    });
+    const summary = requireRecord(taskFlows.getTaskSummary(created.flowId));
+    expect(summary.total).toBe(1);
+    expect(summary.active).toBe(1);
 
     expect(otherTaskFlows.get(created.flowId)).toBeUndefined();
     expect(otherTaskRuns.get(child.task.taskId)).toBeUndefined();
@@ -137,10 +152,12 @@ describe("runtime tasks", () => {
       sessionKey: "agent:main:main",
     });
 
-    const created = legacyTaskFlow.createManaged({
-      controllerId: "tests/runtime-tasks",
-      goal: "Cancel active task",
-    });
+    const created = requireCreatedFlow(
+      legacyTaskFlow.createManaged({
+        controllerId: "tests/runtime-tasks",
+        goal: "Cancel active task",
+      }),
+    );
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -165,14 +182,60 @@ describe("runtime tasks", () => {
       sessionKey: "agent:main:subagent:child",
       reason: "task-cancel",
     });
-    expect(result).toMatchObject({
-      found: true,
-      cancelled: true,
-      task: {
-        id: child.task.taskId,
-        title: "Cancel me",
-        status: "cancelled",
-      },
+    expect(result.found).toBe(true);
+    expect(result.cancelled).toBe(true);
+    const task = requireRecord(result.task);
+    expect(task.id).toBe(child.task.taskId);
+    expect(task.title).toBe("Cancel me");
+    expect(task.status).toBe("cancelled");
+  });
+
+  it("routes runtime task cancellation through the detached task runtime seam", async () => {
+    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const created = requireCreatedFlow(
+      legacyTaskFlow.createManaged({
+        controllerId: "tests/runtime-tasks",
+        goal: "Cancel through runtime seam",
+      }),
+    );
+    const child = legacyTaskFlow.runTask({
+      flowId: created.flowId,
+      runtime: "acp",
+      childSessionKey: "agent:main:subagent:child",
+      runId: "runtime-task-cancel-seam",
+      task: "Cancel via seam",
+      status: "running",
+      startedAt: 22,
+      lastEventAt: 23,
+    });
+    if (!child.created) {
+      throw new Error("expected child task creation to succeed");
+    }
+
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const cancelDetachedTaskRunByIdSpy = vi.fn(
+      (...args: Parameters<typeof defaultRuntime.cancelDetachedTaskRunById>) =>
+        defaultRuntime.cancelDetachedTaskRunById(...args),
+    );
+    setDetachedTaskLifecycleRuntime({
+      ...defaultRuntime,
+      cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
+    });
+
+    await taskRuns.cancel({
+      taskId: child.task.taskId,
+      cfg: {} as never,
+    });
+
+    expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
+      cfg: {} as never,
+      taskId: child.task.taskId,
     });
   });
 
@@ -184,10 +247,12 @@ describe("runtime tasks", () => {
       sessionKey: "agent:main:other",
     });
 
-    const created = legacyTaskFlow.createManaged({
-      controllerId: "tests/runtime-tasks",
-      goal: "Keep owner isolation",
-    });
+    const created = requireCreatedFlow(
+      legacyTaskFlow.createManaged({
+        controllerId: "tests/runtime-tasks",
+        goal: "Keep owner isolation",
+      }),
+    );
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",

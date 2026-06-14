@@ -1,10 +1,17 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+// Mattermost plugin module implements send behavior.
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceipt,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  convertMarkdownTables,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -30,13 +37,16 @@ import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js"
 import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 export type MattermostSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   botToken?: string;
   baseUrl?: string;
   accountId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  workspaceDir?: string;
+  /** Fail the send if media cannot be loaded/uploaded instead of posting text-only. */
+  requireMediaUpload?: boolean;
   replyToId?: string;
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
@@ -48,6 +58,7 @@ export type MattermostSendOpts = {
 export type MattermostSendResult = {
   messageId: string;
   channelId: string;
+  receipt: MessageReceipt;
 };
 
 export type MattermostReplyButtons = Array<
@@ -65,6 +76,39 @@ const channelByNameCache = new Map<string, string>();
 const dmChannelCache = new Map<string, string>();
 
 const getCore = () => getMattermostRuntime();
+
+function createMattermostSendReceipt(params: {
+  messageId: string;
+  channelId: string;
+  kind: MessageReceiptPartKind;
+  replyToId?: string;
+}): MessageReceipt {
+  const messageIds =
+    params.messageId.trim() && params.messageId !== "unknown" ? [params.messageId] : [];
+  return createMessageReceiptFromOutboundResults({
+    kind: params.kind,
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+    results: messageIds.map((messageId) => ({
+      channel: "mattermost",
+      messageId,
+      channelId: params.channelId,
+    })),
+  });
+}
+
+function resolveMattermostReceiptKind(params: {
+  fileIds?: readonly string[];
+  buttons?: readonly unknown[];
+  props?: Record<string, unknown>;
+}): MessageReceiptPartKind {
+  if (params.fileIds?.length) {
+    return "media";
+  }
+  if (params.buttons?.length || params.props) {
+    return "card";
+  }
+  return "text";
+}
 
 function recordMattermostOutboundActivity(accountId: string): void {
   try {
@@ -315,11 +359,16 @@ type MattermostSendContext = {
 
 async function resolveMattermostSendContext(
   to: string,
-  opts: MattermostSendOpts = {},
+  opts: MattermostSendOpts,
 ): Promise<MattermostSendContext> {
   const core = getCore();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
-  const cfg = opts.cfg ?? core.config.loadConfig();
+  if (!opts?.cfg) {
+    throw new Error(
+      "Mattermost send requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const cfg = requireRuntimeConfig(opts.cfg, "Mattermost send");
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
@@ -382,7 +431,7 @@ async function resolveMattermostSendContext(
 
 export async function resolveMattermostSendChannelId(
   to: string,
-  opts: MattermostSendOpts = {},
+  opts: MattermostSendOpts,
 ): Promise<string> {
   return (await resolveMattermostSendContext(to, opts)).channelId;
 }
@@ -390,7 +439,7 @@ export async function resolveMattermostSendChannelId(
 export async function sendMessageMattermost(
   to: string,
   text: string,
-  opts: MattermostSendOpts = {},
+  opts: MattermostSendOpts,
 ): Promise<MattermostSendResult> {
   const core = getCore();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
@@ -424,6 +473,7 @@ export async function sendMessageMattermost(
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
+        workspaceDir: opts.workspaceDir,
       });
       const fileInfo = await uploadMattermostFile(client, {
         channelId,
@@ -434,6 +484,11 @@ export async function sendMessageMattermost(
       fileIds = [fileInfo.id];
     } catch (err) {
       uploadError = err instanceof Error ? err : new Error(String(err));
+      if (opts.requireMediaUpload) {
+        throw new Error(`Mattermost media upload failed: ${uploadError.message}`, {
+          cause: err,
+        });
+      }
       if (core.logging.shouldLogVerbose()) {
         logger.debug?.(
           `mattermost send: media upload failed, falling back to URL text: ${String(err)}`,
@@ -454,7 +509,9 @@ export async function sendMessageMattermost(
 
   if (!message && (!fileIds || fileIds.length === 0)) {
     if (uploadError) {
-      throw new Error(`Mattermost media upload failed: ${uploadError.message}`);
+      throw new Error(`Mattermost media upload failed: ${uploadError.message}`, {
+        cause: uploadError,
+      });
     }
     throw new Error("Mattermost message is empty");
   }
@@ -468,9 +525,20 @@ export async function sendMessageMattermost(
   });
 
   recordMattermostOutboundActivity(accountId);
+  const messageId = post.id ?? "unknown";
 
   return {
-    messageId: post.id ?? "unknown",
+    messageId,
     channelId,
+    receipt: createMattermostSendReceipt({
+      messageId,
+      channelId,
+      kind: resolveMattermostReceiptKind({
+        fileIds,
+        buttons: opts.buttons,
+        props,
+      }),
+      replyToId: opts.replyToId,
+    }),
   };
 }

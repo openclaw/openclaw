@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+// Plugin shape contract tests cover manifest, API, and runtime export shapes.
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
-} from "../../../test/helpers/plugins/contracts-testkit.js";
-import { buildAllPluginInspectReports } from "../status.js";
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describe, expect, it } from "vitest";
+import { buildPluginShapeSummary } from "../inspect-shape.js";
 
 describe("plugin shape compatibility matrix", () => {
   it("keeps legacy hook-only, plain capability, and hybrid capability shapes explicit", () => {
@@ -94,13 +95,13 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    const inspect = buildAllPluginInspectReports({
-      config,
-      report: {
-        workspaceDir: "/virtual-workspace",
-        ...registry.registry,
-      },
-    });
+    const report = {
+      workspaceDir: "/virtual-workspace",
+      ...registry.registry,
+    };
+    const inspect = report.plugins.map((plugin) =>
+      Object.assign({ plugin }, buildPluginShapeSummary({ plugin, report })),
+    );
 
     expect(
       inspect.map((entry) => ({

@@ -1,3 +1,4 @@
+// Commander option-source helpers for explicit flags and bounded parent inheritance.
 import type { Command } from "commander";
 
 export function hasExplicitOptions(command: Command, names: readonly string[]): boolean {
@@ -17,6 +18,7 @@ function getOptionSource(command: Command, name: string): string | undefined {
 // Defensive guardrail: allow expected parent/grandparent inheritance without unbounded deep traversal.
 const MAX_INHERIT_DEPTH = 2;
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Commander option values are typed by the caller.
 export function inheritOptionFromParent<T = unknown>(
   command: Command | undefined,
   name: string,

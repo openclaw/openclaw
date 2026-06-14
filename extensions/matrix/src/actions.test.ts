@@ -1,3 +1,4 @@
+// Matrix tests cover actions plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
@@ -8,7 +9,7 @@ const profileAction = "set-profile" as const;
 
 const runtimeStub = {
   config: {
-    loadConfig: () => ({}),
+    current: () => ({}),
   },
   media: {
     loadWebMedia: async () => {
@@ -78,6 +79,7 @@ describe("matrixMessageActions", () => {
 
     const discovery = describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
+      senderIsOwner: true,
     } as never);
     if (!discovery) {
       throw new Error("describeMessageTool returned null");
@@ -91,9 +93,31 @@ describe("matrixMessageActions", () => {
 
     expect(actions).toContain(profileAction);
     expect(supportsAction({ action: profileAction } as never)).toBe(true);
-    expect(properties.displayName).toBeDefined();
-    expect(properties.avatarUrl).toBeDefined();
-    expect(properties.avatarPath).toBeDefined();
+    expect(discovery.mediaSourceParams).toEqual({
+      "set-profile": ["avatarUrl", "avatarPath"],
+    });
+    expect(Object.keys(properties).toSorted()).toEqual([
+      "avatarPath",
+      "avatarUrl",
+      "avatar_path",
+      "avatar_url",
+      "displayName",
+      "display_name",
+    ]);
+    expect(properties.displayName).toHaveProperty("type", "string");
+    expect(properties.avatarUrl).toHaveProperty("type", "string");
+    expect(properties.avatarPath).toHaveProperty("type", "string");
+  });
+
+  it("hides self-profile updates without owner identity context", () => {
+    const discovery = matrixMessageActions.describeMessageTool({
+      cfg: createConfiguredMatrixConfig(),
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+
+    expect(discovery.actions).not.toContain(profileAction);
   });
 
   it("hides gated actions when the default Matrix account disables them", () => {
@@ -164,7 +188,7 @@ describe("matrixMessageActions", () => {
     }
     const actions = discovery.actions;
 
-    expect(actions).toEqual([]);
+    expect(actions).toStrictEqual([]);
   });
 
   it("honors the selected Matrix account during discovery", () => {

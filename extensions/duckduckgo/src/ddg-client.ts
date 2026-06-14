@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Duckduckgo plugin module implements ddg client behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
@@ -49,7 +50,7 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&mdash;/g, "--")
     .replace(/&hellip;/g, "...")
     .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)));
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)));
 }
 
 function stripHtml(html: string): string {
@@ -204,9 +205,10 @@ export async function runDuckDuckGoSearch(params: {
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   decodeDuckDuckGoUrl,
   decodeHtmlEntities,
   isBotChallenge,
   parseDuckDuckGoHtml,
 };
+export { testing as __testing };

@@ -1,6 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+// Discord plugin module implements thread session close behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Marks every session entry in the store whose key contains {@link threadId}

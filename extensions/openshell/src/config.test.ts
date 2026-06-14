@@ -1,3 +1,4 @@
+// Openshell tests cover config plugin behavior.
 import fsSync from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createOpenShellPluginConfigSchema, resolveOpenShellPluginConfig } from "./config.js";
@@ -46,12 +47,20 @@ describe("openshell plugin config", () => {
         remoteWorkspaceDir: "/sandbox/../sandbox/project",
         remoteAgentWorkspaceDir: "/agent/./session",
       }),
-    ).toEqual(
-      expect.objectContaining({
-        remoteWorkspaceDir: "/sandbox/project",
-        remoteAgentWorkspaceDir: "/agent/session",
-      }),
-    );
+    ).toEqual({
+      mode: "mirror",
+      command: "openshell",
+      gateway: undefined,
+      gatewayEndpoint: undefined,
+      from: "openclaw",
+      policy: undefined,
+      providers: [],
+      gpu: false,
+      autoProviders: true,
+      remoteWorkspaceDir: "/sandbox/project",
+      remoteAgentWorkspaceDir: "/agent/session",
+      timeoutMs: 120_000,
+    });
   });
 
   it("rejects unknown mode", () => {
@@ -60,6 +69,14 @@ describe("openshell plugin config", () => {
         mode: "bogus",
       }),
     ).toThrow("mode must be one of mirror, remote");
+  });
+
+  it("rejects timeouts beyond Node's safe timer range", () => {
+    expect(() =>
+      resolveOpenShellPluginConfig({
+        timeoutSeconds: 2_147_001,
+      }),
+    ).toThrow("timeoutSeconds must be a number <= 2147000");
   });
 
   it("keeps the runtime json schema in sync with the manifest config schema", () => {

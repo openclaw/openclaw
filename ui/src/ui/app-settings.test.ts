@@ -1,4 +1,6 @@
+// Control UI tests cover app settings behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   applyResolvedTheme,
@@ -37,7 +39,6 @@ type SettingsHost = {
     lastActiveSessionKey: string;
     theme: ThemeName;
     themeMode: ThemeMode;
-    chatFocusMode: boolean;
     chatShowThinking: boolean;
     chatShowToolCalls: boolean;
     splitRatio: number;
@@ -45,6 +46,8 @@ type SettingsHost = {
     navWidth: number;
     navGroupsCollapsed: Record<string, boolean>;
     borderRadius: number;
+    textScale?: import("./storage.ts").TextScaleStop;
+    customTheme?: import("./custom-theme.ts").ImportedCustomTheme;
   };
   theme: ThemeName & ThemeMode;
   themeMode: ThemeMode;
@@ -57,6 +60,7 @@ type SettingsHost = {
   logsAtBottom: boolean;
   eventLog: unknown[];
   eventLogBuffer: unknown[];
+  password?: string;
   basePath: string;
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
@@ -70,9 +74,17 @@ type SettingsHost = {
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: null;
 };
 
 function setTestWindowUrl(urlString: string) {
@@ -126,7 +138,6 @@ const createHost = (tab: Tab): SettingsHost => ({
     lastActiveSessionKey: "main",
     theme: "claw",
     themeMode: "system",
-    chatFocusMode: false,
     chatShowThinking: true,
     chatShowToolCalls: true,
     splitRatio: 0.6,
@@ -134,6 +145,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     navWidth: 220,
     navGroupsCollapsed: {},
     borderRadius: 50,
+    textScale: 100,
   },
   theme: "claw" as unknown as ThemeName & ThemeMode,
   themeMode: "system",
@@ -146,6 +158,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   logsAtBottom: false,
   eventLog: [],
   eventLogBuffer: [],
+  password: "",
   basePath: "",
   themeMedia: null,
   themeMediaHandler: null,
@@ -159,9 +172,17 @@ const createHost = (tab: Tab): SettingsHost => ({
   dreamingModeSaving: false,
   dreamDiaryLoading: false,
   dreamDiaryActionLoading: false,
+  dreamDiaryActionMessage: null,
+  dreamDiaryActionArchivePath: null,
   dreamDiaryError: null,
   dreamDiaryPath: null,
   dreamDiaryContent: null,
+  wikiImportInsightsLoading: false,
+  wikiImportInsightsError: null,
+  wikiImportInsights: null,
+  wikiMemoryPalaceLoading: false,
+  wikiMemoryPalaceError: null,
+  wikiMemoryPalace: null,
 });
 
 describe("setTabFromRoute", () => {
@@ -178,8 +199,8 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "logs");
-    expect(host.logsPollInterval).not.toBeNull();
     expect(host.debugPollInterval).toBeNull();
+    expect(host.logsPollInterval).not.toBe(host.debugPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.logsPollInterval).toBeNull();
@@ -189,8 +210,8 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "debug");
-    expect(host.debugPollInterval).not.toBeNull();
     expect(host.logsPollInterval).toBeNull();
+    expect(host.debugPollInterval).not.toBe(host.logsPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
@@ -214,6 +235,18 @@ describe("setTabFromRoute", () => {
     expect(host.themeResolved).toBe("openknot-light");
   });
 
+  it("applies normalized browser-local text scale", () => {
+    const host = createHost("chat");
+
+    applySettings(host, {
+      ...host.settings,
+      textScale: 125,
+    });
+
+    expect(host.settings.textScale).toBe(125);
+    expect(document.documentElement.style.getPropertyValue("--control-ui-text-scale")).toBe("1.25");
+  });
+
   it("syncs both theme family and mode from persisted settings", () => {
     const host = createHost("chat");
     host.settings.theme = "dash";
@@ -224,6 +257,18 @@ describe("setTabFromRoute", () => {
     expect(host.theme).toBe("dash");
     expect(host.themeMode).toBe("light");
     expect(host.themeResolved).toBe("dash-light");
+  });
+
+  it("falls back to claw when custom is selected without a stored custom theme", () => {
+    const host = createHost("chat");
+    host.settings.theme = "custom";
+    host.settings.themeMode = "dark";
+
+    syncThemeWithSettings(host);
+
+    expect(host.theme).toBe("claw");
+    expect(host.settings.theme).toBe("claw");
+    expect(host.themeResolved).toBe("dark");
   });
 
   it("applies named system themes on OS preference changes", () => {
@@ -267,6 +312,22 @@ describe("setTabFromRoute", () => {
     expect(root.dataset.theme).toBe("dash-light");
     expect(root.style.colorScheme).toBe("light");
   });
+
+  it("applies imported custom light themes as light-mode tokens", () => {
+    const root = {
+      dataset: {} as DOMStringMap,
+      style: { colorScheme: "" } as CSSStyleDeclaration & { colorScheme: string },
+    };
+    vi.stubGlobal("document", { documentElement: root } as Document);
+
+    const host = createHost("chat");
+    host.settings.customTheme = createImportedCustomThemeFixture();
+    applyResolvedTheme(host, "custom-light");
+
+    expect(host.themeResolved).toBe("custom-light");
+    expect(root.dataset.theme).toBe("custom-light");
+    expect(root.style.colorScheme).toBe("light");
+  });
 });
 
 describe("applySettingsFromUrl", () => {
@@ -283,7 +344,7 @@ describe("applySettingsFromUrl", () => {
   });
 
   it("hydrates query token params and strips them from the URL", () => {
-    setTestWindowUrl("https://control.example/ui/overview?token=abc123");
+    setTestWindowUrl("https://control.example/ui/overview?token=abc123&password=sekret");
     const host = createHost("overview");
     host.settings.gatewayUrl = "wss://control.example/openclaw";
 
@@ -291,6 +352,9 @@ describe("applySettingsFromUrl", () => {
 
     expect(host.settings.token).toBe("abc123");
     expect(window.location.search).toBe("");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
   });
 
   it("prefers fragment tokens over legacy query tokens when both are present", () => {
@@ -303,6 +367,37 @@ describe("applySettingsFromUrl", () => {
     expect(host.settings.token).toBe("hash-token");
     expect(window.location.search).toBe("");
     expect(window.location.hash).toBe("");
+  });
+
+  it("hydrates native Mac app auth before the first connection", () => {
+    setTestWindowUrl("https://control.example/ui/chat");
+    (
+      window as unknown as {
+        __OPENCLAW_NATIVE_CONTROL_AUTH__?: {
+          gatewayUrl?: string;
+          token?: string;
+          password?: string;
+        };
+      }
+    )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+      gatewayUrl: "wss://control.example/ui/",
+      token: "device-token",
+      password: "shared-password",
+    };
+    const host = createHost("chat");
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.gatewayUrl).toBe("wss://control.example/ui/");
+    expect(host.settings.token).toBe("device-token");
+    expect(host.password).toBe("shared-password");
+    expect(
+      (
+        window as unknown as {
+          __OPENCLAW_NATIVE_CONTROL_AUTH__?: unknown;
+        }
+      )["__OPENCLAW_NATIVE_CONTROL_AUTH__"],
+    ).toBeUndefined();
   });
 
   it("resets stale persisted session selection to main when a token is supplied without a session", () => {

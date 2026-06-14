@@ -6,8 +6,6 @@ read_when:
 title: "exe.dev"
 ---
 
-# exe.dev
-
 Goal: OpenClaw Gateway running on an exe.dev VM, reachable from your laptop via: `https://<vm-name>.exe.xyz`
 
 This page assumes exe.dev's default **exeuntu** image. If you picked a different distro, map packages accordingly.
@@ -25,7 +23,7 @@ This page assumes exe.dev's default **exeuntu** image. If you picked a different
 - exe.dev account
 - `ssh exe.dev` access to [exe.dev](https://exe.dev) virtual machines (optional)
 
-## Automated Install with Shelley
+## Automated install with Shelley
 
 Shelley, [exe.dev](https://exe.dev)'s agent, can install OpenClaw instantly with our
 prompt. The prompt used is as below:
@@ -50,9 +48,9 @@ Then connect:
 ssh <vm-name>.exe.xyz
 ```
 
-Tip: keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent
-`auth-profiles.json`, sessions, and channel/provider state under
-`~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
+<Tip>
+Keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent `auth-profiles.json`, sessions, and channel/provider state under `~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
+</Tip>
 
 ## 2) Install prerequisites (on the VM)
 
@@ -115,7 +113,72 @@ with `openclaw config get gateway.auth.token` (or generate one with `openclaw do
 If you changed the gateway to password auth, use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead.
 Approve devices with `openclaw devices list` and `openclaw devices approve <requestId>`. When in doubt, use Shelley from your browser!
 
-## Remote Access
+## Remote channel setup
+
+For remote hosts, prefer one `config patch` call over many SSH calls to `config set`. Keep real tokens in the VM environment or `~/.openclaw/.env`, and put only SecretRefs in `openclaw.json`.
+
+On the VM, make the service environment contain the secrets it needs:
+
+```bash
+cat >> ~/.openclaw/.env <<'EOF'
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+DISCORD_BOT_TOKEN=...
+OPENAI_API_KEY=sk-...
+EOF
+```
+
+From your local machine, create a patch file and pipe it to the VM:
+
+```json5
+// openclaw.remote.patch.json5
+{
+  secrets: {
+    providers: {
+      default: { source: "env" },
+    },
+  },
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "socket",
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      groupPolicy: "open",
+      requireMention: false,
+    },
+    discord: {
+      enabled: true,
+      token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+      dmPolicy: "disabled",
+      dm: { enabled: false },
+      groupPolicy: "allowlist",
+    },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.5" },
+      models: {
+        "openai/gpt-5.5": { params: { fastMode: true } },
+      },
+    },
+  },
+}
+```
+
+```bash
+ssh <vm-name>.exe.xyz 'openclaw config patch --stdin --dry-run' < ./openclaw.remote.patch.json5
+ssh <vm-name>.exe.xyz 'openclaw config patch --stdin' < ./openclaw.remote.patch.json5
+ssh <vm-name>.exe.xyz 'openclaw gateway restart && openclaw health'
+```
+
+Use `--replace-path` when a nested allowlist should become exactly the patch value, for example when replacing a Discord channel allowlist:
+
+```bash
+ssh <vm-name>.exe.xyz 'openclaw config patch --stdin --replace-path "channels.discord.guilds[\"123\"].channels"' < ./discord.patch.json5
+```
+
+## Remote access
 
 Remote access is handled by [exe.dev](https://exe.dev)'s authentication. By
 default, HTTP traffic from port 8000 is forwarded to `https://<vm-name>.exe.xyz`
@@ -131,3 +194,8 @@ openclaw health
 ```
 
 Guide: [Updating](/install/updating)
+
+## Related
+
+- [Remote gateway](/gateway/remote)
+- [Install overview](/install)

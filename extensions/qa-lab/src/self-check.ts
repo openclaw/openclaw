@@ -1,8 +1,10 @@
+// Qa Lab plugin module implements self check behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import type { QaBusState } from "./bus-state.js";
-import { renderQaMarkdownReport } from "./report.js";
+import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
 import { runQaScenario, type QaScenarioResult } from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
 
@@ -24,15 +26,31 @@ export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; rep
 export async function runQaSelfCheckAgainstState(params: {
   state: QaBusState;
   cfg: OpenClawConfig;
+  transportId?: QaTransportId;
   outputPath?: string;
   repoRoot?: string;
   notes?: string[];
+  waitTimeoutMs?: number;
 }): Promise<QaSelfCheckResult> {
   const startedAt = new Date();
-  params.state.reset();
-  const scenarioResult = await runQaScenario(createQaSelfCheckScenario(params.cfg), {
+  const transport = createQaTransportAdapter({
+    id: params.transportId ?? "qa-channel",
     state: params.state,
   });
+  params.state.reset();
+  const scenarioResult = await runQaScenario(
+    createQaSelfCheckScenario({ waitTimeoutMs: params.waitTimeoutMs }),
+    {
+      state: params.state,
+      performAction: async (action, args) =>
+        await transport.handleAction({
+          action,
+          args,
+          cfg: params.cfg,
+          accountId: transport.accountId,
+        }),
+    },
+  );
   const checks = [
     {
       name: "QA self-check scenario",
@@ -68,7 +86,7 @@ export async function runQaSelfCheckAgainstState(params: {
     timeline,
     notes: params.notes ?? [
       "Vertical slice: qa-channel + qa-lab bus + private debugger surface.",
-      "Docker orchestration, matrix runs, and auto-fix loops remain follow-up work.",
+      "Docker orchestration, additional QA runners, and auto-fix loops remain follow-up work.",
     ],
   });
 

@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Matrix plugin module implements replies behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
@@ -38,10 +39,11 @@ export async function deliverMatrixReplies(params: {
   textLimit: number;
   replyToMode: "off" | "first" | "all" | "batched";
   threadId?: string;
+  replyToId?: string;
   accountId?: string;
   mediaLocalRoots?: readonly string[];
   tableMode?: MarkdownTableMode;
-}): Promise<void> {
+}): Promise<boolean> {
   const core = getMatrixRuntime();
   const tableMode =
     params.tableMode ??
@@ -56,6 +58,7 @@ export async function deliverMatrixReplies(params: {
     }
   };
   let hasReplied = false;
+  let deliveredAny = false;
   for (const reply of params.replies) {
     if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
       logVerbose("matrix reply suppressed as reasoning-only");
@@ -70,8 +73,12 @@ export async function deliverMatrixReplies(params: {
       params.runtime.error?.("matrix reply missing text/media");
       continue;
     }
-    const replyToIdRaw = reply.replyToId?.trim();
-    const replyToId = params.threadId || params.replyToMode === "off" ? undefined : replyToIdRaw;
+    const replyToIdRaw = (reply.replyToId ?? params.replyToId)?.trim();
+    const replyToId = params.threadId
+      ? replyToIdRaw
+      : params.replyToMode === "off"
+        ? undefined
+        : replyToIdRaw;
     const rawText = reply.text ?? "";
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
@@ -80,7 +87,7 @@ export async function deliverMatrixReplies(params: {
         : [];
 
     const shouldIncludeReply = (id?: string) =>
-      Boolean(id) && (params.replyToMode === "all" || !hasReplied);
+      Boolean(id) && (params.threadId || params.replyToMode === "all" || !hasReplied);
     const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
 
     if (mediaList.length === 0) {
@@ -102,6 +109,7 @@ export async function deliverMatrixReplies(params: {
           threadId: params.threadId,
           accountId: params.accountId,
         });
+        deliveredAny = true;
         sentTextChunk = true;
       }
       if (replyToIdForReply && !hasReplied && sentTextChunk) {
@@ -123,10 +131,12 @@ export async function deliverMatrixReplies(params: {
         audioAsVoice: reply.audioAsVoice,
         accountId: params.accountId,
       });
+      deliveredAny = true;
       first = false;
     }
     if (replyToIdForReply && !hasReplied) {
       hasReplied = true;
     }
   }
+  return deliveredAny;
 }

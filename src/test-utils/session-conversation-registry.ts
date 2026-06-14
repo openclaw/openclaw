@@ -1,4 +1,19 @@
+// Test helpers for session conversation registry keys and thread suffixes.
+import { parseThreadSessionSuffix } from "../sessions/session-key-utils.js";
 import { createTestRegistry } from "./channel-plugins.js";
+
+// Mirrors generic thread suffix handling without loading real channel plugins.
+function resolveGenericSessionConversation(params: { rawId: string }) {
+  const parsed = parseThreadSessionSuffix(params.rawId);
+  const id = parsed.baseSessionKey ?? params.rawId;
+  return {
+    id,
+    threadId: parsed.threadId,
+    baseConversationId: id,
+    parentConversationCandidates:
+      parsed.threadId && parsed.baseSessionKey ? [parsed.baseSessionKey] : [],
+  };
+}
 
 function resolveTelegramSessionConversation(params: { kind: "group" | "channel"; rawId: string }) {
   if (params.kind !== "group") {
@@ -36,6 +51,7 @@ function resolveFeishuSessionConversation(params: { kind: "group" | "channel"; r
   };
 }
 
+/** Builds channel registry stubs with conversation resolvers for session tests. */
 export function createSessionConversationTestRegistry() {
   return createTestRegistry([
     {
@@ -49,9 +65,11 @@ export function createSessionConversationTestRegistry() {
           selectionLabel: "Discord",
           docsPath: "/channels/discord",
           blurb: "Discord test stub.",
+          preferSessionLookupForAnnounceTarget: true,
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
+          resolveSessionConversation: resolveGenericSessionConversation,
           resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
         },
         config: {
@@ -74,6 +92,7 @@ export function createSessionConversationTestRegistry() {
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
+          resolveSessionConversation: resolveGenericSessionConversation,
           resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
         },
         config: {
@@ -96,6 +115,7 @@ export function createSessionConversationTestRegistry() {
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
+          resolveSessionConversation: resolveGenericSessionConversation,
           resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
         },
         config: {
@@ -118,6 +138,8 @@ export function createSessionConversationTestRegistry() {
         },
         capabilities: { chatTypes: ["direct", "group", "thread"] },
         messaging: {
+          resolveSessionTarget: ({ kind, id }: { kind: string; id: string }) =>
+            kind === "group" ? id : `channel:${id}`,
           normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
           resolveSessionConversation: resolveTelegramSessionConversation,
         },

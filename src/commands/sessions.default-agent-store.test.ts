@@ -1,24 +1,8 @@
+// Sessions default-agent store tests cover default session-store selection and runtime config loading.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
-const loadConfigMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    agents: {
-      defaults: {
-        model: { primary: "pi:opus" },
-        models: { "pi:opus": {} },
-        contextTokens: 32000,
-      },
-      list: [
-        { id: "main", default: false },
-        { id: "voice", default: true },
-      ],
-    },
-    session: {
-      store: "/tmp/sessions-{agentId}.json",
-    },
-  })),
-);
+const loadConfigMock = vi.hoisted(() => vi.fn());
 
 const resolveStorePathMock = vi.hoisted(() =>
   vi.fn((_store: string | undefined, opts?: { agentId?: string }) => {
@@ -31,6 +15,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
+    getRuntimeConfig: loadConfigMock,
     loadConfig: loadConfigMock,
   };
 });
@@ -45,7 +30,36 @@ vi.mock("../config/sessions.js", async () => {
   };
 });
 
+vi.mock("../infra/state-migrations.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/state-migrations.js")>(
+    "../infra/state-migrations.js",
+  )),
+  autoMigrateLegacyState: vi.fn(async () => ({
+    migrated: false,
+    skipped: true,
+    changes: [],
+    warnings: [],
+  })),
+}));
+
 import { sessionsCommand } from "./sessions.js";
+
+function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "test:opus" },
+        models: { "test:opus": {} },
+        contextTokens: 32000,
+      },
+      list: [
+        { id: "main", default: false },
+        { id: "voice", default: true },
+      ],
+    },
+    session: { store },
+  };
+}
 
 function createRuntime(): { runtime: RuntimeEnv; logs: string[] } {
   const logs: string[] = [];
@@ -62,22 +76,7 @@ function createRuntime(): { runtime: RuntimeEnv; logs: string[] } {
 describe("sessionsCommand default store agent selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadConfigMock.mockImplementation(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "pi:opus" },
-          models: { "pi:opus": {} },
-          contextTokens: 32000,
-        },
-        list: [
-          { id: "main", default: false },
-          { id: "voice", default: true },
-        ],
-      },
-      session: {
-        store: "/tmp/sessions-{agentId}.json",
-      },
-    }));
+    loadConfigMock.mockImplementation(() => createSessionsConfig());
     resolveStorePathMock.mockImplementation(
       (_store: string | undefined, opts?: { agentId?: string }) => {
         return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
@@ -91,10 +90,10 @@ describe("sessionsCommand default store agent selection", () => {
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock
       .mockReturnValueOnce({
-        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "test:opus" },
       })
       .mockReturnValueOnce({
-        voice_row: { sessionId: "s2", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+        voice_row: { sessionId: "s2", updatedAt: Date.now() - 120_000, model: "test:opus" },
       });
     const { runtime, logs } = createRuntime();
 
@@ -110,26 +109,11 @@ describe("sessionsCommand default store agent selection", () => {
   });
 
   it("avoids duplicate rows when --all-agents resolves to a shared store path", async () => {
-    loadConfigMock.mockImplementation(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "pi:opus" },
-          models: { "pi:opus": {} },
-          contextTokens: 32000,
-        },
-        list: [
-          { id: "main", default: false },
-          { id: "voice", default: true },
-        ],
-      },
-      session: {
-        store: "/tmp/shared-sessions.json",
-      },
-    }));
+    loadConfigMock.mockImplementation(() => createSessionsConfig("/tmp/shared-sessions.json"));
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock.mockReturnValue({
-      "agent:main:room": { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
-      "agent:voice:room": { sessionId: "s2", updatedAt: Date.now() - 30_000, model: "pi:opus" },
+      "agent:main:room": { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "test:opus" },
+      "agent:voice:room": { sessionId: "s2", updatedAt: Date.now() - 30_000, model: "test:opus" },
     });
     const { runtime, logs } = createRuntime();
 
@@ -166,7 +150,7 @@ describe("sessionsCommand default store agent selection", () => {
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock
       .mockReturnValueOnce({
-        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "test:opus" },
       })
       .mockReturnValueOnce({});
     const { runtime, logs } = createRuntime();

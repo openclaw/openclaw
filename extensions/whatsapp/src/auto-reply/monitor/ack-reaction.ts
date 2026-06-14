@@ -1,16 +1,22 @@
-import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+// Whatsapp plugin module implements ack reaction behavior.
+import {
+  createAckReactionHandle,
+  shouldAckReactionForWhatsApp,
+  type AckReactionHandle,
+} from "openclaw/plugin-sdk/channel-feedback";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSenderIdentity } from "../../identity.js";
+import type { WebInboundMessage } from "../../inbound/types.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import { sendReactionWhatsApp } from "../../send.js";
 import { formatError } from "../../session.js";
-import type { WebInboundMsg } from "../types.js";
+import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
-export function maybeSendAckReaction(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  msg: WebInboundMsg;
+export async function maybeSendAckReaction(params: {
+  cfg: OpenClawConfig;
+  msg: WebInboundMessage;
   agentId: string;
   sessionKey: string;
   conversationId: string;
@@ -18,9 +24,9 @@ export function maybeSendAckReaction(params: {
   accountId?: string;
   info: (obj: unknown, msg: string) => void;
   warn: (obj: unknown, msg: string) => void;
-}) {
-  if (!params.msg.id) {
-    return;
+}): Promise<AckReactionHandle | null> {
+  if (!params.msg.event.id) {
+    return null;
   }
 
   // Keep ackReaction as the emoji/scope control, while letting reactionLevel
@@ -30,19 +36,24 @@ export function maybeSendAckReaction(params: {
     accountId: params.accountId,
   });
   if (reactionLevel.level === "off") {
-    return;
+    return null;
   }
 
   const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
-  const emoji = (ackConfig?.emoji ?? "").trim();
+  const emoji = resolveWhatsAppAckEmoji({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    ackConfig,
+  });
   const directEnabled = ackConfig?.direct ?? true;
   const groupMode = ackConfig?.group ?? "mentions";
   const conversationIdForCheck = params.msg.conversationId ?? params.msg.from;
 
   const activation =
     params.msg.chatType === "group"
-      ? resolveGroupActivationFor({
+      ? await resolveGroupActivationFor({
           cfg: params.cfg,
+          accountId: params.accountId,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           conversationId: conversationIdForCheck,
@@ -60,28 +71,44 @@ export function maybeSendAckReaction(params: {
     });
 
   if (!shouldSendReaction()) {
-    return;
+    return null;
   }
 
   params.info(
-    { chatId: params.msg.chatId, messageId: params.msg.id, emoji },
+    { chatId: params.msg.platform.chatJid, messageId: params.msg.event.id, emoji },
     "sending ack reaction",
   );
   const sender = getSenderIdentity(params.msg);
-  sendReactionWhatsApp(params.msg.chatId, params.msg.id, emoji, {
+  const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
-    participant: sender.jid ?? undefined,
-    accountId: params.accountId,
-  }).catch((err) => {
-    params.warn(
-      {
-        error: formatError(err),
-        chatId: params.msg.chatId,
-        messageId: params.msg.id,
-      },
-      "failed to send ack reaction",
-    );
-    logVerbose(`WhatsApp ack reaction failed for chat ${params.msg.chatId}: ${formatError(err)}`);
+    ...(sender.jid ? { participant: sender.jid } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    cfg: params.cfg,
+  };
+  return createAckReactionHandle({
+    ackReactionValue: emoji,
+    send: () =>
+      sendReactionWhatsApp(
+        params.msg.platform.chatJid,
+        params.msg.event.id!,
+        emoji,
+        reactionOptions,
+      ),
+    remove: () =>
+      sendReactionWhatsApp(params.msg.platform.chatJid, params.msg.event.id!, "", reactionOptions),
+    onSendError: (err) => {
+      params.warn(
+        {
+          error: formatError(err),
+          chatId: params.msg.platform.chatJid,
+          messageId: params.msg.event.id,
+        },
+        "failed to send ack reaction",
+      );
+      logVerbose(
+        `WhatsApp ack reaction failed for chat ${params.msg.platform.chatJid}: ${formatError(err)}`,
+      );
+    },
   });
 }

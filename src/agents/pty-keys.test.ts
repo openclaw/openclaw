@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for PTY key encoding and DSR stripping.
+ * Protects terminal control bytes used by process send-keys and PTY sessions.
+ */
 import { expect, test } from "vitest";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import {
@@ -111,7 +115,7 @@ test("encodeKeySequence supports hex + literal with warnings", () => {
     keys: ["Enter"],
   });
   expect(result.data).toBe("hi\r\n\r");
-  expect(result.warnings.length).toBe(1);
+  expect(result.warnings).toStrictEqual(["Invalid hex byte: zz"]);
 });
 
 test("encodePaste wraps bracketed sequences by default", () => {

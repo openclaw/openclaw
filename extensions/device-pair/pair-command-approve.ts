@@ -1,7 +1,8 @@
+// Device Pair plugin module implements pair command approve behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { approveDevicePairing, listDevicePairing } from "./api.js";
 import { formatPendingRequests } from "./notify.js";
 
@@ -36,9 +37,14 @@ export function selectPendingApprovalRequest(params: {
   }
 
   if (normalizeLowercaseStringOrEmpty(params.requested) === "latest") {
-    return {
-      pending: [...params.pending].toSorted((a, b) => (b.ts ?? 0) - (a.ts ?? 0))[0],
-    };
+    let latest = params.pending[0];
+    for (let index = 1; index < params.pending.length; index += 1) {
+      const pending = params.pending[index];
+      if ((pending.ts ?? 0) > (latest.ts ?? 0)) {
+        latest = pending;
+      }
+    }
+    return { pending: latest };
   }
 
   return {

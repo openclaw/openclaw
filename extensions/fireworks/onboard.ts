@@ -1,3 +1,4 @@
+// Fireworks setup module handles plugin onboarding behavior.
 import {
   createDefaultModelsPresetAppliers,
   type OpenClawConfig,
@@ -24,10 +25,6 @@ const fireworksPresetAppliers = createDefaultModelsPresetAppliers({
     };
   },
 });
-
-export function applyFireworksProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return fireworksPresetAppliers.applyProviderConfig(cfg);
-}
 
 export function applyFireworksConfig(cfg: OpenClawConfig): OpenClawConfig {
   return fireworksPresetAppliers.applyConfig(cfg);

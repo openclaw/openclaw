@@ -1,28 +1,33 @@
+// Builds provider auth credentials from config and plugin metadata.
 import fs from "node:fs";
 import path from "node:path";
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
-import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import { upsertAuthProfile, upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   coerceSecretRef,
   DEFAULT_SECRET_PROVIDER_ALIAS,
   type SecretInput,
   type SecretRef,
 } from "../config/types.secrets.js";
+import type { OAuthCredentials } from "../llm/oauth.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
 const ENV_REF_PATTERN = /^\$\{([A-Z][A-Z0-9_]*)\}$/;
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
-const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
+const resolveAuthAgentDir = (agentDir?: string, config?: OpenClawConfig) =>
+  agentDir ?? resolveDefaultAgentDir(config ?? {});
 
 export type ApiKeyStorageOptions = {
   secretInputMode?: SecretInputMode;
+  config?: OpenClawConfig;
 };
 
 export type WriteOAuthCredentialsOptions = {
@@ -43,8 +48,11 @@ function parseEnvSecretRef(value: string): SecretRef | null {
   return buildEnvSecretRef(match[1]);
 }
 
-function resolveProviderDefaultEnvSecretRef(provider: string): SecretRef {
-  const envVars = getProviderEnvVars(provider);
+function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
+  const envVars = getProviderEnvVars(provider, {
+    ...(config ? { config } : {}),
+    includeUntrustedWorkspacePlugins: false,
+  });
   const envVar = envVars?.find((candidate) => candidate.trim().length > 0);
   if (!envVar) {
     throw new Error(
@@ -59,6 +67,9 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
+  if (options?.secretInputMode === "plaintext") {
+    return normalizeSecretInput(input);
+  }
   const coercedRef = coerceSecretRef(input);
   if (coercedRef) {
     return coercedRef;
@@ -69,7 +80,7 @@ function resolveApiKeySecretInput(
     return inlineEnvRef;
   }
   if (options?.secretInputMode === "ref") {
-    return resolveProviderDefaultEnvSecretRef(provider);
+    return resolveProviderDefaultEnvSecretRef(provider, options.config);
   }
   return normalized;
 }
@@ -120,9 +131,18 @@ export function upsertApiKeyProfile(params: {
       params.metadata,
       params.options,
     ),
-    agentDir: resolveAuthAgentDir(params.agentDir),
+    agentDir: resolveAuthAgentDir(params.agentDir, params.options?.config),
   });
   return profileId;
+}
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
 }
 
 export function applyAuthProfileConfig(
@@ -130,7 +150,7 @@ export function applyAuthProfileConfig(
   params: {
     profileId: string;
     provider: string;
-    mode: "api_key" | "oauth" | "token";
+    mode: "api_key" | "aws-sdk" | "oauth" | "token";
     email?: string;
     displayName?: string;
     preferProfileFirst?: boolean;
@@ -161,7 +181,7 @@ export function applyAuthProfileConfig(
   );
   const existingProviderOrder =
     matchingProviderOrderEntries.length > 0
-      ? [...new Set(matchingProviderOrderEntries.flatMap(([, order]) => order))]
+      ? uniqueStrings(matchingProviderOrderEntries.flatMap(([, order]) => order))
       : undefined;
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
@@ -283,7 +303,7 @@ export async function writeOAuthCredentials(
     ...(options?.displayName ? { displayName: options.displayName } : {}),
   };
 
-  upsertAuthProfile({
+  await upsertAuthProfileWithLockOrThrow({
     profileId,
     credential,
     agentDir: resolvedAgentDir,
@@ -297,7 +317,7 @@ export async function writeOAuthCredentials(
         continue;
       }
       try {
-        upsertAuthProfile({
+        await upsertAuthProfileWithLock({
           profileId,
           credential,
           agentDir: targetAgentDir,

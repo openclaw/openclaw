@@ -1,5 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { normalizeCommandBody, type CommandNormalizeOptions } from "../commands-registry.js";
+// Normalizes abort command primitives before runtime cancellation.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
+import type { CommandNormalizeOptions } from "../commands-registry.types.js";
 
 const ABORT_TRIGGERS = new Set([
   "stop",
@@ -14,6 +16,8 @@ const ABORT_TRIGGERS = new Set([
   "arrete",
   "arrête",
   "停止",
+  "停下来",
+  "暂停",
   "やめて",
   "止めて",
   "रुको",
@@ -47,7 +51,7 @@ const ABORT_TRIGGERS = new Set([
 ]);
 const ABORT_MEMORY = new Map<string, boolean>();
 const ABORT_MEMORY_MAX = 2000;
-const TRAILING_ABORT_PUNCTUATION_RE = /[.!?…,，。;；:：'"’”)\]}]+$/u;
+const TRAILING_ABORT_PUNCTUATION_RE = /[.!?！？…,，。;；:：'"’”)\]}]+$/u;
 
 function normalizeAbortTriggerText(text: string): string {
   return normalizeLowercaseStringOrEmpty(text)

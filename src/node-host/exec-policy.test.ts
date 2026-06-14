@@ -1,3 +1,4 @@
+/** Tests node-host exec policy evaluation and approval decisions. */
 import { describe, expect, it } from "vitest";
 import {
   evaluateSystemRunPolicy,
@@ -145,6 +146,16 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.shellWrapperBlocked).toBe(true);
     expect(denied.windowsShellWrapperBlocked).toBe(true);
     expect(denied.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
+  });
+
+  it("does not block Windows cmd.exe invocations without inline shell-wrapper transport", () => {
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({ isWindows: true, cmdInvocation: true, shellWrapperInvocation: false }),
+      ),
+    );
+    expect(allowed.shellWrapperBlocked).toBe(false);
+    expect(allowed.windowsShellWrapperBlocked).toBe(false);
   });
 
   it("allows execution when policy checks pass", () => {

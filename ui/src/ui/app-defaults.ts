@@ -1,3 +1,4 @@
+// Control UI module implements app defaults behavior.
 import type { LogLevel } from "./types.ts";
 import type { CronFormState } from "./ui-types.ts";
 
@@ -9,6 +10,11 @@ export const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
   error: true,
   fatal: true,
 };
+
+export const DEFAULT_SESSIONS_FILTERS = {
+  activeMinutes: "120",
+  limit: "200",
+} as const;
 
 export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
@@ -30,6 +36,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   sessionTarget: "isolated",
   wakeMode: "now",
   payloadKind: "agentTurn",
+  payloadLocked: false,
   payloadText: "",
   payloadModel: "",
   payloadThinking: "",

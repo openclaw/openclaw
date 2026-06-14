@@ -1,118 +1,35 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+/** Tests request-scoped secret ref resolution for runtime operations. */
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import { getRuntimeConfigSnapshotRefreshHandler } from "../config/runtime-snapshot.js";
+import { activateSecretsRuntimeSnapshot, getActiveSecretsRuntimeSnapshot } from "./runtime.js";
+import {
+  asConfig,
+  loadAuthStoreWithProfiles,
+  setupSecretsRuntimeSnapshotTestHooks,
+} from "./runtime.test-support.ts";
 
-type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-}));
-
-vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
+async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+  try {
+    await fs.writeFile(tempPath, content, "utf8");
+    await fs.chmod(tempPath, mode);
+    await fs.rename(tempPath, filePath);
+  } catch (err) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  }
 }
-
-function createTestProvider(params: {
-  id: WebProviderUnderTest;
-  pluginId: string;
-  order: number;
-}): PluginWebSearchProviderEntry {
-  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
-  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
-    const providerConfig =
-      searchConfig?.[params.id] && typeof searchConfig[params.id] === "object"
-        ? (searchConfig[params.id] as { apiKey?: unknown })
-        : undefined;
-    return providerConfig?.apiKey ?? searchConfig?.apiKey;
-  };
-  return {
-    pluginId: params.pluginId,
-    id: params.id,
-    label: params.id,
-    hint: `${params.id} test provider`,
-    envVars: [`${params.id.toUpperCase()}_API_KEY`],
-    placeholder: `${params.id}-...`,
-    signupUrl: `https://example.com/${params.id}`,
-    autoDetectOrder: params.order,
-    credentialPath,
-    inactiveSecretPaths: [credentialPath],
-    getCredentialValue: readSearchConfigKey,
-    setCredentialValue: (searchConfigTarget, value) => {
-      const providerConfig =
-        params.id === "brave" || params.id === "firecrawl"
-          ? searchConfigTarget
-          : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
-      providerConfig.apiKey = value;
-    },
-    getConfiguredCredentialValue: (config) =>
-      (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
-        ?.webSearch?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
-      const entries = (plugins.entries ??= {});
-      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
-      const config = (entry.config ??= {});
-      const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
-      webSearch.apiKey = value;
-    },
-    resolveRuntimeMetadata:
-      params.id === "perplexity"
-        ? () => ({
-            perplexityTransport: "search_api" as const,
-          })
-        : undefined,
-    createTool: () => null,
-  };
-}
-
-function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
-  return [
-    createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
-    createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
-    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
-    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
-    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
-    createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
-  ];
-}
-
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
-
-let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
 describe("secrets runtime snapshot request secret refs", () => {
-  beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  beforeEach(() => {
-    resolvePluginWebSearchProvidersMock.mockReset();
-    resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-  });
-
   it("can skip auth-profile SecretRef resolution when includeAuthStoreRefs is false", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_SECRET_${Date.now()}`;
     delete process.env[missingEnvVar];
@@ -143,8 +60,132 @@ describe("secrets runtime snapshot request secret refs", () => {
       loadAuthStore,
     });
 
-    expect(snapshot.authStores).toEqual([]);
+    expect(snapshot.authStores).toStrictEqual([]);
   });
+
+  it("can skip auth-profile SecretRef resolution during active runtime refresh", async () => {
+    const initialEnvVar = `OPENCLAW_INITIAL_AUTH_PROFILE_SECRET_${Date.now()}`;
+    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_SECRET_${Date.now()}`;
+    delete process.env[missingEnvVar];
+
+    let useMissingProfileRef = false;
+    let loadAuthStoreCalls = 0;
+    const loadAuthStore = () => {
+      loadAuthStoreCalls += 1;
+      return loadAuthStoreWithProfiles({
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          tokenRef: {
+            source: "env",
+            provider: "default",
+            id: useMissingProfileRef ? missingEnvVar : initialEnvVar,
+          },
+        },
+      });
+    };
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      env: { [initialEnvVar]: "sk-initial" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore,
+    });
+    activateSecretsRuntimeSnapshot(snapshot);
+    expect(loadAuthStoreCalls).toBe(1);
+    setRuntimeAuthProfileStoreSnapshot(
+      loadAuthStoreWithProfiles({
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          token: "sk-live",
+        },
+      }),
+      "/tmp/openclaw-agent-main",
+    );
+
+    useMissingProfileRef = true;
+    const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+    if (!refreshHandler) {
+      throw new Error("Expected active runtime refresh handler");
+    }
+    await expect(
+      refreshHandler.refresh({
+        sourceConfig: asConfig({ gateway: { port: 19001 } }),
+        includeAuthStoreRefs: false,
+      }),
+    ).resolves.toBe(true);
+    expect(loadAuthStoreCalls).toBe(1);
+    const profile = getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[
+      "custom:token"
+    ] as { token?: string } | undefined;
+    expect(profile?.token).toBe("sk-live");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reuses preflighted exec SecretRef snapshots during active runtime refresh",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-exec-preflight-"));
+      try {
+        const execLogPath = path.join(root, "exec-calls.log");
+        const execScriptPath = path.join(root, "resolver.sh");
+        await writeSecureFile(
+          execScriptPath,
+          [
+            "#!/bin/sh",
+            `printf 'x\\n' >> ${JSON.stringify(execLogPath)}`,
+            "cat >/dev/null",
+            'printf \'{"protocolVersion":1,"values":{"gateway/token":"exec-gateway-token"}}\'',
+          ].join("\n"),
+          0o700,
+        );
+
+        const config = asConfig({
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: execScriptPath,
+                jsonOnly: true,
+                timeoutMs: 20_000,
+                noOutputTimeoutMs: 10_000,
+              },
+            },
+          },
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "exec", provider: "execmain", id: "gateway/token" },
+            },
+          },
+        });
+        const snapshot = await prepareSecretsRuntimeSnapshot({
+          config,
+          agentDirs: [path.join(root, "agent")],
+          loadAuthStore: () => ({ version: 1, profiles: {} }),
+        });
+        activateSecretsRuntimeSnapshot(snapshot);
+        await fs.writeFile(execLogPath, "", "utf8");
+
+        const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+        if (!refreshHandler?.preflight) {
+          throw new Error("Expected active runtime refresh preflight handler");
+        }
+        const preflightResult = await refreshHandler.preflight({ sourceConfig: config });
+        await expect(
+          refreshHandler.refresh({ sourceConfig: config, preflightResult }),
+        ).resolves.toBe(true);
+
+        const execCalls = (await fs.readFile(execLogPath, "utf8")).split("\n").filter(Boolean);
+        expect(execCalls).toHaveLength(1);
+        expect(getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth?.token).toBe(
+          "exec-gateway-token",
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("resolves model provider request secret refs for headers, auth, and tls material", async () => {
     const config = asConfig({

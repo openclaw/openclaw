@@ -1,5 +1,6 @@
+// Voice Call plugin module implements mock behavior.
 import crypto from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   EndReason,
   GetCallStatusInput,
@@ -11,6 +12,7 @@ import type {
   PlayTtsInput,
   WebhookParseOptions,
   ProviderWebhookParseResult,
+  SendDtmfInput,
   StartListeningInput,
   StopListeningInput,
   WebhookContext,
@@ -159,6 +161,10 @@ export class MockProvider implements VoiceCallProvider {
   }
 
   async playTts(_input: PlayTtsInput): Promise<void> {
+    // No-op for mock
+  }
+
+  async sendDtmf(_input: SendDtmfInput): Promise<void> {
     // No-op for mock
   }
 

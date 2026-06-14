@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+/** Tests node-host runner credential routing and env handling. */
+import { describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveNodeHostGatewayCredentials } from "./runner.js";
+import {
+  handleNodeHostReconnectPaused,
+  resolveNodeHostGatewayCredentials,
+  shouldExitNodeHostOnReconnectPaused,
+} from "./runner.js";
 
 function createRemoteGatewayTokenRefConfig(tokenId: string): OpenClawConfig {
   return {
@@ -145,5 +151,77 @@ describe("resolveNodeHostGatewayCredentials", () => {
         expect(credentials.password).toBeUndefined();
       },
     );
+  });
+});
+
+describe("handleNodeHostReconnectPaused", () => {
+  it("exits for terminal credential pauses so service supervisors can restart", () => {
+    const lines: string[] = [];
+    const exit = vi.fn((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never;
+
+    expect(() =>
+      handleNodeHostReconnectPaused(
+        {
+          code: 1008,
+          reason: "connect failed",
+          detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+        },
+        { writeLine: (line) => lines.push(line), exit },
+      ),
+    ).toThrow("exit 1");
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines).toEqual([
+      "node host gateway reconnect paused after close (1008): connect failed detail=AUTH_TOKEN_MISMATCH; exiting for supervisor restart",
+    ]);
+  });
+
+  it("keeps pairing pauses visible without exiting foreground approval flow", () => {
+    const lines: string[] = [];
+    const exit = vi.fn((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never;
+
+    handleNodeHostReconnectPaused(
+      {
+        code: 1008,
+        reason: "connect failed",
+        detailCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      },
+      { writeLine: (line) => lines.push(line), exit },
+    );
+
+    expect(shouldExitNodeHostOnReconnectPaused(ConnectErrorDetailCodes.PAIRING_REQUIRED)).toBe(
+      false,
+    );
+    expect(exit).not.toHaveBeenCalled();
+    expect(lines).toEqual([
+      "node host gateway reconnect paused after close (1008): connect failed detail=PAIRING_REQUIRED; waiting for operator action",
+    ]);
+  });
+
+  it("exits for version mismatch so supervisor restarts with updated code", () => {
+    const lines: string[] = [];
+    const exit = vi.fn((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never;
+
+    expect(() =>
+      handleNodeHostReconnectPaused(
+        {
+          code: 1008,
+          reason: "client version mismatch",
+          detailCode: ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+        },
+        { writeLine: (line) => lines.push(line), exit },
+      ),
+    ).toThrow("exit 1");
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines).toEqual([
+      "node host gateway reconnect paused after close (1008): client version mismatch detail=CLIENT_VERSION_MISMATCH; exiting for supervisor restart",
+    ]);
   });
 });

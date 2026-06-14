@@ -1,7 +1,8 @@
+// Coordinates managed task-flow creation, updates, ownership, and snapshots.
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   getTaskFlowRegistryObservers,
   getTaskFlowRegistryStore,
@@ -58,12 +59,9 @@ type FlowRecordPatch = Omit<
   endedAt?: number | null;
 };
 
-export type CreateFlowRecordParams = {
-  syncMode?: TaskFlowSyncMode;
+type FlowRecordCreateFields = {
   ownerKey: string;
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  controllerId?: string | null;
-  revision?: number;
   status?: TaskFlowStatus;
   notifyPolicy?: TaskNotifyPolicy;
   goal: string;
@@ -78,6 +76,12 @@ export type CreateFlowRecordParams = {
   endedAt?: number | null;
 };
 
+export type CreateFlowRecordParams = FlowRecordCreateFields & {
+  syncMode?: TaskFlowSyncMode;
+  controllerId?: string | null;
+  revision?: number;
+};
+
 export type TaskFlowUpdateResult =
   | {
       applied: true;
@@ -85,8 +89,19 @@ export type TaskFlowUpdateResult =
     }
   | {
       applied: false;
-      reason: "not_found" | "revision_conflict";
+      reason: "not_found" | "revision_conflict" | "persist_failed";
       current?: TaskFlowRecord;
+    };
+
+export type TaskFlowSyncResult =
+  | {
+      ok: true;
+      flow: TaskFlowRecord | null;
+    }
+  | {
+      ok: false;
+      reason: "persist_failed";
+      current: TaskFlowRecord;
     };
 
 function cloneStructuredValue<T>(value: T | undefined): T | undefined {
@@ -208,6 +223,27 @@ export function deriveTaskFlowStatusFromTask(
   return "failed";
 }
 
+function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {
+  return (
+    status === "succeeded" ||
+    status === "blocked" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "lost"
+  );
+}
+
+function resolveTaskMirroredFlowTiming(
+  task: Pick<TaskRecord, "createdAt" | "lastEventAt" | "endedAt">,
+  isTerminal: boolean,
+): { updatedAt: number; endedAt?: number } {
+  if (!isTerminal) {
+    return { updatedAt: task.lastEventAt ?? task.createdAt };
+  }
+  const endedAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
+  return { updatedAt: endedAt, endedAt };
+}
+
 function ensureFlowRegistryReady() {
   if (restoreAttempted) {
     return;
@@ -237,10 +273,27 @@ export function getTaskFlowRegistryRestoreFailure(): string | null {
   return restoreFailureMessage;
 }
 
-function persistFlowRegistry() {
-  getTaskFlowRegistryStore().saveSnapshot({
-    flows: new Map(snapshotFlowRecords(flows).map((flow) => [flow.flowId, flow])),
-  });
+function createFlowSnapshotWith(next?: TaskFlowRecord, deletedFlowId?: string) {
+  const snapshot = new Map(snapshotFlowRecords(flows).map((flow) => [flow.flowId, flow]));
+  if (deletedFlowId) {
+    snapshot.delete(deletedFlowId);
+  }
+  if (next) {
+    snapshot.set(next.flowId, cloneFlowRecord(next));
+  }
+  return snapshot;
+}
+
+function persistFlowRegistry(): boolean {
+  try {
+    getTaskFlowRegistryStore().saveSnapshot({
+      flows: createFlowSnapshotWith(),
+    });
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task-flow registry snapshot", { error });
+    return false;
+  }
 }
 
 function persistFlowUpsert(flow: TaskFlowRecord) {
@@ -249,7 +302,23 @@ function persistFlowUpsert(flow: TaskFlowRecord) {
     store.upsertFlow(cloneFlowRecord(flow));
     return;
   }
-  persistFlowRegistry();
+  store.saveSnapshot({
+    flows: createFlowSnapshotWith(flow),
+  });
+}
+
+function tryPersistFlowUpsert(flow: TaskFlowRecord, operation: string): boolean {
+  try {
+    persistFlowUpsert(flow);
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task-flow registry upsert", {
+      operation,
+      flowId: flow.flowId,
+      error,
+    });
+    return false;
+  }
 }
 
 function persistFlowDelete(flowId: string) {
@@ -258,7 +327,22 @@ function persistFlowDelete(flowId: string) {
     store.deleteFlow(flowId);
     return;
   }
-  persistFlowRegistry();
+  store.saveSnapshot({
+    flows: createFlowSnapshotWith(undefined, flowId),
+  });
+}
+
+function tryPersistFlowDelete(flowId: string): boolean {
+  try {
+    persistFlowDelete(flowId);
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task-flow registry delete", {
+      flowId,
+      error,
+    });
+    return false;
+  }
 }
 
 function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
@@ -332,9 +416,11 @@ function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch): TaskFl
   };
 }
 
-function writeFlowRecord(next: TaskFlowRecord, previous?: TaskFlowRecord): TaskFlowRecord {
+function writeFlowRecord(next: TaskFlowRecord, previous?: TaskFlowRecord): TaskFlowRecord | null {
+  if (!tryPersistFlowUpsert(next, previous ? "update" : "create")) {
+    return null;
+  }
   flows.set(next.flowId, next);
-  persistFlowUpsert(next);
   emitFlowRegistryObserverEvent(() => ({
     kind: "upserted",
     flow: cloneFlowRecord(next),
@@ -343,29 +429,17 @@ function writeFlowRecord(next: TaskFlowRecord, previous?: TaskFlowRecord): TaskF
   return cloneFlowRecord(next);
 }
 
-export function createFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
+export function createFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord | null {
   ensureFlowRegistryReady();
   const record = buildFlowRecord(params);
   return writeFlowRecord(record);
 }
 
-export function createManagedTaskFlow(params: {
-  ownerKey: string;
-  controllerId: string;
-  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  status?: TaskFlowStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  goal: string;
-  currentStep?: string | null;
-  blockedTaskId?: string | null;
-  blockedSummary?: string | null;
-  stateJson?: JsonValue | null;
-  waitJson?: JsonValue | null;
-  cancelRequestedAt?: number | null;
-  createdAt?: number;
-  updatedAt?: number;
-  endedAt?: number | null;
-}): TaskFlowRecord {
+export function createManagedTaskFlow(
+  params: FlowRecordCreateFields & {
+    controllerId: string;
+  },
+): TaskFlowRecord | null {
   return createFlowRecord({
     ...params,
     syncMode: "managed",
@@ -390,17 +464,12 @@ export function createTaskFlowForTask(params: {
     | "progressSummary"
   >;
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-}): TaskFlowRecord {
+}): TaskFlowRecord | null {
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(params.task);
-  const isTerminal =
-    terminalFlowStatus === "succeeded" ||
-    terminalFlowStatus === "blocked" ||
-    terminalFlowStatus === "failed" ||
-    terminalFlowStatus === "cancelled" ||
-    terminalFlowStatus === "lost";
-  const endedAt = isTerminal
-    ? (params.task.endedAt ?? params.task.lastEventAt ?? params.task.createdAt)
-    : undefined;
+  const timing = resolveTaskMirroredFlowTiming(
+    params.task,
+    isTerminalTaskFlowStatus(terminalFlowStatus),
+  );
   return createFlowRecord({
     syncMode: "task_mirrored",
     ownerKey: params.task.ownerKey,
@@ -413,8 +482,8 @@ export function createTaskFlowForTask(params: {
       terminalFlowStatus === "blocked" ? normalizeOptionalString(params.task.taskId) : undefined,
     blockedSummary: resolveFlowBlockedSummary(params.task),
     createdAt: params.task.createdAt,
-    updatedAt: params.task.lastEventAt ?? params.task.createdAt,
-    ...(endedAt !== undefined ? { endedAt } : {}),
+    updatedAt: timing.updatedAt,
+    ...(timing.endedAt !== undefined ? { endedAt: timing.endedAt } : {}),
   });
 }
 
@@ -450,9 +519,17 @@ export function updateFlowRecordByIdExpectedRevision(params: {
       current: cloneFlowRecord(current),
     };
   }
+  const flow = writeFlowRecord(applyFlowPatch(current, params.patch), current);
+  if (!flow) {
+    return {
+      applied: false,
+      reason: "persist_failed",
+      current: cloneFlowRecord(current),
+    };
+  }
   return {
     applied: true,
-    flow: writeFlowRecord(applyFlowPatch(current, params.patch), current),
+    flow,
   };
 }
 
@@ -578,7 +655,7 @@ export function requestFlowCancel(params: {
   });
 }
 
-export function syncFlowFromTask(
+export function syncFlowFromTaskResult(
   task: Pick<
     TaskRecord,
     | "parentFlowId"
@@ -593,26 +670,29 @@ export function syncFlowFromTask(
     | "terminalSummary"
     | "progressSummary"
   >,
-): TaskFlowRecord | null {
+): TaskFlowSyncResult {
   const flowId = task.parentFlowId?.trim();
   if (!flowId) {
-    return null;
+    return { ok: true, flow: null };
   }
   const flow = getTaskFlowById(flowId);
   if (!flow) {
-    return null;
+    return { ok: true, flow: null };
   }
   if (flow.syncMode !== "task_mirrored") {
-    return flow;
+    return { ok: true, flow };
   }
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(task);
-  const isTerminal =
-    terminalFlowStatus === "succeeded" ||
-    terminalFlowStatus === "blocked" ||
-    terminalFlowStatus === "failed" ||
-    terminalFlowStatus === "cancelled" ||
-    terminalFlowStatus === "lost";
-  return updateFlowRecordByIdUnchecked(flowId, {
+  const isTerminal = isTerminalTaskFlowStatus(terminalFlowStatus);
+  const timing = resolveTaskMirroredFlowTiming(
+    {
+      createdAt: flow.createdAt,
+      lastEventAt: task.lastEventAt,
+      endedAt: task.endedAt,
+    },
+    isTerminal,
+  );
+  const updated = updateFlowRecordByIdUnchecked(flowId, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task"),
@@ -620,13 +700,28 @@ export function syncFlowFromTask(
     blockedSummary:
       terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
     waitJson: null,
-    updatedAt: task.lastEventAt ?? Date.now(),
+    updatedAt: timing.updatedAt,
     ...(isTerminal
       ? {
-          endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
+          endedAt: timing.endedAt ?? timing.updatedAt,
         }
       : { endedAt: null }),
   });
+  if (!updated) {
+    return {
+      ok: false,
+      reason: "persist_failed",
+      current: flow,
+    };
+  }
+  return { ok: true, flow: updated };
+}
+
+export function syncFlowFromTask(
+  task: Parameters<typeof syncFlowFromTaskResult>[0],
+): TaskFlowRecord | null {
+  const result = syncFlowFromTaskResult(task);
+  return result.ok ? result.flow : null;
 }
 
 export function getTaskFlowById(flowId: string): TaskFlowRecord | undefined {
@@ -673,8 +768,10 @@ export function deleteTaskFlowRecordById(flowId: string): boolean {
   if (!current) {
     return false;
   }
+  if (!tryPersistFlowDelete(flowId)) {
+    return false;
+  }
   flows.delete(flowId);
-  persistFlowDelete(flowId);
   emitFlowRegistryObserverEvent(() => ({
     kind: "deleted",
     flowId,

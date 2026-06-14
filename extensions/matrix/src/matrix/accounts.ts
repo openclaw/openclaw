@@ -1,6 +1,7 @@
+// Matrix plugin module implements accounts behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -179,7 +180,7 @@ export function resolveMatrixAccount(params: {
           userId: authView.userId || "",
         })
       : false;
-  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || Boolean(hasStored));
+  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || hasStored);
   return {
     accountId,
     enabled,

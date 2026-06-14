@@ -1,25 +1,48 @@
+/** Resolves system.run allowlist matches, argv plans, and truncated command output. */
 import {
   analyzeArgvCommand,
+  buildSafeBinsShellCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   resolvePlannedSegmentArgv,
   resolveExecApprovals,
   type ExecAllowlistEntry,
   type ExecCommandSegment,
+  type ExecSegmentSatisfiedBy,
   type ExecSecurity,
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import {
+  normalizeExecutableToken,
+  POSIX_SHELL_WRAPPERS,
+  resolveShellWrapperTransportArgv,
+} from "../infra/exec-wrapper-resolution.js";
+import {
+  POSIX_INLINE_COMMAND_FLAGS,
+  resolveInlineCommandMatch,
+} from "../infra/shell-inline-command.js";
 import type { RunResult } from "./invoke-types.js";
 
-export type SystemRunAllowlistAnalysis = {
+/**
+ * Allowlist analysis and argv rewriting for node-host system.run.
+ *
+ * This module keeps command approval analysis separate from process execution,
+ * and only rewrites shell transports when the rebuilt command still satisfies policy.
+ */
+const POSIX_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
+
+type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   allowlistSatisfied: boolean;
   segments: ExecCommandSegment[];
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
+/** Evaluate system.run argv or shell command against the exec allowlist policy. */
+/** Evaluates analyzed command segments against allowlist and trusted safe-bin policy. */
 export function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
   argv: string[];
@@ -55,6 +78,7 @@ export function evaluateSystemRunAllowlist(params: {
           : false,
       segments: allowlistEval.segments,
       segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+      segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
     };
   }
 
@@ -76,9 +100,11 @@ export function evaluateSystemRunAllowlist(params: {
       params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
     segments: analysis.segments,
     segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+    segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
   };
 }
 
+/** Resolve the single planned argv that can replace the caller argv after allowlist approval. */
 export function resolvePlannedAllowlistArgv(params: {
   security: ExecSecurity;
   shellCommand: string | null;
@@ -103,10 +129,17 @@ export function resolvePlannedAllowlistArgv(params: {
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 
+/** Resolve final argv after safe-bin shell rewriting and allowlist revalidation. */
 export function resolveSystemRunExecArgv(params: {
   plannedAllowlistArgv: string[] | undefined;
   argv: string[];
   security: ExecSecurity;
+  approvals: ReturnType<typeof resolveExecApprovals>;
+  safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
+  safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
+  trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
+  skillBins: SkillBinTrustEntry[];
+  autoAllowSkills: boolean;
   isWindows: boolean;
   policy: {
     approvedByAsk: boolean;
@@ -115,7 +148,10 @@ export function resolveSystemRunExecArgv(params: {
   };
   shellCommand: string | null;
   segments: ExecCommandSegment[];
-}): string[] {
+  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+  cwd: string | undefined;
+  env: Record<string, string> | undefined;
+}): string[] | null {
   let execArgv = params.plannedAllowlistArgv ?? params.argv;
   if (
     params.security === "allowlist" &&
@@ -127,11 +163,130 @@ export function resolveSystemRunExecArgv(params: {
     params.segments.length === 1 &&
     params.segments[0]?.argv.length > 0
   ) {
+    // Windows shell transports expose a parsed argv segment that is safer than the wrapper argv.
     execArgv = params.segments[0].argv;
+  }
+  if (
+    params.security === "allowlist" &&
+    !params.isWindows &&
+    !params.policy.approvedByAsk &&
+    params.shellCommand &&
+    params.policy.analysisOk &&
+    params.policy.allowlistSatisfied &&
+    params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain") &&
+    isPosixShellInlineCommandTransport(params.argv)
+  ) {
+    const rebuilt = buildSafeBinsShellCommand({
+      command: params.shellCommand,
+      segments: params.segments,
+      segmentSatisfiedBy: params.segmentSatisfiedBy,
+      cwd: params.cwd,
+      env: params.env,
+      platform: process.platform,
+    });
+    if (!rebuilt.ok || !rebuilt.command) {
+      return null;
+    }
+    const rewrittenArgv = replacePosixShellInlineCommand({
+      argv: params.argv,
+      oldCommand: params.shellCommand,
+      nextCommand: rebuilt.command,
+    });
+    if (!rewrittenArgv) {
+      return null;
+    }
+    const rebuiltAllowlist = evaluateSystemRunAllowlist({
+      shellCommand: rebuilt.command,
+      argv: rewrittenArgv,
+      approvals: params.approvals,
+      security: params.security,
+      safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
+      cwd: params.cwd,
+      env: params.env,
+      skillBins: params.skillBins,
+      autoAllowSkills: params.autoAllowSkills,
+    });
+    if (!rebuiltAllowlist.analysisOk || !rebuiltAllowlist.allowlistSatisfied) {
+      // Rewritten shell commands must prove the same allowlist contract before execution.
+      return null;
+    }
+    execArgv = rewrittenArgv;
   }
   return execArgv;
 }
 
+function isPosixShellInlineCommandTransport(argv: string[]): boolean {
+  const transportArgv = resolveShellWrapperTransportArgv(argv);
+  return Boolean(
+    transportArgv &&
+    POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? "")),
+  );
+}
+
+function findSubsequence(haystack: readonly string[], needle: readonly string[]): number {
+  if (needle.length === 0 || needle.length > haystack.length) {
+    return -1;
+  }
+  for (let start = 0; start <= haystack.length - needle.length; start += 1) {
+    let matches = true;
+    for (let offset = 0; offset < needle.length; offset += 1) {
+      if (haystack[start + offset] !== needle[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return start;
+    }
+  }
+  return -1;
+}
+
+function replacePosixShellInlineCommand(params: {
+  argv: string[];
+  oldCommand: string;
+  nextCommand: string;
+}): string[] | null {
+  const transportArgv = resolveShellWrapperTransportArgv(params.argv);
+  if (
+    !transportArgv ||
+    !POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? ""))
+  ) {
+    return null;
+  }
+  const transportStart = findSubsequence(params.argv, transportArgv);
+  if (transportStart < 0) {
+    return null;
+  }
+  const match = resolveInlineCommandMatch(transportArgv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
+  if (match.valueTokenIndex === null) {
+    return null;
+  }
+  const absoluteValueIndex = transportStart + match.valueTokenIndex;
+  const token = params.argv[absoluteValueIndex];
+  if (token === undefined) {
+    return null;
+  }
+  const rewritten = [...params.argv];
+  if (token === params.oldCommand) {
+    rewritten[absoluteValueIndex] = params.nextCommand;
+    return rewritten;
+  }
+  if (token.endsWith(params.oldCommand)) {
+    // Combined shell flags can leave the inline command in a suffix of the same argv token.
+    rewritten[absoluteValueIndex] =
+      token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
+    return rewritten;
+  }
+  return null;
+}
+
+/** Mark truncated output in stderr when possible, otherwise stdout. */
+/** Truncates captured stdout/stderr in place to the node-host output cap. */
 export function applyOutputTruncation(result: RunResult): void {
   if (!result.truncated) {
     return;

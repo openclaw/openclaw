@@ -1,3 +1,4 @@
+// Control UI view renders nodes exec approvals screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -89,7 +90,7 @@ function resolveExecApprovalsDefaults(
     security: normalizeSecurity(defaults.security),
     ask: normalizeAsk(defaults.ask),
     askFallback: normalizeSecurity(defaults.askFallback ?? "deny"),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? false),
+    autoAllowSkills: defaults.autoAllowSkills ?? false,
   };
 }
 

@@ -136,6 +136,9 @@ func discoverLocalePrefixes(docsRoot string) (map[string]struct{}, error) {
 		if !localeDirRe.MatchString(name) {
 			continue
 		}
+		if _, err := os.Stat(filepath.Join(docsRoot, name, ".i18n", "README.md")); err != nil {
+			continue
+		}
 		locales[name] = struct{}{}
 	}
 	return locales, nil
@@ -322,15 +325,22 @@ func (ri *routeIndex) localizeURL(raw string) string {
 
 func hasURLScheme(raw string) bool {
 	switch {
-	case strings.HasPrefix(raw, "http://"), strings.HasPrefix(raw, "https://"):
+	case hasSchemePrefix(raw, "http://"), hasSchemePrefix(raw, "https://"):
 		return true
-	case strings.HasPrefix(raw, "mailto:"), strings.HasPrefix(raw, "tel:"):
+	case hasSchemePrefix(raw, "mailto:"), hasSchemePrefix(raw, "tel:"):
 		return true
-	case strings.HasPrefix(raw, "data:"), strings.HasPrefix(raw, "javascript:"):
+	case hasSchemePrefix(raw, "data:"), hasSchemePrefix(raw, "javascript:"), hasSchemePrefix(raw, "vbscript:"):
 		return true
 	default:
 		return false
 	}
+}
+
+func hasSchemePrefix(raw, prefix string) bool {
+	if len(raw) < len(prefix) {
+		return false
+	}
+	return strings.EqualFold(raw[:len(prefix)], prefix)
 }
 
 func splitURLSuffix(raw string) (string, string) {

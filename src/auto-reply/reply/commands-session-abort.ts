@@ -1,14 +1,15 @@
-import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+// Implements session abort commands and active-run stop targeting.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,
   type AbortCutoff,
 } from "./abort-cutoff.js";
 import {
+  abortSessionRunTarget,
   formatAbortReplyText,
   isAbortTrigger,
   resolveSessionEntryForKey,
@@ -43,7 +44,11 @@ function resolveAbortTarget(params: {
       sessionId: replyRunRegistry.resolveSessionId(key) ?? entry.sessionId,
     };
   }
-  if (params.sessionEntry && params.sessionKey) {
+  if (
+    params.sessionEntry &&
+    params.sessionKey &&
+    (!targetSessionKey || targetSessionKey === params.sessionKey)
+  ) {
     return {
       entry: params.sessionEntry,
       key: params.sessionKey,
@@ -82,12 +87,7 @@ async function applyAbortTarget(params: {
   abortCutoff?: AbortCutoff;
 }) {
   const { abortTarget } = params;
-  if (abortTarget.key) {
-    replyRunRegistry.abort(abortTarget.key);
-  }
-  if (abortTarget.sessionId) {
-    abortEmbeddedPiRun(abortTarget.sessionId);
-  }
+  abortSessionRunTarget({ key: abortTarget.key, sessionId: abortTarget.sessionId });
 
   const persisted = await persistAbortTargetEntry({
     entry: abortTarget.entry,
@@ -149,7 +149,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     "stop",
     abortTarget.key ?? params.sessionKey ?? "",
     {
-      sessionEntry: abortTarget.entry ?? params.sessionEntry,
+      sessionEntry: abortTarget.entry,
       sessionId: abortTarget.sessionId,
       commandSource: params.command.surface,
       senderId: params.command.senderId,

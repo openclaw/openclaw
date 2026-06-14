@@ -1,3 +1,8 @@
+/**
+ * ACP stateful target driver for configured bindings.
+ *
+ * Ensures ACP-backed bound sessions exist, are ready, and can be reset by Gateway.
+ */
 import {
   ensureConfiguredAcpBindingReady,
   ensureConfiguredAcpBindingSession,
@@ -5,7 +10,7 @@ import {
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { performGatewaySessionReset } from "./acp-stateful-target-reset.runtime.js";
 import type {
@@ -120,7 +125,12 @@ async function resetAcpTargetInPlace(params: {
     commandSource: params.commandSource ?? "stateful-target:acp-reset-in-place",
   });
   if (result.ok) {
-    return { ok: true };
+    return {
+      ok: true,
+      sessionKey: result.key,
+      sessionId: result.entry.sessionId,
+      storePath: result.storePath,
+    };
   }
   return {
     ok: false,

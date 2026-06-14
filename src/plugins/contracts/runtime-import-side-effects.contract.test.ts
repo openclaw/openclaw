@@ -1,5 +1,7 @@
+// Runtime import side-effect contract tests cover cold import behavior for plugin runtime code.
+import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertNoImportTimeSideEffects } from "../../../test/helpers/plugins/contracts-testkit.js";
+import { assertNoImportTimeSideEffects } from "../../plugin-sdk/test-helpers/import-side-effects.js";
 
 const listChannelPlugins = vi.hoisted(() =>
   vi.fn(() => [
@@ -18,6 +20,20 @@ const CHANNEL_REGISTRY_WHY =
   "it boots active channel metadata on hot runtime/config import paths and turns cheap module evaluation into plugin registry work.";
 const CHANNEL_REGISTRY_FIX =
   "keep the seam behind a lazy getter/runtime boundary so import stays cold and the first real lookup loads once.";
+const HOT_RUNTIME_IMPORT_CASES = [
+  ["src/config/markdown-tables.ts", () => import("../../config/markdown-tables.js")],
+  [
+    "src/plugin-sdk/approval-handler-adapter-runtime.ts",
+    () => import("../../plugin-sdk/approval-handler-adapter-runtime.js"),
+  ],
+  [
+    "src/plugin-sdk/approval-gateway-runtime.ts",
+    () => import("../../plugin-sdk/approval-gateway-runtime.js"),
+  ],
+  ["src/plugins/runtime/runtime-system.ts", () => import("../runtime/runtime-system.js")],
+  ["src/web-search/runtime.ts", () => import("../../web-search/runtime.js")],
+  ["src/web-fetch/runtime.ts", () => import("../../web-fetch/runtime.js")],
+] as const;
 
 function mockChannelRegistry() {
   vi.doMock("../../channels/plugins/registry.js", async () => {
@@ -64,13 +80,6 @@ describe("runtime import side-effect contracts", () => {
     getActivePluginChannelRegistryVersion.mockClear().mockReturnValue(1);
   });
 
-  it("keeps config/markdown-tables cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../config/markdown-tables.js");
-
-    expectNoChannelRegistryDuringImport("src/config/markdown-tables.ts");
-  });
-
   it("keeps markdown table defaults lazy and memoized after import", async () => {
     mockChannelRegistry();
     const markdownTables = await import("../../config/markdown-tables.js");
@@ -85,52 +94,21 @@ describe("runtime import side-effect contracts", () => {
     expect(listChannelPlugins).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps plugins/runtime/runtime-channel cold on import", async () => {
+  it.each(HOT_RUNTIME_IMPORT_CASES)("keeps %s cold", async (moduleId, importModule) => {
     mockChannelRegistry();
-    await import("../runtime/runtime-channel.js");
-
-    expectNoChannelRegistryDuringImport("src/plugins/runtime/runtime-channel.ts");
+    await importModule();
+    expectNoChannelRegistryDuringImport(moduleId);
   });
 
-  it("keeps plugin-sdk/approval-handler-adapter-runtime cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../plugin-sdk/approval-handler-adapter-runtime.js");
-
-    expectNoChannelRegistryDuringImport("src/plugin-sdk/approval-handler-adapter-runtime.ts");
+  it("keeps runtime-channel off direct channel registry imports", () => {
+    const source = fs.readFileSync("src/plugins/runtime/runtime-channel.ts", "utf8");
+    expect(source).not.toContain("../../channels/plugins/registry");
+    expect(source).not.toContain("../channels/plugins/registry");
   });
 
-  it("keeps plugin-sdk/approval-gateway-runtime cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../plugin-sdk/approval-gateway-runtime.js");
-
-    expectNoChannelRegistryDuringImport("src/plugin-sdk/approval-gateway-runtime.ts");
-  });
-
-  it("keeps plugins/runtime/runtime-system cold on import", async () => {
-    mockChannelRegistry();
-    await import("../runtime/runtime-system.js");
-
-    expectNoChannelRegistryDuringImport("src/plugins/runtime/runtime-system.ts");
-  });
-
-  it("keeps web-search/runtime cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../web-search/runtime.js");
-
-    expectNoChannelRegistryDuringImport("src/web-search/runtime.ts");
-  });
-
-  it("keeps web-fetch/runtime cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../web-fetch/runtime.js");
-
-    expectNoChannelRegistryDuringImport("src/web-fetch/runtime.ts");
-  });
-
-  it("keeps plugins/runtime/index cold on import", async () => {
-    mockChannelRegistry();
-    await import("../runtime/index.js");
-
-    expectNoChannelRegistryDuringImport("src/plugins/runtime/index.ts");
+  it("keeps runtime index off direct channel registry imports", () => {
+    const source = fs.readFileSync("src/plugins/runtime/index.ts", "utf8");
+    expect(source).not.toContain("../../channels/plugins/registry");
+    expect(source).not.toContain("../channels/plugins/registry");
   });
 });

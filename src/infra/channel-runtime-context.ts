@@ -1,16 +1,14 @@
-import type { PluginRuntime } from "../plugins/runtime/types.js";
-
-export type ChannelRuntimeContextKey = {
-  channelId: string;
-  accountId?: string | null;
-  capability: string;
-};
+// Registers and watches plugin channel runtime context values.
+import type {
+  ChannelRuntimeContextKey,
+  ChannelRuntimeSurface,
+} from "../channels/plugins/channel-runtime-surface.types.js";
 
 const NOOP_DISPOSE = () => {};
 
 function resolveScopedRuntimeContextRegistry(params: {
-  channelRuntime: PluginRuntime["channel"];
-}): PluginRuntime["channel"]["runtimeContexts"] {
+  channelRuntime: ChannelRuntimeSurface;
+}): ChannelRuntimeSurface["runtimeContexts"] {
   const runtimeContexts = resolveRuntimeContextRegistry(params);
   if (
     runtimeContexts &&
@@ -26,14 +24,15 @@ function resolveScopedRuntimeContextRegistry(params: {
 }
 
 function resolveRuntimeContextRegistry(params: {
-  channelRuntime?: PluginRuntime["channel"];
-}): PluginRuntime["channel"]["runtimeContexts"] | null {
+  channelRuntime?: ChannelRuntimeSurface;
+}): ChannelRuntimeSurface["runtimeContexts"] | null {
   return params.channelRuntime?.runtimeContexts ?? null;
 }
 
+/** Registers a channel-scoped runtime context, returning null when no runtime registry exists. */
 export function registerChannelRuntimeContext(
   params: ChannelRuntimeContextKey & {
-    channelRuntime?: PluginRuntime["channel"];
+    channelRuntime?: ChannelRuntimeSurface;
     context: unknown;
     abortSignal?: AbortSignal;
   },
@@ -51,26 +50,28 @@ export function registerChannelRuntimeContext(
   });
 }
 
-export function getChannelRuntimeContext<T = unknown>(
+/** Reads a channel-scoped runtime context from the current runtime registry. */
+export function getChannelRuntimeContext(
   params: ChannelRuntimeContextKey & {
-    channelRuntime?: PluginRuntime["channel"];
+    channelRuntime?: ChannelRuntimeSurface;
   },
-): T | undefined {
+): unknown {
   const runtimeContexts = resolveRuntimeContextRegistry(params);
   if (!runtimeContexts) {
     return undefined;
   }
-  return runtimeContexts.get<T>({
+  return runtimeContexts.get({
     channelId: params.channelId,
     accountId: params.accountId,
     capability: params.capability,
   });
 }
 
+/** Watches context registration changes for one channel/account/capability key. */
 export function watchChannelRuntimeContexts(
   params: ChannelRuntimeContextKey & {
-    channelRuntime?: PluginRuntime["channel"];
-    onEvent: Parameters<PluginRuntime["channel"]["runtimeContexts"]["watch"]>[0]["onEvent"];
+    channelRuntime?: ChannelRuntimeSurface;
+    onEvent: Parameters<ChannelRuntimeSurface["runtimeContexts"]["watch"]>[0]["onEvent"];
   },
 ): (() => void) | null {
   const runtimeContexts = resolveRuntimeContextRegistry(params);
@@ -85,10 +86,11 @@ export function watchChannelRuntimeContexts(
   });
 }
 
-export function createTaskScopedChannelRuntime(params: {
-  channelRuntime?: PluginRuntime["channel"];
+/** Wraps a channel runtime so contexts registered during a task are disposed together. */
+export function createTaskScopedChannelRuntime<T extends ChannelRuntimeSurface>(params: {
+  channelRuntime?: T;
 }): {
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: T;
   dispose: () => void;
 } {
   const baseRuntime = params.channelRuntime;
@@ -110,13 +112,14 @@ export function createTaskScopedChannelRuntime(params: {
           return;
         }
         disposed = true;
+        // Lease disposal is idempotent so task cleanup and explicit caller cleanup can race.
         trackedLeases.delete(lease);
         lease.dispose();
       },
     };
   };
 
-  const scopedRuntime: PluginRuntime["channel"] = {
+  const scopedRuntime = {
     ...baseRuntime,
     runtimeContexts: {
       ...runtimeContexts,
@@ -125,7 +128,7 @@ export function createTaskScopedChannelRuntime(params: {
         return trackLease(lease);
       },
     },
-  };
+  } as T;
 
   return {
     channelRuntime: scopedRuntime,

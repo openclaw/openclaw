@@ -1,5 +1,7 @@
+// Control UI content-security-policy helpers.
+// Computes inline script hashes and builds the Gateway-served CSP header.
 import { createHash } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
 
@@ -32,6 +34,7 @@ function hasScriptSrcAttribute(openTag: string): boolean {
   );
 }
 
+/** Build the CSP header applied to Gateway-served Control UI HTML. */
 export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
   const hashes = opts?.inlineScriptHashes;
   const scriptSrc = hashes?.length
@@ -44,8 +47,10 @@ export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }
     "frame-ancestors 'none'",
     scriptSrc,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: https:",
+    "img-src 'self' data: blob:",
+    "media-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com",
-    "connect-src 'self' ws: wss:",
+    "worker-src 'self'",
+    "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
   ].join("; ");
 }

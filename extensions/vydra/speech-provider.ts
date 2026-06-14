@@ -1,3 +1,4 @@
+// Vydra provider module implements model/runtime integration.
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
@@ -17,6 +18,7 @@ import {
   downloadVydraAsset,
   extractVydraResultUrls,
   normalizeVydraBaseUrl,
+  resolveVydraGeneratedMediaMaxBytes,
   trimToUndefined,
 } from "./shared.js";
 
@@ -86,7 +88,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
     models: [DEFAULT_VYDRA_SPEECH_MODEL],
     voices: VYDRA_SPEECH_VOICES.map((voice) => voice.id),
     resolveConfig: ({ rawConfig }) => normalizeVydraSpeechConfig(rawConfig),
-    listVoices: async () => VYDRA_SPEECH_VOICES.map((voice) => ({ ...voice })),
+    listVoices: async () => VYDRA_SPEECH_VOICES.map((voice) => Object.assign({}, voice)),
     isConfigured: ({ providerConfig }) =>
       Boolean(readVydraSpeechConfig(providerConfig).apiKey || process.env.VYDRA_API_KEY),
     synthesize: async (req) => {
@@ -137,6 +139,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
           kind: "audio",
           timeoutMs: req.timeoutMs,
           fetchFn,
+          maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "audio" }),
         });
         return {
           audioBuffer: audio.buffer,

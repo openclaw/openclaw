@@ -1,15 +1,44 @@
-import { beforeEach, describe, expect, it } from "vitest";
+// Verifies task-flow owner access checks for parent and child sessions.
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   findLatestTaskFlowForOwner,
   getTaskFlowByIdForOwner,
   listTaskFlowsForOwner,
   resolveTaskFlowForLookupTokenForOwner,
 } from "./task-flow-owner-access.js";
-import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
+import {
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  resetTaskFlowRegistryForTests,
+} from "./task-flow-registry.js";
+import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
 
 beforeEach(() => {
-  resetTaskFlowRegistryForTests();
+  resetTaskFlowRegistryForTests({ persist: false });
+  configureTaskFlowRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({ flows: new Map() }),
+      saveSnapshot: () => {},
+      upsertFlow: () => {},
+      deleteFlow: () => {},
+    },
+  });
 });
+
+afterEach(() => {
+  resetTaskFlowRegistryForTests({ persist: false });
+});
+
 describe("task flow owner access", () => {
   it("returns owner-scoped flows for direct and owner-key lookups", () => {
     const older = createManagedTaskFlow({
@@ -80,6 +109,6 @@ describe("task flow owner access", () => {
       listTaskFlowsForOwner({
         callerOwnerKey: "agent:main:other",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

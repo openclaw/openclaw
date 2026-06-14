@@ -1,5 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// Gateway probe auth resolver.
+// Adapts gateway credential precedence for local/remote reachability checks.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
   type ExplicitGatewayAuth,
   isGatewaySecretRefUnavailableError,
@@ -8,20 +11,51 @@ import {
 export { resolveGatewayProbeTarget } from "./probe-target.js";
 export type { GatewayProbeTargetResolution } from "./probe-target.js";
 
+// Probe auth adapts normal gateway credential precedence for reachability
+// checks. Local probes must not accidentally consume remote gateway credentials
+// from config when they are only checking the embedded/local gateway.
 function buildGatewayProbeCredentialPolicy(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
 }) {
+  const cfg = resolveGatewayProbeCredentialConfig(params);
   return {
-    config: params.cfg,
-    cfg: params.cfg,
+    config: cfg,
+    cfg,
     env: params.env,
     explicitAuth: params.explicitAuth,
     modeOverride: params.mode,
     mode: params.mode,
     remoteTokenFallback: "remote-only" as const,
+  };
+}
+
+export function resolveGatewayProbeCredentialConfig(params: {
+  cfg: OpenClawConfig;
+  mode: "local" | "remote";
+}): OpenClawConfig {
+  if (params.mode !== "local") {
+    return params.cfg;
+  }
+
+  const remote = params.cfg.gateway?.remote;
+  if (!remote || (remote.token === undefined && remote.password === undefined)) {
+    return params.cfg;
+  }
+
+  // Strip remote auth only for local probes; otherwise remote credentials can
+  // mask a missing local token and make the wrong gateway look healthy.
+  const remoteWithoutAuth = { ...remote };
+  delete remoteWithoutAuth.token;
+  delete remoteWithoutAuth.password;
+  return {
+    ...params.cfg,
+    gateway: {
+      ...params.cfg.gateway,
+      remote: remoteWithoutAuth,
+    },
   };
 }
 
@@ -49,6 +83,7 @@ function resolveGatewayProbeWarning(error: unknown): string | undefined {
   return buildUnresolvedProbeAuthWarning(error.path);
 }
 
+/** Resolves synchronous probe auth, throwing when configured secrets cannot be read. */
 export function resolveGatewayProbeAuth(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
@@ -58,6 +93,7 @@ export function resolveGatewayProbeAuth(params: {
   return resolveGatewayProbeCredentialsFromConfig(policy);
 }
 
+/** Resolves probe auth with async SecretRef support. */
 export async function resolveGatewayProbeAuthWithSecretInputs(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
@@ -65,17 +101,16 @@ export async function resolveGatewayProbeAuthWithSecretInputs(params: {
   explicitAuth?: ExplicitGatewayAuth;
 }): Promise<{ token?: string; password?: string }> {
   const policy = buildGatewayProbeCredentialPolicy(params);
-  return await import("./call.js").then(({ resolveGatewayCredentialsWithSecretInputs }) =>
-    resolveGatewayCredentialsWithSecretInputs({
-      config: policy.config,
-      env: policy.env,
-      explicitAuth: policy.explicitAuth,
-      modeOverride: policy.modeOverride,
-      remoteTokenFallback: policy.remoteTokenFallback,
-    }),
-  );
+  return await resolveGatewayCredentialsWithSecretInputs({
+    config: policy.config,
+    env: policy.env,
+    explicitAuth: policy.explicitAuth,
+    modeOverride: policy.modeOverride,
+    remoteTokenFallback: policy.remoteTokenFallback,
+  });
 }
 
+/** Resolves probe auth without throwing for unavailable SecretRefs, returning a warning. */
 export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
@@ -103,6 +138,7 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
   }
 }
 
+/** Synchronous safe probe auth wrapper for config-only credential paths. */
 export function resolveGatewayProbeAuthSafe(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";

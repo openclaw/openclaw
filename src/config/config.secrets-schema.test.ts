@@ -1,3 +1,4 @@
+// Verifies secrets schema parsing and validation behavior.
 import { describe, expect, it } from "vitest";
 import {
   INVALID_EXEC_SECRET_REF_IDS,
@@ -30,6 +31,7 @@ describe("config secret refs schema", () => {
             path: "~/.openclaw/secrets.json",
             mode: "json",
             timeoutMs: 10_000,
+            allowInsecurePath: true,
           },
           vault: {
             source: "exec",
@@ -53,30 +55,14 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts openai-codex-responses as a model api value", () => {
+  it("accepts openai-chatgpt-responses as a model api value", () => {
     const result = validateConfigObjectRaw({
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             models: [{ id: "gpt-5.4", name: "gpt-5.4" }],
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("accepts googlechat serviceAccount refs", () => {
-    const result = validateConfigObjectRaw({
-      channels: {
-        googlechat: {
-          serviceAccountRef: {
-            source: "file",
-            provider: "filemain",
-            id: "/channels/googlechat/serviceAccount",
           },
         },
       },

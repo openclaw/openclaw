@@ -1,4 +1,8 @@
-import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
+// Control UI view renders overview hints screen content.
+import {
+  ConnectErrorDetailCodes,
+  readConnectPairingRequiredMessage,
+} from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 const AUTH_REQUIRED_CODES = new Set<string>([
@@ -22,12 +26,53 @@ const AUTH_FAILURE_CODES = new Set<string>([
   ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH,
 ]);
 
+const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
+
 const INSECURE_CONTEXT_CODES = new Set<string>([
+  BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
   ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
   ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
 ]);
 
 type AuthHintKind = "required" | "failed";
+
+export type PairingHint =
+  | {
+      kind: "pairing-required";
+      requestId: string | null;
+    }
+  | {
+      kind: "scope-upgrade-pending" | "role-upgrade-pending" | "metadata-upgrade-pending";
+      requestId: string | null;
+    };
+
+export function resolvePairingHint(
+  connected: boolean,
+  lastError: string | null,
+  lastErrorCode?: string | null,
+): PairingHint | null {
+  if (connected || !lastError) {
+    return null;
+  }
+  const pairing = readConnectPairingRequiredMessage(lastError);
+  if (pairing) {
+    return {
+      kind:
+        pairing.reason === "scope-upgrade"
+          ? "scope-upgrade-pending"
+          : pairing.reason === "role-upgrade"
+            ? "role-upgrade-pending"
+            : pairing.reason === "metadata-upgrade"
+              ? "metadata-upgrade-pending"
+              : "pairing-required",
+      requestId: pairing.requestId ?? null,
+    };
+  }
+  if (lastErrorCode === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
+    return { kind: "pairing-required", requestId: null };
+  }
+  return null;
+}
 
 /** Whether the overview should show device-pairing guidance for this error. */
 export function shouldShowPairingHint(
@@ -35,13 +80,7 @@ export function shouldShowPairingHint(
   lastError: string | null,
   lastErrorCode?: string | null,
 ): boolean {
-  if (connected || !lastError) {
-    return false;
-  }
-  if (lastErrorCode === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
-    return true;
-  }
-  return normalizeLowercaseStringOrEmpty(lastError).includes("pairing required");
+  return resolvePairingHint(connected, lastError, lastErrorCode) !== null;
 }
 
 /**

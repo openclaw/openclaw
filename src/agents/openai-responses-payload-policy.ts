@@ -1,12 +1,20 @@
-import { readStringValue } from "../shared/string-coerce.js";
-import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
+/**
+ * OpenAI Responses payload policy.
+ * Classifies endpoint capabilities and applies store, prompt-cache,
+ * server-compaction, service-tier, and reasoning payload rules.
+ */
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { asBoolean } from "../utils/boolean.js";
+import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
   baseUrl?: unknown;
+  id?: unknown;
   provider?: unknown;
   contextWindow?: unknown;
-  compat?: { supportsStore?: boolean };
+  compat?: unknown;
 };
 
 type OpenAIResponsesPayloadPolicyOptions = {
@@ -16,7 +24,31 @@ type OpenAIResponsesPayloadPolicyOptions = {
   enableServerCompaction?: boolean;
 };
 
-export type OpenAIResponsesPayloadPolicy = {
+type OpenAIResponsesEndpointClass =
+  | "default"
+  | "anthropic-public"
+  | "cerebras-native"
+  | "chutes-native"
+  | "deepseek-native"
+  | "github-copilot-native"
+  | "groq-native"
+  | "mistral-public"
+  | "moonshot-native"
+  | "modelstudio-native"
+  | "openai-public"
+  | "openai"
+  | "opencode-native"
+  | "azure-openai"
+  | "openrouter"
+  | "xai-native"
+  | "zai-native"
+  | "google-generative-ai"
+  | "google-vertex"
+  | "local"
+  | "custom"
+  | "invalid";
+
+type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number;
   explicitStore: boolean | undefined;
@@ -26,21 +58,225 @@ export type OpenAIResponsesPayloadPolicy = {
   useServerCompaction: boolean;
 };
 
+type OpenAIResponsesPayloadCapabilities = {
+  allowsOpenAIServiceTier: boolean;
+  allowsResponsesStore: boolean;
+  shouldStripResponsesPromptCache: boolean;
+  supportsResponsesStoreField: boolean;
+  usesKnownNativeOpenAIRoute: boolean;
+};
+
 const OPENAI_RESPONSES_APIS = new Set([
   "openai-responses",
   "azure-openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
+  "openclaw-openai-responses-transport",
 ]);
+const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
+const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
+  "https://coding-intl.dashscope.aliyuncs.com/v1",
+  "https://coding.dashscope.aliyuncs.com/v1",
+  "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+]);
+const MOONSHOT_NATIVE_BASE_URLS = new Set([
+  "https://api.moonshot.ai/v1",
+  "https://api.moonshot.cn/v1",
+]);
+
+function normalizeLowercaseString(value: unknown): string | undefined {
+  const stringValue = readStringValue(value)?.trim().toLowerCase();
+  return stringValue ? stringValue : undefined;
+}
+
+function normalizeComparableBaseUrl(value: unknown): string | undefined {
+  const trimmed = readStringValue(value)?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsedValue = /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
+    ? `https://${trimmed}`
+    : trimmed;
+  try {
+    const url = new URL(parsedValue);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return undefined;
+    }
+    url.hash = "";
+    url.search = "";
+    return url.toString().replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveUrlHostname(value: unknown): string | undefined {
+  const trimmed = readStringValue(value)?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return new URL(trimmed).hostname.toLowerCase();
+  } catch {
+    try {
+      return new URL(`https://${trimmed}`).hostname.toLowerCase();
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function hostMatchesSuffix(host: string, suffix: string): boolean {
+  return suffix.startsWith(".") || suffix.startsWith("-")
+    ? host.endsWith(suffix)
+    : host === suffix || host.endsWith(`.${suffix}`);
+}
+
+function isLocalEndpointHost(host: string): boolean {
+  return (
+    LOCAL_ENDPOINT_HOSTS.has(host) ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal")
+  );
+}
+
+function resolveBundledOpenAIResponsesEndpointClass(
+  baseUrl: unknown,
+): OpenAIResponsesEndpointClass {
+  const trimmed = readStringValue(baseUrl)?.trim();
+  if (!trimmed) {
+    return "default";
+  }
+  const host = resolveUrlHostname(trimmed);
+  if (!host) {
+    return "invalid";
+  }
+  const comparableBaseUrl = normalizeComparableBaseUrl(trimmed);
+
+  switch (host) {
+    case "api.anthropic.com":
+      return "anthropic-public";
+    case "api.cerebras.ai":
+      return "cerebras-native";
+    case "llm.chutes.ai":
+      return "chutes-native";
+    case "api.deepseek.com":
+      return "deepseek-native";
+    case "api.groq.com":
+      return "groq-native";
+    case "api.mistral.ai":
+      return "mistral-public";
+    case "api.openai.com":
+      return "openai-public";
+    case "chatgpt.com":
+      return "openai";
+    case "generativelanguage.googleapis.com":
+      return "google-generative-ai";
+    case "aiplatform.googleapis.com":
+      return "google-vertex";
+    case "api.x.ai":
+      return "xai-native";
+    case "api.z.ai":
+      return "zai-native";
+  }
+
+  if (hostMatchesSuffix(host, ".githubcopilot.com")) {
+    return "github-copilot-native";
+  }
+  if (hostMatchesSuffix(host, ".openai.azure.com")) {
+    return "azure-openai";
+  }
+  if (hostMatchesSuffix(host, "openrouter.ai")) {
+    return "openrouter";
+  }
+  if (hostMatchesSuffix(host, "opencode.ai")) {
+    return "opencode-native";
+  }
+  if (hostMatchesSuffix(host, "-aiplatform.googleapis.com")) {
+    return "google-vertex";
+  }
+  if (comparableBaseUrl && MOONSHOT_NATIVE_BASE_URLS.has(comparableBaseUrl)) {
+    return "moonshot-native";
+  }
+  if (comparableBaseUrl && MODELSTUDIO_NATIVE_BASE_URLS.has(comparableBaseUrl)) {
+    return "modelstudio-native";
+  }
+  if (isLocalEndpointHost(host)) {
+    return "local";
+  }
+  return "custom";
+}
+
+function isOpenAIResponsesApi(api: string | undefined): boolean {
+  return api !== undefined && OPENAI_RESPONSES_APIS.has(api);
+}
+
+function readCompatPayloadBoolean(
+  compat: unknown,
+  key: "supportsPromptCacheKey" | "supportsStore",
+): boolean | undefined {
+  if (!compat || typeof compat !== "object") {
+    return undefined;
+  }
+  return asBoolean((compat as Record<string, unknown>)[key]);
+}
+
+function resolveOpenAIResponsesPayloadCapabilities(
+  model: OpenAIResponsesPayloadModel,
+): OpenAIResponsesPayloadCapabilities {
+  const provider = normalizeLowercaseString(model.provider);
+  const api = normalizeLowercaseString(model.api);
+  const isOpenAIProvider = provider === "openai";
+  const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
+  const isResponsesApi = isOpenAIResponsesApi(api);
+  const usesConfiguredBaseUrl = endpointClass !== "default";
+  const usesKnownNativeOpenAIEndpoint =
+    endpointClass === "openai-public" ||
+    endpointClass === "openai" ||
+    endpointClass === "azure-openai";
+  const usesKnownNativeOpenAIRoute =
+    endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint;
+  const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
+  const promptCacheKeySupport = readCompatPayloadBoolean(model.compat, "supportsPromptCacheKey");
+  const shouldStripResponsesPromptCache =
+    promptCacheKeySupport === true
+      ? false
+      : promptCacheKeySupport === false
+        ? isResponsesApi
+        : isResponsesApi && usesExplicitProxyLikeEndpoint;
+  const supportsResponsesStoreField =
+    readCompatPayloadBoolean(model.compat, "supportsStore") !== false && isResponsesApi;
+
+  return {
+    allowsOpenAIServiceTier:
+      (provider === "openai" &&
+        (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
+        endpointClass === "openai-public") ||
+      (isOpenAIProvider &&
+        (api === "openai-chatgpt-responses" ||
+          api === "openai-responses" ||
+          api === "openclaw-openai-responses-transport") &&
+        endpointClass === "openai"),
+    allowsResponsesStore:
+      supportsResponsesStoreField &&
+      api !== "openai-chatgpt-responses" &&
+      provider !== undefined &&
+      OPENAI_RESPONSES_PROVIDERS.has(provider) &&
+      usesKnownNativeOpenAIEndpoint,
+    shouldStripResponsesPromptCache,
+    supportsResponsesStoreField,
+    usesKnownNativeOpenAIRoute,
+  };
+}
 
 function parsePositiveInteger(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.floor(value);
   }
   if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
+    return parseStrictPositiveInteger(value);
   }
   return undefined;
 }
@@ -81,26 +317,20 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
     return;
   }
 
-  // Proxy/OpenAI-compat routes can reject `reasoning.effort: "none"`. Treat the
-  // disabled effort as "reasoning omitted" instead of forwarding an unsupported value.
+  // Some Responses models and OpenAI-compatible proxies reject
+  // `reasoning.effort: "none"`. Treat unsupported disabled effort as omitted.
   const reasoningObj = reasoning as Record<string, unknown>;
   if (reasoningObj.effort === "none") {
     delete payloadObj.reasoning;
   }
 }
 
+/** Resolve payload mutation policy for one OpenAI Responses-style model endpoint. */
 export function resolveOpenAIResponsesPayloadPolicy(
   model: OpenAIResponsesPayloadModel,
   options: OpenAIResponsesPayloadPolicyOptions = {},
 ): OpenAIResponsesPayloadPolicy {
-  const capabilities = resolveProviderRequestPolicyConfig({
-    provider: readStringValue(model.provider),
-    api: readStringValue(model.api),
-    baseUrl: readStringValue(model.baseUrl),
-    compat: model.compat,
-    capability: "llm",
-    transport: "stream",
-  }).capabilities;
+  const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const storeMode = options.storeMode ?? "provider-policy";
   const explicitStore =
     storeMode === "preserve"
@@ -112,7 +342,10 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : capabilities.allowsResponsesStore
           ? true
           : undefined;
-  const isResponsesApi = typeof model.api === "string" && OPENAI_RESPONSES_APIS.has(model.api);
+  const isResponsesApi = isOpenAIResponsesApi(normalizeLowercaseString(model.api));
+  const shouldStripDisabledReasoningPayload =
+    isResponsesApi &&
+    (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
@@ -120,11 +353,13 @@ export function resolveOpenAIResponsesPayloadPolicy(
       parsePositiveInteger(options.extraParams?.responsesCompactThreshold) ??
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
-    shouldStripDisabledReasoningPayload: isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute,
+    shouldStripDisabledReasoningPayload,
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:
-      explicitStore !== true && model.compat?.supportsStore === false && isResponsesApi,
+      explicitStore !== true &&
+      readCompatPayloadBoolean(model.compat, "supportsStore") === false &&
+      isResponsesApi,
     useServerCompaction:
       options.enableServerCompaction === true &&
       shouldEnableOpenAIResponsesServerCompaction(
@@ -135,6 +370,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
   };
 }
 
+/** Mutate a Responses request payload according to the resolved endpoint policy. */
 export function applyOpenAIResponsesPayloadPolicy(
   payloadObj: Record<string, unknown>,
   policy: OpenAIResponsesPayloadPolicy,

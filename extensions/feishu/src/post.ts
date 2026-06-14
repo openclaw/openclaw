@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Feishu plugin module implements post behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isRecord } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
@@ -166,6 +167,9 @@ function renderElement(
     }
     case "emotion":
       return renderEmotionElement(element);
+    case "md":
+    case "lark_md":
+      return toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
     case "br":
       return "\n";
     case "hr":

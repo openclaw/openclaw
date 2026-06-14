@@ -1,3 +1,6 @@
+/**
+ * Tests channel pairing helpers and pairing reply behavior.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -62,7 +65,7 @@ describe("createChannelPairingChallengeIssuer", () => {
     const upsertPairingRequest = vi.fn(async () => ({ code: "654321", created: true }));
     const { replies, sendPairingReply } = createReplyCollector();
     const issueChallenge = createChannelPairingChallengeIssuer({
-      channel: "signal",
+      channel: "quietchat",
       upsertPairingRequest,
     });
 
