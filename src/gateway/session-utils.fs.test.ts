@@ -1927,6 +1927,36 @@ describe("resolveSessionTranscriptCandidates safety", () => {
         ).not.toContain(path.resolve(outsidePath));
       }
     });
+
+    test("excludes symlink under legacy root that resolves outside", () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-symlink-escape-"));
+      try {
+        const legacyRoot = path.join(tmpDir, ".openclaw", "sessions");
+        fs.mkdirSync(legacyRoot, { recursive: true });
+
+        // Create a target file outside the legacy root
+        const outsideTarget = path.join(tmpDir, "outside", "target.jsonl");
+        fs.mkdirSync(path.dirname(outsideTarget), { recursive: true });
+        fs.writeFileSync(outsideTarget, '{"test": true}\n', "utf-8");
+
+        // Create a symlink under the legacy root pointing outside
+        const symlinkPath = path.join(legacyRoot, "22222222-2222-4222-8222-222222222222.jsonl");
+        fs.symlinkSync(outsideTarget, symlinkPath);
+
+        vi.stubEnv("OPENCLAW_HOME", tmpDir);
+        const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+        const sessionId = "11111111-1111-4111-8111-111111111111";
+
+        const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, symlinkPath);
+
+        expect(
+          candidates.map((c) => path.resolve(c)),
+          "symlink-to-outside-target should be excluded",
+        ).not.toContain(path.resolve(symlinkPath));
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 });
 

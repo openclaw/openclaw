@@ -102,7 +102,7 @@ export function resolveSessionTranscriptCandidates(
     if (!sessionFile) {
       return;
     }
-    const resolved = path.resolve(sessionFile);
+    const resolved = canonicalizePathForComparison(sessionFile);
     const relative = path.relative(canonicalLegacyDir, resolved);
     if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
       candidates.push(resolved);
