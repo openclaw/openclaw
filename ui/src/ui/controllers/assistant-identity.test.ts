@@ -96,4 +96,63 @@ describe("setAssistantAvatarOverride", () => {
     expect(state.assistantAvatarReason).toBeNull();
     expect(loadLocalAssistantIdentity().avatar).toBeNull();
   });
+
+  it("scopes local avatar overrides per agent", () => {
+    const mainState: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAgentId: "main",
+    };
+    const workerState: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAgentId: "worker",
+    };
+
+    setAssistantAvatarOverride(mainState, "data:image/png;base64,main");
+    setAssistantAvatarOverride(workerState, "data:image/png;base64,worker");
+
+    expect(loadLocalAssistantIdentity("main").avatar).toBe("data:image/png;base64,main");
+    expect(loadLocalAssistantIdentity("worker").avatar).toBe("data:image/png;base64,worker");
+
+    setAssistantAvatarOverride(mainState, null);
+
+    expect(loadLocalAssistantIdentity("main").avatar).toBeNull();
+    expect(loadLocalAssistantIdentity("worker").avatar).toBe("data:image/png;base64,worker");
+  });
+
+  it("applies the local override only for the matching agent on load", async () => {
+    const mainState: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAgentId: "main",
+    };
+    const workerState: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAgentId: "worker",
+    };
+    setAssistantAvatarOverride(mainState, "data:image/png;base64,main");
+    setAssistantAvatarOverride(workerState, "data:image/png;base64,worker");
+
+    const request = vi.fn().mockResolvedValue({
+      agentId: "main",
+      name: "Main",
+      avatar: "server-main.png",
+    });
+    const state: Parameters<typeof loadAssistantIdentity>[0] = {
+      client: { request } as never,
+      connected: true,
+      sessionKey: "agent:main:main",
+      assistantName: "Main",
+      assistantAvatar: null,
+      assistantAgentId: "main",
+    };
+
+    await loadAssistantIdentity(state);
+    expect(state.assistantAvatar).toBe("data:image/png;base64,main");
+
+    request.mockResolvedValue({
+      agentId: "worker",
+      name: "Worker",
+      avatar: "server-worker.png",
+    });
+    state.sessionKey = "agent:worker:main";
+    state.assistantAgentId = "worker";
+
+    await loadAssistantIdentity(state);
+    expect(state.assistantAvatar).toBe("data:image/png;base64,worker");
+  });
 });
