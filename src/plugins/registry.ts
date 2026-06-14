@@ -1479,34 +1479,83 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       }
       return normalized;
     };
-    const parentPath = (opts?.parentPath ?? []).map((segment) =>
-      normalizeCommandRoot(segment, "command"),
-    );
-    if (parentPath.some((segment) => segment === null)) {
+    const pushInvalidCliMetadataDiagnostic = (source: "command" | "descriptor", error: unknown) => {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `invalid cli ${source} metadata: ${formatErrorMessage(error)}`,
+      });
+    };
+    const normalizeCommandRoots = (
+      values: readonly string[],
+      source: "command" | "descriptor",
+      options?: { invalidatesRegistration?: boolean },
+    ) => {
+      const roots: string[] = [];
+      let invalid = false;
+      let index = 0;
+      while (index < values.length) {
+        let value: string;
+        try {
+          value = values[index] as string;
+        } catch (error) {
+          pushInvalidCliMetadataDiagnostic(source, error);
+          invalid ||= options?.invalidatesRegistration === true;
+          index += 1;
+          continue;
+        }
+        if (typeof value !== "string") {
+          pushInvalidCliMetadataDiagnostic(source, new Error("expected string"));
+          invalid ||= options?.invalidatesRegistration === true;
+          index += 1;
+          continue;
+        }
+        const normalized = normalizeCommandRoot(value, source);
+        if (normalized) {
+          roots.push(normalized);
+        } else {
+          invalid = true;
+        }
+        index += 1;
+      }
+      return { invalid, roots };
+    };
+    const parentPathResult = normalizeCommandRoots(opts?.parentPath ?? [], "command", {
+      invalidatesRegistration: true,
+    });
+    if (parentPathResult.invalid) {
       return;
     }
-    const normalizedParentPath = parentPath as string[];
-    const descriptors = (opts?.descriptors ?? [])
-      .map((descriptor) => {
+    const normalizedParentPath = parentPathResult.roots;
+    const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
+    const rawDescriptors = opts?.descriptors ?? [];
+    let descriptorIndex = 0;
+    while (descriptorIndex < rawDescriptors.length) {
+      try {
+        const descriptor = rawDescriptors[descriptorIndex];
+        if (!descriptor) {
+          descriptorIndex += 1;
+          continue;
+        }
         const name = normalizeCommandRoot(descriptor.name, "descriptor");
         const description = sanitizeCommandDescriptorDescription(descriptor.description);
-        return name && description
-          ? {
-              name,
-              description,
-              hasSubcommands: descriptor.hasSubcommands,
-            }
-          : null;
-      })
-      .filter(
-        (descriptor): descriptor is OpenClawPluginCliCommandDescriptor => descriptor !== null,
-      );
+        if (name && description) {
+          descriptors.push({
+            name,
+            description,
+            hasSubcommands: descriptor.hasSubcommands,
+          });
+        }
+      } catch (error) {
+        pushInvalidCliMetadataDiagnostic("descriptor", error);
+      }
+      descriptorIndex += 1;
+    }
     const commands = [
-      ...(opts?.commands ?? []),
+      ...normalizeCommandRoots(opts?.commands ?? [], "command").roots,
       ...descriptors.map((descriptor) => descriptor.name),
-    ]
-      .map((cmd) => normalizeCommandRoot(cmd, "command"))
-      .filter((command): command is string => command !== null);
+    ];
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",
