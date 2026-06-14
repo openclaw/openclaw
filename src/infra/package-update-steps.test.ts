@@ -1,4 +1,5 @@
 // Covers package update step orchestration.
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -238,6 +239,54 @@ describe("runGlobalPackageUpdateSteps", () => {
             await expect(fs.readFile(outsideIndexPath, "utf8")).resolves.toBe(
               "export const outside = true;\n",
             );
+          } finally {
+            __setFsSafeTestHooksForTest(undefined);
+          }
+        },
+      );
+    },
+  );
+
+  it("does not classify baseline files replaced by directories as deletions", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-local-capture-non-file-" },
+      async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.rm(indexPath);
+        await fs.mkdir(indexPath);
+
+        await expect(captureLocalPackageOverrides({ packageRoot })).rejects.toMatchObject({
+          code: "not-file",
+        });
+        expect((await fs.stat(indexPath)).isDirectory()).toBe(true);
+      },
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "opens override capture reads nonblocking so unsupported entries cannot stall capture",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-capture-nonblocking-" },
+        async (base) => {
+          const packageRoot = path.join(base, "package");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+          const openFlags: number[] = [];
+          __setFsSafeTestHooksForTest({
+            beforeOpen: (_filePath, flags) => {
+              openFlags.push(flags);
+            },
+          });
+
+          try {
+            await expect(captureLocalPackageOverrides({ packageRoot })).resolves.not.toBeNull();
+            expect(openFlags.length).toBeGreaterThan(0);
+            expect(openFlags.every((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
           } finally {
             __setFsSafeTestHooksForTest(undefined);
           }
@@ -1535,7 +1584,7 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
-  it("reports a conflict when an updated file blocks a nested added override", async () => {
+  it("rejects a baseline file replaced by a directory containing a nested override", async () => {
     await withTempDir({ prefix: "openclaw-package-update-local-added-enotdir-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
@@ -1620,17 +1669,15 @@ describe("runGlobalPackageUpdateSteps", () => {
           timeoutMs: 1000,
         });
 
-        expect(result.failedStep).toBeNull();
-        expect(result.localOverrides?.status).toBe("conflict");
-        expect(result.localOverrides?.applied).toBe(0);
-        expect(result.localOverrides?.conflicts).toEqual(
-          expect.arrayContaining([
-            { path: "dist/feature", reason: "target-changed" },
-            { path: "dist/Feature/local.js", reason: "target-exists" },
-          ]),
-        );
-        await expect(fs.readFile(featurePath, "utf8")).resolves.toBe(
-          "export const baseline = true;\n",
+        expect(runStep).not.toHaveBeenCalled();
+        expect(result.failedStep).toMatchObject({
+          name: "local overrides",
+          exitCode: 1,
+          stderrTail: expect.stringContaining("not a file"),
+        });
+        expect(result.localOverrides).toBeUndefined();
+        await expect(fs.readFile(localFeaturePath, "utf8")).resolves.toBe(
+          "export const local = true;\n",
         );
       } finally {
         lstatSpy.mockRestore();

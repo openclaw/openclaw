@@ -743,6 +743,7 @@ export async function captureLocalPackageOverrides(params: {
   }
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
+    nonBlockingRead: true,
     symlinks: "reject",
   });
 
@@ -750,6 +751,9 @@ export async function captureLocalPackageOverrides(params: {
     includeSourceMaps: true,
   });
   const actualSet = new Set(actualFiles);
+  const actualCaseFoldedSet = new Set(
+    actualFiles.map((relativePath) => relativePath.toLocaleLowerCase("en-US")),
+  );
   const changes: LocalPackageOverrideChange[] = [];
   let recoveryDir: string | null = null;
   const ensureRecoveryDir = async () => {
@@ -766,16 +770,29 @@ export async function captureLocalPackageOverrides(params: {
     const baselineSet = new Set(baseline.map((entry) => entry.path));
     for (const entry of baseline) {
       resolveSafePackagePath(params.packageRoot, entry.path);
+      let current;
+      try {
+        current = await packageFs.read(entry.path, {
+          hardlinks: "allow",
+          maxBytes: Number.POSITIVE_INFINITY,
+          symlinks: "reject",
+        });
+      } catch (error) {
+        if (!actualSet.has(entry.path) && isMissingPathError(error)) {
+          await ensureRecoveryDir();
+          changes.push({ kind: "deleted", path: entry.path, baseline: entry });
+          continue;
+        }
+        throw error;
+      }
       if (!actualSet.has(entry.path)) {
+        if (!actualCaseFoldedSet.has(entry.path.toLocaleLowerCase("en-US"))) {
+          throw new Error(`package dist inventory changed during override capture: ${entry.path}`);
+        }
         await ensureRecoveryDir();
         changes.push({ kind: "deleted", path: entry.path, baseline: entry });
         continue;
       }
-      const current = await packageFs.read(entry.path, {
-        hardlinks: "allow",
-        maxBytes: Number.POSITIVE_INFINITY,
-        symlinks: "reject",
-      });
       const currentMode = normalizeFileMode(current.stat.mode);
       const currentSha = createHash("sha256").update(current.buffer).digest("hex");
       if (
