@@ -81,6 +81,16 @@ export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string 
     .join(" ");
 }
 
+export function toTrustedMediaOnlyPayload(payload: ReplyPayload): ReplyPayload {
+  const parts = resolveSendableOutboundReplyParts(payload);
+  return {
+    mediaUrls: parts.mediaUrls,
+    mediaUrl: parts.mediaUrls[0],
+    audioAsVoice: payload.audioAsVoice || undefined,
+    trustedLocalMedia: true,
+  };
+}
+
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<
     Awaited<ReturnType<typeof ttsRuntimeLoader.load>>["maybeApplyTtsToPayload"]

@@ -19,6 +19,7 @@ import {
   type InternalReplyResolverOptions,
   createReplyDispatchEvent,
 } from "./dispatch-from-config.events.js";
+import { toTrustedMediaOnlyPayload } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
@@ -385,6 +386,68 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     // Buffered commentary preceded this block; deliver it first.
                     await flushPendingCommentaryProgress();
                     if (state.suppressDelivery) {
+                      if (state.sendPolicyDenied) {
+                        return;
+                      }
+                      // message_tool_only suppresses ordinary source text, but
+                      // trusted block TTS is new local media and must still reach
+                      // the channel as media-only content.
+                      if (
+                        payload.isReasoning === true ||
+                        payload.isCommentary === true ||
+                        isReplyPayloadStatusNotice(payload)
+                      ) {
+                        return;
+                      }
+                      const deliverTrustedMediaOnly = async (
+                        candidatePayload: ReplyPayload,
+                      ): Promise<boolean> => {
+                        const normalizedPayload =
+                          await normalizeReplyMediaPayload(candidatePayload);
+                        if (isDispatchOperationAborted()) {
+                          return true;
+                        }
+                        const normalizedParts =
+                          resolveSendableOutboundReplyParts(normalizedPayload);
+                        if (
+                          normalizedPayload.trustedLocalMedia !== true ||
+                          !normalizedParts.hasMedia
+                        ) {
+                          return false;
+                        }
+                        const mediaOnlyPayload = toTrustedMediaOnlyPayload(normalizedPayload);
+                        if (shouldRouteToOriginating) {
+                          await sendPayloadAsync(
+                            mediaOnlyPayload,
+                            context?.abortSignal,
+                            false,
+                            "block",
+                          );
+                        } else {
+                          markInboundDedupeReplayUnsafe();
+                          const delivered = dispatcher.sendBlockReply(mediaOnlyPayload);
+                          if (delivered) {
+                            state.hasPendingDirectBlockReplyDelivery = true;
+                          }
+                        }
+                        return true;
+                      };
+                      if (await deliverTrustedMediaOnly(payload)) {
+                        return;
+                      }
+                      if (!payload.text?.trim()) {
+                        return;
+                      }
+                      const ttsPayload = await maybeApplyTtsWithFinalizationLease({
+                        payload,
+                        cfg,
+                        channel: deliveryChannel,
+                        kind: "block",
+                        ttsAuto: sessionTtsAuto,
+                        agentId: sessionAgentId,
+                        accountId: replyRoute.accountId,
+                      });
+                      await deliverTrustedMediaOnly(ttsPayload);
                       return;
                     }
                     // Durable reasoning is a channel-owned lane; generic channels

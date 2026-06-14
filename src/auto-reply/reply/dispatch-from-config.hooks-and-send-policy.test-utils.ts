@@ -1400,6 +1400,43 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
+  it("suppresses trusted local block media when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    let capturedOnBlockReply:
+      | ((payload: ReplyPayload, context?: unknown) => Promise<void>)
+      | undefined;
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        capturedOnBlockReply = opts?.onBlockReply as
+          | ((payload: ReplyPayload, context?: unknown) => Promise<void>)
+          | undefined;
+        return [] as ReplyPayload[];
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    await requireBlockReplyHandler(capturedOnBlockReply)({
+      mediaUrl: "https://example.com/tts.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+  });
+
   it("delivers replies normally when sendPolicy is allow", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
