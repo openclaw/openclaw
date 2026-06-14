@@ -1471,6 +1471,57 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("reports the live version when staged override recapture fails before swap", async () => {
+    await withTempDir(
+      { prefix: "openclaw-package-update-staged-recapture-fail-" },
+      async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        await writePackageRoot(packageRoot, "1.0.0");
+
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }) => {
+            const prefixIndex = argv.indexOf("--prefix");
+            const stagePrefix = argv[prefixIndex + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              "2.0.0",
+            );
+            await fs.writeFile(
+              path.join(packageRoot, "dist", "postinstall-content-inventory.json"),
+              "{ invalid json\n",
+              "utf8",
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          timeoutMs: 1000,
+        });
+
+        expect(result.failedStep?.name).toBe("local overrides");
+        expect(result.afterVersion).toBe("1.0.0");
+        expect(result.steps.map((step) => step.name)).not.toContain("global install swap");
+        await expect(
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain('"version":"1.0.0"');
+      },
+    );
+  });
+
   it("preserves local overrides without overwriting updated dist files", async () => {
     await withTempDir({ prefix: "openclaw-package-update-local-conflict-" }, async (base) => {
       const prefix = path.join(base, "prefix");
@@ -3848,6 +3899,67 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "restores updated deletion modes when a later override fails",
+    async () => {
+      await withTempDir({ prefix: "openclaw-package-update-local-delete-mode-" }, async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        const helperPath = path.join(packageRoot, "dist", "helper.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.writeFile(helperPath, "export const helper = true;\n", "utf8");
+        await writePackageDistInventory(packageRoot);
+        await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+        await fs.rm(helperPath);
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await writePackageRoot(packageRoot, "2.0.0");
+        await fs.writeFile(helperPath, "export const helper = true;\n", "utf8");
+        await writePackageDistInventory(packageRoot);
+        await fs.chmod(helperPath, 0o600);
+
+        let previousMoveCount = 0;
+        __setFsSafeTestHooksForTest({
+          beforeRootFallbackMutation: (operation, targetPath) => {
+            if (
+              operation === "move" &&
+              path.basename(targetPath).startsWith(".openclaw-override-previous-")
+            ) {
+              previousMoveCount += 1;
+              if (previousMoveCount === 2) {
+                throw createFsError("EACCES", "later override failed");
+              }
+            }
+          },
+        });
+
+        try {
+          const result = await applyLocalPackageOverrides({
+            packageRoot,
+            plan,
+            reapply: true,
+          });
+
+          expect(previousMoveCount).toBe(2);
+          expect(result.status).toBe("error");
+          expect(result.applied).toBe(0);
+          expect(result.conflicts).toEqual([
+            { path: "dist/helper.js", reason: "apply-failed" },
+            { path: "dist/index.js", reason: "apply-failed" },
+          ]);
+          await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+          await expect(fs.readFile(helperPath, "utf8")).resolves.toBe(
+            "export const helper = true;\n",
+          );
+          expect((await fs.stat(helperPath)).mode & 0o777).toBe(0o600);
+        } finally {
+          __setFsSafeTestHooksForTest(undefined);
+        }
+      });
+    },
+  );
+
   it("rolls back published replacements when post-publish cleanup fails", async () => {
     await withTempDir({ prefix: "openclaw-package-update-local-cleanup-fail-" }, async (base) => {
       const packageRoot = path.join(base, "package");
@@ -3858,6 +3970,9 @@ describe("runGlobalPackageUpdateSteps", () => {
       const plan = await captureLocalPackageOverrides({ packageRoot });
       expect(plan).not.toBeNull();
       await writePackageRoot(packageRoot, "2.0.0");
+      if (process.platform !== "win32") {
+        await fs.chmod(indexPath, 0o600);
+      }
 
       let cleanupFailed = false;
       __setFsSafeTestHooksForTest({
@@ -3885,6 +4000,9 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(result.applied).toBe(0);
         expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "apply-failed" }]);
         await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+        if (process.platform !== "win32") {
+          expect((await fs.stat(indexPath)).mode & 0o777).toBe(0o600);
+        }
         expect(
           (await fs.readdir(path.dirname(indexPath))).filter((entry) =>
             entry.startsWith(".openclaw-override-"),

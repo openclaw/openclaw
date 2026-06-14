@@ -870,6 +870,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           : ({ status: "captured", plan: null } satisfies LocalPackageOverridesCaptureResult);
         if (capturedLocalOverrides.status === "error") {
           steps.push(capturedLocalOverrides.failedStep);
+          afterVersion = await readPackageVersionIfPresent(livePackageRoot);
         } else {
           const swapStep = await swapStagedNpmInstall({
             stage: stagedInstall,

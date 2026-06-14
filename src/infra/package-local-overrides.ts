@@ -476,9 +476,10 @@ async function replaceLocalOverrideTarget(params: {
   mode?: number;
   expected?: PackageDistContentInventoryEntry;
   backupPath?: string;
-  onCommitted?: (cleanupPaths: string[]) => void;
+  onCommitted?: (cleanupPaths: string[], backupMode?: number) => void;
 }): Promise<string[]> {
   const temporaryPath = createLocalOverrideMutationPath(params.relativePath, "next");
+  let backupMode: number | undefined;
   let backupWritten = false;
   let committed = false;
   let movedPath: string | undefined;
@@ -510,6 +511,7 @@ async function replaceLocalOverrideTarget(params: {
         expected: params.expected,
       });
       movedPath = moved.movedPath;
+      backupMode = moved.mode;
       await writeRollbackBackup({
         backupPath: params.backupPath,
         content: moved.content,
@@ -524,7 +526,7 @@ async function replaceLocalOverrideTarget(params: {
       relativePath: params.relativePath,
       onPublished: () => {
         committed = true;
-        params.onCommitted?.(cleanupPaths);
+        params.onCommitted?.(cleanupPaths, backupMode);
       },
     });
     return cleanupPaths;
@@ -551,7 +553,7 @@ async function deleteLocalOverrideTarget(params: {
   relativePath: string;
   expected: PackageDistContentInventoryEntry;
   backupPath: string;
-}): Promise<void> {
+}): Promise<number> {
   const moved = await moveExpectedLocalOverrideTarget({
     packageFs: params.packageFs,
     relativePath: params.relativePath,
@@ -566,6 +568,7 @@ async function deleteLocalOverrideTarget(params: {
     });
     backupWritten = true;
     await params.packageFs.remove(moved.movedPath);
+    return moved.mode;
   } catch (error) {
     await throwAfterRestoringMovedLocalOverrideTarget({
       packageFs: params.packageFs,
@@ -1173,12 +1176,13 @@ export async function applyLocalPackageOverrides(params: {
         if (!change.baseline) {
           throw new Error(`missing local override baseline for ${change.path}`);
         }
-        await deleteLocalOverrideTarget({
+        const backupMode = await deleteLocalOverrideTarget({
           packageFs,
           relativePath: change.path,
           expected: change.baseline,
           backupPath,
         });
+        rollbackEntries.push({ path: change.path, backupPath, backupMode });
       } else {
         if (!change.savedPath) {
           throw new Error(`missing saved override payload for ${change.path}`);
@@ -1195,14 +1199,12 @@ export async function applyLocalPackageOverrides(params: {
           mode: change.mode,
           expected: change.kind === "modified" ? change.baseline : undefined,
           backupPath: change.kind === "modified" ? backupPath : undefined,
-          onCommitted: (committedCleanupPaths) => {
+          onCommitted: (committedCleanupPaths, backupMode) => {
             rollbackEntries.push({
               path: change.path,
               applied: appliedEntry,
               cleanupPaths: committedCleanupPaths,
-              ...(change.kind === "modified"
-                ? { backupPath, backupMode: change.baseline?.mode }
-                : {}),
+              ...(change.kind === "modified" ? { backupPath, backupMode } : {}),
             });
           },
         });
@@ -1210,9 +1212,6 @@ export async function applyLocalPackageOverrides(params: {
           await removeLocalOverrideCleanupPath(packageFs, cleanupPaths[0]);
           cleanupPaths.shift();
         }
-      }
-      if (change.kind === "deleted") {
-        rollbackEntries.push({ path: change.path, backupPath, backupMode: change.baseline?.mode });
       }
       applied += 1;
     }
