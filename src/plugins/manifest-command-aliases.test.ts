@@ -57,6 +57,72 @@ describe("manifest command aliases", () => {
     });
   });
 
+  it("keeps healthy command aliases after unreadable plugin metadata", () => {
+    const registry = {
+      plugins: [
+        {
+          get id() {
+            throw new Error("command alias plugin id getter exploded");
+          },
+          commandAliases: [{ name: "broken" }],
+        },
+        {
+          id: "healthy",
+          commandAliases: [{ name: "healthy-command" }],
+        },
+      ],
+    } as never;
+
+    expect(
+      resolveManifestCommandAliasOwnerInRegistry({ command: "healthy-command", registry }),
+    ).toEqual({
+      name: "healthy-command",
+      pluginId: "healthy",
+    });
+  });
+
+  it("does not drop command aliases when unrelated tool metadata is unreadable", () => {
+    const registry = {
+      plugins: [
+        {
+          id: "healthy",
+          commandAliases: [{ name: "healthy-command" }],
+          get contracts() {
+            throw new Error("unrelated command alias contracts getter exploded");
+          },
+        },
+      ],
+    } as never;
+
+    expect(
+      resolveManifestCommandAliasOwnerInRegistry({ command: "healthy-command", registry }),
+    ).toEqual({
+      name: "healthy-command",
+      pluginId: "healthy",
+    });
+  });
+
+  it("does not let aliases shadow readable plugin ids with unreadable alias metadata", () => {
+    const registry = {
+      plugins: [
+        {
+          id: "memory",
+          get commandAliases() {
+            throw new Error("same id plugin command aliases getter exploded");
+          },
+        },
+        {
+          id: "memory-core",
+          commandAliases: [{ name: "memory" }],
+        },
+      ],
+    } as never;
+
+    expect(resolveManifestCommandAliasOwnerInRegistry({ command: "memory", registry })).toBe(
+      undefined,
+    );
+  });
+
   it("resolves agent tool owners from contracts.tools", () => {
     const registry = {
       plugins: [
@@ -83,5 +149,46 @@ describe("manifest command aliases", () => {
       resolveManifestToolOwnerInRegistry({ toolName: "missing_tool", registry }),
     ).toBeUndefined();
     expect(resolveManifestToolOwnerInRegistry({ toolName: "", registry })).toBeUndefined();
+  });
+
+  it("keeps healthy tool owners after unreadable plugin metadata", () => {
+    const registry = {
+      plugins: [
+        {
+          id: "broken",
+          get contracts() {
+            throw new Error("tool owner plugin contracts getter exploded");
+          },
+        },
+        {
+          id: "healthy",
+          contracts: { tools: ["healthy_tool"] },
+        },
+      ],
+    } as never;
+
+    expect(resolveManifestToolOwnerInRegistry({ toolName: "healthy_tool", registry })).toEqual({
+      toolName: "healthy_tool",
+      pluginId: "healthy",
+    });
+  });
+
+  it("does not drop tool owners when unrelated command alias metadata is unreadable", () => {
+    const registry = {
+      plugins: [
+        {
+          id: "healthy",
+          contracts: { tools: ["healthy_tool"] },
+          get commandAliases() {
+            throw new Error("unrelated tool owner command aliases getter exploded");
+          },
+        },
+      ],
+    } as never;
+
+    expect(resolveManifestToolOwnerInRegistry({ toolName: "healthy_tool", registry })).toEqual({
+      toolName: "healthy_tool",
+      pluginId: "healthy",
+    });
   });
 });
