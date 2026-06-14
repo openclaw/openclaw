@@ -409,8 +409,8 @@ describe("active-memory plugin", () => {
     const [hookName, handler, options] = firstHookRegistration();
     expect(hookName).toBe("before_prompt_build");
     expect(typeof handler).toBe("function");
-    expect(options).toEqual({ timeoutMs: 151_500 });
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(151_500);
+    expect(options).toEqual({ timeoutMs: 153_000 });
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(153_000);
   });
 
   it("keeps the outer hook timeout at the live-config ceiling", () => {
@@ -420,7 +420,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(151_500);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(153_000);
   });
 
   it("covers the maximum recall and setup-grace budgets", () => {
@@ -431,7 +431,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(151_500);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(153_000);
   });
 
   it("runs recall without recording shared auth-profile failures", async () => {
@@ -4213,16 +4213,17 @@ describe("active-memory plugin", () => {
     const warnLines = vi
       .mocked(api.logger.warn)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expectLinesToContain(warnLines, "before_prompt_build timed out after 1525ms");
+    expectLinesToContain(warnLines, "before_prompt_build preflight timed out after 1500ms");
     resolveLookup?.(undefined);
     await vi.advanceTimersByTimeAsync(0);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("cleans up when pre-recall latency lets the live deadline beat the recall watchdog", async () => {
+  it("preserves recall settlement time after near-limit preflight latency", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 25,
@@ -4231,7 +4232,7 @@ describe("active-memory plugin", () => {
     vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
       lookup: async () =>
         await new Promise<undefined>((resolve) => {
-          setTimeout(() => resolve(undefined), 1_501);
+          setTimeout(() => resolve(undefined), 1_490);
         }),
     });
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4246,7 +4247,7 @@ describe("active-memory plugin", () => {
         messageProvider: "webchat",
       },
     );
-    await vi.advanceTimersByTimeAsync(1_501);
+    await vi.advanceTimersByTimeAsync(1_490);
     const hasStartedRecall = () =>
       vi
         .mocked(api.logger.info)
@@ -4259,17 +4260,17 @@ describe("active-memory plugin", () => {
       });
     }
     expect(hasStartedRecall()).toBe(true);
-    await vi.advanceTimersByTimeAsync(24);
+    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(1_499);
 
     await expect(resultPromise).resolves.toBeUndefined();
-    await vi.runOnlyPendingTimersAsync();
     expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalled();
     const circuitBreakerKey = testing.buildCircuitBreakerKey(
       "main",
       "github-copilot",
       "gpt-5.4-mini",
     );
-    expect(testing.isCircuitBreakerOpen(circuitBreakerKey, 1, 60_000)).toBe(false);
+    expect(testing.isCircuitBreakerOpen(circuitBreakerKey, 1, 60_000)).toBe(true);
   });
 
   it("rejects completed output after a memory search returns no recall evidence", async () => {

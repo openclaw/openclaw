@@ -1807,29 +1807,28 @@ function hasTerminalUnavailableMemoryResultInSessionRecord(
   return Boolean(debug?.error) || Boolean(details?.error);
 }
 
-async function resolveActiveMemoryHookWithDeadline<T>(params: {
-  promise: Promise<T>;
-  timeoutMs: number;
-  onTimeout: () => void;
-}): Promise<T | undefined> {
+function createActiveMemoryHookDeadline() {
   const timeoutSentinel = Symbol("active-memory-hook-timeout");
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<typeof timeoutSentinel>((resolve) => {
-    timeoutId = setTimeout(() => resolve(timeoutSentinel), params.timeoutMs);
-    timeoutId.unref?.();
+  let resolveTimeout: (value: typeof timeoutSentinel) => void = () => {};
+  const promise = new Promise<typeof timeoutSentinel>((resolve) => {
+    resolveTimeout = resolve;
   });
-  try {
-    const result = await Promise.race([params.promise, timeoutPromise]);
-    if (result === timeoutSentinel) {
-      params.onTimeout();
-      return undefined;
-    }
-    return result;
-  } finally {
+  const stop = () => {
     if (timeoutId) {
       clearTimeout(timeoutId);
+      timeoutId = undefined;
     }
-  }
+  };
+  const arm = (timeoutMs: number, onTimeout: () => void) => {
+    stop();
+    timeoutId = setTimeout(() => {
+      onTimeout();
+      resolveTimeout(timeoutSentinel);
+    }, timeoutMs);
+    timeoutId.unref?.();
+  };
+  return { arm, promise, stop };
 }
 
 function hasUsableMemoryResultInSessionRecord(
@@ -3550,21 +3549,32 @@ export default definePluginEntry({
       },
     });
 
-    // Live config can raise the recall deadline after registration. Keep the
-    // outer hook at the supported ceiling; the inner watchdog enforces each
-    // current budget and the fixed abort-settlement allowance.
+    // Preflight and recall own separate deadlines. Reserve enough hook time for
+    // both maxima so preflight latency cannot consume recall settlement time.
     const beforePromptBuildTimeoutMs =
-      MAX_TIMEOUT_MS + MAX_SETUP_GRACE_TIMEOUT_MS + HOOK_TIMEOUT_RECOVERY_GRACE_MS;
+      MAX_TIMEOUT_MS + MAX_SETUP_GRACE_TIMEOUT_MS + HOOK_TIMEOUT_RECOVERY_GRACE_MS * 2;
     api.on(
       "before_prompt_build",
       async (event, ctx) => {
         refreshLiveConfigFromRuntime();
         const invocationConfig = config;
-        const liveBeforePromptBuildTimeoutMs =
+        const liveRecallTimeoutMs =
           invocationConfig.timeoutMs +
           invocationConfig.setupGraceTimeoutMs +
           HOOK_TIMEOUT_RECOVERY_GRACE_MS;
         const deadlineController = new AbortController();
+        const hookDeadline = createActiveMemoryHookDeadline();
+        const armHookDeadline = (timeoutMs: number, phase: "preflight" | "recall") => {
+          hookDeadline.arm(timeoutMs, () => {
+            deadlineController.abort(
+              new Error(`active-memory ${phase} timeout after ${timeoutMs}ms`),
+            );
+            api.logger.warn?.(
+              `active-memory: before_prompt_build ${phase} timed out after ${String(timeoutMs)}ms; skipping memory lookup`,
+            );
+          });
+        };
+        armHookDeadline(HOOK_TIMEOUT_RECOVERY_GRACE_MS, "preflight");
         const handlerPromise = (async () => {
           try {
             const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
@@ -3645,6 +3655,9 @@ export default definePluginEntry({
               latestUserMessage: event.prompt,
               recentTurns,
             });
+            // Start recall with its full configured budget. The preceding
+            // session/config checks must not consume abort-settlement time.
+            armHookDeadline(liveRecallTimeoutMs, "recall");
             const result = await maybeResolveActiveRecall({
               api,
               config: invocationConfig,
@@ -3683,18 +3696,12 @@ export default definePluginEntry({
             return undefined;
           }
         })();
-        return await resolveActiveMemoryHookWithDeadline({
-          promise: handlerPromise,
-          timeoutMs: liveBeforePromptBuildTimeoutMs,
-          onTimeout: () => {
-            deadlineController.abort(
-              new Error(`active-memory hook timeout after ${liveBeforePromptBuildTimeoutMs}ms`),
-            );
-            api.logger.warn?.(
-              `active-memory: before_prompt_build timed out after ${String(liveBeforePromptBuildTimeoutMs)}ms; skipping memory lookup`,
-            );
-          },
-        });
+        try {
+          const result = await Promise.race([handlerPromise, hookDeadline.promise]);
+          return typeof result === "symbol" ? undefined : result;
+        } finally {
+          hookDeadline.stop();
+        }
       },
       { timeoutMs: beforePromptBuildTimeoutMs },
     );
