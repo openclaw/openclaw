@@ -253,6 +253,45 @@ describe("login-qr", () => {
     expect(isWebAuthLoggedOut(terminalLoggedOutAccountId)).toBe(false);
   });
 
+  it("clears terminal logged-out state after successful QR relink", async () => {
+    const accountId = "qr-success-clears-terminal-state";
+    markWebAuthLoggedOut(accountId);
+    let finishLogin!: () => void;
+    waitForWaConnectionMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLogin = resolve;
+        }),
+    );
+    readWebAuthExistsForDecisionMock
+      .mockResolvedValueOnce({ outcome: "stable", exists: false })
+      .mockResolvedValueOnce({ outcome: "stable", exists: true })
+      .mockResolvedValueOnce({ outcome: "stable", exists: true });
+    readWebSelfIdMock.mockReturnValue({ e164: "+15551234567", jid: null, lid: null });
+
+    const start = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,encoded:qr-data");
+
+    finishLogin();
+    await expect(
+      waitForWebLogin({
+        timeoutMs: 5000,
+        currentQrDataUrl: start.qrDataUrl,
+        accountId,
+      }),
+    ).resolves.toEqual({
+      connected: true,
+      message: "✅ Linked! WhatsApp is ready.",
+    });
+
+    expect(isWebAuthLoggedOut(accountId)).toBe(false);
+    logoutWebMock.mockClear();
+    await expect(startWebLoginWithQr({ timeoutMs: 5000, accountId })).resolves.toEqual({
+      message: "WhatsApp is already linked (+15551234567). Say “relink” if you want a fresh QR.",
+    });
+    expect(logoutWebMock).not.toHaveBeenCalled();
+  });
+
   it("caps oversized wait timeouts to a timer-safe delay", async () => {
     const accountId = "oversized-wait-timeout";
     waitForWaConnectionMock.mockImplementation(() => new Promise(() => {}));

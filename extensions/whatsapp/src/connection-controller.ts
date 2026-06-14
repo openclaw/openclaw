@@ -238,6 +238,26 @@ export async function waitForWhatsAppLoginResult(params: {
   let timeoutRestarted = false;
   let loggedOutRestarted = false;
 
+  const replaceLoginSocket = async (): Promise<WhatsAppLoginWaitResult | null> => {
+    closeWaSocket(currentSock);
+    try {
+      currentSock = await createSocket(false, params.verbose, {
+        authDir: params.authDir,
+        ...params.socketTiming,
+        onQr: params.onQr,
+      });
+      params.onSocketReplaced?.(currentSock);
+      return null;
+    } catch (createErr) {
+      return {
+        outcome: "failed",
+        message: formatError(createErr),
+        statusCode: getStatusCode(createErr),
+        error: createErr,
+      };
+    }
+  };
+
   while (true) {
     try {
       await wait(currentSock, { timeout: "none" });
@@ -275,57 +295,33 @@ export async function waitForWhatsAppLoginResult(params: {
           timeoutRestarted = true;
         }
         params.runtime.log(info(getLoginSocketRestartMessage(restartKind)));
-        closeWaSocket(currentSock);
-        try {
-          currentSock = await createSocket(false, params.verbose, {
-            authDir: params.authDir,
-            ...params.socketTiming,
-            onQr: params.onQr,
-          });
-          params.onSocketReplaced?.(currentSock);
-          continue;
-        } catch (createErr) {
-          return {
-            outcome: "failed",
-            message: formatError(createErr),
-            statusCode: getStatusCode(createErr),
-            error: createErr,
-          };
+        const replacementFailure = await replaceLoginSocket();
+        if (replacementFailure) {
+          return replacementFailure;
         }
+        continue;
       }
 
       if (statusCode === LOGGED_OUT_STATUS) {
+        if (loggedOutRestarted) {
+          return {
+            outcome: "logged-out",
+            message: WHATSAPP_LOGGED_OUT_RELINK_MESSAGE,
+            statusCode: LOGGED_OUT_STATUS,
+            error: err,
+          };
+        }
         await logoutWeb({
           authDir: params.authDir,
           isLegacyAuthDir: params.isLegacyAuthDir,
           runtime: params.runtime,
         });
-        if (!loggedOutRestarted) {
-          loggedOutRestarted = true;
-          closeWaSocket(currentSock);
-          try {
-            currentSock = await createSocket(false, params.verbose, {
-              authDir: params.authDir,
-              ...params.socketTiming,
-              onQr: params.onQr,
-            });
-            params.onSocketReplaced?.(currentSock);
-            continue;
-          } catch (createErr) {
-            return {
-              outcome: "failed",
-              message: formatError(createErr),
-              statusCode: getStatusCode(createErr),
-              error: createErr,
-            };
-          }
+        loggedOutRestarted = true;
+        const replacementFailure = await replaceLoginSocket();
+        if (replacementFailure) {
+          return replacementFailure;
         }
-        return {
-          outcome: "logged-out",
-          message: WHATSAPP_LOGGED_OUT_RELINK_MESSAGE,
-          statusCode: LOGGED_OUT_STATUS,
-          error: err,
-        };
+        continue;
       }
 
       return {

@@ -226,6 +226,7 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
         return;
       }
       if (result.outcome === "connected") {
+        clearWebAuthLoggedOut(accountId);
         current.sock = result.sock;
         current.connected = true;
         return;

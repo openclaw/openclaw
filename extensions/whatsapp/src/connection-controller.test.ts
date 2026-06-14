@@ -288,6 +288,37 @@ describe("WhatsAppConnectionController", () => {
     expect(waitForConnection).toHaveBeenNthCalledWith(2, replacementSock, { timeout: "none" });
   });
 
+  it("does not clear stale logged-out auth more than once", async () => {
+    const initialSock = createSocketWithTransportEmitter();
+    const replacementSock = createSocketWithTransportEmitter();
+    const loggedOutError = { output: { statusCode: DisconnectReason.loggedOut } };
+    const waitForConnection = vi
+      .fn()
+      .mockRejectedValueOnce(loggedOutError)
+      .mockRejectedValueOnce(loggedOutError);
+    const createSocket = vi.fn(async () => replacementSock);
+    const runtime = { log: vi.fn() } as never;
+
+    const result = await waitForWhatsAppLoginResult({
+      sock: initialSock as never,
+      authDir: "/tmp/wa-auth",
+      isLegacyAuthDir: false,
+      verbose: false,
+      runtime,
+      waitForConnection: waitForConnection as never,
+      createSocket: createSocket as never,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "logged-out",
+      statusCode: DisconnectReason.loggedOut,
+      error: loggedOutError,
+    });
+    expect(logoutWebMock).toHaveBeenCalledOnce();
+    expect(createSocket).toHaveBeenCalledOnce();
+    expect(waitForConnection).toHaveBeenCalledTimes(2);
+  });
+
   it("does not keep recreating sockets when login status 408 persists", async () => {
     const initialSock = createSocketWithTransportEmitter();
     const replacementSock = createSocketWithTransportEmitter();
