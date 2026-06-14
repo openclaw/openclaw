@@ -292,6 +292,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 
 | Provider                                | Id                               | Auth env                                                     | Example model                                              |
 | --------------------------------------- | -------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
+| AIgateway                               | `aigateway`                      | `AIGATEWAY_API_KEY`                                          | `aigateway/openai/gpt-5.5`                                 |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                           | `byteplus-plan/ark-code-latest`                            |
 | Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                           | `cerebras/zai-glm-4.7`                                     |
 | Cloudflare AI Gateway                   | `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY`                              | -                                                          |

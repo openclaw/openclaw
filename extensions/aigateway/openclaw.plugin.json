@@ -1,0 +1,116 @@
+{
+  "id": "aigateway",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["aigateway"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "aigateway-native",
+      "hosts": ["api.aigateway.sh"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "aigateway": {
+        "family": "aigateway"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "aigateway",
+        "envVars": ["AIGATEWAY_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "aigateway",
+      "method": "api-key",
+      "choiceId": "aigateway-api-key",
+      "choiceLabel": "AIgateway API key",
+      "choiceHint": "OpenAI-compatible AIgateway endpoint",
+      "groupId": "aigateway",
+      "groupLabel": "AIgateway",
+      "groupHint": "OpenAI-compatible AIgateway endpoint",
+      "optionKey": "aigatewayApiKey",
+      "cliFlag": "--aigateway-api-key",
+      "cliOption": "--aigateway-api-key <key>",
+      "cliDescription": "AIgateway API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "providers": {
+      "aigateway": {
+        "baseUrl": "https://api.aigateway.sh/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "openai/gpt-5.5",
+            "name": "GPT-5.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "anthropic/claude-opus-4.8",
+            "name": "Claude Opus 4.8",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "moonshot/kimi-k2.6",
+            "name": "Kimi K2.6",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "google/gemini-3.1-pro",
+            "name": "Gemini 3.1 Pro",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    }
+  }
+}
