@@ -1,6 +1,7 @@
 // Identifies whether an ESM module is running as the process entry point.
 import fs from "node:fs";
 import path from "node:path";
+import { resolveProcessCwdOrFallback } from "./safe-cwd.js";
 
 type IsMainModuleOptions = {
   currentFile: string;
@@ -28,13 +29,8 @@ function normalizePathCandidate(candidate: string | undefined, cwd: string): str
 }
 
 function resolveDefaultCwd(currentFile: string): string {
-  try {
-    return process.cwd();
-  } catch {
-    // `process.cwd()` can throw when the launch directory was removed; entrypoint checks should
-    // still work relative to the current module path.
-    return path.dirname(currentFile);
-  }
+  // Entry point checks still work relative to the current module path when the launch cwd is gone.
+  return resolveProcessCwdOrFallback(path.dirname(currentFile));
 }
 
 /** Detects whether a module is executing as the process entrypoint, including wrapper launches. */

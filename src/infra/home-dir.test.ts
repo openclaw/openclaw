@@ -1,6 +1,7 @@
 // Tests OpenClaw home directory resolution.
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
@@ -165,6 +166,24 @@ describe("resolveRequiredHomeDir", () => {
     },
   ])("$name", ({ env, homedir, expected }) => {
     expect(resolveRequiredHomeDir(env, homedir)).toBe(expected);
+  });
+
+  it("falls back to the OS temp dir when no home source exists and cwd was deleted", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT: no such file or directory, uv_cwd"), {
+        code: "ENOENT",
+      });
+    });
+
+    try {
+      expect(
+        resolveRequiredHomeDir({} as NodeJS.ProcessEnv, () => {
+          throw new Error("no home");
+        }),
+      ).toBe(path.resolve(os.tmpdir()));
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });
 
