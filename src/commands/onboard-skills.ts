@@ -95,6 +95,7 @@ export async function setupSkills(
     brewAvailable ??= (await detectBinary("brew")) || resolveBrewExecutable() !== undefined;
     return brewAvailable;
   };
+  const supportsBrew = process.platform === "darwin" || process.platform === "linux";
   const inLinuxContainer = process.platform === "linux" && isContainerEnvironment();
   let installable = baseInstallable;
   if (inLinuxContainer && baseInstallable.length > 0 && !(await detectBrewOnce())) {
@@ -145,7 +146,7 @@ export async function setupSkills(
       .filter((item): item is (typeof installable)[number] => Boolean(item));
 
     const needsBrewPrompt =
-      process.platform !== "win32" &&
+      supportsBrew &&
       selectedSkills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
       !(await detectBrewOnce());
 
