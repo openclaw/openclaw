@@ -527,6 +527,21 @@ describe("defineToolPlugin", () => {
       mode: "safe_text",
       prefix: "Echo:",
     });
+    const runtimeMarker = Symbol("runtime-marker");
+    Object.defineProperty(factoryTool, "runtimeMetadata", {
+      configurable: true,
+      enumerable: true,
+      value: "decorated",
+    });
+    Object.defineProperty(factoryTool, runtimeMarker, {
+      configurable: false,
+      value: true,
+    });
+    expect(Reflect.get(factoryTool, "runtimeMetadata")).toBe("decorated");
+    expect(Reflect.get(factoryTool, runtimeMarker)).toBe(true);
+    expect(Reflect.ownKeys(factoryTool)).toEqual(
+      expect.arrayContaining(["runtimeMetadata", runtimeMarker]),
+    );
     await expect(factoryTool.execute("call-1", { input: "hello" })).resolves.toMatchObject({
       content: [{ type: "text", text: "hello" }],
     });

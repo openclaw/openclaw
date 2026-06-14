@@ -179,10 +179,17 @@ function applyFactoryTerminalResultFallback(
       return tool;
     }
     const boundFunctions = new WeakMap<WeakKey, WeakKey>();
-    return new Proxy(Object.create(Object.getPrototypeOf(tool)) as AnyAgentTool, {
-      get(_target, property) {
-        if (property === "terminalResultFallback") {
-          return terminalResultFallback;
+    const overlay = Object.create(Object.getPrototypeOf(tool)) as AnyAgentTool;
+    Object.defineProperty(overlay, "terminalResultFallback", {
+      configurable: true,
+      enumerable: true,
+      value: terminalResultFallback,
+      writable: false,
+    });
+    return new Proxy(overlay, {
+      get(target, property, receiver) {
+        if (Object.hasOwn(target, property)) {
+          return Reflect.get(target, property, receiver);
         }
         const value = Reflect.get(tool, property, tool);
         if (typeof value !== "function") {
@@ -196,23 +203,19 @@ function applyFactoryTerminalResultFallback(
         boundFunctions.set(value, nextBound);
         return nextBound;
       },
-      getOwnPropertyDescriptor(_target, property) {
-        if (property === "terminalResultFallback") {
-          return {
-            configurable: true,
-            enumerable: true,
-            value: terminalResultFallback,
-            writable: false,
-          };
+      getOwnPropertyDescriptor(target, property) {
+        const targetDescriptor = Reflect.getOwnPropertyDescriptor(target, property);
+        if (targetDescriptor) {
+          return targetDescriptor;
         }
         const descriptor = Reflect.getOwnPropertyDescriptor(tool, property);
         return descriptor ? { ...descriptor, configurable: true } : undefined;
       },
-      has(_target, property) {
-        return property === "terminalResultFallback" || Reflect.has(tool, property);
+      has(target, property) {
+        return Reflect.has(target, property) || Reflect.has(tool, property);
       },
-      ownKeys() {
-        return [...new Set([...Reflect.ownKeys(tool), "terminalResultFallback"])];
+      ownKeys(target) {
+        return [...new Set([...Reflect.ownKeys(target), ...Reflect.ownKeys(tool)])];
       },
     });
   };

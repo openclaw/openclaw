@@ -322,6 +322,9 @@ const QUOTED_USER_PROMPT_LINE_RE = /^[ \t]*>.*$/gmu;
 const QUOTED_USER_PROMPT_FENCED_BLOCK_RE =
   /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?=\n|$)|$)/gu;
 const QUOTED_USER_PROMPT_INDENTED_LINE_RE = /^(?: {4,}|\t).+$/gmu;
+const QUOTED_USER_PROMPT_MARKDOWN_LINK_RE = /!?\[[^\]\n]*\]\([^)\n]*\)/gu;
+const QUOTED_USER_PROMPT_MARKDOWN_EMPHASIS_RE =
+  /(?:\*{1,3}(?=\S)[^*\n]*?\S\*{1,3}|_{1,3}(?=\S)[^_\n]*?\S_{1,3})/gu;
 const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([
   "cool",
   "great",
@@ -1082,6 +1085,8 @@ function stripNonAuthorizingUserPromptExcerpts(text: string): string {
   return text
     .replace(QUOTED_USER_PROMPT_FENCED_BLOCK_RE, " ")
     .replace(QUOTED_USER_PROMPT_INDENTED_LINE_RE, " ")
+    .replace(QUOTED_USER_PROMPT_MARKDOWN_LINK_RE, " ")
+    .replace(QUOTED_USER_PROMPT_MARKDOWN_EMPHASIS_RE, " ")
     .replace(QUOTED_USER_PROMPT_SEGMENT_RE, " ")
     .replace(QUOTED_USER_PROMPT_LINE_RE, " ");
 }
