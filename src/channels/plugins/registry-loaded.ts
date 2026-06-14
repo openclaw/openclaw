@@ -35,23 +35,51 @@ type ChannelPluginView = {
 function coerceLoadedChannelPlugin(
   plugin: ActiveChannelPluginRuntimeShape | null | undefined,
 ): LoadedChannelPlugin | null {
-  const id = normalizeOptionalString(plugin?.id) ?? "";
-  if (!plugin || !id) {
+  if (!plugin || typeof plugin !== "object") {
     return null;
   }
-  if (!plugin.meta || typeof plugin.meta !== "object") {
-    // Loaded plugin metadata is optional at the runtime-state boundary, but
-    // channel sorting expects an object so normalize it once at read time.
-    plugin.meta = {};
+  const id = readLoadedChannelId(plugin);
+  if (!id) {
+    return null;
   }
-  return plugin as LoadedChannelPlugin;
+  return normalizeLoadedChannelMeta(plugin) ? (plugin as LoadedChannelPlugin) : null;
+}
+
+function readLoadedChannelId(plugin: ActiveChannelPluginRuntimeShape): string {
+  try {
+    return normalizeOptionalString(plugin.id) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeLoadedChannelMeta(plugin: ActiveChannelPluginRuntimeShape): boolean {
+  try {
+    if (!plugin.meta || typeof plugin.meta !== "object") {
+      // Loaded plugin metadata is optional at the runtime-state boundary, but
+      // channel sorting expects an object so normalize it once at read time.
+      plugin.meta = {};
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readLoadedChannelOrder(plugin: LoadedChannelPlugin): number | undefined {
+  try {
+    const order = plugin.meta.order;
+    return typeof order === "number" && Number.isFinite(order) ? order : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function dedupeChannels(channels: LoadedChannelPlugin[]): LoadedChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: LoadedChannelPlugin[] = [];
   for (const plugin of channels) {
-    const id = normalizeOptionalString(plugin.id) ?? "";
+    const id = readLoadedChannelId(plugin);
     if (!id || seen.has(id)) {
       continue;
     }
@@ -77,25 +105,37 @@ function resolveChannelPlugins(): ChannelPluginView {
   }
 
   const sorted = dedupeChannels(channelPlugins).toSorted((a, b) => {
-    const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id);
-    const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id);
+    const idA = readLoadedChannelId(a);
+    const idB = readLoadedChannelId(b);
+    const indexA = CHAT_CHANNEL_ORDER.indexOf(idA);
+    const indexB = CHAT_CHANNEL_ORDER.indexOf(idB);
     // Explicit plugin order wins; known built-ins keep their product order;
     // unknown extension channels sort after them by id for deterministic lists.
-    const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
-    const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
+    const orderA = readLoadedChannelOrder(a) ?? (indexA === -1 ? 999 : indexA);
+    const orderB = readLoadedChannelOrder(b) ?? (indexB === -1 ? 999 : indexB);
     if (orderA !== orderB) {
       return orderA - orderB;
     }
-    return a.id.localeCompare(b.id);
+    return idA.localeCompare(idB);
   });
   const byId = new Map<string, LoadedChannelPlugin>();
   const entriesById = new Map<string, LoadedChannelPluginEntry>();
-  const unsortedEntriesById = new Map(pluginEntries.map((entry) => [entry.plugin.id, entry]));
+  const unsortedEntriesById = new Map<string, LoadedChannelPluginEntry>();
+  for (const entry of pluginEntries) {
+    const id = readLoadedChannelId(entry.plugin);
+    if (id) {
+      unsortedEntriesById.set(id, entry);
+    }
+  }
   for (const plugin of sorted) {
-    byId.set(plugin.id, plugin);
-    const entry = unsortedEntriesById.get(plugin.id);
+    const id = readLoadedChannelId(plugin);
+    if (!id) {
+      continue;
+    }
+    byId.set(id, plugin);
+    const entry = unsortedEntriesById.get(id);
     if (entry) {
-      entriesById.set(plugin.id, entry);
+      entriesById.set(id, entry);
     }
   }
 

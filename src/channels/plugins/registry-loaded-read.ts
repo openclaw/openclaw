@@ -12,16 +12,27 @@ import type { ChannelId } from "./types.public.js";
 function coerceLoadedChannelPlugin(
   plugin: ActiveChannelPluginRuntimeShape | null | undefined,
 ): ChannelPlugin | undefined {
-  const id = normalizeOptionalString(plugin?.id) ?? "";
-  if (!plugin || !id) {
+  if (!plugin || typeof plugin !== "object" || !readLoadedChannelId(plugin)) {
     return undefined;
   }
-  if (!plugin.meta || typeof plugin.meta !== "object") {
-    // Normalize optional metadata for callers that inspect labels/capabilities
-    // without requiring a full registry view materialization.
-    plugin.meta = {};
+  try {
+    if (!plugin.meta || typeof plugin.meta !== "object") {
+      // Normalize optional metadata for callers that inspect labels/capabilities
+      // without requiring a full registry view materialization.
+      plugin.meta = {};
+    }
+  } catch {
+    return undefined;
   }
   return plugin as ChannelPlugin;
+}
+
+function readLoadedChannelId(plugin: ActiveChannelPluginRuntimeShape): string {
+  try {
+    return normalizeOptionalString(plugin.id) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -38,7 +49,7 @@ export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | un
   }
   for (const entry of registry.channels) {
     const plugin = coerceLoadedChannelPlugin(entry?.plugin);
-    if (plugin && plugin.id === resolvedId) {
+    if (plugin && readLoadedChannelId(plugin) === resolvedId) {
       return plugin;
     }
   }
