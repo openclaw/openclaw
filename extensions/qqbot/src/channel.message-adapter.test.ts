@@ -30,16 +30,26 @@ type SentTextParams = {
   to?: string;
   text?: string;
   replyToId?: string | null;
-  mediaAccess?: { localRoots?: readonly string[]; workspaceDir?: string };
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    workspaceDir?: string;
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 type SentMediaParams = {
   to?: string;
   text?: string;
   mediaUrl?: string;
-  mediaAccess?: { localRoots?: readonly string[]; workspaceDir?: string };
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    workspaceDir?: string;
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 function latestMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
@@ -178,7 +188,12 @@ describe("qqbot message adapter", () => {
   });
 
   it("forwards scoped media access through outbound text and media sends", async () => {
-    const mediaAccess = { localRoots: ["/tmp/openclaw-sandbox"], workspaceDir: "/tmp/workspace" };
+    const mediaReadFile = vi.fn(async () => Buffer.from("report"));
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-sandbox"],
+      workspaceDir: "/tmp/workspace",
+      readFile: mediaReadFile,
+    };
     const mediaLocalRoots = ["/tmp/openclaw-sandbox"];
 
     sendTextMock.mockResolvedValueOnce({ messageId: "qq-text-media-1" });
@@ -188,10 +203,12 @@ describe("qqbot message adapter", () => {
       text: "<qqmedia>/tmp/openclaw-sandbox/report.docx</qqmedia>",
       mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
     });
     const sentText = latestMockArg(sendTextMock, "sendText") as SentTextParams;
     expect(sentText.mediaAccess).toBe(mediaAccess);
     expect(sentText.mediaLocalRoots).toBe(mediaLocalRoots);
+    expect(sentText.mediaReadFile).toBe(mediaReadFile);
 
     sendMediaMock.mockResolvedValueOnce({ messageId: "qq-media-local-1" });
     await qqbotPlugin.outbound?.sendMedia?.({
@@ -201,10 +218,12 @@ describe("qqbot message adapter", () => {
       mediaUrl: "/tmp/openclaw-sandbox/report.docx",
       mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
     });
     const sentMedia = latestMockArg(sendMediaMock, "sendMedia") as SentMediaParams;
     expect(sentMedia.mediaUrl).toBe("/tmp/openclaw-sandbox/report.docx");
     expect(sentMedia.mediaAccess).toBe(mediaAccess);
     expect(sentMedia.mediaLocalRoots).toBe(mediaLocalRoots);
+    expect(sentMedia.mediaReadFile).toBe(mediaReadFile);
   });
 });

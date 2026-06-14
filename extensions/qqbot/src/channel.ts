@@ -93,6 +93,7 @@ async function sendQQBotText(
     account: toGatewayAccount(account),
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
   });
   return {
     channel: "qqbot" as const,
@@ -129,6 +130,7 @@ async function sendQQBotMedia(
     account: toGatewayAccount(account),
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
   });
   return {
     channel: "qqbot" as const,
@@ -147,6 +149,7 @@ function resolveQQBotOutboundMediaAccessContext(ctx: unknown): OutboundMediaAcce
   return {
     ...(record?.mediaAccess ? { mediaAccess: record.mediaAccess } : {}),
     ...(record?.mediaLocalRoots ? { mediaLocalRoots: record.mediaLocalRoots } : {}),
+    ...(record?.mediaReadFile ? { mediaReadFile: record.mediaReadFile } : {}),
   };
 }
 
