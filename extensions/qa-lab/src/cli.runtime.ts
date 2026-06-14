@@ -679,9 +679,7 @@ function qaScorecardCategoryMatchesRunProfile(
   return true;
 }
 
-function groupQaProfileScenariosByExecutionKind(
-  scenarios: readonly QaSeedScenarioWithSource[],
-) {
+function groupQaProfileScenariosByExecutionKind(scenarios: readonly QaSeedScenarioWithSource[]) {
   const groups = new Map<QaSeedScenarioWithSource["execution"]["kind"], string[]>();
   for (const scenario of scenarios) {
     const scenarioIds = groups.get(scenario.execution.kind) ?? [];

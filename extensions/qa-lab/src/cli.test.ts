@@ -201,7 +201,7 @@ describe("qa cli registration", () => {
     expect(runQaProfileCommand).not.toHaveBeenCalled();
   });
 
-  it("routes qa run profile flags into the mapped profile command", async () => {
+  it("routes qa run profile flags into the taxonomy-backed profile command", async () => {
     await program.parseAsync([
       "node",
       "openclaw",

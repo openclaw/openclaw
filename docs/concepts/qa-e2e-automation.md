@@ -31,7 +31,7 @@ script aliases; both forms are supported.
 
 | Command                                             | Purpose                                                                                                                                                                                                                                                                 |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qa run`                                            | Bundled QA self-check without `--profile`; mapped maturity profile runner with `--profile smoke-ci` or `--profile release`.                                                                                                                                             |
+| `qa run`                                            | Bundled QA self-check without `--profile`; taxonomy-backed maturity profile runner with `--profile smoke-ci` or `--profile release`.                                                                                                                                    |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
 | `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                           |
 | `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report, or use `--runtime-axis --token-efficiency` to write Codex-vs-OpenClaw runtime parity and token-efficiency reports from one runtime-pair summary.                                         |
@@ -51,8 +51,8 @@ script aliases; both forms are supported.
 | `qa whatsapp`                                       | Live transport lane against real WhatsApp Web accounts.                                                                                                                                                                                                                 |
 | `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis) and [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook). |
 
-Mapped `qa run` profiles read membership from `taxonomy-mappings.yaml`, then
-dispatch the resolved scenarios through `qa suite`. `--surface` and
+Profile-backed `qa run` reads membership from `taxonomy.yaml`, then dispatches
+the resolved scenarios through `qa suite`. `--surface` and
 `--category` filter the selected profile instead of defining separate lanes:
 
 ```bash
