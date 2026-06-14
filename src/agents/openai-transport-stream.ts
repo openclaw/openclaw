@@ -60,6 +60,7 @@ import {
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
   isOpenAIGpt54MiniModel,
+  isOpenAIGpt55Model,
   normalizeOpenAIReasoningEffort,
   resolveOpenAIReasoningEffortForModel,
   type OpenAIApiReasoningEffort,
@@ -83,6 +84,7 @@ import {
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForProjection,
 } from "./openai-tool-schema.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildGuardedModelFetch,
@@ -2553,6 +2555,21 @@ function isAzureOpenAICompatibleHost(hostname: string): boolean {
   );
 }
 
+function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
+  if (!model.baseUrl.trim()) {
+    return true;
+  }
+  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  if (endpointClass === "openai-public" || endpointClass === "azure-openai") {
+    return true;
+  }
+  try {
+    return isAzureOpenAICompatibleHost(new URL(model.baseUrl).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function buildOpenAICompletionsClientConfig(
   model: Model,
   context: Context,
@@ -4267,8 +4284,11 @@ export function buildOpenAICompletionsParams(
         fallbackMap: compat.reasoningEffortMap,
       })
     : undefined;
-  const omitGpt54MiniToolReasoningEffort =
-    isOpenAIGpt54MiniModel(model) && Array.isArray(params.tools) && params.tools.length > 0;
+  const omitChatCompletionsToolReasoningEffort =
+    Array.isArray(params.tools) &&
+    params.tools.length > 0 &&
+    (isOpenAIGpt54MiniModel(model) ||
+      (isOpenAIGpt55Model(model) && isKnownOpenAICompletionsEndpoint(model)));
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
@@ -4294,7 +4314,7 @@ export function buildOpenAICompletionsParams(
     model.reasoning &&
     compat.supportsReasoningEffort &&
     !handledQwenThinkingFormat &&
-    !omitGpt54MiniToolReasoningEffort
+    !omitChatCompletionsToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
   }

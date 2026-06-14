@@ -5961,6 +5961,150 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
+  it.each([
+    ["implicit default", ""],
+    ["default", "https://api.openai.com/v1"],
+  ])(
+    "omits reasoning_effort for OpenAI %s gpt-5.5 Chat Completions tool payloads",
+    (_label, baseUrl) => {
+      const params = buildOpenAICompletionsParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-completions",
+          provider: "openai",
+          baseUrl,
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000000,
+          maxTokens: 128000,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "lookup_weather",
+              description: "Get forecast",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          ],
+        } as never,
+        {
+          reasoning: "medium",
+        } as never,
+      ) as { reasoning_effort?: unknown; tools?: unknown };
+
+      expect(params.tools).toHaveLength(1);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
+  it.each([
+    ["Azure OpenAI", "https://example.openai.azure.com/openai/v1"],
+    ["Foundry", "https://example.services.ai.azure.com/openai/v1"],
+    ["Cognitive Services", "https://example.cognitiveservices.azure.com/openai/v1"],
+  ])(
+    "omits reasoning_effort for %s gpt-5.5 deployment aliases with tool payloads",
+    (_label, baseUrl) => {
+      const params = buildOpenAICompletionsParams(
+        {
+          id: "prod-spud",
+          name: "GPT-5.5 (Azure)",
+          api: "openai-completions",
+          provider: "azure-openai",
+          baseUrl,
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000000,
+          maxTokens: 128000,
+        } satisfies Model<"openai-completions">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [
+            {
+              name: "lookup_weather",
+              description: "Get forecast",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          ],
+        } as never,
+        {
+          reasoning: "medium",
+        } as never,
+      ) as { reasoning_effort?: unknown; tools?: unknown };
+
+      expect(params.tools).toHaveLength(1);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
+  it("keeps reasoning_effort for custom gpt-5.5 Chat Completions tool payloads", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider: "custom-openai",
+        baseUrl: "https://models.example.com/v1",
+        compat: { supportsReasoningEffort: true },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toHaveLength(1);
+    expect(params.reasoning_effort).toBe("medium");
+  });
+
+  it("keeps reasoning_effort for gpt-5.5 Chat Completions payloads without tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toHaveLength(0);
+    expect(params.reasoning_effort).toBe("medium");
+  });
+
   it("keeps reasoning_effort for gpt-5.4-mini Chat Completions payloads without tools", () => {
     const params = buildOpenAICompletionsParams(
       {
