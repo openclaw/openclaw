@@ -167,7 +167,6 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     expect(manifest.comparison.candidate.sha).toBe("abc123");
     expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toEqual([
       "summary.json",
-      "observed-messages.json",
       "telegram-live-transcript.html",
       "report.md",
       "mantis-evidence.json",
@@ -193,6 +192,19 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     expect(targetPaths).not.toContain("observed-messages.json");
   });
 
+  it("ignores stale observed-message files beside current evidence summaries", () => {
+    const dir = makeTelegramOutput();
+
+    const result = writeTelegramEvidence(["--output-dir", dir]);
+
+    expect(readFileSync(result.transcriptPath, "utf8")).toContain(
+      "No observed Telegram messages were recorded.",
+    );
+    expect(result.manifest.artifacts.map((artifact) => artifact.targetPath)).not.toContain(
+      "observed-messages.json",
+    );
+  });
+
   it("renders historical Telegram summaries when evidence summaries are absent", () => {
     const dir = makeLegacyTelegramOutput();
 
@@ -203,6 +215,9 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     expect(
       result.manifest.artifacts.find((artifact) => artifact.targetPath === "summary.json"),
     ).toMatchObject({ path: "telegram-qa-summary.json" });
+    expect(result.manifest.artifacts.map((artifact) => artifact.targetPath)).toContain(
+      "observed-messages.json",
+    );
   });
 
   it("does not fabricate a required report artifact for passing Telegram summaries", () => {
