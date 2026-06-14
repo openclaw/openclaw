@@ -70,6 +70,8 @@ export type TelegramInboundBodyResult = {
   historyKey?: string;
   commandAuthorized: boolean;
   effectiveWasMentioned: boolean;
+  explicitlyMentionedBot: boolean;
+  mentionSource?: MsgContext["MentionSource"];
   canDetectMention: boolean;
   shouldBypassMention: boolean;
   hasControlCommand: boolean;
@@ -442,6 +444,16 @@ export async function resolveTelegramInboundBody(params: {
     historyKey,
     commandAuthorized,
     effectiveWasMentioned,
+    explicitlyMentionedBot: explicitlyMentioned,
+    mentionSource: explicitlyMentioned
+      ? "explicit_bot"
+      : computedWasMentioned
+        ? "mention_pattern"
+        : implicitMentionKinds.length > 0
+          ? "implicit_thread"
+          : mentionDecision.shouldBypassMention
+            ? "command_bypass"
+            : undefined,
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,
     hasControlCommand: hasControlCommandInMessage,

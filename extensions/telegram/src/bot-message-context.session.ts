@@ -21,6 +21,7 @@ import type {
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -220,6 +221,10 @@ export async function buildTelegramInboundContextPayload(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
+  canDetectMention: boolean;
+  explicitlyMentionedBot: boolean;
+  mentionSource?: MsgContext["MentionSource"];
+  requireMention: boolean;
   hasControlCommand: boolean;
   stickerCacheHit?: boolean;
   audioTranscribedMediaIndex?: number;
@@ -270,6 +275,10 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
+    canDetectMention,
+    explicitlyMentionedBot,
+    mentionSource,
+    requireMention,
     hasControlCommand,
     stickerCacheHit,
     audioTranscribedMediaIndex,
@@ -543,6 +552,15 @@ export async function buildTelegramInboundContextPayload(params: {
     access: {
       commands: {
         authorized: commandAuthorized,
+      },
+      mentions: {
+        canDetectMention,
+        wasMentioned: effectiveWasMentioned,
+        explicitlyMentionedBot,
+        mentionSource,
+        effectiveWasMentioned,
+        requireMention,
+        shouldSkip: false,
       },
     },
     command:

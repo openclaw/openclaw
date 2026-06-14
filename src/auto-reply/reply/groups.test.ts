@@ -120,6 +120,32 @@ describe("group runtime loading", () => {
     expect(disallowed).not.toContain("Never say that you are staying quiet");
   });
 
+  it("binds Telegram bot handles to the current assistant identity", () => {
+    const context = groups.buildGroupChatContext({
+      sessionCtx: {
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "kesslerAIBot",
+      },
+      silentToken: "NO_REPLY",
+      silentReplyPolicy: "allow",
+    });
+
+    expect(context).toContain("Telegram: @kesslerAIBot is your bot handle in this chat.");
+    expect(context).toContain("Treat messages addressed to @kesslerAIBot as addressed to you");
+
+    const nonTelegram = groups.buildGroupChatContext({
+      sessionCtx: {
+        ChatType: "group",
+        Provider: "whatsapp",
+        BotUsername: "kesslerAIBot",
+      },
+      silentToken: "NO_REPLY",
+      silentReplyPolicy: "allow",
+    });
+    expect(nonTelegram).not.toContain("@kesslerAIBot is your bot handle");
+  });
+
   it("marks non-visible assistant replies silent for groups with silence allowed", () => {
     expect(
       groups.resolveGroupSilentReplyBehavior({
