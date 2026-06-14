@@ -49,6 +49,7 @@ import {
   type ToolName,
   withFileMutationQueue,
 } from "./tools/index.js";
+import { snapshotToolDefinitions } from "./tools/tool-definition-wrapper.js";
 
 type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
 
@@ -346,7 +347,8 @@ export async function createAgentSession(
   }
 
   const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
-  const customToolNames = options.customTools?.map((tool) => tool.name) ?? [];
+  const customTools = snapshotToolDefinitions(options.customTools);
+  const customToolNames = customTools.map((tool) => tool.name);
   const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
   const disableBuiltInTools = !options.tools && options.noTools === "builtin";
   const initialActiveToolNames: string[] = options.tools
@@ -490,7 +492,7 @@ export async function createAgentSession(
     cwd,
     scopedModels: options.scopedModels,
     resourceLoader,
-    customTools: options.customTools,
+    customTools,
     modelRegistry,
     initialActiveToolNames,
     allowedToolNames,

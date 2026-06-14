@@ -93,7 +93,10 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import type { BashOperations } from "./tools/bash-operations.js";
 import { createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
-import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
+import {
+  createToolDefinitionFromAgentTool,
+  snapshotToolDefinitions,
+} from "./tools/tool-definition-wrapper.js";
 
 function unwrapCoreResult<T>(result: { ok: true; value: T } | { ok: false; error: Error }): T {
   if (result.ok) {
@@ -383,7 +386,7 @@ export class AgentSession {
     this.settingsManager = config.settingsManager;
     this.scopedModelEntries = config.scopedModels ?? [];
     this.sessionResourceLoader = config.resourceLoader;
-    this.customTools = config.customTools ?? [];
+    this.customTools = snapshotToolDefinitions(config.customTools);
     this.cwd = config.cwd;
     this.sessionModelRegistry = config.modelRegistry;
     this.extensionRunnerRef = config.extensionRunnerRef;
