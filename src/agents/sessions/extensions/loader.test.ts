@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadExtensions } from "./loader.js";
+import type { ExtensionContext } from "./types.js";
 
 const tempDirs: string[] = [];
 
@@ -46,5 +47,82 @@ export default async function(api) {
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(1);
     expect(result.extensions[0]?.commands.has("sdk-subpath-probe")).toBe(true);
+  });
+
+  it("skips unreadable registered tools without failing the extension", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-bad-tool-"));
+    tempDirs.push(dir);
+    const extensionPath = join(dir, "extension.ts");
+    await writeFile(
+      extensionPath,
+      `
+export default async function(api) {
+  const unreadableNameTool = {
+    get name() {
+      throw new Error("boom name");
+    },
+    label: "Bad Name",
+    description: "Breaks while reading the name.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }], details: {} };
+    },
+  };
+  const unreadableParametersTool = {
+    name: "bad_parameters",
+    label: "Bad Parameters",
+    description: "Breaks while reading the schema.",
+    get parameters() {
+      throw new Error("boom params");
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }], details: {} };
+    },
+  };
+  const healthyTool = {
+    name: "healthy_lookup",
+    label: "Healthy Lookup",
+    description: "Uses state from the original tool object.",
+    parameters: { type: "object", properties: {} },
+    calls: 0,
+    async execute() {
+      this.calls += 1;
+      return { content: [{ type: "text", text: String(this.calls) }], details: {} };
+    },
+  };
+  api.registerTool(unreadableNameTool);
+  api.registerTool(unreadableParametersTool);
+  api.registerTool(healthyTool);
+  api.registerCommand("after-bad-tool", {
+    description: "probe",
+    handler() {},
+  });
+}
+`,
+    );
+
+    const result = await loadExtensions([extensionPath], dir);
+
+    expect(result.errors).toEqual([
+      { path: extensionPath, error: "skipped extension tool registration: boom name" },
+      {
+        path: extensionPath,
+        error: 'skipped extension tool registration for "bad_parameters": boom params',
+      },
+    ]);
+    expect(result.extensions).toHaveLength(1);
+    expect(Array.from(result.extensions[0]?.tools.keys() ?? [])).toEqual(["healthy_lookup"]);
+    expect(result.extensions[0]?.commands.has("after-bad-tool")).toBe(true);
+
+    const definition = result.extensions[0]?.tools.get("healthy_lookup")?.definition;
+    const toolResult = await definition?.execute(
+      "call-1",
+      {},
+      undefined,
+      undefined,
+      undefined as unknown as ExtensionContext,
+    );
+
+    expect(toolResult?.content).toEqual([{ type: "text", text: "1" }]);
   });
 });

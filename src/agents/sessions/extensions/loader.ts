@@ -214,6 +214,7 @@ function createExtensionAPI(
   runtime: ExtensionRuntime,
   cwd: string,
   eventBus: EventBus,
+  onRegistrationError?: (error: string) => void,
 ): ExtensionAPI {
   const api = {
     // Registration methods - write to extension
@@ -226,8 +227,13 @@ function createExtensionAPI(
 
     registerTool(tool: ToolDefinition): void {
       runtime.assertActive();
-      extension.tools.set(tool.name, {
-        definition: tool,
+      const snapshot = snapshotExtensionToolDefinition(tool);
+      if ("error" in snapshot) {
+        onRegistrationError?.(snapshot.error);
+        return;
+      }
+      extension.tools.set(snapshot.definition.name, {
+        definition: snapshot.definition,
         sourceInfo: extension.sourceInfo,
       });
       runtime.refreshTools();
@@ -365,6 +371,75 @@ function createExtensionAPI(
   return api;
 }
 
+function snapshotExtensionToolDefinition(
+  definition: ToolDefinition,
+): { definition: ToolDefinition } | { error: string } {
+  let toolName: string | undefined;
+  try {
+    if (!definition || typeof definition !== "object") {
+      return { error: "skipped extension tool registration: tool definition is not an object" };
+    }
+    const name = Reflect.get(definition, "name");
+    toolName = typeof name === "string" ? name : undefined;
+    const execute = Reflect.get(definition, "execute");
+    if (!toolName) {
+      return { error: "skipped extension tool registration: tool name is missing or invalid" };
+    }
+    if (typeof execute !== "function") {
+      return {
+        error: `skipped extension tool registration for "${toolName}": execute is missing or invalid`,
+      };
+    }
+    const promptGuidelines = Reflect.get(definition, "promptGuidelines");
+    const prepareArguments = Reflect.get(definition, "prepareArguments");
+    const renderCall = Reflect.get(definition, "renderCall");
+    const renderResult = Reflect.get(definition, "renderResult");
+    const executeWithReceiver = ((...args: Parameters<ToolDefinition["execute"]>) =>
+      Reflect.apply(execute, definition, args)) as ToolDefinition["execute"];
+    return {
+      definition: {
+        name: toolName,
+        label: Reflect.get(definition, "label"),
+        description: Reflect.get(definition, "description"),
+        promptSnippet: Reflect.get(definition, "promptSnippet"),
+        promptGuidelines: Array.isArray(promptGuidelines)
+          ? [...promptGuidelines]
+          : promptGuidelines,
+        parameters: Reflect.get(definition, "parameters"),
+        renderShell: Reflect.get(definition, "renderShell"),
+        prepareArguments:
+          typeof prepareArguments === "function"
+            ? (((...args: Parameters<NonNullable<ToolDefinition["prepareArguments"]>>) =>
+                Reflect.apply(
+                  prepareArguments,
+                  definition,
+                  args,
+                )) as ToolDefinition["prepareArguments"])
+            : prepareArguments,
+        executionMode: Reflect.get(definition, "executionMode"),
+        execute: executeWithReceiver,
+        renderCall:
+          typeof renderCall === "function"
+            ? (((...args: Parameters<NonNullable<ToolDefinition["renderCall"]>>) =>
+                Reflect.apply(renderCall, definition, args)) as ToolDefinition["renderCall"])
+            : renderCall,
+        renderResult:
+          typeof renderResult === "function"
+            ? (((...args: Parameters<NonNullable<ToolDefinition["renderResult"]>>) =>
+                Reflect.apply(renderResult, definition, args)) as ToolDefinition["renderResult"])
+            : renderResult,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      error: toolName
+        ? `skipped extension tool registration for "${toolName}": ${message}`
+        : `skipped extension tool registration: ${message}`,
+    };
+  }
+}
+
 function resolveExtensionFactory(module: unknown): ExtensionFactory | undefined {
   const candidate =
     typeof module === "object" && module !== null && "default" in module
@@ -487,8 +562,9 @@ async function loadExtension(
   cwd: string,
   eventBus: EventBus,
   runtime: ExtensionRuntime,
-): Promise<{ extension: Extension | null; error: string | null }> {
+): Promise<{ extension: Extension | null; error: string | null; registrationErrors: string[] }> {
   const resolvedPath = resolvePath(extensionPath, cwd);
+  const registrationErrors: string[] = [];
 
   try {
     const factory = await loadExtensionModule(resolvedPath);
@@ -496,17 +572,24 @@ async function loadExtension(
       return {
         extension: null,
         error: `Extension does not export a valid factory function: ${extensionPath}`,
+        registrationErrors,
       };
     }
 
     const extension = createExtension(extensionPath, resolvedPath);
-    const api = createExtensionAPI(extension, runtime, cwd, eventBus);
+    const api = createExtensionAPI(extension, runtime, cwd, eventBus, (error) => {
+      registrationErrors.push(error);
+    });
     await factory(api);
 
-    return { extension, error: null };
+    return { extension, error: null, registrationErrors };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { extension: null, error: `Failed to load extension: ${message}` };
+    return {
+      extension: null,
+      error: `Failed to load extension: ${message}`,
+      registrationErrors,
+    };
   }
 }
 
@@ -519,9 +602,12 @@ export async function loadExtensionFromFactory(
   eventBus: EventBus,
   runtime: ExtensionRuntime,
   extensionPath = "<inline>",
+  registrationErrors?: string[],
 ): Promise<Extension> {
   const extension = createExtension(extensionPath, extensionPath);
-  const api = createExtensionAPI(extension, runtime, cwd, eventBus);
+  const api = createExtensionAPI(extension, runtime, cwd, eventBus, (error) => {
+    registrationErrors?.push(error);
+  });
   await factory(api);
   return extension;
 }
@@ -540,15 +626,26 @@ export async function loadExtensions(
   const runtime = createExtensionRuntime();
 
   for (const extPath of paths) {
-    const { extension, error } = await loadExtension(extPath, cwd, resolvedEventBus, runtime);
+    const { extension, error, registrationErrors } = await loadExtension(
+      extPath,
+      cwd,
+      resolvedEventBus,
+      runtime,
+    );
 
     if (error) {
       errors.push({ path: extPath, error });
+      for (const registrationError of registrationErrors) {
+        errors.push({ path: extPath, error: registrationError });
+      }
       continue;
     }
 
     if (extension) {
       extensions.push(extension);
+    }
+    for (const registrationError of registrationErrors) {
+      errors.push({ path: extPath, error: registrationError });
     }
   }
 
