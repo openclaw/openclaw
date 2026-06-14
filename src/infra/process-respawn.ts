@@ -43,7 +43,9 @@ function isTruthy(value: string | undefined): boolean {
 export function rewritePnpmVersionedEntryPath(entryPath: string): string {
   const pnpmMarker = "node_modules/.pnpm/";
   const markerIdx = entryPath.indexOf(pnpmMarker);
-  if (markerIdx === -1) return entryPath;
+  if (markerIdx === -1) {
+    return entryPath;
+  }
 
   // After the marker: `<name>@<version>/node_modules/<name>/...` (unscoped)
   // or `@scope+name@<version>/node_modules/@scope/name/...` (scoped — pnpm
@@ -52,11 +54,13 @@ export function rewritePnpmVersionedEntryPath(entryPath: string): string {
   const match = afterMarker.match(
     /^(?:@([^/+]+)\+)?([^@/]+)@[^/]+\/node_modules\/(?:@\1\/)?\2\/(.+)$/,
   );
-  if (!match) return entryPath;
+  if (!match) {
+    return entryPath;
+  }
 
   const scope = match[1] ? `@${match[1]}` : "";
   const pkgName = match[2];
-  const rest = match[3];
+  const _rest = match[3];
 
   // Don't rewrite if there is no stable wrapper to aim at (e.g. nested dep).
   // The stable wrapper lives at `node_modules/<scope><name>/openclaw.mjs`
