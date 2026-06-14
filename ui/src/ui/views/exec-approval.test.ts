@@ -215,6 +215,44 @@ describe("approval and confirmation modals", () => {
     expect(container.querySelector(".exec-approval-warning")).toBeNull();
   });
 
+  it("renders plugin external verification commands as text", async () => {
+    const request: ExecApprovalRequest = {
+      id: "plugin-approval-1",
+      kind: "plugin",
+      request: {
+        command: "Plugin approval",
+        allowedDecisions: ["deny"],
+      },
+      pluginTitle: "Plugin approval",
+      pluginExternalResolution: {
+        label: "Verify with World",
+        commands: [
+          {
+            decision: "allow-once",
+            label: "Verify once",
+            description: "Approve this blocked action only",
+            command: "/agentkit approve plugin-approval-1 allow-once",
+          },
+        ],
+      },
+      createdAtMs: Date.now() - 1_000,
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(container.textContent).toContain("Verify with World");
+    expect(container.textContent).toContain("Verify once: Approve this blocked action only");
+    expect(container.textContent).toContain("/agentkit approve plugin-approval-1 allow-once");
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Deny"]);
+  });
+
   it("maps Escape to exec denial when approval is idle", async () => {
     const handleExecApprovalDecision = vi.fn(async () => undefined);
     render(renderExecApprovalPrompt(createExecState({ handleExecApprovalDecision })), container);

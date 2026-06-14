@@ -1,3 +1,5 @@
+import type { PluginApprovalExternalResolutionTemplate } from "../infra/plugin-approvals.js";
+
 export const PluginApprovalResolutions = {
   ALLOW_ONCE: "allow-once",
   ALLOW_ALWAYS: "allow-always",
@@ -20,6 +22,7 @@ export type PluginHookBeforeToolCallResult = {
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
+    externalResolution?: PluginApprovalExternalResolutionTemplate | null;
     pluginId?: string;
     onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
   };

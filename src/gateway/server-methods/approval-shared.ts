@@ -272,6 +272,7 @@ export function resolvePendingApprovalRecord<TPayload>(params: {
   inputId: string;
   client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
+  enforceClientVisibility?: boolean;
 }): ApprovalRecordLookupResult<TPayload> {
   return resolveApprovalRecordForState(params, "pending");
 }
@@ -281,6 +282,7 @@ function resolveResolvedApprovalRecord<TPayload>(params: {
   inputId: string;
   client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
+  enforceClientVisibility?: boolean;
 }): ApprovalRecordLookupResult<TPayload> {
   return resolveApprovalRecordForState(params, "resolved");
 }
@@ -291,16 +293,20 @@ function resolveApprovalRecordForState<TPayload>(
     inputId: string;
     client?: GatewayClient | null;
     exposeAmbiguousPrefixError?: boolean;
+    enforceClientVisibility?: boolean;
   },
   expectedState: "pending" | "resolved",
 ): ApprovalRecordLookupResult<TPayload> {
+  const enforceClientVisibility = params.enforceClientVisibility !== false;
   const resolvedId = params.manager.lookupApprovalId(params.inputId, {
     includeResolved: expectedState === "resolved",
     filter: (record) =>
-      isApprovalRecordVisibleToClient({
-        record,
-        client: params.client ?? null,
-      }),
+      enforceClientVisibility
+        ? isApprovalRecordVisibleToClient({
+            record,
+            client: params.client ?? null,
+          })
+        : true,
   });
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
     return {
@@ -510,6 +516,7 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
   context: GatewayRequestContext;
   client: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
+  enforceClientVisibility?: boolean;
   validateDecision?: (snapshot: ExecApprovalRecord<TPayload>) =>
     | {
         message: string;
@@ -537,6 +544,7 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     inputId: params.inputId,
     client: params.client,
     exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
+    enforceClientVisibility: params.enforceClientVisibility,
   });
   if (!resolved.ok) {
     const resolvedRepeat = resolveResolvedApprovalRecord({
@@ -544,6 +552,7 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
       inputId: params.inputId,
       client: params.client,
       exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
+      enforceClientVisibility: params.enforceClientVisibility,
     });
     if (resolvedRepeat.ok) {
       // Treat repeated identical resolves as successful retries; a conflicting

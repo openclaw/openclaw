@@ -3,7 +3,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
   isGatewayMethodClassified,
@@ -35,6 +39,7 @@ function setPluginGatewayMethodScope(
 }
 
 afterEach(() => {
+  releasePinnedPluginHttpRouteRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -178,6 +183,39 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.approvals" });
   });
 
+  it("keeps plugin session action scopes tied to the gateway registry after runtime swaps", () => {
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(gatewayRegistry);
+    pinActivePluginHttpRouteRegistry(gatewayRegistry);
+
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual(["operator.approvals"]);
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual({ allowed: true });
+  });
+
   it("falls back to broad operator scopes when a dynamic session action is not locally registered", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
@@ -200,7 +238,7 @@ describe("method scope resolution", () => {
     );
   });
 
-  it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
+  it("reads plugin-registered gateway method scopes from the gateway plugin registry", () => {
     const registry = createEmptyPluginRegistry();
     registry.gatewayHandlers["browser.request"] = pluginHandler;
     registry.gatewayMethodDescriptors.push(
@@ -212,6 +250,27 @@ describe("method scope resolution", () => {
       }),
     );
     setActivePluginRegistry(registry);
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([
+      "operator.admin",
+    ]);
+  });
+
+  it("keeps plugin gateway method scopes tied to the gateway registry after runtime swaps", () => {
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.gatewayHandlers["browser.request"] = pluginHandler;
+    gatewayRegistry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "browser",
+        name: "browser.request",
+        handler: pluginHandler,
+        scope: "operator.admin",
+      }),
+    );
+    setActivePluginRegistry(gatewayRegistry);
+    pinActivePluginHttpRouteRegistry(gatewayRegistry);
+
+    setActivePluginRegistry(createEmptyPluginRegistry());
 
     expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([
       "operator.admin",
@@ -336,6 +395,25 @@ describe("operator scope authorization", () => {
     });
   });
 
+  it("requires approvals scope for verified plugin approval resolution", () => {
+    expect(
+      authorizeOperatorScopesForMethod("plugin.approval.resolveVerified", ["operator.write"]),
+    ).toEqual({
+      allowed: false,
+      missingScope: "operator.approvals",
+    });
+    expect(
+      authorizeOperatorScopesForMethod("plugin.approval.resolveVerified", ["operator.approvals"]),
+    ).toEqual({
+      allowed: true,
+    });
+    expect(
+      authorizeOperatorScopesForMethod("plugin.approval.resolveVerified", ["operator.admin"]),
+    ).toEqual({
+      allowed: true,
+    });
+  });
+
   it("requires admin for unknown methods", () => {
     expect(authorizeOperatorScopesForMethod("unknown.method", ["operator.read"])).toEqual({
       allowed: false,
@@ -362,6 +440,7 @@ describe("plugin approval method registration", () => {
     expect(methods).toContain("plugin.approval.request");
     expect(methods).toContain("plugin.approval.waitDecision");
     expect(methods).toContain("plugin.approval.resolve");
+    expect(methods).toContain("plugin.approval.resolveVerified");
   });
 
   it("classifies plugin approval methods", () => {
@@ -369,6 +448,7 @@ describe("plugin approval method registration", () => {
     expect(isGatewayMethodClassified("plugin.approval.request")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.waitDecision")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.resolve")).toBe(true);
+    expect(isGatewayMethodClassified("plugin.approval.resolveVerified")).toBe(true);
   });
 });
 
