@@ -209,7 +209,7 @@ export const pluginRegistrationContractCases = {
       "qwen-portal",
       "qwen-cli",
     ],
-    mediaUnderstandingProviderIds: ["qwen"],
+    mediaUnderstandingProviderIds: ["qwen", "qwencloud", "modelstudio", "dashscope"],
     videoGenerationProviderIds: ["qwen"],
     requireDescribeImages: true,
     requireGenerateVideo: true,
