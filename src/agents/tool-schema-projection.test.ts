@@ -138,6 +138,54 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("quarantines oversized runtime tool lists before walking sparse entries", () => {
+    const healthy = {
+      name: "healthy",
+      parameters: { type: "object", properties: {} },
+    };
+    const tools = new Proxy([healthy] as Array<typeof healthy>, {
+      get(target, property, receiver) {
+        if (property === "length") {
+          return 10_001;
+        }
+        if (property === "0") {
+          throw new Error("oversized sparse tool entry should not be read");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(filterRuntimeCompatibleTools(tools)).toEqual({
+      tools: [],
+      diagnostics: [
+        {
+          toolName: "tool-list",
+          toolIndex: -1,
+          violations: ["runtime tool list length 10001 exceeds maximum 10000"],
+        },
+      ],
+    });
+  });
+
+  it("quarantines invalid runtime tool list lengths", () => {
+    const tools = new Proxy([] as AnyAgentTool[], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          return Number.POSITIVE_INFINITY;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(inspectRuntimeToolInputSchemas(tools)).toEqual([
+      {
+        toolName: "tool-list",
+        toolIndex: -1,
+        violations: ["runtime tool list length must be a safe integer no greater than 10000"],
+      },
+    ]);
+  });
+
   it("quarantines unreadable runtime tool fields without dropping healthy siblings", () => {
     const unreadable = {
       name: "fuzzplugin_unreadable",

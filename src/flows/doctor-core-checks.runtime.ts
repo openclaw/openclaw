@@ -26,6 +26,7 @@ import { supportsModelTools } from "../agents/model-tool-support.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
 import { collectExplicitAllowlist, normalizeToolName } from "../agents/tool-policy.js";
 import {
+  isRuntimeToolListDiagnostic,
   inspectRuntimeToolInputSchemas,
   type RuntimeToolSchemaDiagnostic,
 } from "../agents/tool-schema-projection.js";
@@ -548,6 +549,18 @@ function toolSchemaDiagnosticToFinding(params: {
   tools: readonly AnyAgentTool[];
   diagnostic: RuntimeToolSchemaDiagnostic;
 }): HealthFinding {
+  if (isRuntimeToolListDiagnostic(params.diagnostic)) {
+    return {
+      checkId: "core/doctor/runtime-tool-schemas",
+      severity: "error",
+      message: `Agent ${params.agentId} runtime tool list has an unsupported shape for runtime projection.`,
+      path: `agents.${params.agentId}.tools`,
+      target: params.diagnostic.toolName,
+      requirement: params.diagnostic.violations.join(", "),
+      fixHint:
+        "Reduce active tools or disable/update the plugin/provider returning a malformed tool list, then rerun doctor.",
+    };
+  }
   let tool: AnyAgentTool | undefined;
   try {
     tool = params.tools[params.diagnostic.toolIndex];

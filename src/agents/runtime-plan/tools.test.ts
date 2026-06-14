@@ -103,6 +103,46 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     ]);
   });
 
+  it("quarantines oversized tool lists before provider schema normalization", () => {
+    const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
+    const tools = new Proxy([healthy] as AgentTool[], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          return 10_001;
+        }
+        if (property === "0") {
+          throw new Error("oversized sparse tool entry should not be read");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
+    mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools: entries }) => entries);
+
+    expect(
+      normalizeAgentRuntimeTools({
+        tools,
+        provider: "openai",
+        onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
+      }),
+    ).toEqual([]);
+    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [],
+        provider: "openai",
+      }),
+    );
+    expect(diagnostics).toEqual([
+      [
+        {
+          toolName: "tool-list",
+          toolIndex: -1,
+          violations: ["runtime tool list length 10001 exceeds maximum 10000"],
+        },
+      ],
+    ]);
+  });
+
   it("quarantines non-object schemas before provider schema normalization", () => {
     const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
     const arraySchema = {

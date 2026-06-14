@@ -38,6 +38,13 @@ type RuntimeToolEntryRead<TTool extends Pick<AnyAgentTool, "name" | "parameters"
 
 type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
 
+export const MAX_RUNTIME_TOOL_SCHEMA_ENTRIES = 10_000;
+const RUNTIME_TOOL_LIST_DIAGNOSTIC_INDEX = -1;
+
+export function isRuntimeToolListDiagnostic(diagnostic: RuntimeToolSchemaDiagnostic): boolean {
+  return diagnostic.toolIndex === RUNTIME_TOOL_LIST_DIAGNOSTIC_INDEX;
+}
+
 function unreadableRuntimeToolEntry(
   toolIndex: number,
 ): RuntimeToolEntryRead<Pick<AnyAgentTool, "name" | "parameters">> {
@@ -51,14 +58,50 @@ function unreadableRuntimeToolEntry(
   };
 }
 
+function invalidRuntimeToolListLength(): RuntimeToolEntryRead<
+  Pick<AnyAgentTool, "name" | "parameters">
+> {
+  return {
+    ok: false,
+    diagnostic: {
+      toolName: "tool-list",
+      toolIndex: RUNTIME_TOOL_LIST_DIAGNOSTIC_INDEX,
+      violations: [
+        `runtime tool list length must be a safe integer no greater than ${MAX_RUNTIME_TOOL_SCHEMA_ENTRIES}`,
+      ],
+    },
+  };
+}
+
+function oversizedRuntimeToolList(
+  length: number,
+): RuntimeToolEntryRead<Pick<AnyAgentTool, "name" | "parameters">> {
+  return {
+    ok: false,
+    diagnostic: {
+      toolName: "tool-list",
+      toolIndex: RUNTIME_TOOL_LIST_DIAGNOSTIC_INDEX,
+      violations: [
+        `runtime tool list length ${length} exceeds maximum ${MAX_RUNTIME_TOOL_SCHEMA_ENTRIES}`,
+      ],
+    },
+  };
+}
+
 function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
   tools: readonly TTool[],
 ): RuntimeToolEntryRead<TTool>[] {
-  let length: number;
+  let length: unknown;
   try {
     length = tools.length;
   } catch {
     return [unreadableRuntimeToolEntry(0) as RuntimeToolEntryRead<TTool>];
+  }
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0) {
+    return [invalidRuntimeToolListLength() as RuntimeToolEntryRead<TTool>];
+  }
+  if (length > MAX_RUNTIME_TOOL_SCHEMA_ENTRIES) {
+    return [oversizedRuntimeToolList(length) as RuntimeToolEntryRead<TTool>];
   }
   const entries: RuntimeToolEntryRead<TTool>[] = [];
   for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
