@@ -151,6 +151,7 @@ export type EmbeddedAgentSubscribeState = {
   yielded?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  terminalAborted?: boolean;
   hadDeterministicSideEffect?: boolean;
   pendingEventChain: Promise<void> | null;
 
@@ -160,6 +161,7 @@ export type EmbeddedAgentSubscribeState = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
+  messageToolOnlySourceReplyDelivered: boolean;
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -275,6 +277,7 @@ type ToolHandlerParams = Pick<
   | "agentId"
   | "toolResultFormat"
   | "toolProgressDetail"
+  | "sourceReplyDeliveryMode"
 >;
 
 type ToolHandlerState = Pick<
@@ -301,6 +304,7 @@ type ToolHandlerState = Pick<
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSourceReplyPayloads"
+  | "messageToolOnlySourceReplyDelivered"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"

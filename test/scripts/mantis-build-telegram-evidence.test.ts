@@ -18,28 +18,55 @@ afterEach(() => {
   }
 });
 
-function makeTelegramOutput() {
+function makeTelegramOutput({ includeReport = true, summary = {} } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-evidence-test-"));
   tempDirs.push(dir);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    path.join(dir, "telegram-qa-summary.json"),
+    path.join(dir, "qa-evidence.json"),
     JSON.stringify({
-      credentials: { source: "convex", kind: "telegram", role: "ci" },
-      groupId: "<redacted>",
-      startedAt: "2026-05-10T00:00:00.000Z",
-      finishedAt: "2026-05-10T00:00:05.000Z",
-      cleanupIssues: [],
-      counts: { total: 1, passed: 1, failed: 0 },
-      scenarios: [
+      kind: "openclaw.qa.evidence-summary",
+      schemaVersion: 2,
+      generatedAt: "2026-05-10T00:00:05.000Z",
+      entries: [
         {
-          id: "telegram-status-command",
-          title: "Telegram status command reply",
-          status: "pass",
-          details: "Observed expected status response.",
-          rttMs: 1234,
+          test: {
+            kind: "live-transport-check",
+            id: "telegram-status-command",
+            title: "Telegram status command reply",
+          },
+          mapping: {
+            profile: "release",
+            coverage: [],
+          },
+          execution: {
+            runner: "host",
+            environment: {
+              ref: null,
+              os: "darwin",
+              nodeVersion: "v24.0.0",
+            },
+            provider: {
+              id: "openai",
+              live: true,
+              model: { name: "gpt-5.5", ref: "openai/gpt-5.5" },
+              auth: "live-frontier",
+            },
+            channel: {
+              id: "telegram",
+              live: true,
+              driver: "native",
+            },
+            packageSource: { kind: "source-checkout" },
+            artifacts: [],
+          },
+          result: {
+            status: "pass",
+            timing: { rttMs: 1234 },
+          },
         },
       ],
+      ...summary,
     }),
   );
   writeFileSync(
@@ -55,6 +82,32 @@ function makeTelegramOutput() {
       },
     ]),
   );
+  if (includeReport) {
+    writeFileSync(path.join(dir, "telegram-qa-report.md"), "# Telegram QA\n\npass\n");
+  }
+  return dir;
+}
+
+function makeLegacyTelegramOutput() {
+  const dir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-evidence-test-"));
+  tempDirs.push(dir);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, "telegram-qa-summary.json"),
+    JSON.stringify({
+      credentials: { source: "convex" },
+      counts: { total: 1, passed: 1, failed: 0 },
+      scenarios: [
+        {
+          id: "telegram-status-command",
+          title: "Telegram status command reply",
+          status: "pass",
+          details: "Observed expected status response.",
+        },
+      ],
+    }),
+  );
+  writeFileSync(path.join(dir, "telegram-qa-observed-messages.json"), JSON.stringify([]));
   writeFileSync(path.join(dir, "telegram-qa-report.md"), "# Telegram QA\n\npass\n");
   return dir;
 }
@@ -63,14 +116,18 @@ describe("scripts/mantis/build-telegram-evidence", () => {
   it("renders redacted Telegram observed messages as a transcript HTML page", () => {
     const html = renderTelegramEvidenceHtml({
       summary: {
-        credentials: { source: "convex" },
-        counts: { total: 1, passed: 1, failed: 0 },
-        scenarios: [
+        entries: [
           {
-            id: "telegram-status-command",
-            title: "Telegram status command reply",
-            status: "pass",
-            details: "ok",
+            test: {
+              id: "telegram-status-command",
+              title: "Telegram status command reply",
+            },
+            execution: {
+              provider: { auth: "live-frontier" },
+            },
+            result: {
+              status: "pass",
+            },
           },
         ],
       },
@@ -120,14 +177,73 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     );
   });
 
+  it("renders historical Telegram summaries when evidence summaries are absent", () => {
+    const dir = makeLegacyTelegramOutput();
+
+    const result = writeTelegramEvidence(["--output-dir", dir]);
+
+    expect(readFileSync(result.transcriptPath, "utf8")).toContain("Telegram status command reply");
+    expect(result.manifest.comparison.pass).toBe(true);
+    expect(
+      result.manifest.artifacts.find((artifact) => artifact.targetPath === "summary.json"),
+    ).toMatchObject({ path: "telegram-qa-summary.json" });
+  });
+
+  it("does not fabricate a required report artifact for passing Telegram summaries", () => {
+    const dir = makeTelegramOutput({ includeReport: false });
+
+    expect(() => writeTelegramEvidence(["--output-dir", dir])).toThrow(
+      "Missing Telegram QA report for passing summary",
+    );
+  });
+
+  it("keeps a placeholder report for failing Telegram summaries", () => {
+    const dir = makeTelegramOutput({
+      includeReport: false,
+      summary: {
+        entries: [
+          {
+            test: {
+              id: "telegram-status-command",
+              title: "Telegram status command reply",
+            },
+            execution: {
+              provider: { auth: "live-frontier" },
+            },
+            result: {
+              status: "fail",
+              failure: { reason: "Timed out." },
+            },
+          },
+        ],
+      },
+    });
+
+    const result = writeTelegramEvidence(["--output-dir", dir]);
+
+    expect(result.manifest.comparison.pass).toBe(false);
+    expect(readFileSync(path.join(dir, "telegram-qa-report.md"), "utf8")).toContain(
+      "Telegram QA report was unavailable",
+    );
+    expect(loadEvidenceManifest(result.manifestPath).comparison.pass).toBe(false);
+  });
+
   it("marks the comparison failed when any Telegram scenario fails", () => {
     const manifest = buildTelegramEvidenceManifest({
       candidateRef: "main",
       candidateSha: "abc123",
       scenarioLabel: "telegram-live",
       summary: {
-        counts: { total: 2, passed: 1, failed: 1 },
-        scenarios: [],
+        entries: [
+          {
+            test: { id: "telegram-canary" },
+            result: { status: "pass" },
+          },
+          {
+            test: { id: "telegram-status-command" },
+            result: { status: "fail" },
+          },
+        ],
       },
     });
 

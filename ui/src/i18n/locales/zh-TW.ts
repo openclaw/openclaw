@@ -491,6 +491,21 @@ export const zh_TW: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
+  logsView: {
+    title: "Logs",
+    subtitle: "Gateway file logs (JSONL).",
+    exportButton: "Export {label}",
+    exportLabels: {
+      filtered: "filtered",
+      visible: "visible",
+    },
+    filter: "Filter",
+    searchPlaceholder: "Search logs",
+    autoFollow: "Auto-follow",
+    file: "File: {file}",
+    truncated: "Log output truncated; showing latest chunk.",
+    empty: "No log entries.",
+  },
   workboard: {
     disabledHelpStart: "Workboard 已停用。啟用",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
@@ -609,6 +624,7 @@ export const zh_TW: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "搜尋卡片",
     allPriorities: "所有優先順序",
+    hideEmptyColumns: "Hide empty columns",
     emptyColumn: "將工作拖放到這裡",
     lifecycleUnlinked: "沒有工作階段",
     lifecycleUnlinkedDetail: "開始或連結工作階段",
@@ -1311,6 +1327,17 @@ export const zh_TW: TranslationMap = {
     toolCards: {
       toolError: "工具錯誤",
     },
+    workspaceFiles: {
+      label: "Workspace files",
+      expand: "Expand workspace files",
+      collapse: "Collapse workspace files",
+      workspace: "Workspace",
+      files: "Files",
+      refresh: "Refresh files",
+      loading: "Loading files…",
+      empty: "No workspace files",
+      missing: "Missing",
+    },
   },
   languages: {
     en: "英文",
@@ -1567,6 +1594,8 @@ export const zh_TW: TranslationMap = {
     },
     jobDetail: {
       system: "系統",
+      command: "Command",
+      cwd: "CWD",
       prompt: "提示",
       delivery: "傳送",
       agent: "代理",

@@ -38,6 +38,16 @@ const providerEndpointPlugins = vi.hoisted(() => [
       },
       {
         endpointClass: "google-vertex",
+        hosts: ["aiplatform.eu.rep.googleapis.com"],
+        googleVertexRegion: "eu",
+      },
+      {
+        endpointClass: "google-vertex",
+        hosts: ["aiplatform.us.rep.googleapis.com"],
+        googleVertexRegion: "us",
+      },
+      {
+        endpointClass: "google-vertex",
         hostSuffixes: ["-aiplatform.googleapis.com"],
         googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
       },
@@ -63,6 +73,15 @@ const providerEndpointPlugins = vi.hoisted(() => [
         hosts: ["integrate.api.nvidia.com"],
         baseUrls: ["https://integrate.api.nvidia.com/v1"],
       },
+      {
+        endpointClass: "xiaomi-native",
+        hosts: [
+          "api.xiaomimimo.com",
+          "token-plan-ams.xiaomimimo.com",
+          "token-plan-cn.xiaomimimo.com",
+          "token-plan-sgp.xiaomimimo.com",
+        ],
+      },
     ],
     providerRequest: {
       providers: {
@@ -80,6 +99,8 @@ const providerEndpointPlugins = vi.hoisted(() => [
         openrouter: { family: "openrouter" },
         qwen: { family: "modelstudio" },
         together: { family: "together" },
+        xiaomi: { family: "xiaomi" },
+        "xiaomi-token-plan": { family: "xiaomi" },
         xai: { family: "xai" },
         zai: { family: "zai" },
       },
@@ -92,6 +113,15 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     plugins: providerEndpointPlugins,
     diagnostics: [],
   }),
+}));
+
+vi.mock("../plugins/manifest-metadata-scan.js", () => ({
+  listOpenClawPluginManifestMetadata: () =>
+    providerEndpointPlugins.map((manifest, index) => ({
+      pluginDir: `provider-endpoint-fixture-${index}`,
+      manifest,
+      origin: "bundled",
+    })),
 }));
 
 import {
@@ -729,6 +759,23 @@ describe("provider attribution", () => {
       endpointClass: "google-vertex",
       hostname: "aiplatform.googleapis.com",
       googleVertexRegion: "global",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://aiplatform.eu.rep.googleapis.com"), {
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.eu.rep.googleapis.com",
+      googleVertexRegion: "eu",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://aiplatform.us.rep.googleapis.com"), {
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.us.rep.googleapis.com",
+      googleVertexRegion: "us",
+    });
+
+    expectRecordFields(resolveProviderEndpoint("https://discoveryengine.eu.rep.googleapis.com"), {
+      endpointClass: "custom",
+      hostname: "discoveryengine.eu.rep.googleapis.com",
     });
 
     expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/google"), {

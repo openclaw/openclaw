@@ -35,6 +35,12 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitAgentEvent({
     runId: ctx.params.runId,
+    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+    ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+    ...(ctx.params.lifecycleGeneration
+      ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
+      : {}),
     stream: "lifecycle",
     data: {
       phase: "start",
@@ -130,17 +136,32 @@ export function handleAgentEnd(
   }
 
   const emitLifecycleTerminal = () => {
+    const terminalStopReason =
+      ctx.params.resolveTerminalStopReason?.() ??
+      ctx.state.terminalStopReason ??
+      (!isError && isAssistantMessage(lastAssistant) ? lastAssistant.stopReason : undefined);
+    const terminalAborted =
+      typeof ctx.state.terminalAborted === "boolean"
+        ? ctx.state.terminalAborted
+        : ctx.params.isTerminalAborted?.();
     const terminalMeta = {
-      ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
+      ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
       ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),
       ...(typeof ctx.state.providerStarted === "boolean"
         ? { providerStarted: ctx.state.providerStarted }
         : {}),
+      ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
     };
     if (isError) {
       emitAgentEvent({
         runId: ctx.params.runId,
+        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+        ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+        ...(ctx.params.lifecycleGeneration
+          ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
+          : {}),
         stream: "lifecycle",
         data: {
           phase: "error",
@@ -166,6 +187,12 @@ export function handleAgentEnd(
     const successPhase = ctx.params.terminalLifecyclePhase ?? "end";
     emitAgentEvent({
       runId: ctx.params.runId,
+      ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+      ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+      ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+      ...(ctx.params.lifecycleGeneration
+        ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
+        : {}),
       stream: "lifecycle",
       data: {
         phase: successPhase,

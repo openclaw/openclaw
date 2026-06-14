@@ -68,7 +68,7 @@ jobs:
     steps:
       - name: Require maintainer-level repository access
         id: permission
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const allowed = new Set(["admin", "maintain", "write"]);
@@ -105,7 +105,7 @@ jobs:
     steps:
       - name: Resolve refs and target PR
         id: resolve
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const eventName = context.eventName;
@@ -327,7 +327,7 @@ jobs:
         run: pnpm build
 
       - name: Cache Mantis candidate pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.local/share/pnpm/store
@@ -445,8 +445,8 @@ jobs:
           telegram_exit=$?
           set -e
 
-          if [[ ! -f "$root/telegram-qa-summary.json" ]]; then
-            echo "Telegram live QA did not produce a summary." >&2
+          if [[ ! -f "$root/qa-evidence.json" && ! -f "$root/telegram-qa-summary.json" ]]; then
+            echo "Telegram live QA did not produce an evidence summary." >&2
             exit "$telegram_exit"
           fi
           echo "telegram_exit=${telegram_exit}" >> "$GITHUB_OUTPUT"
@@ -573,7 +573,7 @@ jobs:
       issues: write
     steps:
       - name: Remove workflow eyes reaction
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const { owner, repo } = context.repo;

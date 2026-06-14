@@ -156,6 +156,8 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** The runtime owns the transcript decision for this assistant payload. */
+  assistantTranscriptOwned?: boolean;
   /**
    * Internal OpenClaw notices generated after a runtime/provider failure are
    * not assistant source replies. Dispatch may deliver them even when normal
@@ -213,6 +215,18 @@ export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(p
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
   });
+}
+
+export function markCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (!reply) {
+    return reply;
+  }
+  if (Array.isArray(reply)) {
+    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+  }
+  return markReplyPayloadForSourceSuppressionDelivery(reply);
 }
 
 /** Returns true for internal status/notice payloads, not assistant answer content. */

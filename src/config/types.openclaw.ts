@@ -166,6 +166,14 @@ export type OpenClawConfig = {
       avatar?: string;
     };
   };
+  /** Terminal UI display settings. */
+  tui?: {
+    /** Footer display settings for the terminal UI. */
+    footer?: {
+      /** Show the remote Gateway hostname in the footer for non-local URL-backed connections. */
+      showRemoteHost?: boolean;
+    };
+  };
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
   /** Skill loading and bundled skill configuration. */

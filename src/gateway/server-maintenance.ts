@@ -5,7 +5,11 @@ import type { HealthSummary } from "../commands/health.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
-import { abortTrackedChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import {
+  abortTrackedChatRunById,
+  type ChatAbortControllerEntry,
+  type RestartRecoveryCandidate,
+} from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -103,6 +107,7 @@ export function startGatewayMaintenanceTimers(params: {
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   chatRunState: Pick<
     ChatRunState,
     | "abortedRuns"
@@ -257,7 +262,30 @@ export function startGatewayMaintenanceTimers(params: {
     };
 
     for (const [runId, entry] of params.chatAbortControllers) {
+      if (entry.projectSessionTerminalPending === true) {
+        continue;
+      }
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
+        continue;
+      }
+      if (entry.projectSessionTerminalPersistence) {
+        const lifecycleGeneration = entry.lifecycleGeneration?.trim();
+        const sessionKey = entry.sessionKey.trim();
+        const sessionId = entry.sessionId.trim();
+        if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
+          params.restartRecoveryCandidates.set(runId, {
+            runId,
+            lifecycleGeneration,
+            sessionKey,
+            sessionId,
+            observedAt: entry.projectSessionTerminalObservedAt,
+          });
+        }
+        params.chatAbortControllers.delete(runId);
+        continue;
+      }
+      if (entry.projectSessionActive === false) {
+        params.chatAbortControllers.delete(runId);
         continue;
       }
       abortTrackedChatRunById(params, {

@@ -1053,6 +1053,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
   });
 
+  it("normalizes second-based inbound timestamps before preparing user turns", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "timestamped followup",
+          RawBody: "timestamped followup",
+          CommandBody: "timestamped followup",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "+15550001",
+          ChatType: "direct",
+          Timestamp: 1_710_000_000,
+        },
+        sessionCtx: {
+          Body: "timestamped followup",
+          BodyStripped: "timestamped followup",
+          Provider: "whatsapp",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "+15550001",
+          ChatType: "direct",
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "timestamped followup",
+      timestamp: 1_710_000_000_000,
+    });
+  });
+
   it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
@@ -1699,6 +1730,7 @@ describe("runPreparedReply media-only handling", () => {
       async () => await authPromise.then(() => undefined),
     );
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const onSessionPrepared = vi.fn();
 
     const runPromise = runPreparedReply(
       baseParams({
@@ -1706,6 +1738,8 @@ describe("runPreparedReply media-only handling", () => {
         sessionId: "session-before-rotation",
         sessionEntry: sessionStore["session-key"],
         sessionStore,
+        storePath: "/tmp/sessions.json",
+        opts: { onSessionPrepared } as never,
       }),
     );
 
@@ -1737,6 +1771,11 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
+    expect(onSessionPrepared).toHaveBeenLastCalledWith({
+      sessionKey: "session-key",
+      sessionId: "session-after-rotation",
+      storePath: "/tmp/sessions.json",
+    });
   });
   it("reports still shutting down when a new owner appears after waiting", async () => {
     vi.useFakeTimers();
@@ -2397,6 +2436,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(groupContextParams?.sessionCtx?.Surface).toBe("discord");
     expect(groupContextParams?.sessionCtx?.ChatType).toBe("channel");
     expect(groupContextParams?.sessionCtx?.GroupChannel).toBe("#ops");
+    expect(call?.followupRun.run.chatType).toBe("channel");
     expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
   });
 

@@ -1,6 +1,7 @@
 /** Prepares and runs auto-reply agent turns, including prompt context and session policy. */
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -68,6 +69,7 @@ import type { InlineDirectives } from "./directive-handling.js";
 import { isSystemEventProvider } from "./effective-reply-route.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
+import type { ReplySessionBinding } from "./get-reply.types.js";
 import {
   buildDirectChatContext,
   buildGroupChatContext,
@@ -118,10 +120,12 @@ type InternalGetReplyOptions = GetReplyOptions & {
    * can differ from abortSignal when dispatch temporarily borrows an active lane.
    */
   queuedFollowupAbortSignal?: AbortSignal;
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 function hasResolvedThinkingCatalogEntry(params: {
   catalog?: readonly ThinkingCatalogEntry[];
@@ -148,6 +152,16 @@ function routeThreadIdsMatch(
     return true;
   }
   return String(activeThreadId) === String(currentThreadId);
+}
+
+function normalizeMessageTimestampMs(value: unknown): number | undefined {
+  const timestamp = typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (timestamp === undefined || timestamp <= 0) {
+    return undefined;
+  }
+  const timestampMs =
+    timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
+  return asDateTimestampMs(timestampMs);
 }
 
 function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
@@ -799,6 +813,7 @@ export async function runPreparedReply(
         sessionKey,
         isMainSession,
         isNewSession,
+        suppressHeartbeatOwnedEvents: isHeartbeat,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
@@ -928,6 +943,11 @@ export async function runPreparedReply(
           }).existing ?? sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
+    internalOpts?.onSessionPrepared?.({
+      sessionKey,
+      sessionId: latestSessionId,
+      storePath,
+    });
     return {
       sessionEntry: latestSessionEntry,
       sessionId: latestSessionId,
@@ -1188,6 +1208,7 @@ export async function runPreparedReply(
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
+  const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
     hasMedia: userTurnMediaForPersistence.length > 0,
   });
@@ -1202,6 +1223,12 @@ export async function runPreparedReply(
                 mediaOnlyText: "[User sent media without caption]",
               }
             : {}),
+          // Persist the message's own arrival timestamp so the single
+          // LLM-boundary stamping site (normalizeMessagesForLlmBoundary) can
+          // derive a stable per-message `[DOW YYYY-MM-DD HH:MM TZ]` prefix that
+          // is identical whether this turn is sent as the current turn or
+          // replayed as history. See: https://github.com/openclaw/openclaw/issues/3658
+          ...(userTurnTimestamp ? { timestamp: userTurnTimestamp } : {}),
         }
       : undefined;
   const userTurnTranscriptRecorder =
@@ -1258,6 +1285,7 @@ export async function runPreparedReply(
         // still reflects the active channel that should own tool routing.
         provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       }),
+      chatType: normalizeChatType(promptSessionCtx.ChatType),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:
@@ -1310,6 +1338,7 @@ export async function runPreparedReply(
           : {}),
       },
       timeoutMs,
+      runTimeoutOverrideMs: opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance,

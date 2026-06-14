@@ -301,6 +301,7 @@ export function parseFeishuMessageEvent(
     chatId: event.message.chat_id,
     messageId: event.message.message_id,
     replyTargetMessageId: event.message.reply_target_message_id?.trim() || undefined,
+    typingTargetMessageId: event.message.typing_target_message_id?.trim() || undefined,
     suppressReplyTarget: event.message.suppress_reply_target === true,
     senderId: senderUserId || senderOpenId || "",
     // Keep the historical field name, but fall back to user_id when open_id is unavailable
@@ -802,7 +803,14 @@ export async function handleFeishuMessage(params: {
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
     const peerId = isGroup ? (groupSession?.peerId ?? ctx.chatId) : ctx.senderOpenId;
     const parentPeer = isGroup ? (groupSession?.parentPeer ?? null) : null;
-    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : false;
+    const directThreadReply = !isGroup && Boolean(ctx.threadId?.trim());
+    const defaultReplyTargetMessageId =
+      ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId);
+    const directThreadRootId = directThreadReply ? ctx.rootId?.trim() || undefined : undefined;
+    const directThreadReplyTargetMessageId = directThreadReply
+      ? (directThreadRootId ?? defaultReplyTargetMessageId)
+      : undefined;
+    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : directThreadReply;
     const feishuAcpConversationSupported =
       !isGroup ||
       groupSession?.groupSessionScope === "group_topic" ||
@@ -906,10 +914,13 @@ export async function handleFeishuMessage(params: {
         bindingResolution: configuredBinding,
       });
       if (!ensured.ok) {
-        const replyTargetMessageId =
+        const acpTopicReply =
           isGroup &&
           (groupSession?.groupSessionScope === "group_topic" ||
-            groupSession?.groupSessionScope === "group_topic_sender")
+            groupSession?.groupSessionScope === "group_topic_sender");
+        const replyTargetMessageId = directThreadReply
+          ? directThreadReplyTargetMessageId
+          : acpTopicReply
             ? (ctx.rootId ?? ctx.messageId)
             : ctx.messageId;
         await sendMessageFeishu({
@@ -917,7 +928,7 @@ export async function handleFeishuMessage(params: {
           to: `chat:${ctx.chatId}`,
           text: `⚠️ Failed to initialize the configured ACP session for this Feishu conversation: ${ensured.error}`,
           replyToMessageId: replyTargetMessageId,
-          replyInThread: isGroup ? (groupSession?.replyInThread ?? false) : false,
+          replyInThread,
           accountId: account.accountId,
         }).catch((err: unknown) => {
           log(`feishu[${account.accountId}]: failed to send ACP init error reply: ${String(err)}`);
@@ -1387,13 +1398,15 @@ export async function handleFeishuMessage(params: {
     const configReplyInThread =
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
-    const replyTargetMessageId =
-      isTopicSession || configReplyInThread
-        ? (ctx.rootId ??
-          ctx.replyTargetMessageId ??
-          (ctx.suppressReplyTarget ? undefined : ctx.messageId))
-        : (ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId));
-    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+    const topicReplyTargetMessageId = ctx.rootId ?? defaultReplyTargetMessageId;
+    const replyTargetMessageId = directThreadReply
+      ? directThreadReplyTargetMessageId
+      : isTopicSession || configReplyInThread
+        ? topicReplyTargetMessageId
+        : defaultReplyTargetMessageId;
+    const typingTargetMessageId =
+      ctx.typingTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId);
+    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : directThreadReply;
     const lastRouteThreadId =
       isGroup && (isTopicSession || configReplyInThread || threadReply)
         ? replyTargetMessageId
@@ -1518,7 +1531,8 @@ export async function handleFeishuMessage(params: {
               chatId: ctx.chatId,
               allowReasoningPreview,
               replyToMessageId: replyTargetMessageId,
-              skipReplyToInMessages: !isGroup,
+              typingTargetMessageId,
+              skipReplyToInMessages: !isGroup && !directThreadReply,
               replyInThread,
               rootId: ctx.rootId,
               threadReply,
@@ -1694,7 +1708,8 @@ export async function handleFeishuMessage(params: {
           chatId: ctx.chatId,
           allowReasoningPreview,
           replyToMessageId: replyTargetMessageId,
-          skipReplyToInMessages: !isGroup,
+          typingTargetMessageId,
+          skipReplyToInMessages: !isGroup && !directThreadReply,
           replyInThread,
           rootId: ctx.rootId,
           threadReply,

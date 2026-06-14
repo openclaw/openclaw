@@ -72,9 +72,11 @@ resolve_package_tgz() {
 
 package_mount_args=()
 package_install_source="$PACKAGE_SPEC"
+package_source_kind="npm-package"
 resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
 if [ -n "$resolved_package_tgz" ]; then
   package_install_source="/package-under-test/$(basename "$resolved_package_tgz")"
+  package_source_kind="packed-tarball"
   package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")
 else
   validate_openclaw_package_spec "$PACKAGE_SPEC"
@@ -198,6 +200,8 @@ docker_env=(
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source"
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL"
   -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"
+  -e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"
+  -e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"
   -e OPENCLAW_QA_TELEGRAM_GROUP_ID
   -e OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN
   -e OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN
@@ -236,6 +240,9 @@ for key in \
   OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS \
   OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS \
   OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES \
+  OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES \
+  OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS \
+  OPENCLAW_QA_PACKAGE_SOURCE_SHA \
   OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX \
   OPENCLAW_QA_CREDENTIAL_OWNER_ID \
   OPENCLAW_QA_ALLOW_INSECURE_HTTP; do
@@ -244,10 +251,10 @@ done
 
 run_logged() {
   if ! "$@" >"$run_log" 2>&1; then
-    cat "$run_log"
+    docker_e2e_print_log "$run_log"
     exit 1
   fi
-  cat "$run_log"
+  docker_e2e_print_log "$run_log"
   >"$run_log"
 }
 
@@ -303,6 +310,7 @@ run_logged docker_e2e_docker_run_cmd run --rm \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
 
 export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-rtt.XXXXXX")"
 export NPM_CONFIG_PREFIX="/npm-global"
@@ -334,7 +342,7 @@ dump_logs() {
     "$gateway_log"; do
     if [ -f "$file" ]; then
       echo "--- $file ---" >&2
-      sed -n '1,260p' "$file" >&2 || true
+      openclaw_e2e_print_log "$file" >&2
     fi
   done
 }
@@ -409,7 +417,7 @@ for _ in $(seq 1 60); do
 done
 if [ "$mock_ready" != "1" ]; then
   echo "Mock OpenAI server did not become ready" >&2
-  cat "$mock_log" >&2 || true
+  openclaw_e2e_print_log "$mock_log" >&2
   exit 1
 fi
 

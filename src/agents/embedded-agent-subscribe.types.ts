@@ -29,6 +29,8 @@ export type {
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Immutable gateway lifecycle ownership for this execution. */
+  lifecycleGeneration?: string;
   /** Originating message channel used for subsystem log attribution. */
   messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
@@ -41,6 +43,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Attempt-owned delivery proof for message-tool-only source replies. */
+  hasDeliveredMessageToolOnlySourceReply?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onReasoningStream?: (payload: {
     text?: string;
@@ -69,6 +73,10 @@ export type SubscribeEmbeddedAgentSessionParams = {
   }) => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   terminalLifecyclePhase?: "end" | "finishing";
+  /** Read immediately before terminal lifecycle emission. */
+  isTerminalAborted?: () => boolean | undefined;
+  /** Override the terminal stop reason from the current abort owner. */
+  resolveTerminalStopReason?: () => string | undefined;
   /** Gate final block delivery/lifecycle after the natural answer is known. */
   onBeforeTerminalDelivery?: (event: {
     messages: AgentMessage[];

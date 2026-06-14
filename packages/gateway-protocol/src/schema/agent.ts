@@ -126,6 +126,12 @@ export const SendParamsSchema = Type.Object(
     message: Type.Optional(Type.String()),
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
+    /** Base64 attachment payload for gateway-local media materialization. */
+    buffer: Type.Optional(Type.String()),
+    /** Optional filename for a base64 attachment payload. */
+    filename: Type.Optional(Type.String()),
+    /** Optional MIME type for a base64 attachment payload. */
+    contentType: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
@@ -213,6 +219,7 @@ export const AgentParamsSchema = Type.Object(
     ),
     acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
     internalRuntimeHandoffId: Type.Optional(NonEmptyString),
+    execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     suppressPromptPersistence: Type.Optional(Type.Boolean()),
@@ -268,6 +275,12 @@ export const WakeParamsSchema = Type.Object(
     // Typed field; misspelled variants remain opaque metadata because wake
     // senders already rely on additionalProperties.
     sessionKey: Type.Optional(NonEmptyString),
+    /**
+     * Optional agent id paired with `sessionKey`. Routes multi-agent setups
+     * to the agent that owns the targeted session — closes the related half
+     * of #46886 ("always routes to default agent").
+     */
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata
 );
