@@ -1181,6 +1181,70 @@ describe("cron controller", () => {
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
 
+  it("flags unsendable Telegram announce To targets before save (#90467)", () => {
+    // A phone number, a hyphenated name, and a too-short handle cannot resolve
+    // through the Telegram target contract, so block them before save.
+    for (const target of ["+15551234567", "gmail-cleaner", "@abc"]) {
+      const errors = validateCronForm({
+        ...DEFAULT_CRON_FORM,
+        name: "tg",
+        payloadKind: "agentTurn",
+        payloadText: "ping",
+        sessionTarget: "isolated",
+        deliveryMode: "announce",
+        deliveryChannel: "telegram",
+        deliveryTo: target,
+      });
+      expect(errors.deliveryTo).toBe("cron.errors.telegramChatIdInvalid");
+    }
+  });
+
+  it("accepts every Telegram target form runtime delivery resolves (#90467)", () => {
+    // Mirrors the forms normalizeTelegramMessagingTarget accepts: numeric chat
+    // ids, @username / bare usernames, t.me links, telegram:/tg: prefixes, and
+    // optional :topicId / :topic:topicId suffixes.
+    const accepted = [
+      "-1001234567890",
+      "123456789",
+      "-1001234567890:42",
+      "-100123:topic:7",
+      "@mychannel",
+      "mychannel",
+      "https://t.me/mychannel",
+      "t.me/mychannel",
+      "telegram:123456789",
+      "tg:@mychannel",
+      "@mychannel:42",
+    ];
+    for (const target of accepted) {
+      const errors = validateCronForm({
+        ...DEFAULT_CRON_FORM,
+        name: "tg",
+        payloadKind: "agentTurn",
+        payloadText: "ping",
+        sessionTarget: "isolated",
+        deliveryMode: "announce",
+        deliveryChannel: "telegram",
+        deliveryTo: target,
+      });
+      expect(errors.deliveryTo).toBeUndefined();
+    }
+  });
+
+  it("ignores Telegram chat id format on non-telegram channels", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "discord",
+      payloadKind: "agentTurn",
+      payloadText: "ping",
+      sessionTarget: "isolated",
+      deliveryMode: "announce",
+      deliveryChannel: "discord",
+      deliveryTo: "ops",
+    });
+    expect(errors.deliveryTo).toBeUndefined();
+  });
+
   it("blocks add/update submit when validation errors exist", async () => {
     const request = vi.fn(async () => ({}));
     const state = createState({

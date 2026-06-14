@@ -116,6 +116,23 @@ export function normalizeCronFormState(form: CronFormState): CronFormState {
   };
 }
 
+// Mirrors the Telegram delivery target contract that cron announce delivery
+// resolves through normalizeTargetForProvider -> the Telegram plugin's
+// normalizeTelegramMessagingTarget (extensions/telegram/src/targets.ts,
+// parseTelegramTarget + normalizeTelegramLookupTarget). Accept the same forms
+// runtime can send to — numeric chat ids, @username / bare usernames, and t.me
+// links — with optional telegram:/tg: prefix and optional :topicId /
+// :topic:topicId suffix. Anything else (e.g. a phone number) cannot resolve at
+// send time, so it is caught before the cron job is saved. The plugin owns the
+// canonical contract; this is a save-time UX mirror, not a second source.
+const TELEGRAM_USERNAME_PATTERN = "[A-Za-z0-9_]{5,}";
+const TELEGRAM_TARGET_PATTERN = new RegExp(
+  `^(?:(?:telegram|tg):)?` +
+    `(?:-?\\d+|@?${TELEGRAM_USERNAME_PATTERN}|(?:https?:\\/\\/)?t\\.me\\/${TELEGRAM_USERNAME_PATTERN})` +
+    `(?::topic:\\d+|:\\d+)?$`,
+  "i",
+);
+
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
   if (!form.name.trim()) {
@@ -166,6 +183,12 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.deliveryTo = "cron.errors.webhookUrlRequired";
     } else if (!/^https?:\/\//i.test(target)) {
       errors.deliveryTo = "cron.errors.webhookUrlInvalid";
+    }
+  }
+  if (form.deliveryMode === "announce" && form.deliveryChannel === "telegram") {
+    const target = form.deliveryTo.trim();
+    if (target && !TELEGRAM_TARGET_PATTERN.test(target)) {
+      errors.deliveryTo = "cron.errors.telegramChatIdInvalid";
     }
   }
   if (form.failureAlertMode === "custom") {
