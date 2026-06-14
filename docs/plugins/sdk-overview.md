@@ -220,6 +220,27 @@ inbound through the channel's normal admission path so a **revoked** destination
 (group/topic disabled, `requireTopic` unmet) is dropped — if it instead delivered
 unconditionally, content could leak to a destination whose access was disabled.
 
+**Companion: echo-admission predicate.** The native mirror runs the channel's
+admission gate, but the prompt / post-hoc **echo** path (`fireEchoDeliveries`)
+delivers through the channel-agnostic raw send, which has no such gate — so a
+disabled destination would keep receiving echoes. A channel registers an
+admission predicate so the echo path honors live enablement too:
+
+```ts
+import {
+  registerChannelEchoAdmission,
+  unregisterChannelEchoAdmission,
+  type ChannelEchoAdmission,
+} from "openclaw/plugin-sdk/channel-outbound";
+```
+
+`registerChannelEchoAdmission(channel, accountId, (cfg, target) => boolean)`
+returns `false` when an echo to `target` is currently not allowed (e.g. its
+group/topic is disabled). Same lifecycle and account-resolution rules as the
+dispatcher: per-account, last-wins, unregister on stop, and **fail closed** — a
+channel with predicates registered but none resolving for the target's account
+denies the echo. Channels that register no predicate deliver echoes unchanged.
+
 ### Host hooks for workflow plugins
 
 Host hooks are the SDK seams for plugins that need to participate in the host

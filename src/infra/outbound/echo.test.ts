@@ -3,10 +3,10 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { SessionEntry, SessionEchoTarget } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  resolveEchoTargets,
-  fireEchoDeliveries,
-  targetMatchesSessionParticipant,
-} from "./echo.js";
+  registerChannelEchoAdmission,
+  resetChannelEchoAdmissionForTest,
+} from "./channel-admission.js";
+import { resolveEchoTargets, fireEchoDeliveries, targetMatchesSessionParticipant } from "./echo.js";
 
 vi.mock("./deliver.js", () => ({
   deliverOutboundPayloadsInternal: vi.fn(() => Promise.resolve()),
@@ -256,6 +256,49 @@ describe("fireEchoDeliveries", () => {
   afterEach(() => {
     mockDeliver.mockReset();
     mockDeliver.mockResolvedValue(undefined as never);
+    resetChannelEchoAdmissionForTest();
+  });
+
+  it("suppresses echo delivery to a target whose channel reports it inadmissible (revocation)", () => {
+    // The channel-agnostic echo send bypasses the channel's own inbound admission
+    // gate, so a disabled (revoked) destination would still receive echoes. The
+    // admission predicate makes the echo path honor live enablement: fail closed.
+    registerChannelEchoAdmission("telegram", "default", () => false);
+    const entry = makeEntry([
+      makeTarget({ channel: "telegram", to: "telegram:-100", accountId: "default", threadId: 1 }),
+    ]);
+    fireEchoDeliveries(
+      {
+        cfg: fakeCfg,
+        sessionKey: "agent:main",
+        sessionEntry: entry,
+        originChannel: "webchat",
+        originTo: "",
+        role: "user",
+      },
+      [{ text: "secret prompt" }],
+    );
+    // The disabled destination receives nothing — neither native mirror nor echo.
+    expect(mockDeliver).not.toHaveBeenCalled();
+  });
+
+  it("delivers when the channel predicate admits the target", () => {
+    registerChannelEchoAdmission("telegram", "default", () => true);
+    const entry = makeEntry([
+      makeTarget({ channel: "telegram", to: "telegram:-100", accountId: "default", threadId: 1 }),
+    ]);
+    fireEchoDeliveries(
+      {
+        cfg: fakeCfg,
+        sessionKey: "agent:main",
+        sessionEntry: entry,
+        originChannel: "webchat",
+        originTo: "",
+        role: "user",
+      },
+      [{ text: "hi" }],
+    );
+    expect(mockDeliver).toHaveBeenCalledOnce();
   });
 
   it("never passes session or mirror to deliver (loop-safety contract)", () => {
@@ -475,9 +518,9 @@ describe("targetMatchesSessionParticipant (no arbitrary chat ids)", () => {
   });
 
   it("rejects a different channel / chat id / thread (arbitrary target)", () => {
-    expect(
-      targetMatchesSessionParticipant(boundEntry, { channel: "discord", to: "999" }),
-    ).toBe(false);
+    expect(targetMatchesSessionParticipant(boundEntry, { channel: "discord", to: "999" })).toBe(
+      false,
+    );
     expect(
       targetMatchesSessionParticipant(boundEntry, {
         channel: "telegram",

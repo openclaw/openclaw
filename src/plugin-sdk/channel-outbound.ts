@@ -57,6 +57,17 @@ export {
   unregisterChannelMirrorDispatcher,
   type MirrorDispatcher,
 } from "../infra/outbound/mirror-dispatch.js";
+
+// Channel echo-admission seam. A channel registers a predicate so the prompt /
+// post-hoc echo path (fireEchoDeliveries) honors the destination's live
+// enablement — a pinned target stops receiving echoes once its group/topic is
+// disabled (revocation), matching the native mirror gate. Contract:
+// docs/plugins/sdk-overview.md#channel-mirror-dispatcher.
+export {
+  registerChannelEchoAdmission,
+  unregisterChannelEchoAdmission,
+  type ChannelEchoAdmission,
+} from "../infra/outbound/channel-admission.js";
 export { createChannelRunQueue } from "./channel-lifecycle.core.js";
 export type {
   ChannelRunQueue,

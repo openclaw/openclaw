@@ -3,6 +3,7 @@ import type { SessionEchoTarget, SessionEntry } from "../../config/sessions/type
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { formatErrorMessage } from "../errors.js";
+import { isEchoTargetAdmissible } from "./channel-admission.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
 
 export function normalizeEchoTargetId(channel: string, to: string): string {
@@ -140,9 +141,29 @@ export function fireEchoDeliveries(
     originThreadId: ctx.originThreadId,
     role: ctx.role,
   });
-  const targets = options?.filterTargets
+  const filteredTargets = options?.filterTargets
     ? resolvedTargets.filter(options.filterTargets)
     : resolvedTargets;
+
+  // Honor the destination channel's live enablement. The echo path delivers via
+  // the channel-agnostic raw send (no per-message admission gate), so a disabled
+  // (revoked) group/topic would keep receiving echoes unless we check here. Fail
+  // closed: drop targets a registered channel predicate reports as inadmissible.
+  const targets = filteredTargets.filter((target) => {
+    if (
+      isEchoTargetAdmissible(ctx.cfg, target.channel, {
+        to: target.to,
+        accountId: target.accountId,
+        threadId: target.threadId,
+      })
+    ) {
+      return true;
+    }
+    log.warn(
+      `Echo delivery suppressed for ${target.channel}:${target.to} (destination disabled/revoked)`,
+    );
+    return false;
+  });
 
   if (targets.length === 0) {
     return;

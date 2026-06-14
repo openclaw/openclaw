@@ -1,5 +1,7 @@
 import {
+  registerChannelEchoAdmission,
   registerChannelMirrorDispatcher,
+  unregisterChannelEchoAdmission,
   unregisterChannelMirrorDispatcher,
 } from "openclaw/plugin-sdk/channel-outbound";
 // Telegram plugin module implements bot core behavior.
@@ -409,6 +411,30 @@ export function createTelegramBotCore(
     processMessage.dispatchMirror({ target, replyResolver }),
   );
 
+  // Pin-from-here revocation: the prompt / post-hoc echo path delivers through
+  // the channel-agnostic raw send (no inbound admission gate), so gate it on
+  // this account's live group/topic enablement. A disabled (revoked) destination
+  // then stops receiving echoes too, matching the native mirror gate.
+  registerChannelEchoAdmission("telegram", account.accountId, (_cfg, target) => {
+    const raw = target.to
+      .replace(/^(telegram|tg):/i, "")
+      .replace(/^group:/i, "")
+      .trim();
+    const chatId = /^-?\d+$/.test(raw) ? Number(raw) : raw;
+    const threadNum = target.threadId == null ? undefined : Number(target.threadId);
+    const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+      chatId,
+      threadNum != null && Number.isFinite(threadNum) ? threadNum : undefined,
+    );
+    if (groupConfig?.enabled === false) {
+      return false;
+    }
+    if (topicConfig?.enabled === false) {
+      return false;
+    }
+    return true;
+  });
+
   registerTelegramNativeCommands({
     bot,
     cfg,
@@ -458,6 +484,7 @@ export function createTelegramBotCore(
     // Drop this account's mirror dispatcher so a stopped account never keeps a
     // stale dispatcher (a reload re-registers a fresh one; a removal just clears it).
     unregisterChannelMirrorDispatcher("telegram", account.accountId);
+    unregisterChannelEchoAdmission("telegram", account.accountId);
     return originalStop(...args);
   }) as typeof bot.stop;
 
