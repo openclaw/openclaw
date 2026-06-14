@@ -107,7 +107,7 @@ describe("TTS core", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       },
-    } as ResolvedTtsConfig;
+    } as unknown as ResolvedTtsConfig;
     const testUsage: Usage = {
       input: 10,
       output: 20,
@@ -125,9 +125,9 @@ describe("TTS core", () => {
           text: "<thinking>Internal reasoning that should not be spoken.</thinking>The weather today is sunny with a high of 75°F.",
         },
       ],
-      api: config.model.api,
-      provider: config.model.provider,
-      model: config.model.id,
+      api: "openai-completions",
+      provider: "openai",
+      model: "gpt-5.5",
       stopReason: "stop",
       usage: testUsage,
       timestamp: Date.now(),
@@ -143,7 +143,15 @@ describe("TTS core", () => {
       },
       {
         completeSimple: vi.fn(async () => assistant),
-        prepareSimpleCompletionModel: vi.fn(async () => ({ model: config.model, auth })),
+        prepareSimpleCompletionModel: vi.fn(async () => ({
+          model: {
+            id: "gpt-5.5",
+            api: "openai-completions",
+            provider: "openai",
+            baseUrl: "https://api.openai.com/v1",
+          },
+          auth,
+        })),
         requireApiKey: vi.fn(() => "key"),
       },
     );
