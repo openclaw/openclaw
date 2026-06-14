@@ -62,6 +62,24 @@
         "api": "anthropic-messages",
         "models": [
           {
+            "id": "claude-fable-5",
+            "name": "Claude Fable 5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
+            "contextWindow": 1000000,
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "off": "low",
+              "minimal": "low",
+              "xhigh": "xhigh",
+              "max": "max"
+            }
+          },
+          {
             "id": "claude-opus-4-8",
             "name": "Claude Opus 4.8",
             "reasoning": true,
@@ -79,6 +97,28 @@
             "input": ["text", "image"],
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 200000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "claude-haiku-4-5",
+            "name": "Claude Haiku 4.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
+            },
+            "contextWindow": 200000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "claude-haiku-4-5-20251001",
+            "name": "Claude Haiku 4.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
             "contextWindow": 200000,
             "maxTokens": 64000

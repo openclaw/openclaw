@@ -10,6 +10,7 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -1211,16 +1212,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:dreaming-narrative-light-1775894400455": {
           sessionId: "dreaming-narrative",
           sessionFile: transcriptPath,
           updatedAt: Date.parse("2026-04-05T18:05:00.000Z"),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     const mtime = new Date("2026-04-05T18:05:00.000Z");
     await fs.utimes(transcriptPath, mtime, mtime);
@@ -1306,16 +1307,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:cron:job-1:run:run-1": {
           sessionId: "cron-run",
           sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
 
     const { beforeAgentReply } = createHarness(
@@ -2913,6 +2914,75 @@ describe("previewRemHarness", () => {
 
     expect(preview.groundedInputPaths).toStrictEqual([]);
     expect(preview.grounded).toBeNull();
+  });
+
+  it("skips REM short-term candidates whose source file disappeared", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const nowMs = new Date("2026-04-15T12:00:00.000Z").getTime();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-14.md"),
+      "Move backups to S3 Glacier.\n",
+      "utf-8",
+    );
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "live backup",
+      nowMs,
+      results: [
+        {
+          path: "memory/2026-04-14.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.91,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "stale provider setup",
+      nowMs,
+      results: [
+        {
+          path: "memory/.dreams/session-corpus/2026-04-16.txt",
+          startLine: 2,
+          endLine: 2,
+          score: 0.88,
+          snippet: "Assistant: Documented Ollama provider setup.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const preview = await previewRemHarness({
+      workspaceDir,
+      nowMs,
+      pluginConfig: {
+        dreaming: {
+          enabled: true,
+          phases: {
+            rem: {
+              enabled: true,
+              lookbackDays: 7,
+              limit: 10,
+              minPatternStrength: 0,
+            },
+          },
+        },
+      },
+    });
+
+    const candidateTruthSnippets = preview.rem.candidateTruths
+      .map((entry) => entry.snippet)
+      .join("\n");
+    const bodyText = preview.rem.bodyLines.join("\n");
+    expect(preview.recallEntryCount).toBe(1);
+    expect(preview.rem.sourceEntryCount).toBe(1);
+    expect(candidateTruthSnippets).toContain("Move backups to S3 Glacier.");
+    expect(candidateTruthSnippets).not.toContain("Documented Ollama provider setup");
+    expect(bodyText).toContain("Move backups to S3 Glacier.");
+    expect(bodyText).not.toContain("Documented Ollama provider setup");
   });
 
   it("skips REM preview when rem.limit=0 while still ranking deep candidates", async () => {

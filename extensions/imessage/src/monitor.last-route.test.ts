@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
@@ -19,21 +19,7 @@ import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 type DispatchInboundMessageParams = {
   ctx: MsgContext;
-  replyOptions?: {
-    suppressDefaultToolProgressMessages?: boolean;
-    allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
-    onReplyStart?: () => Promise<void> | void;
-    onTypingCleanup?: () => void;
-    onTypingController?: (typing: {
-      startTypingLoop: () => Promise<void>;
-      refreshTypingTtl: () => void;
-      isActive: () => boolean;
-      markRunComplete: () => void;
-      markDispatchIdle: () => void;
-      cleanup: () => void;
-    }) => void;
-    onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
-  };
+  replyOptions?: GetReplyOptions;
 };
 
 const waitForTransportReadyMock = vi.hoisted(() =>
@@ -154,10 +140,14 @@ describe("iMessage monitor last-route updates", () => {
         }
       };
       const typingController = {
+        onReplyStart: async () => {
+          await params.replyOptions?.onReplyStart?.();
+        },
         startTypingLoop: async () => {
           active = true;
           await params.replyOptions?.onReplyStart?.();
         },
+        startTypingOnText: async () => {},
         refreshTypingTtl: () => {},
         isActive: () => active,
         markRunComplete: () => {
@@ -412,6 +402,260 @@ describe("iMessage monitor last-route updates", () => {
       expect.anything(),
     );
   });
+
+  it.each([
+    {
+      label: "flat true",
+      imessagePatch: { blockStreaming: true },
+      expectedDisable: false,
+    },
+    {
+      label: "flat false",
+      imessagePatch: { blockStreaming: false },
+      expectedDisable: true,
+    },
+    {
+      label: "nested true",
+      imessagePatch: { streaming: { block: { enabled: true } } },
+      expectedDisable: false,
+    },
+    {
+      label: "nested false",
+      imessagePatch: { streaming: { block: { enabled: false } } },
+      expectedDisable: true,
+    },
+    { label: "unset", imessagePatch: {}, expectedDisable: undefined },
+  ] as const)(
+    "passes iMessage block streaming config ($label) through to reply dispatch",
+    async ({ imessagePatch, expectedDisable }) => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
+        expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+      });
+
+      let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+      const client = {
+        request: vi.fn(async (method: string) => {
+          if (method === "watch.subscribe") {
+            return { subscription: 1 };
+          }
+          throw new Error(`unexpected imsg method ${method}`);
+        }),
+        waitForClose: vi.fn(async () => {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 10,
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                text: "stream blocks before the final",
+                is_group: false,
+                created_at: new Date().toISOString(),
+              },
+            },
+          });
+          await Promise.resolve();
+          await Promise.resolve();
+        }),
+        stop: vi.fn(async () => {}),
+      };
+      createIMessageRpcClientMock.mockImplementation(async (params) => {
+        if (!params?.onNotification) {
+          throw new Error("expected iMessage notification handler");
+        }
+        onNotification = params.onNotification;
+        return client as never;
+      });
+
+      await monitorIMessageProvider({
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+15550001111"],
+              sendReadReceipts: false,
+              ...imessagePatch,
+            },
+          },
+          messages: { inbound: { debounceMs: 0 } },
+          session: { mainKey: "main" },
+        } as never,
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      });
+
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "flat false overrides channel nested true",
+      channelBlockEnabled: true,
+      accountBlockStreaming: false,
+      expectedDisable: true,
+    },
+    {
+      label: "flat true overrides channel nested false",
+      channelBlockEnabled: false,
+      accountBlockStreaming: true,
+      expectedDisable: false,
+    },
+  ] as const)(
+    "preserves account-level block streaming opt-outs when inheriting channel streaming ($label)",
+    async ({ channelBlockEnabled, accountBlockStreaming, expectedDisable }) => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
+        expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+      });
+
+      let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+      const client = {
+        request: vi.fn(async (method: string) => {
+          if (method === "watch.subscribe") {
+            return { subscription: 1 };
+          }
+          throw new Error(`unexpected imsg method ${method}`);
+        }),
+        waitForClose: vi.fn(async () => {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 11,
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                text: "stream blocks before the final",
+                is_group: false,
+                created_at: new Date().toISOString(),
+              },
+            },
+          });
+          await Promise.resolve();
+          await Promise.resolve();
+        }),
+        stop: vi.fn(async () => {}),
+      };
+      createIMessageRpcClientMock.mockImplementation(async (params) => {
+        if (!params?.onNotification) {
+          throw new Error("expected iMessage notification handler");
+        }
+        onNotification = params.onNotification;
+        return client as never;
+      });
+
+      await monitorIMessageProvider({
+        accountId: "personal",
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+15550001111"],
+              sendReadReceipts: false,
+              streaming: { block: { enabled: channelBlockEnabled } },
+              accounts: {
+                personal: {
+                  blockStreaming: accountBlockStreaming,
+                },
+              },
+            },
+          },
+          messages: { inbound: { debounceMs: 0 } },
+          session: { mainKey: "main" },
+        } as never,
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      });
+
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "chunkMode",
+      accountStreaming: { chunkMode: "length" },
+    },
+    {
+      label: "block coalesce",
+      accountStreaming: { block: { coalesce: { idleMs: 1 } } },
+    },
+  ] as const)(
+    "preserves channel-level nested block streaming when an account overrides $label",
+    async ({ accountStreaming }) => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
+        expect(params.replyOptions?.disableBlockStreaming).toBe(false);
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
+      });
+
+      let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+      const client = {
+        request: vi.fn(async (method: string) => {
+          if (method === "watch.subscribe") {
+            return { subscription: 1 };
+          }
+          throw new Error(`unexpected imsg method ${method}`);
+        }),
+        waitForClose: vi.fn(async () => {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 11,
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                text: "stream blocks before the final",
+                is_group: false,
+                created_at: new Date().toISOString(),
+              },
+            },
+          });
+          await Promise.resolve();
+          await Promise.resolve();
+        }),
+        stop: vi.fn(async () => {}),
+      };
+      createIMessageRpcClientMock.mockImplementation(async (params) => {
+        if (!params?.onNotification) {
+          throw new Error("expected iMessage notification handler");
+        }
+        onNotification = params.onNotification;
+        return client as never;
+      });
+
+      await monitorIMessageProvider({
+        accountId: "personal",
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+15550001111"],
+              sendReadReceipts: false,
+              streaming: { block: { enabled: true } },
+              accounts: {
+                personal: {
+                  streaming: accountStreaming,
+                },
+              },
+            },
+          },
+          messages: { inbound: { debounceMs: 0 } },
+          session: { mainKey: "main" },
+        } as never,
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      });
+
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+    },
+  );
 
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
     const runtimeErrorMock = vi.fn();

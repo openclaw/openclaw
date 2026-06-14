@@ -8,10 +8,6 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -96,11 +92,11 @@ async function writeSessionStore(
   sessionKey: string,
   entry: { sessionId: string; updatedAt: number; compactionCheckpoints?: unknown[] },
 ): Promise<void> {
-  await writeSessionStoreForTestAsync(storePath, { [sessionKey]: entry });
+  await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }, null, 2), "utf-8");
 }
 
 async function readSessionStore<T extends object>(storePath: string): Promise<Record<string, T>> {
-  return readSessionStoreForTest<T>(storePath);
+  return JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, T>;
 }
 
 async function readFirstCompactionCheckpoints<T>(storePath: string): Promise<T[] | undefined> {

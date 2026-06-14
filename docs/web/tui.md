@@ -54,7 +54,7 @@ Notes:
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
-- Footer: connection state + agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
+- Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver. When `tui.footer.showRemoteHost` is enabled, remote Gateway connections also show the connection host.
 - Input: text editor with autocomplete.
 
 ## Mental model: agents + sessions
@@ -68,6 +68,14 @@ Notes:
   - `per-sender` (default): each agent has many sessions.
   - `global`: the TUI always uses the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
+- To show the Gateway host for non-local URL-backed connections, opt in with:
+
+  ```bash
+  openclaw config set tui.footer.showRemoteHost true
+  ```
+
+  Loopback and embedded local connections never show a host label.
+
 - If the session has a [goal](/tools/goal), the footer shows its compact state
   such as `Pursuing goal`, `Goal paused (/goal resume)`, or
   `Goal achieved`.

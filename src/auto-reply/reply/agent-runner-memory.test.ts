@@ -4,8 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -52,10 +52,12 @@ function createReplyOperation(): TestReplyOperation {
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
+    retainFailureUntilComplete: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn((afterClear: () => void) => {
       afterClear();
     }),
+    completeWithAfterClearBarrier: vi.fn(),
     fail: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
@@ -227,6 +229,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
   afterEach(async () => {
     setAgentRunnerMemoryTestDeps();
+    cliBackendsTesting.resetDepsForTest();
     clearMemoryPluginState();
     await fs.rm(rootDir, { recursive: true, force: true });
   });
@@ -302,7 +305,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshCall.nextSessionId).toBe("session-rotated");
     expect(refreshCall.nextSessionFile).toContain("session-rotated.jsonl");
 
-    const persisted = readSessionStoreForTest(storePath) as {
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
       main: SessionEntry;
     };
     expect(persisted.main.sessionId).toBe("session-rotated");
@@ -527,7 +530,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushFailureCount).toBe(1);
     expect(persisted.main.memoryFlushLastFailedAt).toBe(1_700_000_000_000);
     expect(persisted.main.memoryFlushLastFailureError).toContain("provider crashed during flush");
@@ -572,7 +575,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushFailureCount).toBe(0);
     expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
     expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
@@ -606,7 +609,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushFailureCount).toBe(0);
     expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
     expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
@@ -643,7 +646,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
     });
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushCompactionCount).toBe(1);
     expect(persisted.main.memoryFlushFailureCount).toBe(TEST_MAX_FLUSH_FAILURES);
     expect(emitAgentEventMock).toHaveBeenCalledWith(
@@ -695,7 +698,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
 
-    const persisted = readSessionStoreForTest(storePath) as { main: SessionEntry };
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
     expect(persisted.main.memoryFlushFailureCount).toBe(2);
   });
 
@@ -913,6 +916,46 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("skips memory flush for compatible CLI session runtime pins", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const entry = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("uses runtime policy session key when checking memory-flush sandbox writability", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -983,6 +1026,7 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokens: 120,
       totalTokensFresh: true,
     };
+    const onCompactionNotice = vi.fn();
 
     const entry = await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -999,6 +1043,7 @@ describe("runMemoryFlushIfNeeded", () => {
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
       replyOperation: createReplyOperation(),
+      onCompactionNotice,
     });
 
     expect(entry).toBe(sessionEntry);
@@ -1013,6 +1058,8 @@ describe("runMemoryFlushIfNeeded", () => {
       contextTokenBudget: 100,
     });
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
   });
 
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {
@@ -1616,6 +1663,61 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  it("skips preflight compaction for compatible CLI session runtime pins", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: true,
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: { models: [{ id: "claude-opus-4-6", contextWindow: 350_000 }] },
+          },
+        },
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the OpenAI API context window for persisted OpenClaw runtime overrides", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
@@ -2013,6 +2115,107 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.currentTokenCount).toBe(10);
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
+  });
+
+  it("emits preflight compaction notices around a successful budget compaction", async () => {
+    const sessionFile = path.join(rootDir, "notify-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const onCompactionNotice = vi.fn();
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              notifyUser: true,
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onCompactionNotice,
+    });
+
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "end");
+  });
+
+  it("emits an incomplete preflight compaction notice when post-compaction state update throws", async () => {
+    const sessionFile = path.join(rootDir, "notify-failed-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    incrementCompactionCountMock.mockRejectedValueOnce(new Error("count update failed"));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const onCompactionNotice = vi.fn();
+
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                notifyUser: true,
+                truncateAfterCompaction: true,
+                maxActiveTranscriptBytes: "10b",
+              },
+            },
+          },
+        },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100_000,
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+        onCompactionNotice,
+      }),
+    ).rejects.toThrow("count update failed");
+
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
   });
 
   it("keeps the active transcript byte threshold inactive unless transcript rotation is enabled", async () => {

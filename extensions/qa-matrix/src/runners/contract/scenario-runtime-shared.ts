@@ -57,7 +57,7 @@ export type MatrixQaScenarioContext = {
   topology: MatrixQaProvisionedTopology;
   patchGatewayConfig?: (
     patch: Record<string, unknown>,
-    opts?: { restartDelayMs?: number },
+    opts?: { replacePaths?: string[]; restartDelayMs?: number },
   ) => Promise<void>;
   waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
 };

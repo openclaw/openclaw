@@ -54,7 +54,6 @@ export {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
-export { loadSessionStore } from "../../../../src/config/sessions/store-load.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {
@@ -81,6 +80,7 @@ export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env
 export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
 export {
   DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+  DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
   DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
   configureSqliteWalMaintenance,
 } from "../../../../src/infra/sqlite-wal.js";

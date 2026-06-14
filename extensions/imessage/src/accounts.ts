@@ -6,6 +6,7 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageAccountConfig } from "./account-types.js";
 
@@ -25,14 +26,95 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("im
 export const listIMessageAccountIds = listAccountIds;
 export const resolveDefaultIMessageAccountId = resolveDefaultAccountId;
 
+function resolveIMessageAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): IMessageAccountConfig | undefined {
+  return resolveAccountEntry(cfg.channels?.imessage?.accounts, accountId);
+}
+
+type IMessageStreamingConfig = NonNullable<IMessageAccountConfig["streaming"]>;
+
+function asStreamingConfigObject(value: unknown): IMessageStreamingConfig | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as IMessageStreamingConfig)
+    : undefined;
+}
+
+function asOwnBooleanProperty(value: unknown, key: string): boolean | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return Object.hasOwn(record, key) && typeof record[key] === "boolean" ? record[key] : undefined;
+}
+
+function mergeIMessageStreamingConfig(
+  base: unknown,
+  account: unknown,
+  accountFlatBlockStreaming: unknown,
+): IMessageStreamingConfig | undefined {
+  const baseConfig = asStreamingConfigObject(base);
+  const accountConfig = asStreamingConfigObject(account);
+  const accountBlockEnabled = asOwnBooleanProperty(accountConfig?.block, "enabled");
+  const flatAccountBlockEnabled =
+    accountBlockEnabled === undefined && typeof accountFlatBlockStreaming === "boolean"
+      ? accountFlatBlockStreaming
+      : undefined;
+  const applyFlatAccountBlockEnabled = (
+    config: IMessageStreamingConfig | undefined,
+  ): IMessageStreamingConfig | undefined => {
+    if (flatAccountBlockEnabled === undefined || config === undefined) {
+      return config;
+    }
+    return {
+      ...config,
+      block: {
+        ...config.block,
+        enabled: flatAccountBlockEnabled,
+      },
+    };
+  };
+  if (!baseConfig || !accountConfig) {
+    return applyFlatAccountBlockEnabled(accountConfig ?? baseConfig);
+  }
+  return applyFlatAccountBlockEnabled({
+    ...baseConfig,
+    ...accountConfig,
+    ...(baseConfig.block || accountConfig.block
+      ? {
+          block: {
+            ...baseConfig.block,
+            ...accountConfig.block,
+            ...(baseConfig.block?.coalesce || accountConfig.block?.coalesce
+              ? {
+                  coalesce: {
+                    ...baseConfig.block?.coalesce,
+                    ...accountConfig.block?.coalesce,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+  });
+}
+
 function mergeIMessageAccountConfig(cfg: OpenClawConfig, accountId: string): IMessageAccountConfig {
-  return resolveMergedAccountConfig<IMessageAccountConfig>({
+  const accountConfig = resolveIMessageAccountConfig(cfg, accountId);
+  const merged = resolveMergedAccountConfig<IMessageAccountConfig>({
     channelConfig: cfg.channels?.imessage as IMessageAccountConfig | undefined,
     accounts: cfg.channels?.imessage?.accounts as
       | Record<string, Partial<IMessageAccountConfig>>
       | undefined,
     accountId,
   });
+  const streaming = mergeIMessageStreamingConfig(
+    (cfg.channels?.imessage as Record<string, unknown> | undefined)?.streaming,
+    (accountConfig as Record<string, unknown> | undefined)?.streaming,
+    (accountConfig as Record<string, unknown> | undefined)?.blockStreaming,
+  );
+  return streaming !== undefined ? ({ ...merged, streaming } as IMessageAccountConfig) : merged;
 }
 
 export function resolveIMessageAccount(params: {
@@ -49,6 +131,7 @@ export function resolveIMessageAccount(params: {
     merged.cliPath?.trim() ||
     merged.dbPath?.trim() ||
     merged.service ||
+    merged.sendTransport ||
     merged.region?.trim() ||
     (merged.allowFrom && merged.allowFrom.length > 0) ||
     (merged.groupAllowFrom && merged.groupAllowFrom.length > 0) ||

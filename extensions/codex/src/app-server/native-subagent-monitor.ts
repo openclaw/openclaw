@@ -493,6 +493,9 @@ export class CodexNativeSubagentMonitor {
     if (!taskRuntime) {
       return;
     }
+    this.getMirrorForChild(completion.childThreadId)?.markAuthoritativeCompletion(
+      completion.childThreadId,
+    );
     taskRuntime.finalizeTaskRunByRunId({
       runId: codexNativeSubagentRunId(completion.childThreadId),
       status: completion.status,
@@ -508,6 +511,12 @@ export class CodexNativeSubagentMonitor {
     const childState = this.childStates.get(childThreadId.trim());
     const state = childState ? this.parentStates.get(childState.parentThreadId) : undefined;
     return state?.taskRuntime;
+  }
+
+  private getMirrorForChild(childThreadId: string): CodexNativeSubagentTaskMirror | undefined {
+    const childState = this.childStates.get(childThreadId.trim());
+    const state = childState ? this.parentStates.get(childState.parentThreadId) : undefined;
+    return state?.mirror;
   }
 
   private registerChildThread(
@@ -526,6 +535,10 @@ export class CodexNativeSubagentMonitor {
       normalizedChildThreadId,
     );
     const agentPath = normalizeOptionalString(options.agentPath);
+    const state = this.parentStates.get(normalizedParentThreadId);
+    if (state?.mirror && (this.codexHome || agentPath)) {
+      state.mirror.markAuthoritativeCompletionExpected(normalizedChildThreadId);
+    }
     if (agentPath) {
       this.childThreadIdsByAgentPath.set(
         buildParentAgentPathKey(normalizedParentThreadId, agentPath),
@@ -606,21 +619,29 @@ export class CodexNativeSubagentMonitor {
     const delayMs = noFinalCompletionFallbackDelayMs(this.transcriptPollDelaysMs);
     childState.noFinalCompletionFallbackTimer = setTimeout(() => {
       childState.noFinalCompletionFallbackTimer = undefined;
-      void this.reconcileChildTranscript(childState.childThreadId)
-        .catch((error: unknown) => {
-          embeddedAgentLog.warn("Failed to reconcile Codex native subagent transcript", {
-            childThreadId: childState.childThreadId,
-            error: formatErrorMessage(error),
-          });
-          return false;
-        })
-        .then((reconciled) => {
-          if (!reconciled && !childState.transcriptTerminal) {
-            void this.processCompletion(state, completion, eventAt);
-          }
-        });
+      void this.deliverNoFinalCompletionFallback(state, childState, completion, eventAt);
     }, delayMs);
     unrefTimer(childState.noFinalCompletionFallbackTimer);
+  }
+
+  private async deliverNoFinalCompletionFallback(
+    state: ParentState,
+    childState: ChildState,
+    completion: CodexNativeSubagentCompletion,
+    eventAt: number,
+  ): Promise<void> {
+    const reconciled = await this.reconcileChildTranscript(childState.childThreadId).catch(
+      (error: unknown): false => {
+        embeddedAgentLog.warn("Failed to reconcile Codex native subagent transcript", {
+          childThreadId: childState.childThreadId,
+          error: formatErrorMessage(error),
+        });
+        return false;
+      },
+    );
+    if (!reconciled && !childState.transcriptTerminal) {
+      await this.processCompletion(state, completion, eventAt);
+    }
   }
 
   private clearTimers(): void {

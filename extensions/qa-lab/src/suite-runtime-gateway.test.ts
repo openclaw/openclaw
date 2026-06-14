@@ -261,23 +261,31 @@ describe("qa suite gateway helpers", () => {
       patchConfig({
         env,
         patch: { tools: { deny: ["read"] } },
+        replacePaths: ["tools.deny"],
         restartDelayMs: 0,
       }),
     ).resolves.toEqual({ ok: true });
 
     expect(gatewayCall).toHaveBeenCalledWith(
       "config.patch",
-      expect.objectContaining({ baseHash: "hash-1" }),
+      expect.objectContaining({
+        baseHash: "hash-1",
+        replacePaths: ["tools.deny"],
+      }),
       { timeoutMs: 180_000 },
     );
     expect(gatewayCall).toHaveBeenCalledWith(
       "config.patch",
-      expect.objectContaining({ baseHash: "hash-2" }),
+      expect.objectContaining({
+        baseHash: "hash-2",
+        replacePaths: ["tools.deny"],
+      }),
       { timeoutMs: 180_000 },
     );
   });
 
   it("waits for transport readiness after gateway restart health", async () => {
+    vi.useFakeTimers();
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: { ok: true },
@@ -285,7 +293,10 @@ describe("qa suite gateway helpers", () => {
     });
     const waitReady = vi.fn(async () => {});
 
-    await waitForConfigRestartSettle(createRestartSettleEnv(waitReady), 0, 1_000);
+    const settling = waitForConfigRestartSettle(createRestartSettleEnv(waitReady), 0, 5_000);
+
+    await vi.advanceTimersByTimeAsync(750);
+    await settling;
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({

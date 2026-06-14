@@ -12,6 +12,7 @@ import type {
 import type { OpenClawConfig } from "../../config/config.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { runMessageAction } from "./message-action-runner.js";
 import { extractToolPayload } from "./tool-payload.js";
@@ -384,62 +385,63 @@ describe("runMessageAction plugin dispatch", () => {
     it("routes execution context ids into plugin handleAction", async () => {
       const stateDir = path.join("/tmp", "openclaw-plugin-dispatch-media-roots");
       const expectedWorkspaceRoot = path.resolve(stateDir, "workspace-alpha");
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
-      await runMessageAction({
-        cfg: {
-          channels: {
-            actionhub: {
-              enabled: true,
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await runMessageAction({
+          cfg: {
+            channels: {
+              actionhub: {
+                enabled: true,
+              },
             },
-          },
-        } as OpenClawConfig,
-        action: "pin",
-        params: {
-          channel: "actionhub",
-          messageId: "om_123",
-        },
-        defaultAccountId: "ops",
-        requesterSenderId: "trusted-user",
-        sessionKey: "agent:alpha:main",
-        sessionId: "session-123",
-        agentId: "alpha",
-        inboundEventKind: "room_event",
-        toolContext: {
-          currentChannelId: "oc_123",
-          currentChannelProvider: "actionhub",
-          currentThreadTs: "thread-456",
-          currentMessageId: "msg-789",
-        },
-        dryRun: false,
-      });
-
-      const call = readLastPluginCall(handleAction);
-      expectRecordFields(
-        call,
-        {
+          } as OpenClawConfig,
           action: "pin",
-          accountId: "ops",
+          params: {
+            channel: "actionhub",
+            messageId: "om_123",
+          },
+          defaultAccountId: "ops",
           requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
-          inboundEventKind: "room_event",
           agentId: "alpha",
-        },
-        "plugin action call",
-      );
-      expect(Array.isArray(call.mediaLocalRoots)).toBe(true);
-      expect((call.mediaLocalRoots as unknown[]).includes(expectedWorkspaceRoot)).toBe(true);
-      expectRecordFields(
-        readRecordField(call, "toolContext", "plugin tool context"),
-        {
-          currentChannelId: "oc_123",
-          currentChannelProvider: "actionhub",
-          currentThreadTs: "thread-456",
-          currentMessageId: "msg-789",
-        },
-        "plugin tool context",
-      );
+          inboundEventKind: "room_event",
+          toolContext: {
+            currentChannelId: "oc_123",
+            currentChannelProvider: "actionhub",
+            currentThreadTs: "thread-456",
+            currentMessageId: "msg-789",
+          },
+          dryRun: false,
+        });
+
+        const call = readLastPluginCall(handleAction);
+        expectRecordFields(
+          call,
+          {
+            action: "pin",
+            accountId: "ops",
+            requesterSenderId: "trusted-user",
+            sessionKey: "agent:alpha:main",
+            sessionId: "session-123",
+            inboundEventKind: "room_event",
+            agentId: "alpha",
+          },
+          "plugin action call",
+        );
+        expect(Array.isArray(call.mediaLocalRoots)).toBe(true);
+        expect((call.mediaLocalRoots as unknown[]).includes(expectedWorkspaceRoot)).toBe(true);
+        expectRecordFields(
+          readRecordField(call, "toolContext", "plugin tool context"),
+          {
+            currentChannelId: "oc_123",
+            currentChannelProvider: "actionhub",
+            currentThreadTs: "thread-456",
+            currentMessageId: "msg-789",
+          },
+          "plugin tool context",
+        );
+      });
     });
 
     it("routes gateway-executed plugin actions through gateway RPC instead of local dispatch", async () => {

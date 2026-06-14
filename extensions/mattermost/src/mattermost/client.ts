@@ -242,6 +242,35 @@ export type CreateDmChannelRetryOptions = {
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
 
+const DM_REPLY_DELIVERY_BARRIER_SLACK_MS = 60_000;
+
+/** Covers DM creation retries without extending channel-delivery stalls. */
+export function resolveMattermostReplyDeliveryBarrierTimeoutMs(params: {
+  isDirect: boolean;
+  dmRetryOptions?: CreateDmChannelRetryOptions;
+  queuedCounts: Readonly<Record<"tool" | "block" | "final", number>>;
+  humanDelayBudgetMs?: number;
+}): number | undefined {
+  if (!params.isDirect) {
+    return undefined;
+  }
+  const deliveryCount = Object.values(params.queuedCounts).reduce((sum, count) => sum + count, 0);
+  if (deliveryCount === 0) {
+    return undefined;
+  }
+  const maxRetries = params.dmRetryOptions?.maxRetries ?? 3;
+  const maxDelayMs = params.dmRetryOptions?.maxDelayMs ?? 10_000;
+  const timeoutMs = params.dmRetryOptions?.timeoutMs ?? 30_000;
+  const perDeliveryTimeoutMs =
+    (maxRetries + 1) * timeoutMs + maxRetries * maxDelayMs + DM_REPLY_DELIVERY_BARRIER_SLACK_MS;
+  const totalTimeoutMs =
+    perDeliveryTimeoutMs * deliveryCount + Math.max(0, params.humanDelayBudgetMs ?? 0);
+  return resolveTimerTimeoutMs(
+    Number.isFinite(totalTimeoutMs) ? totalTimeoutMs : Number.MAX_SAFE_INTEGER,
+    perDeliveryTimeoutMs,
+  );
+}
+
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",

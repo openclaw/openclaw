@@ -26,6 +26,7 @@ import {
   assertKitchenSinkUiDescriptors,
   assertKitchenSinkSearchInvokeResult,
   assertKitchenSinkTextInvokeResult,
+  assertOperatorRpcDenied,
   assertResourceCeiling,
   assertTtsProviderCoverage,
   cleanupKitchenSinkEnv,
@@ -38,6 +39,8 @@ import {
   findDistCallGatewayModuleFiles,
   hasChildExited,
   listKitchenSinkToolInvokeNames,
+  listKitchenSinkAuthorizationRpcProbeNames,
+  listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
   readPositiveInt,
   readBoundedResponseText,
@@ -803,6 +806,50 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     ]);
   });
 
+  it("walks broad read-only gateway RPC surfaces", () => {
+    expect(listKitchenSinkReadOnlyRpcProbeNames()).toEqual(
+      expect.arrayContaining([
+        "gateway.identity.get",
+        "config.schema.lookup",
+        "models.list",
+        "skills.status",
+        "agents.list",
+        "sessions.list",
+        "cron.list",
+        "tasks.list",
+        "usage.status",
+        "voicewake.routing.get",
+        "talk.catalog",
+        "update.status",
+        "node.list",
+        "device.pair.list",
+        "exec.approvals.get",
+        "environments.status",
+      ]),
+    );
+  });
+
+  it("proves node-only RPC authorization boundaries", async () => {
+    expect(listKitchenSinkAuthorizationRpcProbeNames()).toEqual(["skills.bins"]);
+    await expect(
+      assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => {
+        throw Object.assign(new Error("unauthorized role: operator"), {
+          gatewayCode: "INVALID_REQUEST",
+        });
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => {
+        throw new Error(
+          "openclaw gateway call skills.bins failed with 1\nGateway call failed: unauthorized role: operator",
+        );
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertOperatorRpcDenied({ method: "skills.bins", params: {} }, async () => ({})),
+    ).rejects.toThrow("skills.bins unexpectedly allowed operator access");
+  });
+
   it("requires provenance for effective Kitchen Sink plugin tools too", () => {
     expect(() =>
       assertExpectedKitchenSinkToolEntries(
@@ -1031,6 +1078,22 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     );
     expect(() => assertKitchenSinkUiDescriptors({ ok: true, descriptors: [] })).toThrow(
       "plugins.uiDescriptors did not report Kitchen Sink descriptor",
+    );
+  });
+
+  it("allows conformance mode to skip generated Kitchen Sink UI descriptors", () => {
+    expect(() =>
+      assertKitchenSinkUiDescriptors(
+        {
+          ok: true,
+          descriptors: [],
+        },
+        { expectDescriptor: false },
+      ),
+    ).not.toThrow();
+
+    expect(() => assertKitchenSinkUiDescriptors({}, { expectDescriptor: false })).toThrow(
+      "plugins.uiDescriptors returned invalid payload",
     );
   });
 });

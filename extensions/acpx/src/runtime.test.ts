@@ -224,6 +224,56 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+  it("strips the OpenClaw Anthropic provider prefix for Claude ACP startup", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "claude" ? "npx @agentclientprotocol/claude-agent-acp" : agentName,
+        list: () => ["claude", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "persistent",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "persistent",
+      model: "claude-sonnet-4-6",
+      sessionOptions: { model: "claude-sonnet-4-6" },
+    });
+  });
+
+  it("keeps Claude ACP model ids intact after stripping the OpenClaw provider prefix", () => {
+    expect(testing.normalizeClaudeAcpModelOverride("anthropic/claude-sonnet-4-6")).toBe(
+      "claude-sonnet-4-6",
+    );
+    expect(testing.normalizeClaudeAcpModelOverride("anthropic/claude-opus-4-8")).toBe(
+      "claude-opus-4-8",
+    );
+    expect(testing.normalizeClaudeAcpModelOverride("anthropic/claude-haiku-4-5")).toBe(
+      "claude-haiku-4-5",
+    );
+    expect(testing.normalizeClaudeAcpModelOverride("anthropic/claude-sonnet-4-6-1m")).toBe(
+      "claude-sonnet-4-6-1m",
+    );
+    expect(testing.normalizeClaudeAcpModelOverride("custom-model")).toBe("custom-model");
+  });
+
   it("leaves Codex ACP startup defaults alone when no model or thinking is provided", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
@@ -898,7 +948,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
-  it("still forwards non-timeout config controls for claude-agent-acp", async () => {
+  it("normalizes model config controls for claude-agent-acp", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:claude:acp:test",
@@ -918,14 +968,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     await runtime.setConfigOption({
       handle,
       key: "model",
-      value: "claude-sonnet-4.6",
+      value: "anthropic/claude-sonnet-4-6",
     });
 
     expect(setConfigOption).toHaveBeenCalledOnce();
     expect(setConfigOption).toHaveBeenCalledWith({
       handle,
       key: "model",
-      value: "claude-sonnet-4.6",
+      value: "claude-sonnet-4-6",
     });
   });
 

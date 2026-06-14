@@ -3,6 +3,7 @@
  */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -20,6 +21,7 @@ export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: ChatType;
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -146,6 +148,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
+  chatType?: ChatType | null;
   agentAccountId?: string | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
@@ -188,6 +191,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     sessionKey: params.sessionKey ?? undefined,
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
+    chatType: params.chatType ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,

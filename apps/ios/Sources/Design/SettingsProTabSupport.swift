@@ -1,10 +1,12 @@
 import Darwin
+import OpenClawKit
 import SwiftUI
 
 enum SettingsRoute: Hashable {
     case gateway
     case approvals
     case permissions
+    case channels
     case voice
     case diagnostics
     case privacy
@@ -150,3 +152,176 @@ extension SettingsProTab {
         return a == 100 && b >= 64 && b <= 127
     }
 }
+
+#if DEBUG
+#Preview("Gateway settings states") {
+    SettingsGatewayStatesPreview()
+}
+
+private struct SettingsGatewayStatesPreview: View {
+    var body: some View {
+        ZStack {
+            OpenClawProBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    self.stateSection("Connected") {
+                        self.gatewayStatusCard(
+                            title: "Gateway online",
+                            detail: "Connected to openclaw-gateway.tailnet.ts.net.",
+                            value: "online",
+                            color: OpenClawBrand.ok)
+                        self.gatewayFactsCard(
+                            address: "100.88.41.20:18789",
+                            server: "openclaw-gateway",
+                            discovered: "3",
+                            agent: "Aiden")
+                    }
+
+                    self.stateSection("Loading") {
+                        self.gatewayStatusCard(
+                            title: "Checking gateway",
+                            detail: "Refreshing connection, discovery, and device trust state.",
+                            value: "loading",
+                            color: OpenClawBrand.accent)
+                        self.gatewayActionsCard(isBusy: true)
+                    }
+
+                    self.stateSection("Empty") {
+                        self.gatewayStatusCard(
+                            title: "No gateway configured",
+                            detail: "Scan a setup QR code, paste a setup code, or choose a discovered gateway.",
+                            value: "setup",
+                            color: .secondary)
+                        self.setupActionsCard
+                    }
+
+                    self.stateSection("Error") {
+                        GatewayProblemBanner(
+                            problem: Self.pairingProblem,
+                            primaryActionTitle: "Retry",
+                            onPrimaryAction: {},
+                            onShowDetails: {})
+                        self.gatewayStatusCard(
+                            title: "Tailscale warning",
+                            detail: "Tailscale is off on this device. Turn it on, then try again.",
+                            value: "network",
+                            color: OpenClawBrand.warn)
+                    }
+                }
+                .padding(.horizontal, OpenClawProMetric.pagePadding)
+                .padding(.vertical, 18)
+            }
+        }
+    }
+
+    private func stateSection(
+        _ title: String,
+        @ViewBuilder content: () -> some View) -> some View
+    {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    private func gatewayStatusCard(
+        title: String,
+        detail: String,
+        value: String,
+        color: Color) -> some View
+    {
+        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
+            ProStatusRow(
+                icon: value == "online" ? "antenna.radiowaves.left.and.right" : "wifi.slash",
+                title: title,
+                detail: detail,
+                value: value,
+                color: color,
+                actionTitle: value == "setup" ? "Scan QR" : nil,
+                action: value == "setup" ? {} : nil)
+        }
+    }
+
+    private func gatewayFactsCard(
+        address: String,
+        server: String,
+        discovered: String,
+        agent: String) -> some View
+    {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(spacing: 0) {
+                self.factRow("Address", value: address)
+                Divider()
+                self.factRow("Server", value: server)
+                Divider()
+                self.factRow("Discovered", value: discovered)
+                Divider()
+                self.factRow("Default Agent", value: agent)
+            }
+        }
+    }
+
+    private func factRow(_ label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .frame(height: SettingsLayout.rowHeight)
+    }
+
+    private func gatewayActionsCard(isBusy: Bool) -> some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            HStack(spacing: 10) {
+                self.previewButton("Reconnect", systemImage: "arrow.triangle.2.circlepath", isBusy: isBusy)
+                self.previewButton("Diagnose", systemImage: "cross.case", isBusy: isBusy)
+            }
+        }
+    }
+
+    private var setupActionsCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    self.previewButton("Scan QR", systemImage: "qrcode.viewfinder", isBusy: false)
+                    self.previewButton("Connect", systemImage: "link", isBusy: false)
+                }
+                Text("Discovered gateways and manual setup live here when the gateway has not connected yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func previewButton(
+        _ title: String,
+        systemImage: String,
+        isBusy: Bool) -> some View
+    {
+        Button {} label: {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(isBusy)
+    }
+
+    private static let pairingProblem = GatewayConnectionProblem(
+        kind: .pairingRequired,
+        owner: .gateway,
+        title: "Pairing required",
+        message: "Run /pair approve in your OpenClaw chat before this iPad can connect.",
+        actionCommand: "/pair approve req-ipad-preview",
+        requestId: "req-ipad-preview",
+        retryable: false,
+        pauseReconnect: true)
+}
+#endif

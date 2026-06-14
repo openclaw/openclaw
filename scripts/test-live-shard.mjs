@@ -36,6 +36,7 @@ const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "t
 /** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-src-agents",
+  "native-live-src-agents-zai-coding",
   "native-live-src-gateway-core",
   "native-live-src-gateway-profiles",
   "native-live-src-gateway-backends",
@@ -244,7 +245,9 @@ function isMoonshotLiveTest(file) {
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
-      return files.filter((file) => file.startsWith("src/agents/"));
+      return files.filter((file) => file.startsWith("src/agents/") || file.startsWith("src/llm/"));
+    case "native-live-src-agents-zai-coding":
+      return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":
       return files.filter(
         (file) => file.startsWith("src/gateway/") || file.startsWith("src/crestodian/"),

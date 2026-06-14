@@ -134,8 +134,14 @@ async function sendQQBotMedia(params: {
 }
 
 function toQQBotMessageSendResult(result: Awaited<ReturnType<typeof sendQQBotText>>) {
+  if (result.meta?.error) {
+    throw new Error(result.meta.error);
+  }
+  if (result.receipt.platformMessageIds.length === 0) {
+    throw new Error("QQBot message adapter send did not return a platform message id");
+  }
   return {
-    messageId: result.messageId,
+    messageId: result.messageId || result.receipt.primaryPlatformMessageId,
     receipt: result.receipt,
   } satisfies ChannelMessageSendResult;
 }

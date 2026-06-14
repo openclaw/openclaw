@@ -7,7 +7,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
@@ -72,7 +71,11 @@ async function writeSessionStore(
   agentId: string,
   entries: Record<string, unknown>,
 ) {
-  await writeSessionStoreForTestAsync(storeTemplate.replaceAll("{agentId}", agentId), entries);
+  await fs.writeFile(
+    storeTemplate.replaceAll("{agentId}", agentId),
+    JSON.stringify(entries, null, 2),
+    "utf-8",
+  );
 }
 
 function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
@@ -861,6 +864,28 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("slack")).toBe(false);
     expect(names.has("telegram")).toBe(false);
     expect(names.has("whatsapp")).toBe(false);
+  });
+
+  it("separates the canonical message provider from transport tool policy", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:speaker-1": { deny: ["exec"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      toolPolicyMessageProvider: "discord-voice",
+      senderId: "speaker-1",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("tts")).toBe(false);
+    expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
   it("filters session tools for sub-agent sessions by default", () => {

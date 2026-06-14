@@ -15,6 +15,7 @@ export type WorkboardDispatchStartOptions = {
   model?: string;
   provider?: string;
   ownerId?: string;
+  boardId?: string;
   now?: number;
 };
 
@@ -123,7 +124,11 @@ function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
   );
 }
 
-function selectStartableCards(cards: WorkboardCard[], limit: number): WorkboardCard[] {
+function selectStartableCards(
+  cards: WorkboardCard[],
+  limit: number,
+  candidates: WorkboardCard[] = cards,
+): WorkboardCard[] {
   if (limit <= 0) {
     return [];
   }
@@ -140,7 +145,7 @@ function selectStartableCards(cards: WorkboardCard[], limit: number): WorkboardC
     runningByOwner.set(owner, (runningByOwner.get(owner) ?? 0) + 1);
   }
   const selected: WorkboardCard[] = [];
-  for (const card of cards
+  for (const card of candidates
     .filter((entry) => entry.status === "ready" && !entry.metadata?.claim && !cardIsArchived(entry))
     .toSorted(sortReadyCards)) {
     const owner = card.agentId ?? DEFAULT_DISPATCH_OWNER;
@@ -162,7 +167,8 @@ export async function dispatchAndStartWorkboardCards(params: {
   options?: WorkboardDispatchStartOptions;
 }): Promise<WorkboardDispatchAndStartResult> {
   const now = params.options?.now ?? Date.now();
-  const dispatch = await params.store.dispatch(now);
+  const boardId = params.options?.boardId;
+  const dispatch = await params.store.dispatch({ now, boardId });
   const maxStarts = normalizePositiveInteger(
     params.options?.maxStarts,
     DEFAULT_DISPATCH_MAX_STARTS,
@@ -171,8 +177,9 @@ export async function dispatchAndStartWorkboardCards(params: {
   const startFailures: WorkboardStartFailure[] = [];
   const model = params.options?.model?.trim() || DEFAULT_DISPATCH_MODEL;
   const cards = await params.store.list();
+  const candidates = await params.store.list({ boardId });
 
-  for (const card of selectStartableCards(cards, maxStarts)) {
+  for (const card of selectStartableCards(cards, maxStarts, candidates)) {
     const ownerId = params.options?.ownerId?.trim() || card.agentId || DEFAULT_DISPATCH_OWNER;
     const sessionKey = buildSessionKey(card);
     let token = "";

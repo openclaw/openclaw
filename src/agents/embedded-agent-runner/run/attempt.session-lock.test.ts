@@ -56,6 +56,15 @@ async function createTempSessionFile(): Promise<string> {
   return sessionFile;
 }
 
+function cloneBigIntStatWith(
+  stat: Awaited<ReturnType<typeof fs.stat>>,
+  fields: Partial<Awaited<ReturnType<typeof fs.stat>>>,
+): Awaited<ReturnType<typeof fs.stat>> {
+  return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, fields) as Awaited<
+    ReturnType<typeof fs.stat>
+  >;
+}
+
 describe("embedded attempt session lock lifecycle", () => {
   it("serializes embedded attempts that share a session file owner", async () => {
     const sessionFile = await createTempSessionFile();
@@ -831,6 +840,152 @@ describe("embedded attempt session lock lifecycle", () => {
     );
     expect(controller.hasSessionTakeover()).toBe(true);
     expect(acquireSessionWriteLockLocal6).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows ctime-only fingerprint drift while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalCtimeDrift = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalCtimeDrift,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    const stableStat = await fs.stat(sessionFile, { bigint: true });
+    const driftedStat = cloneBigIntStatWith(stableStat, {
+      ctimeNs: stableStat.ctimeNs + 1_000_000n,
+    });
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
+      if (target === sessionFile && options?.bigint === true) {
+        return driftedStat;
+      }
+      throw new Error(`unexpected stat call for ${String(target)}`);
+    });
+
+    try {
+      await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    } finally {
+      statSpy.mockRestore();
+    }
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(acquireSessionWriteLockLocalCtimeDrift).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("trusts owned writes after accepting ctime-only fingerprint drift", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalOwnedAfterDrift = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalOwnedAfterDrift,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    const stableStat = await fs.stat(sessionFile, { bigint: true });
+    const driftedStat = cloneBigIntStatWith(stableStat, {
+      ctimeNs: stableStat.ctimeNs + 1_000_000n,
+    });
+    const appendedText = '{"type":"message","id":"owned-after-drift"}\n';
+    const changedStat = cloneBigIntStatWith(stableStat, {
+      ctimeNs: stableStat.ctimeNs + 2_000_000n,
+      mtimeNs: stableStat.mtimeNs + 1_000_000n,
+      size: stableStat.size + BigInt(Buffer.byteLength(appendedText)),
+    });
+    let currentStat = driftedStat;
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
+      if (target === sessionFile && options?.bigint === true) {
+        return currentStat;
+      }
+      throw new Error(`unexpected stat call for ${String(target)}`);
+    });
+
+    try {
+      await expect(
+        controller.withSessionWriteLock(
+          async () => {
+            currentStat = changedStat;
+            await fs.appendFile(sessionFile, appendedText, "utf8");
+          },
+          { publishOwnedWrite: true },
+        ),
+      ).resolves.toBeUndefined();
+      await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    } finally {
+      statSpy.mockRestore();
+    }
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(acquireSessionWriteLockLocalOwnedAfterDrift).toHaveBeenCalledTimes(3);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
+
+  it("allows ctime-only fingerprint drift for large transcript snapshots", async () => {
+    const sessionFile = await createTempSessionFile();
+    await fs.writeFile(sessionFile, Buffer.alloc(8 * 1024 * 1024 + 1, "x"));
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalLargeCtimeDrift = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalLargeCtimeDrift,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    const stableStat = await fs.stat(sessionFile, { bigint: true });
+    const driftedStat = cloneBigIntStatWith(stableStat, {
+      ctimeNs: stableStat.ctimeNs + 1_000_000n,
+    });
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
+      if (target === sessionFile && options?.bigint === true) {
+        return driftedStat;
+      }
+      throw new Error(`unexpected stat call for ${String(target)}`);
+    });
+
+    try {
+      await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    } finally {
+      statSpy.mockRestore();
+    }
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("rejects same-size transcript rewrites with restored mtime", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalSameSizeRewrite = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalSameSizeRewrite,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    const stableStat = await fs.stat(sessionFile, { bigint: true });
+    await fs.writeFile(sessionFile, '{"type":"sessioN"}\n', "utf8");
+    const driftedStat = cloneBigIntStatWith(stableStat, {
+      ctimeNs: stableStat.ctimeNs + 1_000_000n,
+    });
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
+      if (target === sessionFile && options?.bigint === true) {
+        return driftedStat;
+      }
+      throw new Error(`unexpected stat call for ${String(target)}`);
+    });
+
+    try {
+      await expect(controller.withSessionWriteLock(() => "finalize")).rejects.toBeInstanceOf(
+        EmbeddedAttemptSessionTakeoverError,
+      );
+    } finally {
+      statSpy.mockRestore();
+    }
+    expect(controller.hasSessionTakeover()).toBe(true);
+    expect(acquireSessionWriteLockLocalSameSizeRewrite).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);
   });
 

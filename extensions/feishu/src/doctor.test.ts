@@ -2,11 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  loadSessionStore,
-  saveSessionStore,
-  type SessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { isFeishuSessionStoreKey, runFeishuDoctorSequence } from "./doctor.js";
@@ -63,13 +59,10 @@ function storePath(agentId = "main"): string {
   return path.join(sessionsDir(agentId), "sessions.json");
 }
 
-async function writeStore(
-  entries: Record<string, SessionEntry>,
-  agentId = "main",
-): Promise<string> {
+function writeStore(entries: Record<string, unknown>, agentId = "main"): string {
   const target = storePath(agentId);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  await saveSessionStore(target, entries, { skipMaintenance: true });
+  fs.writeFileSync(target, JSON.stringify(entries, null, 2));
   return target;
 }
 
@@ -138,7 +131,7 @@ describe("Feishu doctor state repair", () => {
     fs.writeFileSync(path.join(feishuDedupDir, "default.json"), JSON.stringify({ msg1: 1 }));
 
     writeTranscript("sess-ok", [sessionHeader("sess-ok"), userMessage("hello")]);
-    await writeStore({
+    writeStore({
       "agent:main:feishu:direct:ou_user": {
         sessionId: "sess-ok",
         sessionFile: "sess-ok.jsonl",
@@ -162,16 +155,15 @@ describe("Feishu doctor state repair", () => {
     ]);
     const customStorePath = path.join(stateDir(), "custom-sessions", "sessions.json");
     fs.mkdirSync(path.dirname(customStorePath), { recursive: true });
-    await saveSessionStore(
+    fs.writeFileSync(
       customStorePath,
-      {
+      JSON.stringify({
         "agent:main:feishu:direct:ou_user": {
           sessionId: "sess-abs",
           sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
-      },
-      { skipMaintenance: true },
+      }),
     );
 
     const result = await runFeishuDoctorSequence({
@@ -195,7 +187,7 @@ describe("Feishu doctor state repair", () => {
       userMessage("world"),
       userMessage(""),
     ]);
-    await writeStore({
+    writeStore({
       "agent:main:feishu:direct:ou_user": {
         sessionId: "sess-separated-blanks",
         sessionFile: "sess-separated-blanks.jsonl",
@@ -238,7 +230,7 @@ describe("Feishu doctor state repair", () => {
       sessionHeader("sess-ok"),
       userMessage("hello"),
     ]);
-    const targetStorePath = await writeStore({
+    const targetStorePath = writeStore({
       "agent:main:feishu:direct:ou_user": {
         sessionId: "sess-ok",
         sessionFile: "sess-ok.jsonl",
@@ -294,7 +286,7 @@ describe("Feishu doctor state repair", () => {
       userMessage(""),
     ]);
 
-    const targetStorePath = await writeStore({
+    const targetStorePath = writeStore({
       "agent:main:feishu:direct:ou_user": {
         sessionId: "sess-bad",
         sessionFile: "sess-bad.jsonl",
@@ -353,38 +345,6 @@ describe("Feishu doctor state repair", () => {
     ).toBe(true);
   });
 
-  it("archives unhealthy Feishu sessions from SQLite-only retired agent stores", async () => {
-    const retiredAgent = "retired";
-    const transcriptPath = writeTranscript(
-      "sess-retired-bad",
-      [sessionHeader("sess-retired-bad"), userMessage(""), userMessage(""), userMessage("")],
-      retiredAgent,
-    );
-    const targetStorePath = storePath(retiredAgent);
-    const entries: Record<string, SessionEntry> = {
-      "agent:retired:feishu:direct:ou_user": {
-        sessionId: "sess-retired-bad",
-        sessionFile: "sess-retired-bad.jsonl",
-        updatedAt: Date.now(),
-      },
-    };
-    await saveSessionStore(targetStorePath, entries, { skipMaintenance: true });
-    expect(fs.existsSync(targetStorePath)).toBe(false);
-
-    const result = await runFeishuDoctorSequence({
-      cfg: feishuConfig(),
-      env: process.env,
-      shouldRepair: true,
-    });
-
-    expect(result.warningNotes).toEqual([]);
-    expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
-
-    const store = loadSessionStore(targetStorePath, { skipCache: true });
-    expect(store["agent:retired:feishu:direct:ou_user"]).toBeUndefined();
-    expect(fs.existsSync(transcriptPath)).toBe(false);
-  });
-
   it("archives unhealthy default-scope sessions when metadata identifies Feishu", async () => {
     const transcriptPath = writeTranscript("sess-default-feishu-bad", [
       sessionHeader("sess-default-feishu-bad"),
@@ -392,7 +352,7 @@ describe("Feishu doctor state repair", () => {
       userMessage(""),
       userMessage(""),
     ]);
-    const targetStorePath = await writeStore({
+    const targetStorePath = writeStore({
       "agent:main:main": {
         sessionId: "sess-default-feishu-bad",
         sessionFile: "sess-default-feishu-bad.jsonl",

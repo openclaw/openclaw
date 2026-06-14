@@ -14,6 +14,7 @@ import {
 import {
   deliverInboundReplyWithMessageSendContext,
   createChannelMessageReplyPipeline,
+  resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
@@ -92,6 +93,7 @@ import {
 } from "./inbound-dedupe.js";
 import {
   buildIMessageInboundContext,
+  rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
@@ -255,6 +257,68 @@ function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
   );
 }
 
+const IMESSAGE_DIAGNOSTIC_DROP_REASONS = new Set([
+  "agent echo in self-chat",
+  "echo",
+  "from me",
+  "reflected assistant content",
+  "self-chat echo",
+]);
+const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me"]);
+
+export function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
+  return IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(reason);
+}
+
+export function describeIMessageInboundDropDiagnostic(params: {
+  accountId: string;
+  reason: string;
+  message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
+}): string | null {
+  if (!IMESSAGE_DIAGNOSTIC_DROP_REASONS.has(params.reason)) {
+    return null;
+  }
+  const messageId =
+    typeof params.message.id === "number" || typeof params.message.id === "string"
+      ? String(params.message.id)
+      : "unknown";
+  return (
+    `imessage: dropped inbound message account=${params.accountId} reason=${JSON.stringify(
+      params.reason,
+    )} ` +
+    `chat_id=${params.message.chat_id ?? "unknown"} group=${params.message.is_group === true} ` +
+    `message_id=${messageId} guid=${params.message.guid ? "present" : "missing"} ` +
+    `created_at=${params.message.created_at ?? "unknown"}`
+  );
+}
+
+function describeIMessageWatchSubscribeStartupFailure(params: {
+  accountId: string;
+  attempt: number;
+  maxAttempts: number;
+  cliPath: string;
+  dbPath?: string;
+  remoteHost?: string;
+  includeAttachments: boolean;
+  probeTimeoutMs: number;
+  watchSinceRowid: number | null;
+  error: unknown;
+  retryDelayMs?: number;
+}): string {
+  const retry = params.retryDelayMs !== undefined ? ` retry_in_ms=${params.retryDelayMs}` : "";
+  return (
+    `imessage: watch.subscribe startup failed attempt=${params.attempt}/${params.maxAttempts} ` +
+    `account=${params.accountId} cliPath=${params.cliPath} ` +
+    `dbPath=${params.dbPath ? "configured" : "default"} remoteHost=${
+      params.remoteHost ? "configured" : "none"
+    } ` +
+    `timeoutMs=${params.probeTimeoutMs} since_rowid=${params.watchSinceRowid ?? "none"} ` +
+    `attachments=${params.includeAttachments} include_reactions=true${retry}: ${String(
+      params.error,
+    )}`
+  );
+}
+
 async function waitForWatchSubscribeRetryDelay(params: {
   ms: number;
   abortSignal?: AbortSignal;
@@ -361,6 +425,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // replay aggressively without the old catchup cursor/retry bookkeeping.
   const inboundReplayGuard = createIMessageInboundReplayGuard();
   let staleBacklogSuppressed = 0;
+  const loggedThrottledDropDiagnostics = new Set<string>();
 
   // Downtime recovery. We pass the persisted recovery cursor (the last
   // dispatched rowid) to watch.subscribe as since_rowid so imsg replays the rows
@@ -727,14 +792,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  async function handleMessageNowInner(rawMessage: IMessagePayload) {
-    const message = await repairMessageConversationAnchor(rawMessage);
-    if (!message) {
-      return;
-    }
-
+  function resolveIMessageInboundBodyText(message: IMessagePayload) {
     const messageText = (message.text ?? "").trim();
-
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
     const validAttachments = attachments.filter((entry) => {
@@ -768,7 +827,28 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       : validAttachments.length
         ? "<media:attachment>"
         : "";
-    const bodyText = messageText || placeholder;
+    return {
+      messageText,
+      bodyText: messageText || placeholder,
+      validAttachments,
+      rawMediaAttachments,
+      effectiveAttachmentRoots,
+    };
+  }
+
+  async function handleMessageNowInner(rawMessage: IMessagePayload) {
+    const message = await repairMessageConversationAnchor(rawMessage);
+    if (!message) {
+      return;
+    }
+
+    const {
+      messageText,
+      bodyText,
+      validAttachments,
+      rawMediaAttachments,
+      effectiveAttachmentRoots,
+    } = resolveIMessageInboundBodyText(message);
 
     // Approval reaction shortcut: if the inbound tapback resolves a pending
     // approval prompt, route it through the gateway and skip the normal
@@ -831,6 +911,23 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         decision.reason === "from me";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
+      }
+      const diagnostic = describeIMessageInboundDropDiagnostic({
+        accountId: accountInfo.accountId,
+        reason: decision.reason,
+        message,
+      });
+      if (diagnostic) {
+        const throttleKey = `${rateLimitKey}:${decision.reason}`;
+        const shouldThrottleDiagnostic = shouldThrottleIMessageInboundDropDiagnostic(
+          decision.reason,
+        );
+        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.has(throttleKey)) {
+          if (shouldThrottleDiagnostic) {
+            loggedThrottledDropDiagnostics.add(throttleKey);
+          }
+          runtime.log?.(warn(diagnostic));
+        }
       }
       // Surface the silent-allowlist drop once per chat. Without this, operators
       // who set groupPolicy="allowlist" without populating
@@ -1072,7 +1169,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           to: target,
           deps: {
             imessage: createIMessageEchoCachingSend({
-              client: getActiveClient(),
               accountId: accountInfo.accountId,
               sentMessageCache,
             }),
@@ -1088,7 +1184,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           cfg,
           replies: [payload],
           target,
-          client: getActiveClient(),
           accountId: accountInfo.accountId,
           runtime,
           maxBytes: mediaMaxBytes,
@@ -1132,6 +1227,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           },
         } as const)
       : {};
+    const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
     const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
       route: decision.route,
       sessionKey: decision.route.sessionKey,
@@ -1205,8 +1301,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                 replyOptions: {
                   ...typingReplyOptions,
                   disableBlockStreaming:
-                    typeof accountInfo.config.blockStreaming === "boolean"
-                      ? !accountInfo.config.blockStreaming
+                    typeof configuredBlockStreaming === "boolean"
+                      ? !configuredBlockStreaming
                       : undefined,
                   onModelSelected,
                   ...directToolTypingOptions,
@@ -1406,12 +1502,39 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const shouldRetry =
         attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && isRetriableWatchSubscribeStartupError(err);
       if (!shouldRetry) {
-        runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
+        runtime.error?.(
+          danger(
+            `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure({
+              accountId: accountInfo.accountId,
+              attempt,
+              maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
+              cliPath,
+              dbPath,
+              remoteHost,
+              includeAttachments,
+              probeTimeoutMs,
+              watchSinceRowid,
+              error: err,
+            })}`,
+          ),
+        );
         throw err;
       }
       runtime.log?.(
         warn(
-          `imessage: watch.subscribe startup failed (attempt ${attempt}/${WATCH_SUBSCRIBE_MAX_ATTEMPTS}): ${String(err)}; retrying`,
+          describeIMessageWatchSubscribeStartupFailure({
+            accountId: accountInfo.accountId,
+            attempt,
+            maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
+            cliPath,
+            dbPath,
+            remoteHost,
+            includeAttachments,
+            probeTimeoutMs,
+            watchSinceRowid,
+            error: err,
+            retryDelayMs: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
+          }),
         ),
       );
       // Tear down the failed client before waiting so a slow subscribe attempt
@@ -1496,6 +1619,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         config: catchupCfg,
         includeAttachments,
         dispatchPayload: (message) => handleMessageNow(message, { advanceCatchupCursor: false }),
+        observeSkippedFromMePayload: (message) => {
+          const { bodyText } = resolveIMessageInboundBodyText(message);
+          rememberIMessageSkippedFromMeForSelfChatDedupe({
+            accountId: accountInfo.accountId,
+            message,
+            bodyText,
+            selfChatCache,
+          });
+        },
         runtime,
       });
       liveCatchupCursorAdvanceEnabled =

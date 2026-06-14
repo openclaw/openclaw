@@ -3,10 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTest,
-} from "../config/sessions/test-helpers.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
@@ -108,7 +104,7 @@ describe("sweepCronRunSessions", () => {
         updatedAt: now - 100 * 3_600_000, // old but not a cron run
       },
     };
-    writeSessionStoreForTest(storePath, store);
+    fs.writeFileSync(storePath, JSON.stringify(store));
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -120,7 +116,7 @@ describe("sweepCronRunSessions", () => {
     expect(result.swept).toBe(true);
     expect(result.pruned).toBe(2);
 
-    const updated = readSessionStoreForTest(storePath);
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
     expect(updated).toEqual({
       "agent:main:cron:job1": {
         sessionId: "base-session",
@@ -152,7 +148,7 @@ describe("sweepCronRunSessions", () => {
         updatedAt: now - 25 * 3_600_000,
       },
     };
-    writeSessionStoreForTest(storePath, store);
+    fs.writeFileSync(storePath, JSON.stringify(store));
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -182,7 +178,7 @@ describe("sweepCronRunSessions", () => {
         updatedAt: now - 25 * 3_600_000,
       },
     };
-    writeSessionStoreForTest(storePath, store);
+    fs.writeFileSync(storePath, JSON.stringify(store));
 
     try {
       const result = await sweepCronRunSessions({
@@ -207,7 +203,7 @@ describe("sweepCronRunSessions", () => {
         updatedAt: now - 2 * 3_600_000, // 2h ago
       },
     };
-    writeSessionStoreForTest(storePath, store);
+    fs.writeFileSync(storePath, JSON.stringify(store));
 
     const result = await sweepCronRunSessions({
       cronConfig: { sessionRetention: "1h" },
@@ -228,7 +224,7 @@ describe("sweepCronRunSessions", () => {
         updatedAt: now - 100 * 3_600_000,
       },
     };
-    writeSessionStoreForTest(storePath, store);
+    fs.writeFileSync(storePath, JSON.stringify(store));
 
     const result = await sweepCronRunSessions({
       cronConfig: { sessionRetention: false },
@@ -244,7 +240,7 @@ describe("sweepCronRunSessions", () => {
 
   it("throttles sweeps without force", async () => {
     const now = Date.now();
-    writeSessionStoreForTest(storePath, {});
+    fs.writeFileSync(storePath, JSON.stringify({}));
 
     // First sweep runs
     const r1 = await sweepCronRunSessions({
@@ -266,8 +262,8 @@ describe("sweepCronRunSessions", () => {
   it("throttles per store path", async () => {
     const now = Date.now();
     const otherPath = path.join(tmpDir, "sessions-other.json");
-    writeSessionStoreForTest(storePath, {});
-    writeSessionStoreForTest(otherPath, {});
+    fs.writeFileSync(storePath, JSON.stringify({}));
+    fs.writeFileSync(otherPath, JSON.stringify({}));
 
     const r1 = await sweepCronRunSessions({
       sessionStorePath: storePath,

@@ -26,29 +26,58 @@ function writeModelsJsonWithPluginCatalog(params: {
   pluginRelativePath: string;
   pluginCatalog: unknown;
 }): string {
+  return writeModelsJsonWithPluginCatalogs({
+    root: params.root,
+    pluginCatalogs: [
+      {
+        pluginRelativePath: params.pluginRelativePath,
+        pluginCatalog: params.pluginCatalog,
+      },
+    ],
+  });
+}
+
+function writeModelsJsonWithPluginCatalogs(params: {
+  root: unknown;
+  pluginCatalogs: Array<{
+    pluginRelativePath: string;
+    pluginCatalog: unknown;
+  }>;
+}): string {
   const dir = mkdtempSync(join(tmpdir(), "openclaw-model-registry-"));
   tempDirs.push(dir);
   const file = join(dir, "models.json");
-  const pluginFile = join(dir, params.pluginRelativePath);
-  mkdirSync(dirname(pluginFile), { recursive: true });
   writeFileSync(file, JSON.stringify(params.root, null, 2), "utf-8");
-  writeFileSync(pluginFile, JSON.stringify(params.pluginCatalog, null, 2), "utf-8");
+  for (const pluginCatalog of params.pluginCatalogs) {
+    const pluginFile = join(dir, pluginCatalog.pluginRelativePath);
+    mkdirSync(dirname(pluginFile), { recursive: true });
+    writeFileSync(pluginFile, JSON.stringify(pluginCatalog.pluginCatalog, null, 2), "utf-8");
+  }
   return file;
 }
 
 function pluginOwnerSnapshot(providerId: string, pluginId: string, enabled = true) {
+  return pluginOwnerSnapshotEntries([{ providerId, pluginId, enabled }]);
+}
+
+function pluginOwnerSnapshotEntries(
+  entries: Array<{ providerId: string; pluginId: string; enabled?: boolean }>,
+) {
   // The registry only trusts generated provider shards that are still owned by
   // an enabled plugin in the current metadata snapshot.
   return {
     index: {
-      plugins: [{ pluginId, enabled }],
+      plugins: entries.map((entry) => ({
+        pluginId: entry.pluginId,
+        enabled: entry.enabled ?? true,
+      })),
     },
     normalizePluginId: (id: string) => id,
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
-      providers: new Map([[providerId, [pluginId]]]),
-      modelCatalogProviders: new Map([[providerId, [pluginId]]]),
+      providers: new Map(entries.map((entry) => [entry.providerId, [entry.pluginId]])),
+      modelCatalogProviders: new Map(entries.map((entry) => [entry.providerId, [entry.pluginId]])),
       cliBackends: new Map(),
       setupProviders: new Map(),
       commandAliases: new Map(),
@@ -143,6 +172,97 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
+  });
+
+  it("isolates invalid generated plugin catalog shards from valid models", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalogs({
+      root: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-responses",
+            apiKey: "CUSTOM_API_KEY",
+            models: [{ id: "root-model", name: "Root Model" }],
+          },
+        },
+      },
+      pluginCatalogs: [
+        {
+          pluginRelativePath: join("plugins", "google", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              "google-vertex": {
+                baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
+                apiKey: "GOOGLE_API_KEY",
+                models: [{ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" }],
+              },
+            },
+          },
+        },
+        {
+          pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              zai: {
+                baseUrl: "https://api.z.ai/api/paas/v4",
+                api: "openai-completions",
+                apiKey: "ZAI_API_KEY",
+                models: [{ id: "glm-5.1", name: "GLM 5.1" }],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+      pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
+        { providerId: "google-vertex", pluginId: "google" },
+        { providerId: "zai", pluginId: "zai" },
+      ]),
+    });
+
+    expect(registry.getError()).toContain(
+      'Provider google-vertex, model gemini-3.1-pro-preview: no "api" specified',
+    );
+    expect(registry.find("custom", "root-model")?.name).toBe("Root Model");
+    expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
+    expect(registry.find("google-vertex", "gemini-3.1-pro-preview")).toBeUndefined();
+  });
+
+  it("preserves model params from generated plugin catalog shards", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: join("plugins", "amazon-bedrock", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          "amazon-bedrock": {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            api: "bedrock-converse-stream",
+            auth: "aws-sdk",
+            models: [
+              {
+                id: "company-fable",
+                name: "Company Fable",
+                params: { canonicalModelId: "claude-fable-5" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+      pluginMetadataSnapshot: pluginOwnerSnapshot("amazon-bedrock", "amazon-bedrock"),
+    });
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("amazon-bedrock", "company-fable")?.params).toEqual({
+      canonicalModelId: "claude-fable-5",
+    });
   });
 
   it("ignores non-generated plugin catalog files", () => {

@@ -3,14 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  ensureSessionStorePromptBlobsForPersistence,
-  projectSessionStoreForPersistence,
-} from "../config/sessions/skill-prompt-blobs.js";
-import {
-  loadSqliteSessionStore,
-  replaceSqliteSessionStore,
-} from "../config/sessions/store-sqlite.js";
+import { saveSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
@@ -70,28 +63,7 @@ async function writeSessionStore(
   store: Record<string, SessionEntry>,
 ): Promise<void> {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  replaceSqliteSessionStore(storePath, store);
-}
-
-function readRawSessionStore(storePath: string): Record<string, SessionEntry> {
-  return loadSqliteSessionStore(storePath);
-}
-
-function readRawSessionStoreText(storePath: string): string {
-  return JSON.stringify(readRawSessionStore(storePath));
-}
-
-async function writeBlobbedSessionStore(
-  storePath: string,
-  store: Record<string, SessionEntry>,
-): Promise<void> {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  const projection = projectSessionStoreForPersistence({ storePath, store });
-  await ensureSessionStorePromptBlobsForPersistence({
-    storePath,
-    promptBlobs: projection.promptBlobs.values(),
-  });
-  replaceSqliteSessionStore(storePath, projection.store);
+  await fs.writeFile(storePath, JSON.stringify(store, null, 2));
 }
 
 describe("doctor session snapshot stale runtime metadata", () => {
@@ -342,15 +314,19 @@ describe("doctor session snapshot stale runtime metadata", () => {
     );
     const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
     const prompt = `${skillPrompt(stalePath)}\n${"padding\n".repeat(200)}`;
-    await writeBlobbedSessionStore(storePath, {
-      "agent:main": sessionEntry({
-        skillsSnapshot: {
-          prompt,
-          skills: [{ name: "doctor" }],
-        },
-      }),
-    });
-    const raw = readRawSessionStoreText(storePath);
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main": sessionEntry({
+          skillsSnapshot: {
+            prompt,
+            skills: [{ name: "doctor" }],
+          },
+        }),
+      },
+      { skipMaintenance: true },
+    );
+    const raw = await fs.readFile(storePath, "utf-8");
     expect(raw).not.toContain(stalePath);
     expect(raw).toContain("promptRef");
 
@@ -479,7 +455,7 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
       shouldRepair: true,
     });
 
-    const raw = readRawSessionStoreText(storePath);
+    const raw = await fs.readFile(storePath, "utf-8");
     expect(raw).not.toContain(stalePath);
     expect(raw).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
     expect(note).toHaveBeenCalledTimes(1);
@@ -499,16 +475,20 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     );
     const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
     const prompt = `${skillPrompt(stalePath)}\n${"padding\n".repeat(200)}`;
-    await writeBlobbedSessionStore(storePath, {
-      "agent:main": sessionEntry({
-        skillsSnapshot: {
-          prompt,
-          skills: [{ name: "doctor" }],
-        },
-      }),
-    });
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main": sessionEntry({
+          skillsSnapshot: {
+            prompt,
+            skills: [{ name: "doctor" }],
+          },
+        }),
+      },
+      { skipMaintenance: true },
+    );
 
-    const rawBefore = readRawSessionStoreText(storePath);
+    const rawBefore = await fs.readFile(storePath, "utf-8");
     expect(rawBefore).toContain("promptRef");
     expect(rawBefore).not.toContain(stalePath);
 
@@ -518,10 +498,9 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
       shouldRepair: true,
     });
 
-    const rawAfter = readRawSessionStoreText(storePath);
+    const rawAfter = await fs.readFile(storePath, "utf-8");
+    expect(rawAfter).toContain("promptRef");
     expect(rawAfter).not.toContain(stalePath);
-    expect(rawAfter).not.toContain("promptRef");
-    expect(rawAfter).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] as [string, string];
     expect(message).toContain("Repaired");
@@ -554,10 +533,11 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
       shouldRepair: true,
     });
 
-    const raw = readRawSessionStoreText(storePath);
+    const raw = await fs.readFile(storePath, "utf-8");
     const expectedBaseDir = path.dirname(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
+    expect(raw).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
+    expect(raw).toContain(expectedBaseDir);
     expect(raw).not.toContain(path.join(root, "old-runtime"));
-    expect(raw).not.toContain(expectedBaseDir);
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] as [string, string];
     expect(message).toContain("Repaired");
@@ -595,10 +575,10 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
       shouldRepair: true,
     });
 
-    const raw = readRawSessionStoreText(storePath);
+    const raw = await fs.readFile(storePath, "utf-8");
+    expect(raw).toContain(currentPath);
+    expect(raw).toContain(path.dirname(currentPath));
     expect(raw).not.toContain(path.join(root, "old-runtime"));
-    expect(raw).not.toContain(currentPath);
-    expect(raw).not.toContain(path.dirname(currentPath));
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] as [string, string];
     expect(message).toContain("Repaired");
@@ -637,11 +617,10 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
       shouldRepair: true,
     });
 
-    const parsed = readRawSessionStore(storePath) as Record<string, Record<string, unknown>>;
+    const raw = await fs.readFile(storePath, "utf-8");
+    const parsed = JSON.parse(raw);
     expect(parsed["agent:missing-blob"].skillsSnapshot).toBeDefined();
-    expect(
-      (parsed["agent:missing-blob"].skillsSnapshot as Record<string, unknown>).promptRef,
-    ).toBeDefined();
+    expect(parsed["agent:missing-blob"].skillsSnapshot.promptRef).toBeDefined();
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] as [string, string];
     expect(message).toContain("Repaired");
@@ -659,16 +638,20 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     );
     const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
     const prompt = `${skillPrompt(stalePath)}\n${"padding\n".repeat(200)}`;
-    await writeBlobbedSessionStore(storePath, {
-      "agent:main": sessionEntry({
-        skillsSnapshot: {
-          prompt,
-          skills: [{ name: "doctor" }],
-        },
-      }),
-    });
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main": sessionEntry({
+          skillsSnapshot: {
+            prompt,
+            skills: [{ name: "doctor" }],
+          },
+        }),
+      },
+      { skipMaintenance: true },
+    );
 
-    const rawBefore = readRawSessionStoreText(storePath);
+    const rawBefore = await fs.readFile(storePath, "utf-8");
     expect(rawBefore).toContain("promptRef");
 
     // Delete the blob file — simulates corrupted/missing blob state
@@ -686,7 +669,8 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     expect(note).not.toHaveBeenCalled();
 
     // Verify the store is still valid JSON and the session entry is preserved
-    const parsed = readRawSessionStore(storePath);
+    const rawAfter = await fs.readFile(storePath, "utf-8");
+    const parsed = JSON.parse(rawAfter);
     expect(parsed["agent:main"]).toBeDefined();
   });
 
@@ -720,18 +704,14 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
       shouldRepair: true,
     });
 
-    const parsed = readRawSessionStore(storePath) as Record<
-      string,
-      SessionEntry & { transcript?: string }
-    >;
-    const repairedEntry = parsed["agent:main"];
-    expect(repairedEntry).toBeDefined();
-    expect(repairedEntry.transcript).toContain(stalePath);
-    expect(repairedEntry.skillsSnapshot?.prompt).not.toContain(stalePath);
-    expect(repairedEntry.skillsSnapshot?.prompt).toContain(bundledSkillsDir);
+    const raw = await fs.readFile(storePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    expect(parsed["agent:main"].transcript).toContain(stalePath);
+    expect(parsed["agent:main"].skillsSnapshot.prompt).not.toContain(stalePath);
+    expect(parsed["agent:main"].skillsSnapshot.prompt).toContain(bundledSkillsDir);
   });
 
-  it("repairs without creating a JSON sidecar backup", async () => {
+  it("creates backup before repair", async () => {
     const stalePath = path.join(
       root,
       "old-runtime",
@@ -760,8 +740,10 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     const dir = path.dirname(storePath);
     const files = await fs.readdir(dir);
     const backupFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
-    expect(backupFiles).toEqual([]);
-    expect(readRawSessionStoreText(storePath)).not.toContain(stalePath);
+    expect(backupFiles.length).toBe(1);
+
+    const backupContent = await fs.readFile(path.join(dir, backupFiles[0]), "utf-8");
+    expect(backupContent).toContain(stalePath);
   });
 
   it("is idempotent — second repair finds nothing", async () => {

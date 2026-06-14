@@ -484,14 +484,9 @@ function collectConfiguredVoiceProviderIds(config: OpenClawConfig): ConfiguredVo
   };
 }
 
-// Explicit memory provider startup only pulls plugin-owned remote/custom
-// providers into Gateway boot. Missing/"auto" stays lazy, "local" is covered by
-// the selected memory slot, and "none" disables provider-backed embeddings.
-const MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS: ReadonlySet<string> = new Set([
-  "auto",
-  "local",
-  "none",
-]);
+// Explicit memory provider startup pulls plugin-owned providers into Gateway
+// boot. Missing/"auto" stays lazy, and "none" disables provider-backed embeddings.
+const MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS: ReadonlySet<string> = new Set(["auto", "none"]);
 
 function normalizeMemoryEmbeddingProviderIdValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -1383,10 +1378,7 @@ function canStartConfiguredMemoryEmbeddingProviderPlugin(params: {
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
     activationSource: params.activationSource,
   });
-  return (
-    activationState.enabled &&
-    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
-  );
+  return activationState.enabled;
 }
 
 function canStartConfiguredModelProviderPlugin(params: {
@@ -1689,6 +1681,49 @@ function canStartExplicitHookPlugin(params: {
     activationSource: params.activationSource,
   });
   return activationState.enabled && (activationState.explicitlyEnabled || hasHookPolicyIntent);
+}
+
+function canStartTrustedToolPolicyPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSource: {
+    plugins: NormalizedPluginsConfig;
+    rootConfig?: OpenClawConfig;
+  };
+  platform?: NodeJS.Platform;
+}): boolean {
+  if ((params.manifest?.contracts?.trustedToolPolicies?.length ?? 0) === 0) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return (
+    activationState.enabled &&
+    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
+  );
 }
 
 function canStartConfiguredChannelPlugin(params: {
@@ -2031,6 +2066,19 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         pluginsConfig,
         activationSource,
         activationSourcePlugins,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartTrustedToolPolicyPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
         platform: params.platform,
       })
     ) {

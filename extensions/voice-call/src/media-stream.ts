@@ -45,7 +45,7 @@ export interface MediaStreamConfig {
   maxConnections?: number;
   /** Optional trusted resolver for the source IP used by pending-connection guards. */
   resolveClientIp?: (request: IncomingMessage) => string | undefined;
-  /** Validate whether to accept a media stream for the given call ID */
+  /** Validate whether to accept a media stream for the given call ID. Missing validator rejects. */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
   onTranscript?: (callId: string, transcript: string) => void;
@@ -321,10 +321,13 @@ export class MediaStreamHandler {
       ws.close(1008, "Missing callSid");
       return null;
     }
-    if (
-      this.config.shouldAcceptStream &&
-      !this.config.shouldAcceptStream({ callId: callSid, streamSid, token: effectiveToken })
-    ) {
+    if (!this.config.shouldAcceptStream) {
+      console.warn("[MediaStream] Rejecting stream without an acceptance validator");
+      ws.close(1008, "Unauthorized stream");
+      return null;
+    }
+
+    if (!this.config.shouldAcceptStream({ callId: callSid, streamSid, token: effectiveToken })) {
       console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
       ws.close(1008, "Unknown call");
       return null;

@@ -203,10 +203,191 @@ describe("CodexNativeSubagentMonitor", () => {
         task: "inspect the repo",
       }),
     );
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        progressSummary: "Codex native subagent is idle.",
+      }),
+    );
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "remote V1", codexHome: undefined, finalizes: true },
+    { label: "local transcript-backed V1", codexHome: "/tmp/codex-home", finalizes: false },
+  ])(
+    "uses collab completion as a terminal fallback only for $label",
+    async ({ codexHome, finalizes }) => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client, runtime, { codexHome });
+      monitor.registerParent({
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        taskRuntimeScope: createTaskScope("agent:main:main"),
+        agentId: "main",
+      });
+
+      await notifyChildStarted(client, "parent-thread", "child-thread", "");
+      await client.notify({
+        method: "item/completed",
+        params: {
+          threadId: "parent-thread",
+          item: {
+            type: "collabAgentToolCall",
+            tool: "wait",
+            senderThreadId: "parent-thread",
+            agentsStates: {
+              "child-thread": {
+                status: "completed",
+                message: "child final result",
+              },
+            },
+          },
+        },
+      });
+
+      if (finalizes) {
+        expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runId: "codex-thread:child-thread",
+            status: "succeeded",
+            terminalSummary: "child final result",
+          }),
+        );
+      } else {
+        expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runId: "codex-thread:child-thread",
+            progressSummary: "child final result",
+          }),
+        );
+        expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+      }
+      monitor.dispose();
+    },
+  );
+
+  it("does not complete mirrored task rows from idle status before native completion", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "idle" },
+      },
+    });
+
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+
+    await client.notify(
+      nativeCompletionNotification({
+        agentPath: "child-thread",
+        statusLabel: "completed",
+        result: "child final result",
+      }),
+    );
+
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "codex-thread:child-thread",
         status: "succeeded",
+        terminalSummary: "child final result",
+      }),
+    );
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionId: "child-thread",
+        result: "child final result",
+      }),
+    );
+  });
+
+  it("keeps late idle lifecycle updates from overwriting native completion results", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify(
+      nativeCompletionNotification({
+        agentPath: "child-thread",
+        statusLabel: "completed",
+        result: "child final result",
+      }),
+    );
+    runtime.recordTaskRunProgressByRunId.mockClear();
+
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "idle" },
+      },
+    });
+
+    expect(runtime.recordTaskRunProgressByRunId).not.toHaveBeenCalled();
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(1);
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        status: "succeeded",
+        terminalSummary: "child final result",
+      }),
+    );
+  });
+
+  it("keeps later lifecycle errors from rewriting native completion results", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify(
+      nativeCompletionNotification({
+        agentPath: "child-thread",
+        statusLabel: "completed",
+        result: "child final result",
+      }),
+    );
+
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "systemError" },
+      },
+    });
+
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(1);
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        status: "succeeded",
+        terminalSummary: "child final result",
       }),
     );
   });
@@ -380,7 +561,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const runtime = createRuntime();
       const monitor = new CodexNativeSubagentMonitor(client, runtime, {
         codexHome,
-        transcriptPollDelaysMs: [10],
+        transcriptPollDelaysMs: [10, 1],
       });
       monitor.registerParent({
         parentThreadId: "parent-thread",
@@ -400,15 +581,20 @@ describe("CodexNativeSubagentMonitor", () => {
 
       expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
 
-      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
-        expect.objectContaining({
-          childSessionId: "child-thread",
-          status: "succeeded",
-          statusLabel: "completed_without_final_message",
-          result: "Codex native subagent completed without a final assistant message.",
-        }),
+      await vi.advanceTimersByTimeAsync(1);
+
+      await vi.waitFor(() =>
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+          expect.objectContaining({
+            childSessionId: "child-thread",
+            status: "succeeded",
+            statusLabel: "completed_without_final_message",
+            result: "Codex native subagent completed without a final assistant message.",
+          }),
+        ),
       );
 
       client.close();

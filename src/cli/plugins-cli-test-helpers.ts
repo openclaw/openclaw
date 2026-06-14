@@ -220,6 +220,18 @@ vi.mock("../plugins/marketplace.js", () => ({
 }));
 
 vi.mock("../plugins/enable.js", () => ({
+  enableExplicitlySelectedPluginInConfig: ((
+    ...args: Parameters<
+      (typeof import("../plugins/enable.js"))["enableExplicitlySelectedPluginInConfig"]
+    >
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/enable.js"))["enableExplicitlySelectedPluginInConfig"]>,
+      unknown
+    >(
+      enablePluginInConfig,
+      ...args,
+    )) as (typeof import("../plugins/enable.js"))["enableExplicitlySelectedPluginInConfig"],
   enablePluginInConfig: ((
     ...args: Parameters<(typeof import("../plugins/enable.js"))["enablePluginInConfig"]>
   ) =>

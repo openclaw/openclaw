@@ -333,7 +333,10 @@ async function isExistingDirectory(dir: string): Promise<boolean> {
   }
 }
 
-function resolveSshRuntimePaths(workspaceRoot: string, scopeKey: string): ResolvedSshRuntimePaths {
+export function resolveSshRuntimePaths(
+  workspaceRoot: string,
+  scopeKey: string,
+): ResolvedSshRuntimePaths {
   const runtimeId = buildSshSandboxRuntimeId(scopeKey);
   const runtimeRootDir = path.posix.join(workspaceRoot, runtimeId);
   return {

@@ -6,7 +6,13 @@ import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
-  readSessionStoreReadOnly: vi.fn(() => ({})),
+  resolveProviderStaticModel: vi.fn(),
+  listSessionEntries: vi.fn<
+    (scope?: { agentId?: string; storePath?: string }) => Array<{
+      sessionKey: string;
+      entry: Record<string, unknown>;
+    }>
+  >(() => []),
   configureTaskRegistryMaintenance: vi.fn(),
   taskRegistrySummary: {
     total: 0,
@@ -50,11 +56,6 @@ const statusSummaryMocks = vi.hoisted(() => ({
     },
   ] as TaskAuditFinding[],
   getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
-  ensureSessionStateMigratedForCommand: vi.fn(async () => undefined),
-}));
-
-vi.mock("./session-state-migration.js", () => ({
-  ensureSessionStateMigratedForCommand: statusSummaryMocks.ensureSessionStateMigratedForCommand,
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -83,20 +84,37 @@ vi.mock("../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
 
+vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: vi.fn(() =>
+    vi.fn(({ provider, modelId }) =>
+      provider === "openai" && modelId === "gpt-5.5"
+        ? { contextWindow: 1_000_000, contextTokens: 272_000 }
+        : undefined,
+    ),
+  ),
+  createBundledProviderStaticCatalogModelResolver: vi.fn(
+    () => statusSummaryMocks.resolveProviderStaticModel,
+  ),
+  createBundledProviderStaticCatalogContextResolver: vi.fn(
+    () => statusSummaryMocks.resolveProviderStaticModel,
+  ),
+}));
+
 vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  projectConfigOntoRuntimeSourceSnapshot: vi.fn((config) => config),
 }));
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
 }));
 
-vi.mock("../config/sessions/store-read.js", () => ({
-  readSessionStoreReadOnly: statusSummaryMocks.readSessionStoreReadOnly,
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: statusSummaryMocks.listSessionEntries,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -147,9 +165,15 @@ vi.mock("./status.link-channel.js", () => ({
 }));
 
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
+const { resolveStorePath } = await import("../config/sessions/paths.js");
+const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
 const { resolveLinkChannelContext } = await import("./status.link-channel.js");
 let getStatusSummary: typeof import("./status.summary.js").getStatusSummary;
 let statusSummaryRuntime: typeof import("./status.summary.runtime.js").statusSummaryRuntime;
+
+function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>) {
+  return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+}
 
 describe("getStatusSummary", () => {
   beforeAll(async () => {
@@ -201,7 +225,21 @@ describe("getStatusSummary", () => {
     ];
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
+    statusSummaryMocks.resolveProviderStaticModel.mockReset();
+    statusSummaryMocks.resolveProviderStaticModel.mockImplementation(
+      async ({ provider, modelId }) =>
+        provider === "google" && modelId === "gemini-3.1-pro-preview"
+          ? { contextWindow: 1_048_576 }
+          : undefined,
+    );
+    statusSummaryMocks.listSessionEntries.mockReturnValue([]);
+    vi.mocked(resolveStorePath).mockReturnValue("/tmp/sessions.json");
+    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+    });
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -301,16 +339,84 @@ describe("getStatusSummary", () => {
     const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
       .calls[0]?.[0];
     expect(contextCall?.allowAsyncLoad).toBe(false);
+    expect(contextCall).toMatchObject({
+      modelContextWindow: 1_000_000,
+      modelContextTokens: 272_000,
+    });
+  });
+
+  it("uses bundled provider static catalogs for cold status context", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+
+    await getStatusSummary();
+
+    expect(
+      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock.calls[0]?.[0],
+    ).toMatchObject({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      modelContextWindow: 1_048_576,
+      allowAsyncLoad: false,
+    });
+  });
+
+  it("uses context-only static metadata for nested provider-owned model refs", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "google-gemini-cli",
+      model: "google/gemini-3.1-pro-preview",
+    });
+    statusSummaryMocks.resolveProviderStaticModel.mockResolvedValueOnce({
+      contextWindow: 1_048_576,
+    });
+
+    await getStatusSummary();
+
+    expect(statusSummaryMocks.resolveProviderStaticModel).toHaveBeenCalledWith({
+      provider: "google-gemini-cli",
+      modelId: "google/gemini-3.1-pro-preview",
+    });
+    expect(
+      vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock.calls[0]?.[0],
+    ).toMatchObject({
+      provider: "google-gemini-cli",
+      model: "google/gemini-3.1-pro-preview",
+      modelContextWindow: 1_048_576,
+      allowAsyncLoad: false,
+    });
+  });
+
+  it("keeps status available when static catalog lookup fails", async () => {
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
+      provider: "broken-provider",
+      model: "broken-model",
+    });
+    statusSummaryMocks.resolveProviderStaticModel.mockRejectedValueOnce(
+      new Error("static catalog unavailable"),
+    );
+
+    await expect(getStatusSummary()).resolves.toMatchObject({
+      sessions: {
+        defaults: {
+          model: "broken-model",
+          contextTokens: 200_000,
+        },
+      },
+    });
   });
 
   it("includes the selected agent runtime on recent sessions", async () => {
     vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
-      "agent:main:main": {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-      },
-    });
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      }),
+    );
 
     const summary = await getStatusSummary();
 
@@ -330,7 +436,7 @@ describe("getStatusSummary", () => {
         ];
       }),
     );
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue(store);
+    statusSummaryMocks.listSessionEntries.mockReturnValue(toSessionEntrySummaries(store));
 
     const summary = await getStatusSummary();
 
@@ -359,6 +465,69 @@ describe("getStatusSummary", () => {
     expect(hydratedKeys).not.toContain("agent:main:session-2");
   });
 
+  it("passes agent scope when listing configured agent session stores", async () => {
+    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "ops" }],
+    });
+    vi.mocked(resolveStorePath).mockImplementation((_store, opts) => {
+      return `/tmp/${opts?.agentId ?? "main"}/sessions.json`;
+    });
+    statusSummaryMocks.listSessionEntries.mockImplementation((scope) =>
+      scope?.agentId === "ops"
+        ? toSessionEntrySummaries({
+            main: { sessionId: "ops-session", updatedAt: 2 },
+          })
+        : toSessionEntrySummaries({
+            main: { sessionId: "main-session", updatedAt: 1 },
+          }),
+    );
+
+    const summary = await getStatusSummary({ includeChannelSummary: false });
+
+    expect(statusSummaryMocks.listSessionEntries).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: "/tmp/main/sessions.json",
+    });
+    expect(statusSummaryMocks.listSessionEntries).toHaveBeenCalledWith({
+      agentId: "ops",
+      storePath: "/tmp/ops/sessions.json",
+    });
+    expect(summary.sessions.count).toBe(2);
+    expect(summary.sessions.byAgent.map((agent) => [agent.agentId, agent.count])).toEqual([
+      ["main", 1],
+      ["ops", 1],
+    ]);
+  });
+
+  it("aggregates shared file session stores only once", async () => {
+    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "ops" }],
+    });
+    vi.mocked(resolveStorePath).mockReturnValue("/tmp/shared-sessions.json");
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        main: { sessionId: "shared-session", updatedAt: 1 },
+      }),
+    );
+
+    const summary = await getStatusSummary({ includeChannelSummary: false });
+
+    expect(summary.sessions.count).toBe(1);
+    expect(summary.sessions.byAgent.map((agent) => [agent.agentId, agent.count])).toEqual([
+      ["main", 1],
+      ["ops", 1],
+    ]);
+    expect(statusSummaryMocks.listSessionEntries).toHaveBeenCalledWith({
+      storePath: "/tmp/shared-sessions.json",
+    });
+  });
+
   it("includes configured and selected model labels for pinned sessions", async () => {
     vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
       provider: "zhipu",
@@ -368,15 +537,17 @@ describe("getStatusSummary", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
     });
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
-      "agent:main:main": {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelOverrideSource: "user",
-      },
-    });
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          providerOverride: "deepseek",
+          modelOverride: "deepseek-v4-flash",
+          modelOverrideSource: "user",
+        },
+      }),
+    );
 
     const summary = await getStatusSummary();
 
@@ -394,14 +565,16 @@ describe("getStatusSummary", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
     });
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
-      "agent:main:main": {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        modelProvider: "deepseek",
-        model: "deepseek-v4-flash",
-      },
-    });
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          modelProvider: "deepseek",
+          model: "deepseek-v4-flash",
+        },
+      }),
+    );
 
     const summary = await getStatusSummary();
 
@@ -419,17 +592,19 @@ describe("getStatusSummary", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
     });
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
-      "agent:main:main": {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        providerOverride: "deepseek",
-        modelOverride: "deepseek-v4-flash",
-        modelOverrideSource: "auto",
-        modelOverrideFallbackOriginProvider: "zhipu",
-        modelOverrideFallbackOriginModel: "glm-4.5-air",
-      },
-    });
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          providerOverride: "deepseek",
+          modelOverride: "deepseek-v4-flash",
+          modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "zhipu",
+          modelOverrideFallbackOriginModel: "glm-4.5-air",
+        },
+      }),
+    );
 
     const summary = await getStatusSummary();
 
@@ -447,15 +622,17 @@ describe("getStatusSummary", () => {
       provider: "openai",
       model: "gpt-5.5-codex",
     });
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
-      "agent:main:main": {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        providerOverride: "openai",
-        modelOverride: "gpt-5.5-codex",
-        modelOverrideSource: "user",
-      },
-    });
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "gpt-5.5-codex",
+          modelOverrideSource: "user",
+        },
+      }),
+    );
 
     const summary = await getStatusSummary();
 

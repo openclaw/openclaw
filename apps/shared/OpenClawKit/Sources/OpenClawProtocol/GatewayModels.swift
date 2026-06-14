@@ -765,6 +765,7 @@ public struct AgentParams: Codable, Sendable {
     public let bootstrapcontextrunkind: AnyCodable?
     public let acpturnsource: String?
     public let internalruntimehandoffid: String?
+    public let execapprovalfollowupexpectedsessionid: String?
     public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
     public let suppresspromptpersistence: Bool?
@@ -806,6 +807,7 @@ public struct AgentParams: Codable, Sendable {
         bootstrapcontextrunkind: AnyCodable?,
         acpturnsource: String?,
         internalruntimehandoffid: String?,
+        execapprovalfollowupexpectedsessionid: String?,
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         suppresspromptpersistence: Bool?,
@@ -846,6 +848,7 @@ public struct AgentParams: Codable, Sendable {
         self.bootstrapcontextrunkind = bootstrapcontextrunkind
         self.acpturnsource = acpturnsource
         self.internalruntimehandoffid = internalruntimehandoffid
+        self.execapprovalfollowupexpectedsessionid = execapprovalfollowupexpectedsessionid
         self.internalevents = internalevents
         self.inputprovenance = inputprovenance
         self.suppresspromptpersistence = suppresspromptpersistence
@@ -888,6 +891,7 @@ public struct AgentParams: Codable, Sendable {
         case bootstrapcontextrunkind = "bootstrapContextRunKind"
         case acpturnsource = "acpTurnSource"
         case internalruntimehandoffid = "internalRuntimeHandoffId"
+        case execapprovalfollowupexpectedsessionid = "execApprovalFollowupExpectedSessionId"
         case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
         case suppresspromptpersistence = "suppressPromptPersistence"
@@ -978,21 +982,25 @@ public struct WakeParams: Codable, Sendable {
     public let mode: AnyCodable
     public let text: String
     public let sessionkey: String?
+    public let agentid: String?
 
     public init(
         mode: AnyCodable,
         text: String,
-        sessionkey: String?)
+        sessionkey: String?,
+        agentid: String? = nil)
     {
         self.mode = mode
         self.text = text
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case mode
         case text
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -2066,6 +2074,204 @@ public struct SessionsCompactionRestoreResult: Codable, Sendable {
     }
 }
 
+public struct SessionFileBrowserEntry: Codable, Sendable {
+    public let path: String
+    public let name: String
+    public let kind: AnyCodable
+    public let sessionkind: SessionFileRelevance?
+    public let size: Int?
+    public let updatedatms: Int?
+
+    public init(
+        path: String,
+        name: String,
+        kind: AnyCodable,
+        sessionkind: SessionFileRelevance?,
+        size: Int?,
+        updatedatms: Int?)
+    {
+        self.path = path
+        self.name = name
+        self.kind = kind
+        self.sessionkind = sessionkind
+        self.size = size
+        self.updatedatms = updatedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case name
+        case kind
+        case sessionkind = "sessionKind"
+        case size
+        case updatedatms = "updatedAtMs"
+    }
+}
+
+public struct SessionFileBrowserResult: Codable, Sendable {
+    public let path: String
+    public let parentpath: String?
+    public let search: String?
+    public let entries: [SessionFileBrowserEntry]
+    public let truncated: Bool?
+
+    public init(
+        path: String,
+        parentpath: String?,
+        search: String?,
+        entries: [SessionFileBrowserEntry],
+        truncated: Bool?)
+    {
+        self.path = path
+        self.parentpath = parentpath
+        self.search = search
+        self.entries = entries
+        self.truncated = truncated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case parentpath = "parentPath"
+        case search
+        case entries
+        case truncated
+    }
+}
+
+public struct SessionFileEntry: Codable, Sendable {
+    public let path: String
+    public let name: String
+    public let kind: SessionFileKind
+    public let missing: Bool
+    public let size: Int?
+    public let updatedatms: Int?
+    public let content: String?
+
+    public init(
+        path: String,
+        name: String,
+        kind: SessionFileKind,
+        missing: Bool,
+        size: Int?,
+        updatedatms: Int?,
+        content: String?)
+    {
+        self.path = path
+        self.name = name
+        self.kind = kind
+        self.missing = missing
+        self.size = size
+        self.updatedatms = updatedatms
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case name
+        case kind
+        case missing
+        case size
+        case updatedatms = "updatedAtMs"
+        case content
+    }
+}
+
+public struct SessionsFilesListParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let path: String?
+    public let search: String?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        path: String?,
+        search: String?)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.path = path
+        self.search = search
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case path
+        case search
+    }
+}
+
+public struct SessionsFilesListResult: Codable, Sendable {
+    public let sessionkey: String
+    public let root: String?
+    public let files: [SessionFileEntry]
+    public let browser: SessionFileBrowserResult?
+
+    public init(
+        sessionkey: String,
+        root: String?,
+        files: [SessionFileEntry],
+        browser: SessionFileBrowserResult?)
+    {
+        self.sessionkey = sessionkey
+        self.root = root
+        self.files = files
+        self.browser = browser
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case root
+        case files
+        case browser
+    }
+}
+
+public struct SessionsFilesGetParams: Codable, Sendable {
+    public let sessionkey: String
+    public let path: String
+    public let agentid: String?
+
+    public init(
+        sessionkey: String,
+        path: String,
+        agentid: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.path = path
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case path
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionsFilesGetResult: Codable, Sendable {
+    public let sessionkey: String
+    public let root: String?
+    public let file: SessionFileEntry
+
+    public init(
+        sessionkey: String,
+        root: String?,
+        file: SessionFileEntry)
+    {
+        self.sessionkey = sessionkey
+        self.root = root
+        self.file = file
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case root
+        case file
+    }
+}
+
 public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
@@ -2769,6 +2975,7 @@ public struct ConfigPatchParams: Codable, Sendable {
     public let deliverycontext: [String: AnyCodable]?
     public let note: String?
     public let restartdelayms: Int?
+    public let replacepaths: [String]?
 
     public init(
         raw: String,
@@ -2776,7 +2983,8 @@ public struct ConfigPatchParams: Codable, Sendable {
         sessionkey: String?,
         deliverycontext: [String: AnyCodable]?,
         note: String?,
-        restartdelayms: Int?)
+        restartdelayms: Int?,
+        replacepaths: [String]?)
     {
         self.raw = raw
         self.basehash = basehash
@@ -2784,6 +2992,7 @@ public struct ConfigPatchParams: Codable, Sendable {
         self.deliverycontext = deliverycontext
         self.note = note
         self.restartdelayms = restartdelayms
+        self.replacepaths = replacepaths
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2793,6 +3002,7 @@ public struct ConfigPatchParams: Codable, Sendable {
         case deliverycontext = "deliveryContext"
         case note
         case restartdelayms = "restartDelayMs"
+        case replacepaths = "replacePaths"
     }
 }
 

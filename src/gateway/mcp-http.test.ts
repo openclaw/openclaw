@@ -111,6 +111,7 @@ let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
 
 const MAIN_SESSION_HEADER = { "x-session-key": "agent:main:main" };
 const ANGLE_NUMBER_PROPERTY = { type: "number" };
+const SSE_TEST_READ_TIMEOUT_MS = 100;
 
 async function sendRaw(params: {
   port: number;
@@ -126,6 +127,97 @@ async function sendRaw(params: {
     },
     body: params.body,
   });
+}
+
+async function readStreamChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const timeoutResult = Symbol("sse-read-timeout");
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      reader.read(),
+      new Promise<typeof timeoutResult>((resolve) => {
+        timeout = setTimeout(() => resolve(timeoutResult), SSE_TEST_READ_TIMEOUT_MS);
+      }),
+    ]);
+    if (result === timeoutResult) {
+      throw new Error("timed out waiting for SSE response body");
+    }
+    return result;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function expectPromiseResolvesWithin<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function readUntilInitialSseCommentFrame(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let bodyPrefix = "";
+  while (!bodyPrefix.includes(":\n\n")) {
+    const chunk = await readStreamChunkWithTimeout(reader);
+    expect(chunk.done).toBe(false);
+    bodyPrefix += decoder.decode(chunk.value, { stream: true });
+    if (bodyPrefix.length > 64) {
+      throw new Error(`SSE response did not start with a comment frame: ${bodyPrefix}`);
+    }
+  }
+  expect(bodyPrefix.startsWith(":\n\n")).toBe(true);
+}
+
+async function expectInitialSseCommentFrame(res: Response): Promise<void> {
+  expect(res.body).toBeTruthy();
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("expected SSE response body");
+  }
+  let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+  let closeTimeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await readUntilInitialSseCommentFrame(reader);
+
+    pendingRead = reader.read();
+    const immediateClose = Symbol("immediate-close");
+    const result = await Promise.race([
+      pendingRead,
+      new Promise<typeof immediateClose>((resolve) => {
+        closeTimeout = setTimeout(() => resolve(immediateClose), SSE_TEST_READ_TIMEOUT_MS);
+      }),
+    ]);
+    expect(result).toBe(immediateClose);
+  } finally {
+    if (closeTimeout) {
+      clearTimeout(closeTimeout);
+    }
+    await reader.cancel();
+    await pendingRead?.catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 async function sendChunkedOversizedBody(params: {
@@ -646,6 +738,45 @@ describe("mcp loopback server", () => {
     expect(getScopedToolsCall(3).currentInboundAudio).toBe(true);
   });
 
+  it("keeps explicit non-owner and unknown-owner loopback cache entries separate", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: "telegram:chat123",
+      currentInboundAudio: undefined,
+      currentMessageId: "message-1",
+      currentThreadTs: "thread-1",
+      inboundEventKind: "room_event",
+      messageProvider: "telegram",
+      sessionKey: "agent:main:telegram:group:chat123",
+      sourceReplyDeliveryMode: "message_tool_only",
+    } satisfies Omit<Parameters<McpLoopbackToolCache["resolve"]>[0], "senderIsOwner">;
+    resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
+      const params = input as { senderIsOwner?: boolean };
+      return {
+        agentId: "main",
+        tools:
+          params.senderIsOwner === false
+            ? [makeMessageTool()]
+            : [makeMessageTool(), makeCronTool()],
+      };
+    });
+
+    const unknownFirst = cache.resolve({ ...baseParams, senderIsOwner: undefined });
+    const nonOwnerSecond = cache.resolve({ ...baseParams, senderIsOwner: false });
+    expect(unknownFirst.toolSchema.map((tool) => tool.name)).toContain("cron");
+    expect(nonOwnerSecond.toolSchema.map((tool) => tool.name)).not.toContain("cron");
+
+    const secondCache = new McpLoopbackToolCache();
+    const nonOwnerFirst = secondCache.resolve({ ...baseParams, senderIsOwner: false });
+    const unknownSecond = secondCache.resolve({ ...baseParams, senderIsOwner: undefined });
+    expect(nonOwnerFirst.toolSchema.map((tool) => tool.name)).not.toContain("cron");
+    expect(unknownSecond.toolSchema.map((tool) => tool.name)).toContain("cron");
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
+  });
+
   it("caps loopback tool cache cardinality by evicting oldest contexts", () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = {
@@ -1147,5 +1278,130 @@ describe("createMcpLoopbackServerConfig", () => {
       "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
     );
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
+  });
+
+  it("opens an auth-gated SSE stream on GET (Streamable HTTP notification channel)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    await expectInitialSseCommentFrame(res);
+  });
+
+  it("closes active GET notification streams during loopback shutdown", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body?.getReader();
+    if (!reader) {
+      throw new Error("expected SSE response body");
+    }
+
+    try {
+      await readUntilInitialSseCommentFrame(reader);
+      const closePromise = server.close();
+      server = undefined;
+      await expectPromiseResolvesWithin(closePromise, 500, "MCP loopback server close");
+      const closed = await readStreamChunkWithTimeout(reader);
+      expect(closed.done).toBe(true);
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  });
+
+  it("rejects a GET notification channel without a bearer token (401)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "GET" });
+    expect(res.status).toBe(401);
+    await res.body?.cancel();
+  });
+
+  it("rejects a GET notification channel from a browser Origin (403)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        origin: "https://evil.example",
+      },
+    });
+    expect(res.status).toBe(403);
+    await res.body?.cancel();
+  });
+
+  it("acknowledges DELETE session teardown with 200 (stateless no-op)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "DELETE",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("ignores Mcp-Session-Id on DELETE because loopback teardown is stateless", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "DELETE",
+      headers: token
+        ? { authorization: `Bearer ${token}`, "mcp-session-id": "ignored-loopback-session" }
+        : { "mcp-session-id": "ignored-loopback-session" },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects DELETE without a bearer token (401)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "DELETE" });
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects unsupported methods with 405 advertising GET, POST, DELETE", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "PUT" });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, POST, DELETE");
+  });
+
+  it("stays stateless: POST responses advertise no Mcp-Session-Id", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await sendRaw({
+      port: server.port,
+      token: getActiveMcpLoopbackRuntime()?.ownerToken,
+      headers: { "content-type": "application/json", "x-session-key": "agent:main:main" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("mcp-session-id")).toBeNull();
+  });
+
+  it("rejects a browser-Origin GET before auth (403, no bearer)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: { origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
+    await res.body?.cancel();
+  });
+
+  it("rejects a browser-Origin DELETE before auth (403, no bearer)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "DELETE",
+      headers: { origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
   });
 });

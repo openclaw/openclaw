@@ -409,6 +409,39 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expect(fs.existsSync(authPath)).toBe(false);
     expect(fs.existsSync(`${authPath}.sqlite-import.458.bak`)).toBe(true);
   });
+
+  it("keeps legacy JSON when SQLite verification misses an imported profile", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openrouter:default": {
+          type: "api_key",
+          provider: "openrouter",
+          key: "sk-openrouter",
+        },
+      },
+    });
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 464,
+      deps: {
+        loadPersistedAuthProfileStore: () => ({
+          version: 1,
+          profiles: {},
+        }),
+      },
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([
+      `Left auth profile JSON in place for ${authPath} because SQLite verification did not find imported profile(s): openrouter:default.`,
+    ]);
+    expect(fs.existsSync(authPath)).toBe(true);
+    expect(fs.existsSync(`${authPath}.sqlite-import.464.bak`)).toBe(false);
+  });
 });
 
 describe("maybeRepairLegacyFlatAuthProfileStores", () => {

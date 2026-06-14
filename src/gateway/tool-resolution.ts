@@ -31,7 +31,7 @@ import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
-  GATEWAY_HTTP_OWNER_ONLY_CORE_TOOLS,
+  GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../security/dangerous-tools.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
@@ -117,10 +117,10 @@ export function resolveGatewayScopedTools(params: {
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
       : [];
   const ownerOnlyGatewayDeny =
-    surface === "http" && params.senderIsOwner !== true
-      ? [...GATEWAY_HTTP_OWNER_ONLY_CORE_TOOLS]
+    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
+      ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS]
       : [];
-  // HTTP callers start with a stricter denylist than loopback callers because they cross auth only.
+  // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,
     agentId ?? resolveDefaultAgentId(params.cfg),

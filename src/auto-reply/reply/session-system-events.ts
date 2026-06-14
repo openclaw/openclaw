@@ -18,8 +18,23 @@ import {
   type SystemEvent,
 } from "../../infra/system-events.js";
 
-function selectGenericSystemEvents(events: readonly SystemEvent[]): SystemEvent[] {
-  return events.filter((event) => !isExecCompletionEvent(event.text));
+function isCronContextSystemEvent(event: SystemEvent): boolean {
+  return event.contextKey?.startsWith("cron:") ?? false;
+}
+
+function selectGenericSystemEvents(
+  events: readonly SystemEvent[],
+  options?: { suppressHeartbeatOwnedEvents?: boolean },
+): SystemEvent[] {
+  // Exec completions and tagged cron events own dedicated heartbeat prompts
+  // (buildExecEventPrompt / buildCronEventPrompt). During heartbeat runs, leave
+  // cron entries queued for that owner; ordinary turns still drain them as the
+  // fallback when a heartbeat was skipped before it could consume the event.
+  return events.filter(
+    (event) =>
+      !isExecCompletionEvent(event.text) &&
+      !(options?.suppressHeartbeatOwnedEvents === true && isCronContextSystemEvent(event)),
+  );
 }
 
 function compactSystemEvent(line: string): string | null {
@@ -90,6 +105,7 @@ export async function drainFormattedSystemEvents(params: {
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
+  suppressHeartbeatOwnedEvents?: boolean;
 }): Promise<string | undefined> {
   const summaryLines: string[] = [];
   const systemLines: string[] = [];
@@ -97,7 +113,9 @@ export async function drainFormattedSystemEvents(params: {
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
-    selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey)),
+    selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey), {
+      suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents,
+    }),
   );
   for (const event of queued) {
     const compacted = compactSystemEvent(event.text);

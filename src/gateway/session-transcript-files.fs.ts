@@ -18,10 +18,82 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
+type ResetArchiveCandidate = { archivePath: string; name: string; timestamp: number };
 export type ArchivedSessionTranscript = {
   sourcePath: string;
   archivedPath: string;
 };
+
+const MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES = 2048;
+const MAX_RESET_ARCHIVE_HEADER_MATCH_CACHE_ENTRIES = 4096;
+const MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT = 128;
+
+const resetArchiveDiscoveryCache = new Map<
+  string,
+  {
+    dirMtimeMs: number;
+    dirSize: number;
+    archives: ResetArchiveCandidate[];
+  }
+>();
+const resetArchiveHeaderMatchCache = new Map<
+  string,
+  {
+    mtimeMs: number;
+    size: number;
+    matches: boolean;
+  }
+>();
+
+function clearSessionTranscriptResetArchiveDiscoveryCache(): void {
+  resetArchiveDiscoveryCache.clear();
+  resetArchiveHeaderMatchCache.clear();
+}
+
+function deleteResetArchiveHeaderMatchesForArchives(archives: ResetArchiveCandidate[]): void {
+  if (archives.length === 0 || resetArchiveHeaderMatchCache.size === 0) {
+    return;
+  }
+  const archivePaths = new Set(archives.map((archive) => archive.archivePath));
+  for (const cacheKey of resetArchiveHeaderMatchCache.keys()) {
+    const archivePath = cacheKey.slice(cacheKey.indexOf("\0") + 1);
+    if (archivePaths.has(archivePath)) {
+      resetArchiveHeaderMatchCache.delete(cacheKey);
+    }
+  }
+}
+
+function setResetArchiveDiscoveryCacheEntry(
+  cacheKey: string,
+  entry: { dirMtimeMs: number; dirSize: number; archives: ResetArchiveCandidate[] },
+): void {
+  resetArchiveDiscoveryCache.set(cacheKey, entry);
+  while (resetArchiveDiscoveryCache.size > MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES) {
+    const oldestKey = resetArchiveDiscoveryCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    const oldestEntry = resetArchiveDiscoveryCache.get(oldestKey);
+    if (oldestEntry) {
+      deleteResetArchiveHeaderMatchesForArchives(oldestEntry.archives);
+    }
+    resetArchiveDiscoveryCache.delete(oldestKey);
+  }
+}
+
+function setResetArchiveHeaderMatchCacheEntry(
+  cacheKey: string,
+  entry: { mtimeMs: number; size: number; matches: boolean },
+): void {
+  resetArchiveHeaderMatchCache.set(cacheKey, entry);
+  while (resetArchiveHeaderMatchCache.size > MAX_RESET_ARCHIVE_HEADER_MATCH_CACHE_ENTRIES) {
+    const oldestKey = resetArchiveHeaderMatchCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    resetArchiveHeaderMatchCache.delete(oldestKey);
+  }
+}
 
 function classifySessionTranscriptCandidate(
   sessionId: string,
@@ -129,10 +201,189 @@ export function resolveSessionTranscriptCandidates(
   return uniqueStrings(candidates);
 }
 
+async function resetArchiveHeaderMatchesSessionId(
+  sessionId: string,
+  archivePath: string,
+): Promise<boolean> {
+  const stat = await fs.promises.stat(archivePath).catch(() => null);
+  if (!stat?.isFile()) {
+    return false;
+  }
+  const cacheKey = `${sessionId}\0${archivePath}`;
+  const cached = resetArchiveHeaderMatchCache.get(cacheKey);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    resetArchiveHeaderMatchCache.delete(cacheKey);
+    resetArchiveHeaderMatchCache.set(cacheKey, cached);
+    return cached.matches;
+  }
+
+  let matches = false;
+  const handle = await fs.promises.open(archivePath, "r").catch(() => null);
+  if (!handle) {
+    return false;
+  }
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const lines = buffer.toString("utf-8", 0, bytesRead).split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const record = JSON.parse(trimmed) as unknown;
+      matches =
+        Boolean(record) &&
+        typeof record === "object" &&
+        !Array.isArray(record) &&
+        (record as { type?: unknown; id?: unknown }).type === "session" &&
+        (record as { type?: unknown; id?: unknown }).id === sessionId;
+      return matches;
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    await handle.close().catch(() => undefined);
+    setResetArchiveHeaderMatchCacheEntry(cacheKey, {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      matches,
+    });
+  }
+}
+
+async function listResetArchiveCandidatesForTranscriptAsync(
+  transcriptPath: string,
+): Promise<ResetArchiveCandidate[] | undefined> {
+  const base = path.basename(transcriptPath);
+  if (!base.endsWith(".jsonl")) {
+    return undefined;
+  }
+  const dir = path.dirname(transcriptPath);
+  const dirStat = await fs.promises.stat(dir).catch(() => null);
+  if (!dirStat?.isDirectory()) {
+    return undefined;
+  }
+  const cacheKey = `${dir}\0${base}`;
+  const cached = resetArchiveDiscoveryCache.get(cacheKey);
+  if (cached && cached.dirMtimeMs === dirStat.mtimeMs && cached.dirSize === dirStat.size) {
+    resetArchiveDiscoveryCache.delete(cacheKey);
+    resetArchiveDiscoveryCache.set(cacheKey, cached);
+    return cached.archives;
+  }
+
+  const archives: ResetArchiveCandidate[] = [];
+  try {
+    for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith(`${base}.reset.`)) {
+        continue;
+      }
+      const timestamp = parseSessionArchiveTimestamp(entry.name, "reset");
+      if (timestamp == null) {
+        continue;
+      }
+      archives.push({ archivePath: path.join(dir, entry.name), name: entry.name, timestamp });
+    }
+  } catch {
+    return undefined;
+  }
+  archives.sort(
+    (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+  );
+  const boundedArchives = archives.slice(0, MAX_RESET_ARCHIVE_CANDIDATES_PER_TRANSCRIPT);
+  setResetArchiveDiscoveryCacheEntry(cacheKey, {
+    dirMtimeMs: dirStat.mtimeMs,
+    dirSize: dirStat.size,
+    archives: boundedArchives,
+  });
+  return boundedArchives;
+}
+
+async function resolveLatestResetArchiveForTranscriptAsync(
+  sessionId: string,
+  transcriptPath: string,
+  opts?: { requireSessionHeader?: boolean },
+): Promise<ResetArchiveCandidate | undefined> {
+  const archives = await listResetArchiveCandidatesForTranscriptAsync(transcriptPath);
+  if (!archives) {
+    return undefined;
+  }
+  if (opts?.requireSessionHeader !== true) {
+    return archives[0];
+  }
+  for (const archive of archives) {
+    if (await resetArchiveHeaderMatchesSessionId(sessionId, archive.archivePath)) {
+      return archive;
+    }
+  }
+  return undefined;
+}
+
+function transcriptArchiveIdentity(
+  sessionId: string,
+  transcriptPath: string,
+): { key: string; requireSessionHeader: boolean } | undefined {
+  const generatedSessionId = extractGeneratedTranscriptSessionId(transcriptPath);
+  return {
+    key: path.basename(transcriptPath),
+    requireSessionHeader: !generatedSessionId || generatedSessionId !== sessionId,
+  };
+}
+
+export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<string[]> {
+  const candidatesByIdentity = new Map<
+    string,
+    Array<{ path: string; requireSessionHeader: boolean }>
+  >();
+  for (const candidate of resolveSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    sessionFile,
+    agentId,
+  )) {
+    const identity = transcriptArchiveIdentity(sessionId, candidate);
+    if (!identity) {
+      continue;
+    }
+    candidatesByIdentity.set(identity.key, [
+      ...(candidatesByIdentity.get(identity.key) ?? []),
+      { path: candidate, requireSessionHeader: identity.requireSessionHeader },
+    ]);
+  }
+  const archives = (
+    await Promise.all(
+      Array.from(candidatesByIdentity.values(), (candidates) =>
+        Promise.all(
+          candidates.map((candidate) =>
+            resolveLatestResetArchiveForTranscriptAsync(sessionId, candidate.path, {
+              requireSessionHeader: candidate.requireSessionHeader,
+            }),
+          ),
+        ),
+      ),
+    )
+  ).flatMap((identityArchives) =>
+    identityArchives
+      .flatMap((archive) => (archive ? [archive] : []))
+      .toSorted(
+        (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+      )
+      .slice(0, 1),
+  );
+  return uniqueStrings(archives.map((archive) => archive.archivePath));
+}
+
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
+  clearSessionTranscriptResetArchiveDiscoveryCache();
   // Notify the session transcript subscribers (memory index, sessions-history
   // HTTP, etc.) that a mutation landed on a session-owned path. Without this
   // emit the memory sync's incremental path never learns the new archive

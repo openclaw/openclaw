@@ -121,6 +121,56 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("passes the default RPC send transport", async () => {
+    const client = createClient({ guid: "p:0/imsg-transport-default" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_id: 42,
+        text: "hello",
+        transport: "auto",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("passes the configured RPC send transport", async () => {
+    const client = createClient({ guid: "p:0/imsg-transport-bridge" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            sendTransport: "applescript",
+            accounts: {
+              work: {
+                sendTransport: "bridge",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_id: 42,
+        text: "hello",
+        transport: "bridge",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("uses the dedicated send timeout (covers macOS 26 stalls), not the 10s probe default", async () => {
     const client = createClient({ guid: "p:0/imsg-1" });
 
@@ -669,6 +719,69 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 
+  it("persists an echo marker before awaiting the bridge send result", async () => {
+    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const send = sendMessageIMessage("+15551234567", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "hello",
+        includePendingText: true,
+      }),
+    ).toBe(true);
+
+    resolveRequest({ guid: "p:0/imsg-1" });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-1" });
+  });
+
+  it("keeps the pending echo marker alive for slow default-timeout sends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-04T00:00:00Z"));
+    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const send = sendMessageIMessage("+15551234567", "slow hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+    expect(getClientMocks(client).request).toHaveBeenCalled();
+
+    vi.advanceTimersByTime(61_000);
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "slow hello",
+        includePendingText: true,
+      }),
+    ).toBe(true);
+
+    resolveRequest({ guid: "p:0/imsg-slow" });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-slow" });
+  });
+
   it("resolves numeric chat.db ROWIDs to GUIDs for approval reaction binding", async () => {
     const client = createClient({ message_id: 12345 });
     const resolveMessageGuidImpl = vi.fn(async () => "p:0/resolved-guid");
@@ -877,10 +990,10 @@ describe("sendMessageIMessage receipts", () => {
     });
   });
 
-  it("throws the rpc timeout without resending for generic text", async () => {
+  it("throws the rpc timeout without matching generic text to older sent rows", async () => {
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
-    const resolveSentMessageGuidImpl = vi.fn(async () => "p:0/stale-guid");
+    const resolveSentMessageGuidImpl = vi.fn(async () => "p:0/older-identical-text-guid");
 
     await expect(
       sendMessageIMessage("chat_id:42", "hello", {
@@ -894,6 +1007,73 @@ describe("sendMessageIMessage receipts", () => {
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).not.toHaveBeenCalled();
+  });
+
+  it("throws the rpc timeout without resending when sent-row recovery misses", async () => {
+    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const runCliJson = vi.fn();
+    const resolveSentMessageGuidImpl = vi.fn(async () => null);
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(6_001);
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        createClient: async () => client,
+        runCliJson,
+        dbPath: "/Users/me/Library/Messages/chat.db",
+        resolveSentMessageGuidImpl,
+      }),
+    ).rejects.toThrow("imsg rpc timeout (send)");
+
+    expect(getClientMocks(client).stop).toHaveBeenCalledTimes(1);
+    expect(runCliJson).not.toHaveBeenCalled();
+  });
+
+  it("does not stop caller-owned rpc clients after sent-row recovery misses", async () => {
+    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const runCliJson = vi.fn();
+    const resolveSentMessageGuidImpl = vi.fn(async () => null);
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(6_001);
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        runCliJson,
+        dbPath: "/Users/me/Library/Messages/chat.db",
+        resolveSentMessageGuidImpl,
+      }),
+    ).rejects.toThrow("imsg rpc timeout (send)");
+
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(getClientMocks(client).stop).not.toHaveBeenCalled();
+  });
+
+  it("throws the rpc timeout without resending when sent-row checks are unavailable", async () => {
+    const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
+    const runCliJson = vi.fn();
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        runCliJson,
+        dbPath: "/Users/me/Library/Messages/chat.db",
+      }),
+    ).rejects.toThrow("imsg rpc timeout (send)");
+
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(getClientMocks(client).stop).not.toHaveBeenCalled();
   });
 
   it("throws the rpc timeout without resending when approval GUID recovery misses", async () => {

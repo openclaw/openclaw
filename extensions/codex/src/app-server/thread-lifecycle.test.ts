@@ -799,6 +799,36 @@ describe("Codex app-server model provider selection", () => {
 
     expect(request.modelProvider).toBe("openai");
   });
+
+  it("splits provider-qualified model refs for app-server thread/start", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({ provider: "codex", modelId: "lmstudio/local-model" }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request.model).toBe("local-model");
+    expect(request.modelProvider).toBe("lmstudio");
+  });
+
+  it("normalizes provider-qualified model refs for turn/start metadata", () => {
+    const request = buildTurnStartParams(
+      createAttemptParams({ provider: "codex", modelId: "lmstudio/local-model" }),
+      {
+        threadId: "thread-1",
+        cwd: "/repo",
+        appServer: createAppServerOptions() as never,
+      },
+    );
+
+    const collaborationMode = request.collaborationMode as { settings?: Record<string, unknown> };
+    expect(request.model).toBe("local-model");
+    expect(collaborationMode.settings?.model).toBe("local-model");
+  });
 });
 
 describe("Codex app-server thread lifecycle timing", () => {

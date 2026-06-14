@@ -16,11 +16,11 @@ import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  loadSessionStore,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -31,7 +31,6 @@ import {
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
-import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 
 type SandboxExplainOptions = {
   session?: string;
@@ -107,8 +106,11 @@ function resolveActiveChannel(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.agentId,
   });
-  const store = loadSessionStore(storePath);
-  const entry = store[params.sessionKey] as
+  const entry = loadSessionEntry({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    storePath,
+  }) as
     | {
         lastChannel?: string;
         channel?: string;
@@ -152,7 +154,6 @@ export async function sandboxExplainCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   const cfg = getRuntimeConfig();
-  await ensureSessionStateMigratedForCommand(cfg);
 
   const defaultAgentId = resolveAgentIdFromSessionKey(resolveMainSessionKey(cfg));
   const resolvedAgentId = normalizeAgentId(

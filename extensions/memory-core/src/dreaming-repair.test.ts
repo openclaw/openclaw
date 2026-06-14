@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { auditDreamingArtifacts, repairDreamingArtifacts } from "./dreaming-repair.js";
 import {
   configureMemoryCoreDreamingStateForTests,
+  DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
@@ -213,5 +214,43 @@ describe("dreaming artifact repair", () => {
         workspaceDir,
       }),
     ).resolves.toEqual([]);
+  });
+
+  it("reports ingestion state present from SQLite when legacy JSON is absent", async () => {
+    const workspaceDir = await createWorkspace();
+    // Write SQLite ingestion entries but NO legacy session-ingestion.json
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+      entries: [
+        {
+          key: "main/session.jsonl",
+          value: { lastSize: 120, lastMtimeMs: 1_000, lastContentHash: "hash", cursorLine: 42 },
+        },
+      ],
+    });
+
+    const audit = await auditDreamingArtifacts({ workspaceDir });
+
+    expect(audit.sessionIngestionExists).toBe(true);
+  });
+
+  it("reports ingestion state present from SQLite daily namespace", async () => {
+    const workspaceDir = await createWorkspace();
+    // Only daily ingestion namespace has rows
+    await writeMemoryCoreWorkspaceEntries({
+      namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
+      workspaceDir,
+      entries: [
+        {
+          key: "2026-06-10",
+          value: { ingestedAt: Date.now() },
+        },
+      ],
+    });
+
+    const audit = await auditDreamingArtifacts({ workspaceDir });
+
+    expect(audit.sessionIngestionExists).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import {
 } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
+import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
@@ -29,7 +30,7 @@ type DoctorConfigResult = {
   preservedLegacyRootKeys?: readonly string[];
 };
 
-type DoctorHealthFlowContext = {
+export type DoctorHealthFlowContext = {
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;
@@ -45,6 +46,7 @@ type DoctorHealthFlowContext = {
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
+  postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 };
 
 type DoctorHealthContribution = FlowContribution & {
@@ -376,7 +378,6 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
-    config: ctx.cfg,
     recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
   });
   if (migrated.changes.length > 0) {
@@ -425,6 +426,9 @@ async function runReleaseConfiguredPluginInstallsHealth(
     env: ctx.env ?? process.env,
     touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
   });
+  if (result.postInstallDoctorResult) {
+    ctx.postInstallDoctorResult = result.postInstallDoctorResult;
+  }
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
@@ -727,9 +731,62 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   });
 }
 
+async function hasActiveGatewayExecCredential(
+  ctx: DoctorHealthFlowContext,
+  mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
+): Promise<boolean> {
+  const { resolveSecretInputRef } = await loadSecretTypesModule();
+  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
+  const { ALL_GATEWAY_SECRET_INPUT_PATHS, readGatewaySecretInputValue } =
+    await import("../gateway/secret-input-paths.js");
+  return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
+    if (
+      !gatewaySecretInputPathCanWin({
+        config: ctx.cfg,
+        env: process.env,
+        modeOverride: mode,
+        path,
+      })
+    ) {
+      return false;
+    }
+    const ref = resolveSecretInputRef({
+      value: readGatewaySecretInputValue(ctx.cfg, path),
+      defaults: ctx.cfg.secrets?.defaults,
+    }).ref;
+    return ref?.source === "exec";
+  });
+}
+
 async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  let pluginVersionDrift:
+    | import("../plugins/plugin-version-drift.js").PluginVersionDriftReport
+    | undefined;
+  if (ctx.cfg.gateway?.mode !== "remote") {
+    try {
+      const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
+      const allowExecSecretRefs = ctx.options.allowExec === true;
+      const status = await gatherDaemonStatus({
+        rpc: {
+          timeout: ctx.options.nonInteractive === true ? "3000" : "10000",
+          json: true,
+        },
+        probe: true,
+        requireRpc: false,
+        deep: ctx.options.deep === true,
+        allowExecSecretRefs,
+      });
+      const hasProbedGatewayVersion =
+        typeof status.gateway?.version === "string" && status.gateway.version.trim() !== "";
+      if (status.pluginVersionDrift && hasProbedGatewayVersion && !status.rpc?.authWarning) {
+        pluginVersionDrift = status.pluginVersionDrift;
+      }
+    } catch {
+      // Best-effort diagnostic: doctor should keep running if daemon status is unavailable.
+    }
+  }
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
-  noteWorkspaceStatus(ctx.cfg);
+  noteWorkspaceStatus(ctx.cfg, { pluginVersionDrift });
 }
 
 async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -762,31 +819,8 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { resolveSecretInputRef } = await loadSecretTypesModule();
-  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
-  const { readGatewaySecretInputValue } = await import("../gateway/secret-input-paths.js");
   const { note } = await loadNoteModule();
-  const credentialPaths = [
-    "gateway.auth.token",
-    "gateway.auth.password",
-    "gateway.remote.token",
-    "gateway.remote.password",
-  ] as const;
-  const activeSecretRefPaths = credentialPaths.filter((path) =>
-    gatewaySecretInputPathCanWin({
-      config: ctx.cfg,
-      env: process.env,
-      path,
-    }),
-  );
-  const hasActiveExecCredential = activeSecretRefPaths.some((path) => {
-    const ref = resolveSecretInputRef({
-      value: readGatewaySecretInputValue(ctx.cfg, path),
-      defaults: ctx.cfg.secrets?.defaults,
-    }).ref;
-    return ref?.source === "exec";
-  });
-  if (hasActiveExecCredential && ctx.options.allowExec !== true) {
+  if ((await hasActiveGatewayExecCredential(ctx)) && ctx.options.allowExec !== true) {
     note(
       "Gateway health probes skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
       "Gateway",

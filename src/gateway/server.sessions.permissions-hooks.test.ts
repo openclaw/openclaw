@@ -10,13 +10,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
 import { requireRecord } from "./test-helpers.assertions.js";
-import {
-  connectWebchatClient,
-  readSessionStore,
-  rpcReq,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionHookMocks,
@@ -327,7 +321,10 @@ test("control-ui client can delete sessions even in webchat mode", async () => {
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
 
-  const store = readSessionStore(storePath);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
   expect(store["agent:main:discord:group:dev"]).toBeUndefined();
 
   ws.close();

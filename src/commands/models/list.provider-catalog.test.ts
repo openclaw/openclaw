@@ -7,13 +7,27 @@ import {
 } from "./list.provider-catalog.js";
 
 const providerDiscoveryMocks = vi.hoisted(() => ({
+  buildAgentModelCatalogCacheKey: vi.fn(),
+  buildModelsJsonSourceFingerprint: vi.fn(),
   loadPluginRegistrySnapshotWithMetadata: vi.fn(),
+  readCachedAgentModelCatalog: vi.fn(),
   resolvePluginContributionOwners: vi.fn(),
   resolveProviderOwners: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
   resolveOwningPluginIdsForProvider: vi.fn(),
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   resolveProviderContractPluginIdsForProviderAlias: vi.fn(),
+  writeCachedAgentModelCatalog: vi.fn(),
+}));
+
+vi.mock("../../agents/model-catalog-state-cache.js", () => ({
+  buildAgentModelCatalogCacheKey: providerDiscoveryMocks.buildAgentModelCatalogCacheKey,
+  readCachedAgentModelCatalog: providerDiscoveryMocks.readCachedAgentModelCatalog,
+  writeCachedAgentModelCatalog: providerDiscoveryMocks.writeCachedAgentModelCatalog,
+}));
+
+vi.mock("../../agents/models-config.js", () => ({
+  buildModelsJsonSourceFingerprint: providerDiscoveryMocks.buildModelsJsonSourceFingerprint,
 }));
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
@@ -194,9 +208,39 @@ function firstDiscoveryRequest(): {
   };
 }
 
+function firstCacheKeyInput(): {
+  cacheScope?: {
+    envFingerprint?: string;
+    sourceFingerprint?: string;
+  };
+  metadataSnapshot?: unknown;
+} {
+  const call = providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mock.calls[0];
+  if (!call) {
+    throw new Error("expected state cache key build call");
+  }
+  return call[0] as {
+    cacheScope?: {
+      envFingerprint?: string;
+      sourceFingerprint?: string;
+    };
+    metadataSnapshot?: unknown;
+  };
+}
+
 describe("loadProviderCatalogModelsForList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mockImplementation(
+      (input: { cacheScope?: { sourceFingerprint?: string } }) =>
+        `provider-cache-key:${input.cacheScope?.sourceFingerprint ?? "none"}`,
+    );
+    providerDiscoveryMocks.buildModelsJsonSourceFingerprint.mockResolvedValue({
+      agentDir: baseParams.agentDir,
+      fingerprint: "provider-source-fingerprint",
+      workspaceDir: "/tmp/provider-workspace",
+    });
+    providerDiscoveryMocks.readCachedAgentModelCatalog.mockReturnValue(undefined);
     providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source: "persisted",
       snapshot: {
@@ -258,6 +302,103 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(rows.map((row) => `${row.provider}/${row.id}`)).toContain("moonshot/kimi-k2.6");
   });
 
+  it("reuses cached provider catalog rows before runtime provider discovery", async () => {
+    providerDiscoveryMocks.readCachedAgentModelCatalog.mockReturnValueOnce([
+      { provider: "moonshot", id: "cached-kimi", name: "Cached Kimi" },
+    ]);
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["moonshot/cached-kimi"]);
+    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenCalledWith({
+      agentDir: baseParams.agentDir,
+      catalogKey: "provider-cache-key:provider-source-fingerprint",
+    });
+    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+    expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("separates provider catalog state cache keys by environment fingerprint", async () => {
+    await loadProviderCatalogModelsForList({
+      ...baseParams,
+      env: {
+        ...baseParams.env,
+        MOONSHOT_API_KEY: "first-secret",
+      },
+      providerFilter: "moonshot",
+    });
+    const firstFingerprint = firstCacheKeyInput().cacheScope?.envFingerprint;
+
+    providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mockClear();
+    await loadProviderCatalogModelsForList({
+      ...baseParams,
+      env: {
+        ...baseParams.env,
+        MOONSHOT_API_KEY: "second-secret",
+      },
+      providerFilter: "moonshot",
+    });
+    const secondFingerprint = firstCacheKeyInput().cacheScope?.envFingerprint;
+
+    expect(firstFingerprint).toEqual(expect.any(String));
+    expect(secondFingerprint).toEqual(expect.any(String));
+    expect(firstFingerprint).not.toBe(secondFingerprint);
+    expect(firstFingerprint).not.toContain("first-secret");
+    expect(secondFingerprint).not.toContain("second-secret");
+  });
+
+  it("writes provider catalog rows to the state cache after runtime discovery", async () => {
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "moonshot",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["moonshot/kimi-k2.6"]);
+    expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).toHaveBeenCalledWith({
+      agentDir: baseParams.agentDir,
+      catalogKey: "provider-cache-key:provider-source-fingerprint",
+      entries: rows,
+    });
+  });
+
+  it("misses cached provider catalog rows when source freshness changes", async () => {
+    providerDiscoveryMocks.buildModelsJsonSourceFingerprint
+      .mockResolvedValueOnce({
+        agentDir: baseParams.agentDir,
+        fingerprint: "old-provider-source",
+        workspaceDir: "/tmp/provider-workspace",
+      })
+      .mockResolvedValueOnce({
+        agentDir: baseParams.agentDir,
+        fingerprint: "new-provider-source",
+        workspaceDir: "/tmp/provider-workspace",
+      });
+    providerDiscoveryMocks.readCachedAgentModelCatalog.mockImplementation(
+      ({ catalogKey }: { catalogKey: string }) =>
+        catalogKey.endsWith("old-provider-source")
+          ? [{ provider: "moonshot", id: "cached-stale", name: "Cached Stale" }]
+          : undefined,
+    );
+
+    await expect(loadProviderCatalogModelsForList({ ...baseParams })).resolves.toEqual([
+      { provider: "moonshot", id: "cached-stale", name: "Cached Stale" },
+    ]);
+    await expect(loadProviderCatalogModelsForList({ ...baseParams })).resolves.toEqual([
+      expect.objectContaining({ provider: "moonshot", id: "kimi-k2.6" }),
+    ]);
+
+    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenNthCalledWith(1, {
+      agentDir: baseParams.agentDir,
+      catalogKey: "provider-cache-key:old-provider-source",
+    });
+    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenNthCalledWith(2, {
+      agentDir: baseParams.agentDir,
+      catalogKey: "provider-cache-key:new-provider-source",
+    });
+  });
+
   it("requires complete discovery-entry coverage for static-only loads", async () => {
     await loadProviderCatalogModelsForList({
       ...baseParams,
@@ -300,6 +441,7 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
       expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
     );
+    expect(firstCacheKeyInput()).toEqual(expect.objectContaining({ metadataSnapshot }));
   });
 
   it("uses bundled runtime provider catalogs for provider-filtered self-hosted rows", async () => {

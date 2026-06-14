@@ -4,7 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { readSessionStore, testState, writeSessionStore } from "./test-helpers.js";
+import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
@@ -176,7 +176,10 @@ async function expectMainResetModelFields(params: {
   expect(reset.ok).toBe(true);
   expectModelResetFields(reset.payload?.entry, params.expected);
 
-  const store = readSessionStore(storePath) as Record<string, ModelResetEntry>;
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    ModelResetEntry
+  >;
   expectModelResetFields(store["agent:main:main"], params.expected);
 }
 
@@ -275,7 +278,10 @@ test("sessions.reset clears stale estimated context budget status", async () => 
   expect(reset.payload?.entry.contextBudgetStatus).toBeUndefined();
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
 
-  const store = readSessionStore(storePath);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { contextBudgetStatus?: unknown; contextTokens?: number }
+  >;
   expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
   expect(store["agent:main:main"]?.contextTokens).toBeUndefined();
 });
@@ -313,7 +319,10 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
   expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-skills");
   expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
 
-  const store = readSessionStore(storePath);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { skillsSnapshot?: unknown }
+  >;
   expect(store["agent:main:main"]?.skillsSnapshot).toBeUndefined();
 });
 
@@ -351,7 +360,13 @@ test("sessions.reset rotates generated topic transcript files with the new sessi
   expect(nextSessionId).not.toBe(previousSessionId);
   expect(path.basename(nextSessionFile)).toBe(`${nextSessionId}-topic-456.jsonl`);
 
-  const store = readSessionStore(storePath);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      sessionId?: string;
+      sessionFile?: string;
+    }
+  >;
   const persistedEntry = store["agent:main:telegram:group:123:topic:456"];
   expect(persistedEntry?.sessionId).toBe(nextSessionId);
   expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}-topic-456.jsonl`);
@@ -443,6 +458,9 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(reset.ok).toBe(true);
   expectOwnedChildMetadata(reset.payload?.entry, customSessionFile);
 
-  const store = readSessionStore(storePath) as Record<string, ResetSessionEntry>;
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    ResetSessionEntry
+  >;
   expectOwnedChildMetadata(store["agent:main:subagent:child"], customSessionFile);
 });

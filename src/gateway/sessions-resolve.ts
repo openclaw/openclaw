@@ -7,7 +7,7 @@ import {
   errorShape,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -17,7 +17,7 @@ import {
   loadCombinedSessionStoreForGateway,
   migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
@@ -42,8 +42,10 @@ function noSessionFoundResult(key: string): SessionsResolveResult {
 function validateSessionAgentExists(
   cfg: OpenClawConfig,
   key: string,
+  entry?: SessionEntry | null,
+  options?: { acpMetadataSessionKey?: string | null },
 ): SessionsResolveResult | null {
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key);
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key, entry, options);
   if (deletedAgentId === null) {
     return null;
   }
@@ -59,8 +61,7 @@ function validateSessionAgentExists(
 function isResolvedSessionKeyVisible(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
-  storePath: string;
-  store: ReturnType<typeof loadSessionStore>;
+  store: Record<string, SessionEntry>;
   key: string;
 }) {
   if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
@@ -123,21 +124,25 @@ export async function resolveSessionKeyFromResolveParams(params: {
   if (hasKey) {
     // Key lookups may hit legacy store aliases. Migrate/prune before returning
     // the canonical key so later calls operate on one store identity.
-    const target = resolveGatewaySessionStoreTarget({ cfg, key });
-    const store = loadSessionStore(target.storePath);
+    const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
+    const store = target.store;
     if (store[target.canonicalKey]) {
       if (
         !isResolvedSessionKeyVisible({
           cfg,
           p,
-          storePath: target.storePath,
           store,
           key: target.canonicalKey,
         })
       ) {
         return noSessionFoundResult(key);
       }
-      const agentCheck = validateSessionAgentExists(cfg, target.canonicalKey);
+      const agentCheck = validateSessionAgentExists(
+        cfg,
+        target.canonicalKey,
+        store[target.canonicalKey],
+        { acpMetadataSessionKey: target.canonicalKey },
+      );
       if (agentCheck) {
         return agentCheck;
       }
@@ -153,22 +158,31 @@ export async function resolveSessionKeyFromResolveParams(params: {
         s[primaryKey] = s[legacyKey];
       }
     });
+    const refreshedTarget = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key: target.canonicalKey,
+      clone: false,
+    });
     if (
       !isResolvedSessionKeyVisible({
         cfg,
         p,
-        storePath: target.storePath,
-        store: loadSessionStore(target.storePath),
-        key: target.canonicalKey,
+        store: refreshedTarget.store,
+        key: refreshedTarget.canonicalKey,
       })
     ) {
       return noSessionFoundResult(key);
     }
-    const agentCheckLegacy = validateSessionAgentExists(cfg, target.canonicalKey);
+    const agentCheckLegacy = validateSessionAgentExists(
+      cfg,
+      refreshedTarget.canonicalKey,
+      refreshedTarget.store[refreshedTarget.canonicalKey],
+      { acpMetadataSessionKey: refreshedTarget.canonicalKey },
+    );
     if (agentCheckLegacy) {
       return agentCheckLegacy;
     }
-    return { ok: true, key: target.canonicalKey };
+    return { ok: true, key: refreshedTarget.canonicalKey };
   }
 
   if (hasSessionId) {
@@ -193,7 +207,12 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
-    const agentCheckSessionId = validateSessionAgentExists(cfg, selection.sessionKey);
+    const selectedEntry = matches.find(([matchKey]) => matchKey === selection.sessionKey)?.[1];
+    const agentCheckSessionId = validateSessionAgentExists(
+      cfg,
+      selection.sessionKey,
+      selectedEntry,
+    );
     if (agentCheckSessionId) {
       return agentCheckSessionId;
     }
@@ -242,7 +261,8 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const agentCheckLabel = validateSessionAgentExists(cfg, list.sessions[0].key);
+  const labelKey = list.sessions[0].key;
+  const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
   if (agentCheckLabel) {
     return agentCheckLabel;
   }

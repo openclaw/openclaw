@@ -99,6 +99,10 @@ import {
   recordPluginError,
 } from "./loader-records.js";
 import {
+  hasExplicitManifestOwnerTrust,
+  resolveManifestOwnerBasePolicyBlock,
+} from "./manifest-owner-policy.js";
+import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
   type PluginManifestRegistry,
@@ -394,6 +398,7 @@ type PluginRegistrySnapshot = {
     migrationProviders: PluginRegistry["migrationProviders"];
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
+    trustedToolPolicies: NonNullable<PluginRegistry["trustedToolPolicies"]>;
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
     agentHarnesses: PluginRegistry["agentHarnesses"];
     httpRoutes: PluginRegistry["httpRoutes"];
@@ -439,6 +444,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       migrationProviders: [...registry.migrationProviders],
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
+      trustedToolPolicies: [...(registry.trustedToolPolicies ?? [])],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
       agentHarnesses: [...registry.agentHarnesses],
       httpRoutes: [...registry.httpRoutes],
@@ -483,6 +489,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.migrationProviders = snapshot.arrays.migrationProviders;
   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
+  registry.trustedToolPolicies = snapshot.arrays.trustedToolPolicies;
   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
   registry.agentHarnesses = snapshot.arrays.agentHarnesses;
   registry.httpRoutes = snapshot.arrays.httpRoutes;
@@ -2067,6 +2074,27 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.kind = manifestRecord.kind;
       record.configUiHints = manifestRecord.configUiHints;
       record.configJsonSchema = manifestRecord.configSchema;
+      const localSetupBasePolicyBlock = resolveManifestOwnerBasePolicyBlock({
+        plugin: { id: pluginId },
+        normalizedConfig: normalized,
+      });
+      const trustedLocalScopedChannelSetupImport =
+        localSetupBasePolicyBlock === null &&
+        (hasExplicitManifestOwnerTrust({
+          plugin: { id: pluginId },
+          normalizedConfig: normalized,
+        }) ||
+          (candidate.origin === "workspace" && activationState.source === "auto"));
+      // Scoped setup-only loads intentionally bypass normal activation so setup
+      // can reach explicitly trusted local plugins. Reapply the non-bundled
+      // trust boundary here so default-only workspace/config/global plugins never import.
+      const blockUntrustedLocalScopedChannelSetupImport =
+        includeSetupOnlyChannelPlugins &&
+        !validateOnly &&
+        Boolean(onlyPluginIdSet) &&
+        manifestRecord.channels.length > 0 &&
+        candidate.origin !== "bundled" &&
+        !trustedLocalScopedChannelSetupImport;
       const pushPluginLoadError = (message: string) => {
         record.status = "error";
         record.error = message;
@@ -2081,6 +2109,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           message: record.error,
         });
       };
+      if (blockUntrustedLocalScopedChannelSetupImport) {
+        record.status = "disabled";
+        record.error =
+          activationState.reason ??
+          enableState.reason ??
+          "local plugin requires explicit trust for setup";
+        markPluginActivationDisabled(record, record.error);
+        // Manifest-registry duplicate resolution already canonicalizes same-id
+        // plugin shadows before this load loop. Do not claim `seenIds` here:
+        // different-id trusted fallbacks still need a chance to load later.
+        registry.plugins.push(record);
+        continue;
+      }
       const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
       const runtimeCandidateEntry = resolvePreferredBuiltRuntimeArtifact({
         source: candidate.source,

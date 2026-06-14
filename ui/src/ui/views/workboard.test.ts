@@ -81,6 +81,55 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("high");
   });
 
+  it("can hide empty columns while keeping populated columns visible", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Keep visible",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    const props = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => undefined,
+    } satisfies WorkboardRenderProps;
+
+    render(renderWorkboard(props), container);
+    expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
+
+    const toggle = container.querySelector<HTMLInputElement>(
+      'input[name="workboard-hide-empty-columns"]',
+    );
+    expect(toggle).toBeInstanceOf(HTMLInputElement);
+    toggle!.checked = true;
+    toggle!.dispatchEvent(new Event("change", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    const columnHeadings = Array.from(
+      container.querySelectorAll<HTMLElement>(".workboard-column__header h2"),
+    ).map((heading) => heading.textContent?.trim());
+    expect(state.hideEmptyColumns).toBe(true);
+    expect(container.querySelectorAll(".workboard-column")).toHaveLength(1);
+    expect(columnHeadings).toEqual(["Todo"]);
+    expect(container.textContent).toContain("Todo");
+    expect(container.textContent).toContain("Keep visible");
+  });
+
   it("does not render Invalid Date for Date-invalid card timestamps", () => {
     const host = {};
     const state = getWorkboardState(host);

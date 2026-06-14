@@ -24,11 +24,14 @@ import {
   resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth as resolveProviderAuthDirect,
   resolveSnapshot,
+  shouldSkipSnapshotRestore,
   resolveUbuntuVmName,
   resolveWindowsProviderAuth,
   run,
   runStreaming,
   shellQuote,
+  SKIP_SNAPSHOT_RESTORE_ENV,
+  validateSnapshotRestoreMode,
   withProgressOnStderr,
 } from "../../scripts/e2e/parallels/common.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
@@ -210,14 +213,15 @@ describe("Parallels smoke model selection", () => {
   it("keeps the public shell entrypoints as thin TypeScript launchers", () => {
     for (const [platform, wrapperPath] of Object.entries(WRAPPERS)) {
       const wrapper = readFileSync(wrapperPath, "utf8");
+      const scriptPath =
+        platform === "npmUpdate"
+          ? TS_PATHS.npmUpdate
+          : TS_PATHS[platform as "linux" | "macos" | "windows"];
 
-      expect(wrapper, wrapperPath).toContain('exec pnpm --dir "$ROOT_DIR" exec tsx');
-      if (platform === "npmUpdate") {
-        expect(wrapper, wrapperPath).toContain(TS_PATHS.npmUpdate);
-      } else {
-        expect(wrapper, wrapperPath).toContain(TS_PATHS[platform as "linux" | "macos" | "windows"]);
-      }
-      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(5);
+      expect(wrapper, wrapperPath).toContain('cd "$ROOT_DIR"');
+      expect(wrapper, wrapperPath).toContain(`exec pnpm exec tsx ${scriptPath}`);
+      expect(wrapper, wrapperPath).toContain(`exec node --import tsx ${scriptPath}`);
+      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(9);
     }
   });
 
@@ -535,6 +539,26 @@ if (isPrlctl) {
     }
   });
 
+  it("rejects skip-restore for combined Parallels smoke lanes", () => {
+    expect(withEnv({ [SKIP_SNAPSHOT_RESTORE_ENV]: "1" }, () => shouldSkipSnapshotRestore())).toBe(
+      true,
+    );
+    const invalidSkipBothResult = spawnNodeEvalSync(
+      `process.env.${SKIP_SNAPSHOT_RESTORE_ENV} = "1"; const { validateSnapshotRestoreMode } = await import("./${TS_PATHS.common}"); validateSnapshotRestoreMode("both", "test smoke");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    expect(invalidSkipBothResult.status).toBe(1);
+    expect(invalidSkipBothResult.stderr).toContain(
+      "OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE=1 requires --mode fresh or --mode upgrade",
+    );
+    expect(() =>
+      withEnv({ [SKIP_SNAPSHOT_RESTORE_ENV]: "1" }, () =>
+        validateSnapshotRestoreMode("fresh", "test smoke"),
+      ),
+    ).not.toThrow();
+    expect(() => validateSnapshotRestoreMode("both", "test smoke")).not.toThrow();
+  });
+
   it("uses one Ubuntu VM fallback resolver for Linux lanes", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-helper-"));
     writeFakePrlctl(
@@ -727,12 +751,17 @@ if (isPrlctl) {
       const script = readFileSync(scriptPath, "utf8");
 
       expect(script, scriptPath).toContain("PhaseRunner");
+      expect(script, scriptPath).toContain("validateSnapshotRestoreMode(this.options.mode");
       expect(script, scriptPath).toContain("remainingPhaseTimeoutMs");
       expect(script, scriptPath).toContain("timeoutMs:");
     }
 
-    const linux = readFileSync(TS_PATHS.linux, "utf8");
     const macos = readFileSync(TS_PATHS.macos, "utf8");
+    expect(macos).toContain("currentRunningSnapshotInfo(this.options.vmName)");
+    expect(macos).toContain("shouldSkipSnapshotRestore()");
+    expect(macos).toContain("Skip snapshot restore; using current running VM");
+
+    const linux = readFileSync(TS_PATHS.linux, "utf8");
     const windows = readFileSync(TS_PATHS.windows, "utf8");
     expect(linux).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
     expect(windows).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
@@ -1280,6 +1309,7 @@ setInterval(() => {}, 1000);
     expect(powershell).toContain("models.providers.${providerId}");
     expect(powershell).toContain("agents.defaults.models${configPathMapKey(modelId)}");
     expect(powershell).toContain("OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED");
+    expect(powershell).toContain("Programs\\nodejs");
     expect(powershell).toContain('selectedModelEntry.agentRuntime = { id: "openclaw" }');
     expect(powershell).toContain("delete selectedModelEntry.agentRuntime");
     expect(powershell).toContain("delete providerEntry.agentRuntime");

@@ -9,7 +9,16 @@ struct TalkProTab: View {
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
     @State private var showPermissionPrompt = false
     @State private var showTalkIssueDetails = false
+    let headerLeadingAction: OpenClawSidebarHeaderAction?
     var openSettings: () -> Void
+
+    init(
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        openSettings: @escaping () -> Void)
+    {
+        self.headerLeadingAction = headerLeadingAction
+        self.openSettings = openSettings
+    }
 
     private var state: TalkProState {
         TalkProState(
@@ -85,6 +94,9 @@ struct TalkProTab: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 11) {
+            if let headerLeadingAction {
+                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+            }
             OpenClawProMark(size: 31, shadowRadius: 9)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Talk")

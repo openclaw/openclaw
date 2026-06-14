@@ -468,6 +468,8 @@ function createTestOpenAIProviderWrapper(
   streamFn = createCodexNativeWebSearchWrapper(streamFn, {
     config: params.context.config,
     agentDir: params.context.agentDir,
+    agentId: params.context.agentId,
+    nativeWebSearchAllowedByToolPolicy: params.context.nativeWebSearchAllowedByToolPolicy,
   });
   streamFn = createOpenAIStringContentWrapper(streamFn);
   streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);
@@ -512,6 +514,53 @@ describe("applyExtraParamsToAgent", () => {
     };
   }
 
+  type OpenAIResponsesWrapperOptions = SimpleStreamOptions & {
+    replayResponsesItemIds?: boolean;
+  };
+  type OpenAIResponsesWrapperCompat = NonNullable<Model<"openai-responses">["compat"]> & {
+    supportsStore?: boolean;
+  };
+
+  const buildResponsesWrapperModel = (params: {
+    provider: string;
+    id: string;
+    baseUrl: string;
+    compat?: OpenAIResponsesWrapperCompat;
+  }): Model<"openai-responses"> => ({
+    api: "openai-responses",
+    provider: params.provider,
+    id: params.id,
+    name: params.id,
+    baseUrl: params.baseUrl,
+    reasoning: true,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128_000,
+    maxTokens: 4096,
+    ...(params.compat ? { compat: params.compat } : {}),
+  });
+
+  const captureOpenAIResponsesWrapperReplay = (params: {
+    model: Model<"openai-responses">;
+    options?: OpenAIResponsesWrapperOptions;
+  }): boolean | undefined => {
+    let capturedOptions: OpenAIResponsesWrapperOptions | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions = options;
+      return createAssistantMessageEventStream();
+    };
+    const streamFn = createOpenAIResponsesContextManagementWrapper(baseStreamFn, undefined);
+
+    void streamFn(params.model, { messages: [] }, params.options);
+
+    return capturedOptions?.replayResponsesItemIds;
+  };
+
   it("passes agentDir and workspaceDir to provider stream wrappers", () => {
     let capturedContext: WrapProviderStreamFnParams["context"] | undefined;
     extraParamsTesting.setProviderRuntimeDepsForTest({
@@ -540,10 +589,29 @@ describe("applyExtraParamsToAgent", () => {
       "/tmp/openclaw-workspace",
       model,
       "/tmp/openclaw-agent",
+      undefined,
+      {
+        nativeWebSearchPolicyContext: {
+          sessionKey: "agent:cass:main",
+          sandboxToolPolicy: { deny: ["group:web"] },
+          messageProvider: "teams",
+          agentAccountId: "acct-1",
+          groupId: "group-1",
+          groupChannel: "General",
+          groupSpace: "space-1",
+          spawnedBy: "agent:cass:main",
+          senderId: "alice",
+          senderName: "Alice",
+          senderUsername: "alice-user",
+          senderE164: "+15551234567",
+        },
+      },
     );
 
     expect(capturedContext?.agentDir).toBe("/tmp/openclaw-agent");
     expect(capturedContext?.workspaceDir).toBe("/tmp/openclaw-workspace");
+    expect(capturedContext?.nativeWebSearchAllowedByToolPolicy).toBe(false);
+    expect("nativeWebSearchPolicyContext" in (capturedContext ?? {})).toBe(false);
   });
 
   function runResponsesPayloadMutationCase(params: {
@@ -3054,29 +3122,58 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("keeps Responses replay item ids enabled for direct OpenAI store-enabled requests", () => {
-    let capturedOptions:
-      | (SimpleStreamOptions & {
-          replayResponsesItemIds?: boolean;
-        })
-      | undefined;
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      capturedOptions = options;
-      return {} as ReturnType<StreamFn>;
-    };
-    const streamFn = createOpenAIResponsesContextManagementWrapper(baseStreamFn, undefined);
+    expect(
+      captureOpenAIResponsesWrapperReplay({
+        model: buildResponsesWrapperModel({
+          provider: "openai",
+          id: "gpt-5",
+          baseUrl: "https://api.openai.com/v1",
+        }),
+        options: {},
+      }),
+    ).toBe(true);
+  });
 
-    void streamFn(
-      {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5",
-        baseUrl: "https://api.openai.com/v1",
-      } as unknown as Model<"openai-responses">,
-      { messages: [] },
-      {},
-    );
-
-    expect(capturedOptions?.replayResponsesItemIds).toBe(true);
+  it.each([
+    {
+      name: "Azure OpenAI store-enabled requests",
+      model: buildResponsesWrapperModel({
+        provider: "azure-openai",
+        id: "gpt-5-mini",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      }),
+      options: {},
+      expectedReplay: true,
+    },
+    {
+      name: "store-capable third-party Responses routes",
+      model: buildResponsesWrapperModel({
+        provider: "custom-openai-responses",
+        id: "store-capable-model",
+        baseUrl: "https://custom.example.invalid/v1",
+        compat: { supportsStore: true },
+      }),
+      options: { replayResponsesItemIds: true },
+      expectedReplay: true,
+    },
+    {
+      name: "storeless custom Responses routes",
+      model: buildResponsesWrapperModel({
+        provider: "custom-openai-responses",
+        id: "gpt-5.5",
+        baseUrl: "https://custom.example.invalid/v1",
+        compat: { supportsStore: false },
+      }),
+      options: {},
+      expectedReplay: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    model: Model<"openai-responses">;
+    options: OpenAIResponsesWrapperOptions;
+    expectedReplay: boolean;
+  }>)("sets replay item ids for $name", ({ model, options, expectedReplay }) => {
+    expect(captureOpenAIResponsesWrapperReplay({ model, options })).toBe(expectedReplay);
   });
 
   it("forces store=true for azure-openai provider with openai-responses API (#42800)", () => {

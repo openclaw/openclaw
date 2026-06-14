@@ -111,6 +111,18 @@ export function resolveHeartbeatDeliveryTarget(params: {
     if (normalized) {
       target = normalized;
     }
+  } else if (
+    rawTarget === undefined &&
+    params.turnSource?.to &&
+    params.turnSource.channel &&
+    isDeliverableMessageChannel(params.turnSource.channel)
+  ) {
+    // No heartbeat target configured, but this run drains an event that
+    // explicitly carried its origin delivery context (e.g. a cron wake from a
+    // channel thread/topic). The event named its destination, so deliver to it
+    // instead of silently dropping the reply. An explicit `target: "none"`
+    // still suppresses delivery (operator opt-out above takes precedence).
+    target = "last";
   }
 
   if (target === "none") {

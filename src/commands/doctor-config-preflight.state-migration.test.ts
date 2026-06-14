@@ -83,7 +83,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
-  it("limits invalid-config preflight to task sidecar migration", async () => {
+  it("limits invalid-config preflight to config-independent state migration", async () => {
     vi.clearAllMocks();
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,

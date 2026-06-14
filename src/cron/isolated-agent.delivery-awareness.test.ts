@@ -1,9 +1,10 @@
 // Delivery awareness tests cover isolated agent knowledge of cron delivery targets.
+import fs from "node:fs/promises";
+import path from "node:path";
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions.js";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -15,7 +16,8 @@ async function writeDefaultAgentSessionStoreEntries(
   entries: Record<string, Record<string, unknown>>,
 ): Promise<string> {
   const storePath = resolveDefaultSessionStorePath("main");
-  await writeSessionStoreForTestAsync(storePath, entries);
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
   return storePath;
 }
 

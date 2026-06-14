@@ -7,6 +7,7 @@ import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
+  currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
   packageBuildCommitFromTgz,
@@ -26,7 +27,9 @@ import {
   resolveSnapshot,
   run,
   say,
+  shouldSkipSnapshotRestore,
   shellQuote,
+  validateSnapshotRestoreMode,
   startHostServer,
   warn,
   withProgressOnStderr,
@@ -321,7 +324,10 @@ class MacosSmoke {
     this.discord = this.createDiscordSmoke();
     this.tgzDir = await makeTempDir("openclaw-parallels-macos-tgz.");
     try {
-      this.snapshot = resolveSnapshot(this.options.vmName, this.options.snapshotHint);
+      validateSnapshotRestoreMode(this.options.mode, "macOS smoke");
+      this.snapshot = shouldSkipSnapshotRestore()
+        ? currentRunningSnapshotInfo(this.options.vmName)
+        : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
       this.hostIp = resolveHostIp(this.options.hostIp);
@@ -712,6 +718,11 @@ exec node "$entry" ${argv}`,
   }
 
   private restoreSnapshot(): void {
+    if (shouldSkipSnapshotRestore()) {
+      say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
+      this.waitForCurrentUser();
+      return;
+    }
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     let restored = false;
     for (let attempt = 1; attempt <= 2; attempt++) {

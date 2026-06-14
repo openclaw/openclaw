@@ -61,6 +61,7 @@ import {
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
+import { ADMIN_SCOPE, PAIRING_SCOPE } from "../operator-scopes.js";
 import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import {
@@ -118,6 +119,11 @@ type PendingNodeAction = {
 };
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
+
+function canReadPendingNodePairing(client: GatewayClient | null): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE) || scopes.includes(PAIRING_SCOPE);
+}
 
 function normalizeBrowserProxyPath(value: string): string {
   const trimmed = value.trim();
@@ -932,7 +938,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, { nodeId: updated.nodeId, displayName: updated.displayName }, undefined);
     });
   },
-  "node.list": async ({ params, respond, context }) => {
+  "node.list": async ({ params, respond, client, context }) => {
     if (!validateNodeListParams(params)) {
       respondInvalidParams({
         respond,
@@ -949,13 +955,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
+        pendingNodes: canReadPendingNodePairing(client) ? nodePairing.pending : undefined,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
       const nodes = listKnownNodes(catalog);
       respond(true, { ts: Date.now(), nodes }, undefined);
     });
   },
-  "node.describe": async ({ params, respond, context }) => {
+  "node.describe": async ({ params, respond, client, context }) => {
     if (!validateNodeDescribeParams(params)) {
       respondInvalidParams({
         respond,
@@ -978,6 +985,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
+        pendingNodes: canReadPendingNodePairing(client) ? nodePairing.pending : undefined,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
       const node = getKnownNode(catalog, id);

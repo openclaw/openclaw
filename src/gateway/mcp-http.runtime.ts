@@ -70,7 +70,11 @@ export class McpLoopbackToolCache {
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
-      params.senderIsOwner === true ? "owner" : "non-owner",
+      params.senderIsOwner === true
+        ? "owner"
+        : params.senderIsOwner === false
+          ? "non-owner"
+          : "unknown-owner",
     ].join("\u0000");
     const now = Date.now();
     for (const [key, entry] of this.#entries) {

@@ -128,6 +128,10 @@ export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta) {
   return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
 }
 
+export function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
+  return ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
+}
+
 function shouldSeedProviderConfigModels(providerMeta) {
   return (
     typeof providerMeta.baseUrl === "string" || typeof providerMeta.timeoutSeconds === "number"
@@ -2312,6 +2316,14 @@ async function runInstalledModelsSet(params) {
   });
   await runInstalledCli({
     cliPath: params.cliPath,
+    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runInstalledCli({
+    cliPath: params.cliPath,
     args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
     cwd: params.cwd,
     env: params.env,
@@ -3230,6 +3242,13 @@ async function runModelsSet(params) {
       JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
       "--strict-json",
     ],
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
+    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });

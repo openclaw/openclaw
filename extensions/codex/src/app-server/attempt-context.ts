@@ -15,6 +15,8 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import type { CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -249,9 +251,11 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         turnScopedDeveloperInstructionFiles,
       ),
       memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
-        ? renderCodexWorkspaceMemoryReference({
+        ? renderCodexWorkspaceMemoryCollaborationInstructions({
             files: memoryReferenceFiles,
             toolNames: params.memoryToolNames,
+            memoryToolRouted: memoryToolsAvailable,
+            citationsMode: params.params.config?.memory?.citations,
           })
         : undefined,
       heartbeatCollaborationInstructions:
@@ -581,17 +585,12 @@ export function prependCodexOpenClawPromptContext(
   return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
 }
 
-const CODEX_DELIVERY_HINT_LINES = [
-  "Delivery: to send a message, use the `message` tool.",
-  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-] as const;
-
 function splitLeadingCodexDeliveryHint(prompt: string): {
   deliveryHint?: string;
   prompt: string;
 } {
   const trimmedStart = prompt.trimStart();
-  const matchedHint = CODEX_DELIVERY_HINT_LINES.find((hint) => trimmedStart.startsWith(hint));
+  const matchedHint = MESSAGE_TOOL_DELIVERY_HINTS.find((hint) => trimmedStart.startsWith(hint));
   if (!matchedHint) {
     return { prompt };
   }
@@ -803,6 +802,55 @@ export function renderCodexWorkspaceMemoryReference(params: {
     lines.push(`- ${file.path}`);
   }
   return lines.join("\n").trim();
+}
+
+function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+  files: EmbeddedContextFile[];
+  toolNames: readonly string[];
+  memoryToolRouted: boolean;
+  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+}): string | undefined {
+  const memoryRecallInstructions = params.memoryToolRouted
+    ? renderCodexMemoryRecallInstructions({
+        toolNames: params.toolNames,
+        citationsMode: params.citationsMode,
+      })
+    : undefined;
+  const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
+    files: params.files,
+    toolNames: params.toolNames,
+  });
+  const sections = [memoryRecallInstructions, memoryReferenceInstructions].filter(isNonEmptyString);
+  return sections.length > 0 ? sections.join("\n\n") : undefined;
+}
+
+function renderCodexMemoryRecallInstructions(params: {
+  toolNames: readonly string[];
+  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+}): string | undefined {
+  const availableTools = new Set(params.toolNames);
+  const memoryPrompt = buildMemorySystemPromptAddition({
+    availableTools,
+    citationsMode: params.citationsMode,
+  });
+  if (!memoryPrompt) {
+    // Memory recall policy belongs to the active memory plugin.
+    // Codex-side fallback text can mask plugin lifecycle bugs or misdescribe third-party memory tools.
+    return undefined;
+  }
+  const toolSearchBridge = renderCodexMemoryToolSearchBridge(params.toolNames);
+  return [memoryPrompt, toolSearchBridge].filter(isNonEmptyString).join("\n").trim();
+}
+
+function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string | undefined {
+  const memoryToolNames = toolNames
+    .map((name) => normalizeCodexDynamicToolName(name))
+    .filter((name) => CODEX_MEMORY_TOOL_NAMES.has(name))
+    .toSorted();
+  if (memoryToolNames.length === 0) {
+    return undefined;
+  }
+  return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
 }
 
 /** Returns whether the current dynamic tool list can serve workspace memory. */

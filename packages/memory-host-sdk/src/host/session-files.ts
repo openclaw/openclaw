@@ -1,4 +1,5 @@
 // Memory Host SDK module implements session files behavior.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
@@ -15,7 +16,6 @@ import {
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
-  loadSessionStore,
   parseUsageCountedSessionIdFromFileName,
   resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
@@ -253,10 +253,11 @@ function readSessionTranscriptClassificationStore(
   storePath: string,
 ): Record<string, SessionTranscriptStoreEntry> {
   try {
-    return loadSessionStore(storePath, { skipCache: true }) as Record<
-      string,
-      SessionTranscriptStoreEntry
-    >;
+    const parsed = JSON.parse(fsSync.readFileSync(storePath, "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as Record<string, SessionTranscriptStoreEntry>;
   } catch {
     return {};
   }

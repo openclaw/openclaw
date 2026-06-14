@@ -3,7 +3,6 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
-  clearExistingSqliteSessionStore,
   removeWorkspaceAttestationPaths,
   resetCleanupCommandMocks,
   silenceCleanupCommandRuntime,
@@ -50,19 +49,6 @@ describe("resetCommand", () => {
         message.includes("openclaw backup create"),
       ),
     ).toBe(false);
-  });
-
-  it("clears SQLite-backed session metadata before removing session directories", async () => {
-    await resetCommand(runtime, {
-      scope: "config+creds+sessions",
-      yes: true,
-      nonInteractive: true,
-    });
-
-    expect(clearExistingSqliteSessionStore).toHaveBeenCalledWith(
-      "/tmp/.openclaw/agents/main/sessions/sessions.json",
-      { compact: true },
-    );
   });
 
   it("removes workspace attestations during full reset", async () => {

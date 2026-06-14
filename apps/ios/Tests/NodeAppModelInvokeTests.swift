@@ -1025,6 +1025,38 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(appModel.openChatRequestID == 1)
     }
 
+    @Test @MainActor func operatorAdminScopeCacheRefreshesFromStoredToken() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let appModel = NodeAppModel()
+        let identity = DeviceIdentityStore.loadOrCreate()
+        #expect(appModel.hasOperatorAdminScope == false)
+
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "operator-token",
+            scopes: ["operator.read", "operator.admin"])
+        appModel._test_refreshOperatorAdminScopeFromStore()
+        #expect(appModel.hasOperatorAdminScope == true)
+
+        DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: "operator")
+        appModel._test_refreshOperatorAdminScopeFromStore()
+        #expect(appModel.hasOperatorAdminScope == false)
+    }
+
     @Test @MainActor func sendVoiceTranscriptThrowsWhenGatewayOffline() async {
         let appModel = NodeAppModel()
         await #expect(throws: Error.self) {

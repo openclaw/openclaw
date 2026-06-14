@@ -3,11 +3,11 @@
 
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
@@ -22,7 +22,6 @@ import {
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 const RECENT_SESSION_LIMIT = 10;
@@ -37,6 +36,16 @@ const linkChannelModuleLoader = createLazyImportLoader(() => import("./status.li
 const taskRegistryMaintenanceModuleLoader = createLazyImportLoader(
   () => import("../tasks/task-registry.maintenance.js"),
 );
+const staticModelCatalogResolverLoader = createLazyImportLoader(async () => {
+  const modelCatalog = await import("../agents/embedded-agent-runner/model.static-catalog.js");
+  return {
+    resolveManifestModel: modelCatalog.createBundledStaticCatalogModelResolver({
+      // Runtime-discovery manifest rows still provide a cold-cache fallback.
+      includeRuntimeDiscovery: true,
+    }),
+    createProviderContextResolver: modelCatalog.createBundledProviderStaticCatalogContextResolver,
+  };
+});
 
 function loadChannelSummaryModule() {
   return channelSummaryModuleLoader.load();
@@ -57,6 +66,10 @@ const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
 
 function loadTaskRegistryMaintenanceModule() {
   return taskRegistryMaintenanceModuleLoader.load();
+}
+
+function loadStaticModelCatalogResolvers() {
+  return staticModelCatalogResolverLoader.load();
 }
 
 const buildFlags = (entry?: SessionEntry): string[] => {
@@ -125,7 +138,7 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
 
 type SessionCandidate = {
   key: string;
-  entry: SessionEntry | undefined;
+  entry: SessionEntry;
   updatedAt: number | null;
 };
 
@@ -133,13 +146,16 @@ function compareSessionCandidatesByUpdatedAt(left: SessionCandidate, right: Sess
   return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
 }
 
-function listSessionCandidates(store: Record<string, SessionEntry | undefined>) {
+function listSessionCandidates(storePath: string, agentId?: string) {
   return (
-    Object.entries(store)
+    listSessionEntries({
+      ...(agentId ? { agentId } : {}),
+      storePath,
+    })
       // Compatibility aggregate buckets are not real user sessions.
-      .filter(([key]) => key !== "global" && key !== "unknown")
-      .map(([key, entry]) => ({
-        key,
+      .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
+      .map(({ sessionKey, entry }) => ({
+        key: sessionKey,
         entry,
         updatedAt: entry?.updatedAt ?? null,
       }))
@@ -186,7 +202,45 @@ export async function getStatusSummary(
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
-  await ensureSessionStateMigratedForCommand(cfg);
+  const contextSourceConfig =
+    options.sourceConfig !== undefined
+      ? options.sourceConfig
+      : projectConfigOntoRuntimeSourceSnapshot(cfg);
+  const { resolveManifestModel, createProviderContextResolver } =
+    await loadStaticModelCatalogResolvers();
+  const resolveProviderContext = createProviderContextResolver({ cfg });
+  const modelContextCache = new Map<
+    string,
+    Promise<{ modelContextWindow?: number; modelContextTokens?: number }>
+  >();
+  const resolveStaticModelContext = async (
+    provider: string | undefined,
+    model: string | undefined,
+  ) => {
+    if (!provider || !model) {
+      return {};
+    }
+    const key = `${provider}\0${model}`;
+    const cached = modelContextCache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const resolved = (async () => {
+      try {
+        const entry =
+          resolveManifestModel({ provider, modelId: model }) ??
+          (await resolveProviderContext({ provider, modelId: model }));
+        return {
+          ...(entry?.contextWindow ? { modelContextWindow: entry.contextWindow } : {}),
+          ...(entry?.contextTokens ? { modelContextTokens: entry.contextTokens } : {}),
+        };
+      } catch {
+        return {};
+      }
+    })();
+    modelContextCache.set(key, resolved);
+    return resolved;
+  };
   const channelScopeConfig =
     options.sourceConfig === undefined
       ? { config: cfg }
@@ -240,144 +294,168 @@ export async function getStatusSummary(
     defaultModel: DEFAULT_MODEL,
   });
   const configModel = resolved.model ?? DEFAULT_MODEL;
+  const configModelContext = await resolveStaticModelContext(
+    resolved.provider ?? DEFAULT_PROVIDER,
+    configModel,
+  );
   const configContextTokens =
     resolveContextTokensForModel({
       cfg,
+      sourceCfg: contextSourceConfig,
       provider: resolved.provider ?? DEFAULT_PROVIDER,
       model: configModel,
+      ...configModelContext,
       contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
       // Keep `status`/`status --json` startup read-only. These summary lookups
-      // should not kick off background provider discovery or plugin scans.
+      // use offline static catalogs but never start live provider discovery.
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
   const candidateCache = new Map<string, SessionCandidate[]>();
-  const loadStore = (storePath: string) => {
-    const cached = storeCache.get(storePath);
+  const loadSessionCandidates = (storePath: string, agentId?: string) => {
+    const cacheKey = `${storePath}\0${agentId ?? ""}`;
+    const cached = candidateCache.get(cacheKey);
     if (cached) {
       return cached;
     }
-    const store = readSessionStoreReadOnly(storePath);
-    storeCache.set(storePath, store);
-    return store;
-  };
-  const loadSessionCandidates = (storePath: string) => {
-    const cached = candidateCache.get(storePath);
-    if (cached) {
-      return cached;
-    }
-    const candidates = listSessionCandidates(loadStore(storePath));
-    candidateCache.set(storePath, candidates);
+    const candidates = listSessionCandidates(storePath, agentId);
+    candidateCache.set(cacheKey, candidates);
     return candidates;
   };
-  const buildSessionRows = (
+  const buildSessionRows = async (
     candidates: SessionCandidate[],
     opts: { agentIdOverride?: string } = {},
   ) =>
-    candidates.map(({ key, entry, updatedAt }) => {
-      const age = updatedAt ? now - updatedAt : null;
-      const parsedAgentId = parseAgentSessionKey(key)?.agentId;
-      const agentId = opts.agentIdOverride ?? parsedAgentId;
-      const configuredForSession = resolveConfiguredStatusModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-        agentId,
-      });
-      const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
-      const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
-      const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
-      const model = resolvedModel.model ?? configuredSessionModel ?? null;
-      const selectedModelLabel =
-        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
-      const modelSelectionDiffers =
-        selectedModelLabel != null &&
-        selectedModelLabel !== configuredSessionModelLabel &&
-        !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredSessionModelLabel) &&
-        hasUserPinnedModelSelection(entry);
-      // Session rows show the live selected model but warn only for user-pinned differences.
-      const contextTokens =
-        resolveContextTokensForModel({
+    Promise.all(
+      candidates.map(async ({ key, entry, updatedAt }) => {
+        const age = updatedAt ? now - updatedAt : null;
+        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
+        const agentId = opts.agentIdOverride ?? parsedAgentId;
+        const configuredForSession = resolveConfiguredStatusModelRef({
           cfg,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+          agentId,
+        });
+        const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
+        const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
+        const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
+        const model = resolvedModel.model ?? configuredSessionModel ?? null;
+        const modelContext = await resolveStaticModelContext(
+          resolvedModel.provider,
+          model ?? undefined,
+        );
+        const selectedModelLabel =
+          resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+        const modelSelectionDiffers =
+          selectedModelLabel != null &&
+          selectedModelLabel !== configuredSessionModelLabel &&
+          !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredSessionModelLabel) &&
+          hasUserPinnedModelSelection(entry);
+        // Session rows show the live selected model but warn only for user-pinned differences.
+        const contextTokens =
+          resolveContextTokensForModel({
+            cfg,
+            sourceCfg: contextSourceConfig,
+            provider: resolvedModel.provider,
+            model,
+            ...modelContext,
+            contextTokensOverride: entry?.contextTokens,
+            fallbackContextTokens: configContextTokens ?? undefined,
+            allowAsyncLoad: false,
+          }) ?? null;
+        const total = resolveSessionTotalTokens(entry);
+        const totalTokensFresh =
+          typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
+        const remaining =
+          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
+        const pct =
+          contextTokens && contextTokens > 0 && total !== undefined
+            ? Math.min(999, Math.round((total / contextTokens) * 100))
+            : null;
+        const runtime = resolveSessionRuntimeLabel({
+          cfg,
+          entry,
           provider: resolvedModel.provider,
+          model: model ?? "",
+          agentId,
+          sessionKey: key,
+        });
+
+        return {
+          agentId,
+          key,
+          kind: classifySessionKey(key, entry),
+          sessionId: entry?.sessionId,
+          updatedAt,
+          age,
+          thinkingLevel: entry?.thinkingLevel,
+          fastMode: entry?.fastMode,
+          verboseLevel: entry?.verboseLevel,
+          traceLevel: entry?.traceLevel,
+          reasoningLevel: entry?.reasoningLevel,
+          elevatedLevel: entry?.elevatedLevel,
+          systemSent: entry?.systemSent,
+          abortedLastRun: entry?.abortedLastRun,
+          inputTokens: entry?.inputTokens,
+          outputTokens: entry?.outputTokens,
+          cacheRead: entry?.cacheRead,
+          cacheWrite: entry?.cacheWrite,
+          totalTokens: total ?? null,
+          totalTokensFresh,
+          remainingTokens: remaining,
+          percentUsed: pct,
           model,
-          contextTokensOverride: entry?.contextTokens,
-          fallbackContextTokens: configContextTokens ?? undefined,
-          allowAsyncLoad: false,
-        }) ?? null;
-      const total = resolveSessionTotalTokens(entry);
-      const totalTokensFresh =
-        typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
-      const remaining =
-        contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
-      const pct =
-        contextTokens && contextTokens > 0 && total !== undefined
-          ? Math.min(999, Math.round((total / contextTokens) * 100))
-          : null;
-      const runtime = resolveSessionRuntimeLabel({
-        cfg,
-        entry,
-        provider: resolvedModel.provider,
-        model: model ?? "",
-        agentId,
-        sessionKey: key,
-      });
+          configuredModel: configuredSessionModelLabel,
+          selectedModel: selectedModelLabel,
+          modelSelectionReason: modelSelectionDiffers ? "session override" : null,
+          runtime,
+          contextTokens,
+          flags: buildFlags(entry),
+        } satisfies SessionStatus;
+      }),
+    );
 
-      return {
-        agentId,
-        key,
-        kind: classifySessionKey(key, entry),
-        sessionId: entry?.sessionId,
-        updatedAt,
-        age,
-        thinkingLevel: entry?.thinkingLevel,
-        fastMode: entry?.fastMode,
-        verboseLevel: entry?.verboseLevel,
-        traceLevel: entry?.traceLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        elevatedLevel: entry?.elevatedLevel,
-        systemSent: entry?.systemSent,
-        abortedLastRun: entry?.abortedLastRun,
-        inputTokens: entry?.inputTokens,
-        outputTokens: entry?.outputTokens,
-        cacheRead: entry?.cacheRead,
-        cacheWrite: entry?.cacheWrite,
-        totalTokens: total ?? null,
-        totalTokensFresh,
-        remainingTokens: remaining,
-        percentUsed: pct,
-        model,
-        configuredModel: configuredSessionModelLabel,
-        selectedModel: selectedModelLabel,
-        modelSelectionReason: modelSelectionDiffers ? "session override" : null,
-        runtime,
-        contextTokens,
-        flags: buildFlags(entry),
-      } satisfies SessionStatus;
-    });
-
+  const storeSources = agentList.agents.map((agent) => ({
+    agentId: agent.id,
+    storePath: resolveStorePath(cfg.session?.store, { agentId: agent.id }),
+  }));
   const paths = new Set<string>();
-  const byAgent = agentList.agents.map((agent) => {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
-    paths.add(storePath);
-    const candidates = loadSessionCandidates(storePath);
-    const sessions = buildSessionRows(candidates.slice(0, RECENT_SESSION_LIMIT), {
-      agentIdOverride: agent.id,
-    });
-    return {
-      agentId: agent.id,
-      path: storePath,
-      count: candidates.length,
-      recent: sessions,
-    };
-  });
+  const pathCounts = new Map<string, number>();
+  for (const source of storeSources) {
+    paths.add(source.storePath);
+    pathCounts.set(source.storePath, (pathCounts.get(source.storePath) ?? 0) + 1);
+  }
 
-  const allSessions = Array.from(paths)
-    .flatMap((storePath) => loadSessionCandidates(storePath))
+  const byAgent = await Promise.all(
+    agentList.agents.map(async (agent) => {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+      const candidates = loadSessionCandidates(storePath, agent.id);
+      const sessions = await buildSessionRows(candidates.slice(0, RECENT_SESSION_LIMIT), {
+        agentIdOverride: agent.id,
+      });
+      return {
+        agentId: agent.id,
+        path: storePath,
+        count: candidates.length,
+        recent: sessions,
+      };
+    }),
+  );
+
+  const allSessions = storeSources
+    .filter((source, index, sources) => {
+      return sources.findIndex((candidate) => candidate.storePath === source.storePath) === index;
+    })
+    .flatMap((source) =>
+      loadSessionCandidates(
+        source.storePath,
+        pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
+      ),
+    )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  const recent = buildSessionRows(allSessions.slice(0, RECENT_SESSION_LIMIT));
+  const recent = await buildSessionRows(allSessions.slice(0, RECENT_SESSION_LIMIT));
   const totalSessions = allSessions.length;
 
   const summary: StatusSummary = {

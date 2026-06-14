@@ -17,7 +17,7 @@ import {
   resolveSkillCommandInvocation,
 } from "../../skills/discovery/chat-commands.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -138,23 +138,6 @@ export type InlineActionResult =
       abortedLastRun: boolean;
       cleanedBody: string;
     };
-
-// Command / skill-dispatch handlers ("/compact", "/status", tool-not-available
-// errors, etc.) emit system-meta feedback for an explicit user action; they
-// are not assistant source content. Mark them so dispatch-from-config does
-// not silently drop them when sourceReplyDeliveryMode === "message_tool_only"
-// (the default for many channels and group chats). See #87107.
-function markCommandReplyForDelivery(
-  reply: ReplyPayload | ReplyPayload[] | undefined,
-): ReplyPayload | ReplyPayload[] | undefined {
-  if (!reply) {
-    return reply;
-  }
-  if (Array.isArray(reply)) {
-    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
-  }
-  return markReplyPayloadForSourceSuppressionDelivery(reply);
-}
 
 function extractTextFromToolResult(result: unknown): string | null {
   if (!result || typeof result !== "object") {

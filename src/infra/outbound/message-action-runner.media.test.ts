@@ -454,6 +454,38 @@ describe("runMessageAction media behavior", () => {
     });
   });
 
+  it("treats top-level image param as a send media source", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          message: "1/7",
+          image: "/workspace/photo.jpg",
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "photo.jpg"));
+      expect(result.sendResult?.mediaUrls).toEqual([path.join(sandboxDir, "photo.jpg")]);
+    });
+  });
+
   it("sends structured attachments as media urls", async () => {
     setActivePluginRegistry(
       createTestRegistry([

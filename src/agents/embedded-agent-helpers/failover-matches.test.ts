@@ -131,6 +131,24 @@ describe("Volcengine Coding Plan subscription errors", () => {
   });
 });
 
+describe("agent harness provider mismatch (#91710)", () => {
+  it("classifies harness provider rejection as format error", () => {
+    expect(
+      classifyFailoverReason(
+        'Requested agent harness "codex" does not support openai/gpt-5.3-codex (provider is not one of: codex).',
+      ),
+    ).toBe("format");
+  });
+
+  it("classifies harness provider rejection with multiple providers as format error", () => {
+    expect(
+      classifyFailoverReason(
+        'Requested agent harness "codex" does not support openrouter/gpt-5.4 (provider is not one of: codex, openai).',
+      ),
+    ).toBe("format");
+  });
+});
+
 describe("server error status classification", () => {
   it("classifies a bare internal server error status as server error", () => {
     // Bare status lines from providers should classify, while prefixed prose is

@@ -6,10 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../../config/sessions/test-helpers.js";
-import {
   testing as abortTesting,
   getAbortMemory,
   getAbortMemorySizeForTest,
@@ -99,7 +95,7 @@ describe("abort detection", () => {
         { sessionId, updatedAt: nowMs },
       ]),
     );
-    await writeSessionStoreForTestAsync(storePath, storeEntries);
+    await fs.writeFile(storePath, JSON.stringify(storeEntries, null, 2));
   }
 
   async function createAbortConfig(params?: {
@@ -809,7 +805,7 @@ describe("abort detection", () => {
       sessionKey: acpSessionKey,
       reason: "fast-abort",
     });
-    const store = readSessionStoreForTest(storePath) as Record<
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
       {
         abortCutoffMessageSid?: string;
@@ -839,7 +835,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = readSessionStoreForTest(storePath) as Record<string, unknown>;
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
     const entry = store[sessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;
@@ -867,7 +863,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = readSessionStoreForTest(storePath) as Record<string, unknown>;
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
     const entry = store[sessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;
@@ -897,7 +893,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = readSessionStoreForTest(storePath) as Record<string, unknown>;
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
     const entry = store[targetSessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;

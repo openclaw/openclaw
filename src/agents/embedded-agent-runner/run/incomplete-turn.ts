@@ -16,6 +16,7 @@ import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
 } from "../../execution-contract.js";
+import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
@@ -44,6 +45,12 @@ type IncompleteTurnAttempt = Pick<
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "heartbeatToolResponse"
+  | "toolMediaUrls"
+  | "toolAudioAsVoice"
+  | "toolTrustedLocalMedia"
+  | "didDeliverSourceReplyViaMessageTool"
+  | "messagingToolSourceReplyPayloads"
   | "didSendViaMessagingTool"
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
@@ -262,6 +269,35 @@ export function resolveAttemptReplayMetadata(attempt: {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+type TerminalAttemptState = Pick<
+  EmbeddedRunAttemptResult,
+  | "clientToolCalls"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "heartbeatToolResponse"
+  | "lastToolError"
+  | "toolMediaUrls"
+  | "toolAudioAsVoice"
+  | "toolTrustedLocalMedia"
+  | "didDeliverSourceReplyViaMessageTool"
+  | "messagingToolSourceReplyPayloads"
+>;
+
+function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean {
+  return Boolean(
+    attempt.clientToolCalls ||
+    attempt.yieldDetected ||
+    attempt.didSendDeterministicApprovalPrompt ||
+    attempt.heartbeatToolResponse ||
+    attempt.lastToolError ||
+    attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
+    attempt.toolAudioAsVoice ||
+    attempt.toolTrustedLocalMedia ||
+    attempt.didDeliverSourceReplyViaMessageTool ||
+    attempt.messagingToolSourceReplyPayloads?.length,
+  );
+}
+
 /**
  * Builds the user-visible incomplete-turn warning when a terminal attempt did
  * not produce a safe final assistant response and no committed delivery/progress
@@ -281,16 +317,17 @@ export function resolveIncompleteTurnPayloadText(params: {
   // produced. (#76477)
   const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  // Unsigned thinking payloads count toward payloadCount but carry no user-visible
-  // content; bypass the visible-text guard when unsigned thinking was the only output
-  // so that incomplete-turn stall detection fires below. (#89787)
-  const unsignedThinkingOnlyTerminal =
+  // Thinking payloads can count toward payloadCount but carry no user-visible
+  // content; bypass the visible-text guard when thinking was the only output
+  // so that incomplete-turn stall detection fires below. (#89787, #91953)
+  const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
     !joinAssistantTexts(params.attempt.assistantTexts).length &&
-    isUnsignedThinkingOnlyAssistantTurn(assistant);
+    !hasAttemptTerminalState(params.attempt) &&
+    Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal && !unsignedThinkingOnlyTerminal) ||
+    (params.payloadCount !== 0 && !toolUseTerminal && !thinkingOnlyTerminal) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -330,7 +367,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
-    !unsignedThinkingOnlyTerminal &&
+    !thinkingOnlyTerminal &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -555,6 +592,50 @@ function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
 }
 
+export function shouldRetrySilentErrorAssistantTurn(params: {
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    | "assistantTexts"
+    | "clientToolCalls"
+    | "yieldDetected"
+    | "didSendDeterministicApprovalPrompt"
+    | "heartbeatToolResponse"
+    | "lastToolError"
+    | "toolMediaUrls"
+    | "toolAudioAsVoice"
+    | "toolTrustedLocalMedia"
+    | "didDeliverSourceReplyViaMessageTool"
+    | "messagingToolSourceReplyPayloads"
+    | "replayMetadata"
+  >;
+  assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
+}): boolean {
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+    return false;
+  }
+  if (hasAttemptTerminalState(params.attempt)) {
+    return false;
+  }
+  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
+    return false;
+  }
+
+  const assistant = params.assistant;
+  if (!assistant || assistant.stopReason !== "error") {
+    return false;
+  }
+
+  const content = (assistant as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return !hasPositiveOutputTokenUsage(assistant);
+  }
+
+  return hasOnlyAssistantReasoningContent(assistant);
+}
+
 function isEmptyResponseAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
@@ -635,7 +716,7 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
-/** Allows configured silent handling for replay-safe empty or reasoning-only assistant turns. */
+/** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -647,6 +728,25 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
+    return false;
+  }
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (
+    params.payloadCount === 0 &&
+    assistant?.stopReason !== "error" &&
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts)
+  ) {
+    return true;
+  }
+  // Post-tool empty stops are ambiguous provider failures, not intentional silence.
+  // Let the retry/incomplete-turn paths decide whether replay is safe.
+  if (
+    params.attempt.toolMetas.length > 0 &&
+    isEmptyResponseAssistantTurn({
+      payloadCount: params.payloadCount,
+      attempt: params.attempt,
+    })
+  ) {
     return false;
   }
   return isNonVisibleAssistantTurnEligibleForSilentReply({

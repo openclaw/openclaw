@@ -12,7 +12,6 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
-import { resolveSqliteSessionStoreDatabasePath } from "./store-sqlite.js";
 
 /** CLI/session-store target selection options. */
 export type SessionStoreSelectionOptions = {
@@ -95,7 +94,6 @@ function resolveValidatedDiscoveredStorePathSync(params: {
   realAgentsRoot?: string;
 }): string | undefined {
   const storePath = path.join(params.sessionsDir, "sessions.json");
-  const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
   try {
     const stat = fsSync.lstatSync(storePath);
     // Discovered stores must be real files under the agents root; symlinked stores could escape
@@ -104,42 +102,8 @@ function resolveValidatedDiscoveredStorePathSync(params: {
       return undefined;
     }
     const realStorePath = fsSync.realpathSync.native(storePath);
+    const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
-  } catch (err) {
-    if (shouldSkipDiscoveryError(err)) {
-      return resolveValidatedSqliteBackedStorePathSync(storePath, realAgentsRoot);
-    }
-    throw err;
-  }
-}
-
-function resolveValidatedSqliteBackedStorePathSync(
-  storePath: string,
-  realAgentsRoot: string,
-): string | undefined {
-  const sessionsDir = path.dirname(storePath);
-  try {
-    const sessionsDirStat = fsSync.lstatSync(sessionsDir);
-    if (sessionsDirStat.isSymbolicLink() || !sessionsDirStat.isDirectory()) {
-      return undefined;
-    }
-    const realSessionsDir = fsSync.realpathSync.native(sessionsDir);
-    if (!isWithinRoot(realSessionsDir, realAgentsRoot)) {
-      return undefined;
-    }
-  } catch (err) {
-    if (!shouldSkipDiscoveryError(err)) {
-      throw err;
-    }
-  }
-  const sqlitePath = resolveSqliteSessionStoreDatabasePath(storePath);
-  try {
-    const stat = fsSync.lstatSync(sqlitePath);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      return undefined;
-    }
-    const realSqlitePath = fsSync.realpathSync.native(sqlitePath);
-    return isWithinRoot(realSqlitePath, realAgentsRoot) ? path.resolve(storePath) : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
       return undefined;
@@ -154,49 +118,14 @@ async function resolveValidatedDiscoveredStorePath(params: {
   realAgentsRoot?: string;
 }): Promise<string | undefined> {
   const storePath = path.join(params.sessionsDir, "sessions.json");
-  const realAgentsRoot = params.realAgentsRoot ?? (await fs.realpath(params.agentsRoot));
   try {
     const stat = await fs.lstat(storePath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
       return undefined;
     }
     const realStorePath = await fs.realpath(storePath);
+    const realAgentsRoot = params.realAgentsRoot ?? (await fs.realpath(params.agentsRoot));
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
-  } catch (err) {
-    if (shouldSkipDiscoveryError(err)) {
-      return await resolveValidatedSqliteBackedStorePath(storePath, realAgentsRoot);
-    }
-    throw err;
-  }
-}
-
-async function resolveValidatedSqliteBackedStorePath(
-  storePath: string,
-  realAgentsRoot: string,
-): Promise<string | undefined> {
-  const sessionsDir = path.dirname(storePath);
-  try {
-    const sessionsDirStat = await fs.lstat(sessionsDir);
-    if (sessionsDirStat.isSymbolicLink() || !sessionsDirStat.isDirectory()) {
-      return undefined;
-    }
-    const realSessionsDir = await fs.realpath(sessionsDir);
-    if (!isWithinRoot(realSessionsDir, realAgentsRoot)) {
-      return undefined;
-    }
-  } catch (err) {
-    if (!shouldSkipDiscoveryError(err)) {
-      throw err;
-    }
-  }
-  const sqlitePath = resolveSqliteSessionStoreDatabasePath(storePath);
-  try {
-    const stat = await fs.lstat(sqlitePath);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      return undefined;
-    }
-    const realSqlitePath = await fs.realpath(sqlitePath);
-    return isWithinRoot(realSqlitePath, realAgentsRoot) ? path.resolve(storePath) : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
       return undefined;
