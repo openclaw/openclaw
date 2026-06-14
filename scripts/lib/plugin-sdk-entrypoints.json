@@ -202,7 +202,6 @@
   "channel-message",
   "channel-message-runtime",
   "channel-outbound",
-  "channel-outbound-internal",
   "channel-pairing",
   "channel-pairing-paths",
   "channel-policy",

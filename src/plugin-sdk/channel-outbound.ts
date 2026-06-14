@@ -48,11 +48,23 @@ export type { DraftStreamLoop } from "../channels/draft-stream-loop.js";
 export { resolveChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export type { ChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
-// NOTE: the pin-from-here mirror-dispatcher + echo-admission registries are NOT
-// exported here. They are global last-wins registries with no per-plugin
-// ownership enforcement, so they live on the repo-local `channel-outbound-internal`
-// subpath (in-repo channel extensions only) until an owner-scoped public contract
-// is approved. See src/plugin-sdk/channel-outbound-internal.ts.
+// Pin-from-here mirror-dispatcher + echo-admission registries. A channel
+// registers per account (last-wins, unregister on stop, fail closed) so a
+// mirrored turn renders through the target's own dispatch and a revoked
+// destination stops receiving the mirror AND the echo fallback. These are global,
+// caller-keyed registries with NO per-plugin ownership enforcement — a maintainer
+// decision is still owed on whether to keep them as a public seam or replace them
+// with an owner-scoped registrar. Contract: docs/plugins/sdk-overview.md#channel-mirror-dispatcher.
+export {
+  registerChannelMirrorDispatcher,
+  unregisterChannelMirrorDispatcher,
+  type MirrorDispatcher,
+} from "../infra/outbound/mirror-dispatch.js";
+export {
+  registerChannelEchoAdmission,
+  unregisterChannelEchoAdmission,
+  type ChannelEchoAdmission,
+} from "../infra/outbound/channel-admission.js";
 export { createChannelRunQueue } from "./channel-lifecycle.core.js";
 export type {
   ChannelRunQueue,

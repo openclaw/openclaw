@@ -10,7 +10,6 @@
   "channel-logging",
   "channel-message",
   "channel-message-runtime",
-  "channel-outbound-internal",
   "channel-pairing-paths",
   "channel-reply-options-runtime",
   "channel-reply-pipeline",

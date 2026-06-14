@@ -3,7 +3,7 @@ import {
   registerChannelMirrorDispatcher,
   unregisterChannelEchoAdmission,
   unregisterChannelMirrorDispatcher,
-} from "openclaw/plugin-sdk/channel-outbound-internal";
+} from "openclaw/plugin-sdk/channel-outbound";
 // Telegram plugin module implements bot core behavior.
 import {
   resolveChannelGroupPolicy,

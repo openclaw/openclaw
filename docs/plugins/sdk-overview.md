@@ -175,18 +175,35 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 | `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
-### Channel mirror dispatcher (internal)
+### Channel mirror dispatcher
 
-The pin-from-here **mirror dispatcher** and **echo-admission** registries
-(`registerChannelMirrorDispatcher` / `registerChannelEchoAdmission` and their
-`unregister*` pairs) are **not** part of the public plugin SDK. They are global,
-last-wins registries keyed by caller-provided `(channel, accountId)` strings
-with no per-plugin ownership enforcement, so they are kept off the public
-`channel-outbound` contract on a dedicated `openclaw/plugin-sdk/channel-outbound-internal`
-subpath. It is tracked in `plugin-sdk-deprecated-public-subpaths.json` — resolvable
-by bundled extensions but flagged as a bundled-maintenance seam, **not** a
-recommended contract for new third-party plugins. They will be promoted to a
-stable, owner-scoped public registrar only with maintainer sign-off.
+The pin-from-here **mirror dispatcher** and **echo-admission** registries are
+exported from `openclaw/plugin-sdk/channel-outbound`:
+
+```ts
+import {
+  registerChannelMirrorDispatcher,
+  unregisterChannelMirrorDispatcher,
+  type MirrorDispatcher,
+  registerChannelEchoAdmission,
+  unregisterChannelEchoAdmission,
+  type ChannelEchoAdmission,
+} from "openclaw/plugin-sdk/channel-outbound";
+```
+
+A channel registers **per account** (last-wins, `unregister*` on stop, fail
+closed). `registerChannelMirrorDispatcher` hands the channel a bus-sourced
+`replyResolver` so a pinned target's turn renders + persists through that
+channel's own dispatch under its own config; `registerChannelEchoAdmission`
+gates the channel-agnostic prompt/post-hoc echo path on the destination's live
+enablement, so a revoked group/topic/DM stops receiving **both** the native
+mirror and the echo fallback.
+
+> **Maintainer note (open):** these are global, caller-keyed registries with no
+> per-plugin ownership enforcement — a caller could replace or unregister
+> another channel's handler. A maintainer decision is owed on whether to keep
+> them as a public seam, hand them out through an owner-scoped registrar, or keep
+> them internal. Only the bundled telegram channel uses them today.
 
 ### Host hooks for workflow plugins
 
