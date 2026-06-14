@@ -41,6 +41,46 @@ vi.mock("./model-catalog.runtime.js", () => ({
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
   loadBundledProviderStaticCatalogContextModels: contextTestState.loadStaticCatalog,
+  resolveBundledStaticCatalogModel: vi.fn(
+    ({
+      provider,
+      modelId,
+      includeRuntimeDiscovery,
+    }: {
+      provider?: string;
+      modelId?: string;
+      includeRuntimeDiscovery?: boolean;
+    }) => {
+      if (includeRuntimeDiscovery !== true || !provider || !modelId) {
+        return undefined;
+      }
+      const normalizedProvider = provider.trim().toLowerCase();
+      const normalizedModelId = modelId.trim().toLowerCase();
+      const model = contextTestState.staticCatalogModels.find((candidate) => {
+        const candidateProvider =
+          typeof candidate.provider === "string" ? candidate.provider.trim().toLowerCase() : "";
+        return (
+          candidateProvider === normalizedProvider &&
+          candidate.id.trim().toLowerCase() === normalizedModelId
+        );
+      });
+      return model
+        ? {
+            provider: normalizedProvider,
+            id: normalizedModelId,
+            name: normalizedModelId,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: model.contextWindow ?? model.contextTokens ?? 0,
+            ...(typeof model.contextTokens === "number"
+              ? { contextTokens: model.contextTokens }
+              : {}),
+            maxTokens: 4096,
+          }
+        : undefined;
+    },
+  ),
 }));
 
 function mockContextDeps(params: {

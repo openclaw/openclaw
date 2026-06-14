@@ -19,6 +19,7 @@
       }
     }
   },
+  "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "providers": {
       "opencode-go": {

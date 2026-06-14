@@ -87,18 +87,12 @@ describe("opencode-go provider plugin", () => {
       "deepseek-v4-pro",
       "glm-5",
       "glm-5.1",
-      "hy3-preview",
-      "kimi-k2.5",
       "kimi-k2.7-code",
       "kimi-k2.6",
-      "mimo-v2-omni",
       "mimo-v2.5",
-      "mimo-v2-pro",
       "mimo-v2.5-pro",
-      "minimax-m2.5",
       "minimax-m2.7",
       "minimax-m3",
-      "qwen3.5-plus",
       "qwen3.6-plus",
       "qwen3.7-max",
       "qwen3.7-plus",
@@ -372,7 +366,43 @@ describe("opencode-go provider plugin", () => {
     ]);
   });
 
-  it("strips unsupported Kimi reasoning payloads on OpenCode Go", async () => {
+  it("strips unsupported Kimi K2.5 reasoning payloads on OpenCode Go", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      const payload = {
+        model: "kimi-k2.5",
+        reasoning_effort: "high",
+        reasoning: { effort: "high" },
+        reasoningEffort: "high",
+      };
+      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as never;
+    };
+
+    const streamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode-go",
+      modelId: "kimi-k2.5",
+      thinkingLevel: "high",
+    } as never);
+
+    expect(streamFn).toBeTypeOf("function");
+    await streamFn?.(
+      { provider: "opencode-go", id: "kimi-k2.5", api: "openai-completions" } as never,
+      {} as never,
+      {},
+    );
+
+    expect(capturedPayloads).toEqual([
+      {
+        model: "kimi-k2.5",
+      },
+    ]);
+  });
+
+  it("strips unsupported Kimi K2.6 reasoning payloads on OpenCode Go", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const capturedPayloads: Record<string, unknown>[] = [];
     const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
