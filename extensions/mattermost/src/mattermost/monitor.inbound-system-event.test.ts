@@ -495,6 +495,14 @@ describe("mattermost inbound user posts", () => {
         status: "completed",
         progressText: "done",
       });
+      await params.replyOptions?.onReasoningStream?.({ text: "Thinking" });
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool-read",
+        kind: "tool",
+        name: "read",
+        status: "completed",
+        progressText: "done",
+      });
       abortController.abort();
     });
 

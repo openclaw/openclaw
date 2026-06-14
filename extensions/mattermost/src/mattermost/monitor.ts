@@ -1922,7 +1922,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               progressDraft.reset();
                             }
                           },
-                          onReasoningStream: async () => {
+                          onReasoningStream: async (payloadResult) => {
+                            if (account.streamingMode === "progress") {
+                              await progressDraft.pushReasoningProgress(
+                                payloadResult.text || "Thinking…",
+                                { snapshot: payloadResult.isReasoningSnapshot === true },
+                              );
+                              return;
+                            }
                             if (!lastPartialText) {
                               draftStream.update("Thinking…");
                             }
