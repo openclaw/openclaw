@@ -14,7 +14,10 @@ import {
 } from "../plugins/runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import {
+  type ChatAbortControllerEntry,
+  resolveInFlightRunSnapshot,
+} from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
@@ -242,6 +245,35 @@ export async function createGatewayRuntimeState(params: {
     });
     const preauthConnectionBudget = createPreauthConnectionBudget();
 
+    // Chat run state is created up front so the HTTP `/sessions/:key/history`
+    // SSE endpoint can resolve any run still streaming for the session on
+    // reconnect (issue #90755): the resolver closes over these maps even though
+    // they are also handed back to the WS server context below.
+    const agentRunSeq = new Map<string, number>();
+    const dedupe = new Map<string, DedupeEntry>();
+    const chatRunState = createChatRunState();
+    const chatRunRegistry = chatRunState.registry;
+    const chatRunBuffers = chatRunState.buffers;
+    const chatDeltaSentAt = chatRunState.deltaSentAt;
+    const chatDeltaLastBroadcastLen = chatRunState.deltaLastBroadcastLen;
+    const addChatRun = chatRunRegistry.add;
+    const removeChatRun = chatRunRegistry.remove;
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+
+    const resolveSessionHistoryInFlightRun = (resolveParams: {
+      requestedSessionKey: string;
+      canonicalSessionKey: string;
+      agentId?: string;
+    }) =>
+      resolveInFlightRunSnapshot({
+        chatAbortControllers,
+        chatRunBuffers,
+        requestedSessionKey: resolveParams.requestedSessionKey,
+        canonicalSessionKey: resolveParams.canonicalSessionKey,
+        ...(resolveParams.agentId ? { agentId: resolveParams.agentId } : {}),
+      });
+
     const httpServers: HttpServer[] = [];
     const httpBindHosts: string[] = [];
     for (const _ of bindHosts) {
@@ -264,6 +296,7 @@ export async function createGatewayRuntimeState(params: {
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+        resolveSessionHistoryInFlightRun,
       });
       // Attach upgrade handler BEFORE listening to prevent race condition
       attachGatewayUpgradeHandler({
@@ -326,18 +359,6 @@ export async function createGatewayRuntimeState(params: {
         throw err;
       }
     };
-    const agentRunSeq = new Map<string, number>();
-    const dedupe = new Map<string, DedupeEntry>();
-    const chatRunState = createChatRunState();
-    const chatRunRegistry = chatRunState.registry;
-    const chatRunBuffers = chatRunState.buffers;
-    const chatDeltaSentAt = chatRunState.deltaSentAt;
-    const chatDeltaLastBroadcastLen = chatRunState.deltaLastBroadcastLen;
-    const addChatRun = chatRunRegistry.add;
-    const removeChatRun = chatRunRegistry.remove;
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const toolEventRecipients = createToolEventRecipientRegistry();
-
     return {
       releasePluginRouteRegistry: () => {
         // Releases both pinned HTTP-route and channel registries set at startup.

@@ -33,6 +33,7 @@ import {
   type PluginNodeCapabilitySurface,
 } from "./plugin-node-capability.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
+import type { SessionHistoryInFlightRunResolver } from "./sessions-history-http.js";
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
@@ -502,6 +503,12 @@ export function createGatewayHttpServer(opts: {
   getReadiness?: ReadinessChecker;
   getRuntimeConfig?: () => OpenClawConfig;
   tlsOptions?: TlsOptions;
+  /**
+   * Resolver that surfaces a run still streaming for a given session key. Wired
+   * into `/sessions/:key/history` so reconnects can restore the in-progress
+   * assistant response (issue #90755).
+   */
+  resolveSessionHistoryInFlightRun?: SessionHistoryInFlightRunResolver;
 }): HttpServer {
   const {
     clients,
@@ -662,6 +669,9 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
+              ...(opts.resolveSessionHistoryInFlightRun
+                ? { resolveInFlightRun: opts.resolveSessionHistoryInFlightRun }
+                : {}),
             }),
         });
       }
