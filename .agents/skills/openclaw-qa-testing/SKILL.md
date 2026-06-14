@@ -13,7 +13,7 @@ Use this skill for `qa-lab` / `qa-channel` work. Repo-local QA only.
 - `docs/help/testing.md`
 - `docs/channels/qa-channel.md`
 - `qa/README.md`
-- `qa/scenarios/index.md`
+- `qa/scenarios/index.yaml`
 - `extensions/qa-lab/src/suite.ts`
 - `extensions/qa-lab/src/character-eval.ts`
 
@@ -198,7 +198,7 @@ pnpm openclaw qa character-eval \
 - Judges default to `openai/gpt-5.4,thinking=xhigh,fast` and `anthropic/claude-opus-4-6,thinking=high`.
 - Report includes judge ranking, run stats, durations, and full transcripts; do not include raw judge replies. Duration is benchmark context, not a grading signal.
 - Candidate and judge concurrency default to 16. Use `--concurrency <n>` and `--judge-concurrency <n>` to override when local gateways or provider limits need a gentler lane.
-- Scenario source should stay markdown-driven under `qa/scenarios/`.
+- Scenario source should stay YAML-driven under `qa/scenarios/`.
 - For isolated character/persona evals, write the persona into `SOUL.md` and blank `IDENTITY.md` in the scenario flow. Use `SOUL.md + IDENTITY.md` only when intentionally testing how the normal OpenClaw identity combines with the character.
 - Keep prompts natural and task-shaped. The candidate model should receive character setup through `SOUL.md`, then normal user turns such as chat, workspace help, and small file tasks; do not ask "how would you react?" or tell the model it is in an eval.
 - Prefer at least one real task, such as creating or editing a tiny workspace artifact, so the transcript captures character under normal tool use instead of pure roleplay.
@@ -262,8 +262,8 @@ pnpm openclaw qa manual \
 
 ## When adding scenarios
 
-- Add or update scenario markdown under `qa/scenarios/`
-- Keep kickoff expectations in `qa/scenarios/index.md` aligned
+- Add or update scenario YAML under `qa/scenarios/`
+- Keep kickoff expectations in `qa/scenarios/index.yaml` aligned
 - Add executable coverage in `extensions/qa-lab/src/suite.ts`
 - Prefer end-to-end assertions over mock-only checks
 - Save outputs under `.artifacts/qa-e2e/`

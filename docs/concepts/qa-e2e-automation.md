@@ -33,7 +33,7 @@ script aliases; both forms are supported.
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                                                                                                        |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
-| `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                           |
+| `qa coverage`                                       | Print the YAML scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                               |
 | `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report, or use `--runtime-axis --token-efficiency` to write Codex-vs-OpenClaw runtime parity and token-efficiency reports from one runtime-pair summary.                                         |
 | `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                                                                                                                            |
 | `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                                                                                                          |
@@ -773,25 +773,26 @@ Operational env vars and the Convex broker endpoint contract live in [Testing â†
 
 Seed assets live in `qa/`:
 
-- `qa/scenarios/index.md`
-- `qa/scenarios/<theme>/*.md`
+- `qa/scenarios/index.yaml`
+- `qa/scenarios/<theme>/*.yaml`
 
 These are intentionally in git so the QA plan is visible to both humans and the
 agent.
 
-`qa-lab` should stay a generic markdown runner. Each scenario markdown file is
+`qa-lab` should stay a generic YAML scenario runner. Each scenario YAML file is
 the source of truth for one test run and should define:
 
-- scenario metadata
-- optional category, capability, lane, and risk metadata
-- docs and code refs
-- optional plugin requirements
-- optional gateway config patch
-- an executable `qa-flow` block for flow scenarios, or `execution.kind`/`execution.path`
-  for Vitest and Playwright scenarios
+- top-level `title`
+- `scenario` metadata
+- optional category, capability, lane, and risk metadata in `scenario`
+- docs and code refs in `scenario`
+- optional plugin requirements in `scenario`
+- optional gateway config patch in `scenario`
+- executable top-level `flow` for flow scenarios, or `scenario.execution.kind` /
+  `scenario.execution.path` for Vitest and Playwright scenarios
 
-The reusable runtime surface that backs `qa-flow` blocks is allowed to stay generic
-and cross-cutting. For example, markdown scenarios can combine transport-side
+The reusable runtime surface that backs `flow` is allowed to stay generic
+and cross-cutting. For example, YAML scenarios can combine transport-side
 helpers with browser-side helpers that drive the embedded Control UI through the
 Gateway `browser.request` seam without adding a special-case runner.
 
@@ -829,17 +830,17 @@ provider names.
 
 ## Transport adapters
 
-`qa-lab` owns a generic transport seam for markdown QA scenarios. `qa-channel` is the first adapter on that seam, but the design target is wider: future real or synthetic channels should plug into the same suite runner instead of adding a transport-specific QA runner.
+`qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is the first adapter on that seam, but the design target is wider: future real or synthetic channels should plug into the same suite runner instead of adding a transport-specific QA runner.
 
 At the architecture level, the split is:
 
 - `qa-lab` owns generic scenario execution, worker concurrency, artifact writing, and reporting.
 - The transport adapter owns gateway config, readiness, inbound and outbound observation, transport actions, and normalized transport state.
-- Markdown scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
+- YAML scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
 
 ### Adding a channel
 
-Adding a channel to the markdown QA system requires exactly two things:
+Adding a channel to the YAML QA system requires exactly two things:
 
 1. A transport adapter for the channel.
 2. A scenario pack that exercises the channel contract.
@@ -873,7 +874,7 @@ The minimum adoption bar for a new channel:
 2. Implement the transport runner on the shared `qa-lab` host seam.
 3. Keep transport-specific mechanics inside the runner plugin or channel harness.
 4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command. Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations` array from `runtime-api.ts`. Keep `runtime-api.ts` light; lazy CLI and runner execution should stay behind separate entrypoints.
-5. Author or adapt markdown scenarios under the themed `qa/scenarios/` directories.
+5. Author or adapt YAML scenarios under the themed `qa/scenarios/` directories.
 6. Use the generic scenario helpers for new scenarios.
 7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
 
