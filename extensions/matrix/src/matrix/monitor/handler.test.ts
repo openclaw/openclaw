@@ -2950,12 +2950,19 @@ describe("matrix monitor handler draft streaming", () => {
     ) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
     suppressDefaultToolProgressMessages?: boolean;
-    onToolStart?: (payload: { name?: string }) => Promise<void>;
+    onToolStart?: (payload: {
+      name?: string;
+      args?: unknown;
+      detailMode?: string;
+    }) => Promise<void>;
     onItemEvent?: (payload: {
+      itemId?: string;
+      kind?: string;
       progressText?: string;
       summary?: string;
       title?: string;
       name?: string;
+      status?: string;
     }) => Promise<void>;
     onPlanUpdate?: (payload: {
       phase: string;
@@ -3108,6 +3115,67 @@ describe("matrix monitor handler draft streaming", () => {
     expectFinalizedPreviewEdit("$draft1", "Done");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("keeps raw command text but removes false failed status in Matrix progress previews", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onReplyStart?.();
+    await opts.onItemEvent?.({
+      itemId: "cmd-1",
+      kind: "command",
+      name: "exec",
+      status: "failed",
+      progressText: "gh pr edit 89920 --body private-details",
+    });
+    await opts.onItemEvent?.({
+      itemId: "cmd-1",
+      kind: "command",
+      name: "exec",
+      status: "failed",
+      progressText: "gh pr edit 89920 --body private-details",
+    });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(singleTextMessageBody()).toContain("gh pr edit");
+    expect(singleTextMessageBody()).toContain("private-details");
+    expect(singleTextMessageBody()).not.toContain("failed");
+    await finish();
+  });
+
+  it("renders status-only failed command progress as finished in Matrix progress previews", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onReplyStart?.();
+    await opts.onItemEvent?.({
+      itemId: "cmd-1",
+      kind: "command",
+      name: "exec",
+      status: "failed",
+    });
+    await opts.onItemEvent?.({
+      itemId: "cmd-1",
+      kind: "command",
+      name: "exec",
+      status: "failed",
+    });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(singleTextMessageBody()).toContain("finished");
+    expect(singleTextMessageBody()).not.toContain("failed");
     await finish();
   });
 

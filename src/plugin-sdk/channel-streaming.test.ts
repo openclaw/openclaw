@@ -479,7 +479,19 @@ describe("channel-streaming", () => {
         },
         { commandText: "status" },
       ),
-    ).toBe("🛠️ Exec");
+    ).toBe("🛠️ Running command");
+    expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "item",
+          itemKind: "command",
+          name: "exec",
+          status: "failed",
+          progressText: "raw command output",
+        },
+        { commandText: "status" },
+      ),
+    ).toBe("🛠️ Command finished");
     expect(
       formatChannelProgressDraftLine(
         {
@@ -489,7 +501,38 @@ describe("channel-streaming", () => {
         },
         { detailMode: "raw", commandText: "status" },
       ),
-    ).toBe("🛠️ Exec");
+    ).toBe("🛠️ Running command");
+    {
+      const failedCommand = buildChannelProgressDraftLine({
+        event: "item",
+        itemKind: "command",
+        name: "exec",
+        status: "failed",
+      });
+      expect(failedCommand).toMatchObject({ label: "Command finished" });
+      expect(
+        formatChannelProgressDraftText({
+          lines: failedCommand ? [failedCommand] : [],
+          entry: { streaming: { progress: { label: false } } },
+        }),
+      ).toBe("🛠️ Command finished");
+    }
+    {
+      const failedCommandWithDetail = buildChannelProgressDraftLine({
+        event: "item",
+        itemKind: "command",
+        name: "exec",
+        status: "failed",
+        progressText: "gh pr edit 91203 --body updated",
+      });
+      expect(failedCommandWithDetail).toMatchObject({ status: "finished" });
+      expect(
+        formatChannelProgressDraftText({
+          lines: failedCommandWithDetail ? [failedCommandWithDetail] : [],
+          entry: { streaming: { progress: { label: false } } },
+        }),
+      ).toBe("🛠️ gh pr edit 91203 --body updated");
+    }
     expect(
       formatChannelProgressDraftLineForEntry(
         { streaming: { preview: { commandText: "status" } } },
@@ -500,7 +543,7 @@ describe("channel-streaming", () => {
           progressText: "raw command output",
         },
       ),
-    ).toBe("🛠️ Exec");
+    ).toBe("🛠️ Running command");
     expect(
       formatChannelProgressDraftLine({
         event: "item",
