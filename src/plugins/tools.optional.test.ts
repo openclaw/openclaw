@@ -164,6 +164,71 @@ function createMalformedTool(name: string) {
   };
 }
 
+function createUnreadableParametersTool(name: string) {
+  return {
+    name,
+    description: `${name} tool`,
+    get parameters() {
+      throw new Error("plugin parameters getter exploded");
+    },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+}
+
+function createUnreadableDescriptionTool(name: string) {
+  return {
+    name,
+    get description() {
+      throw new Error("plugin description getter exploded");
+    },
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+}
+
+function createUnreadableExecuteTool(name: string) {
+  return {
+    name,
+    description: `${name} tool`,
+    get execute() {
+      throw new Error("plugin execute getter exploded");
+    },
+    parameters: { type: "object", properties: {} },
+  };
+}
+
+function createUnreadableLabelTool(name: string) {
+  return {
+    name,
+    description: `${name} tool`,
+    get label() {
+      throw new Error("plugin label getter exploded");
+    },
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+}
+
+function createUnreadableDisplaySummaryTool(name: string) {
+  return {
+    name,
+    description: `${name} tool`,
+    get displaySummary() {
+      throw new Error("plugin display summary getter exploded");
+    },
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+}
+
 function installConsoleMethodSpy(method: "log" | "warn") {
   const spy = vi.fn();
   loggingState.rawConsole = {
@@ -1937,6 +2002,70 @@ describe("resolvePluginTools optional tools", () => {
       registry.diagnostics,
       "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
     );
+  });
+
+  it("skips plugin tools with unreadable schema fields while keeping valid sibling tools", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["fuzzplugin_descriptor", "valid_tool"],
+        factory: () => [
+          createUnreadableParametersTool("fuzzplugin_descriptor"),
+          makeTool("valid_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): fuzzplugin_descriptor missing parameters object",
+    );
+  });
+
+  it.each([
+    {
+      name: "execute",
+      tool: createUnreadableExecuteTool("fuzzplugin_descriptor"),
+      expected:
+        "plugin tool is malformed (schema-bug): fuzzplugin_descriptor missing execute function",
+    },
+    {
+      name: "description",
+      tool: createUnreadableDescriptionTool("fuzzplugin_descriptor"),
+      expected:
+        "plugin tool is malformed (schema-bug): fuzzplugin_descriptor missing description string",
+    },
+    {
+      name: "label",
+      tool: createUnreadableLabelTool("fuzzplugin_descriptor"),
+      expected: "plugin tool is malformed (schema-bug): fuzzplugin_descriptor has unreadable label",
+    },
+    {
+      name: "display summary",
+      tool: createUnreadableDisplaySummaryTool("fuzzplugin_descriptor"),
+      expected:
+        "plugin tool is malformed (schema-bug): fuzzplugin_descriptor has unreadable displaySummary",
+    },
+  ])("skips plugin tools with unreadable $name while keeping valid sibling tools", (testCase) => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["fuzzplugin_descriptor", "valid_tool"],
+        factory: () => [testCase.tool, makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(registry.diagnostics, testCase.expected);
   });
 
   it("warns with plugin factory timing details when a factory is slow", () => {

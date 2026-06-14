@@ -17,6 +17,7 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
@@ -168,5 +169,85 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(firstKey).toBe(secondKey);
+  });
+
+  it("skips descriptors whose required tool fields are unreadable", () => {
+    const tool = {
+      name: "fuzzplugin_descriptor",
+      description: "descriptor probe",
+      get parameters() {
+        throw new Error("descriptor parameters getter exploded");
+      },
+      async execute() {
+        return { content: [] };
+      },
+    } as never;
+
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "fuzzplugin",
+        tool,
+        optional: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("skips descriptors whose required description is unreadable", () => {
+    const tool = {
+      name: "fuzzplugin_descriptor",
+      get description() {
+        throw new Error("descriptor description getter exploded");
+      },
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [] };
+      },
+    } as never;
+
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "fuzzplugin",
+        tool,
+        optional: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("ignores unreadable optional descriptor metadata", () => {
+    const tool = {
+      name: "fuzzplugin_descriptor",
+      description: "descriptor probe",
+      get displaySummary() {
+        throw new Error("descriptor display getter exploded");
+      },
+      get label() {
+        throw new Error("descriptor label getter exploded");
+      },
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [] };
+      },
+    } as never;
+
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "fuzzplugin",
+        tool,
+        optional: false,
+      }),
+    ).toEqual({
+      optional: false,
+      descriptor: {
+        name: "fuzzplugin_descriptor",
+        description: "descriptor probe",
+        inputSchema: { type: "object", properties: {} },
+        owner: { kind: "plugin", pluginId: "fuzzplugin" },
+        executor: {
+          kind: "plugin",
+          pluginId: "fuzzplugin",
+          toolName: "fuzzplugin_descriptor",
+        },
+      },
+    });
   });
 });
