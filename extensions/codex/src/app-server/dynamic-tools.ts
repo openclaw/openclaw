@@ -12,11 +12,13 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
   isToolWrappedWithBeforeToolCallHook,
+  isToolResultError,
   isMessagingTool,
   isMessagingToolSendAction,
   normalizeHeartbeatToolResponse,
   projectRuntimeToolInputSchema,
   runAgentHarnessAfterToolCallHook,
+  sanitizeToolResult,
   setBeforeToolCallDiagnosticsEnabled,
   type AnyAgentTool,
   type HeartbeatToolResponse,
@@ -71,7 +73,10 @@ export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
   handleToolCall: (
     params: CodexDynamicToolCallParams,
-    options?: { signal?: AbortSignal },
+    options?: {
+      signal?: AbortSignal;
+      onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
+    },
   ) => Promise<CodexDynamicToolCallResponse>;
   telemetry: {
     didSendViaMessagingTool: boolean;
@@ -155,7 +160,6 @@ export function createCodexDynamicToolBridge(params: {
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
   ]);
-
   return {
     availableSpecs: availableTools.map((entry) =>
       createCodexDynamicToolSpec({
@@ -175,19 +179,28 @@ export function createCodexDynamicToolBridge(params: {
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
+        const message = registeredToolNames.has(call.tool)
+          ? `OpenClaw tool is not available for this turn: ${call.tool}`
+          : `Unknown OpenClaw tool: ${call.tool}`;
+        notifyAgentToolResult(
+          options?.onAgentToolResult,
+          call.tool,
+          failedToolResult(message),
+          true,
+        );
         if (registeredToolNames.has(call.tool)) {
           return {
             contentItems: [
               {
                 type: "inputText",
-                text: `OpenClaw tool is not available for this turn: ${call.tool}`,
+                text: message,
               },
             ],
             success: false,
           };
         }
         return {
-          contentItems: [{ type: "inputText", text: `Unknown OpenClaw tool: ${call.tool}` }],
+          contentItems: [{ type: "inputText", text: message }],
           success: false,
         };
       }
@@ -202,7 +215,7 @@ export function createCodexDynamicToolBridge(params: {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
         didStartExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);
-        const rawIsError = isToolResultError(rawResult);
+        const rawIsError = isCodexToolResultError(rawResult);
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
@@ -220,7 +233,8 @@ export function createCodexDynamicToolBridge(params: {
           args,
           result: middlewareResult,
         });
-        const resultIsError = rawIsError || isToolResultError(result);
+        const resultIsError = rawIsError || isCodexToolResultError(result);
+        notifyAgentToolResult(options?.onAgentToolResult, toolName, result, resultIsError);
         collectToolTelemetry({
           toolName,
           args,
@@ -262,6 +276,13 @@ export function createCodexDynamicToolBridge(params: {
         );
         return withSideEffectEvidence(response, terminalType !== "blocked");
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        notifyAgentToolResult(
+          options?.onAgentToolResult,
+          toolName,
+          failedToolResult(errorMessage),
+          true,
+        );
         collectToolTelemetry({
           toolName,
           args,
@@ -278,7 +299,7 @@ export function createCodexDynamicToolBridge(params: {
           sessionKey: toolResultHookContext.sessionKey,
           channelId: toolResultHookContext.channelId,
           startArgs: args,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage,
           startedAt,
         });
         return withSideEffectEvidence(
@@ -287,7 +308,7 @@ export function createCodexDynamicToolBridge(params: {
               contentItems: [
                 {
                   type: "inputText",
-                  text: error instanceof Error ? error.message : String(error),
+                  text: errorMessage,
                 },
               ],
               success: false,
@@ -298,6 +319,32 @@ export function createCodexDynamicToolBridge(params: {
         );
       }
     },
+  };
+}
+
+function notifyAgentToolResult(
+  observer: EmbeddedRunAttemptParams["onAgentToolResult"] | undefined,
+  toolName: string,
+  result: unknown,
+  isError: boolean,
+) {
+  try {
+    observer?.({
+      toolName,
+      result: sanitizeToolResult(result),
+      isError,
+    });
+  } catch (error) {
+    embeddedAgentLog.warn(
+      `onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`,
+    );
+  }
+}
+
+function failedToolResult(message: string): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text: message }],
+    details: { status: "failed", error: message },
   };
 }
 
@@ -688,9 +735,15 @@ function readPositiveInteger(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
-function isToolResultError(result: AgentToolResult<unknown>): boolean {
+function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
+  if (isToolResultError(result)) {
+    return true;
+  }
   const details = result.details;
   if (!isRecord(details)) {
+    return false;
+  }
+  if (details.ok === true || details.success === true) {
     return false;
   }
   if (details.timedOut === true) {
