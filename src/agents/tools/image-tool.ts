@@ -73,7 +73,9 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
+  type OpenAiFamilyMediaCandidateDecision,
   resolveDefaultModelRef,
+  resolveOpenAiFamilyMediaCandidate,
 } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
@@ -246,6 +248,8 @@ export function resolveImageModelConfigForTool(params: {
   }
 
   const primary = resolveDefaultModelRef(params.cfg);
+  let openAiFamilyDecision: OpenAiFamilyMediaCandidateDecision | null = null;
+  let verifiedSubstituteProvider: string | undefined;
 
   const providerVisionFromConfig = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
@@ -253,6 +257,31 @@ export function resolveImageModelConfigForTool(params: {
   });
   const primaryCandidates = (() => {
     if (providerVisionFromConfig) {
+      if (primary.provider === "openai") {
+        openAiFamilyDecision = resolveOpenAiFamilyMediaCandidate({
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          authStore: params.authStore,
+          capability: "image",
+          openAiModel: providerVisionFromConfig.slice(providerVisionFromConfig.indexOf("/") + 1),
+          codexModel: imageToolProviderDeps.resolveDefaultMediaModel({
+            cfg: params.cfg,
+            workspaceDir: params.workspaceDir,
+            providerId: "codex",
+            capability: "image",
+            includeConfiguredImageModels: false,
+          }),
+        });
+        if (openAiFamilyDecision.kind === "substitute") {
+          verifiedSubstituteProvider = openAiFamilyDecision.provider;
+          return [openAiFamilyDecision.ref];
+        }
+        if (openAiFamilyDecision.kind === "keep") {
+          return [openAiFamilyDecision.ref];
+        }
+        return [];
+      }
       return [providerVisionFromConfig];
     }
     const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
@@ -263,6 +292,31 @@ export function resolveImageModelConfigForTool(params: {
       includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
     });
     if (providerDefault) {
+      if (primary.provider === "openai") {
+        openAiFamilyDecision = resolveOpenAiFamilyMediaCandidate({
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          authStore: params.authStore,
+          capability: "image",
+          openAiModel: providerDefault,
+          codexModel: imageToolProviderDeps.resolveDefaultMediaModel({
+            cfg: params.cfg,
+            workspaceDir: params.workspaceDir,
+            providerId: "codex",
+            capability: "image",
+            includeConfiguredImageModels: false,
+          }),
+        });
+        if (openAiFamilyDecision.kind === "substitute") {
+          verifiedSubstituteProvider = openAiFamilyDecision.provider;
+          return [openAiFamilyDecision.ref];
+        }
+        if (openAiFamilyDecision.kind === "keep") {
+          return [openAiFamilyDecision.ref];
+        }
+        return [];
+      }
       return [`${primary.provider}/${providerDefault}`];
     }
     if (isMinimaxVlmProvider(primary.provider)) {
@@ -287,13 +341,22 @@ export function resolveImageModelConfigForTool(params: {
       });
       return modelId ? `${providerId}/${modelId}` : null;
     });
-  const autoCandidates = rawAutoCandidates.filter(
-    (candidate) =>
-      !isCanonicalCandidateShadowedByExecutionAlias(candidate, [
-        ...primaryCandidates,
-        ...rawAutoCandidates,
-      ]),
-  );
+  const shouldDropImplicitOpenAiCandidates =
+    primary.provider === "openai" && openAiFamilyDecision?.kind !== "keep";
+  const autoCandidates = rawAutoCandidates
+    .filter((candidate) => {
+      if (!shouldDropImplicitOpenAiCandidates || !candidate) {
+        return true;
+      }
+      return candidate.slice(0, candidate.indexOf("/")) !== "openai";
+    })
+    .filter(
+      (candidate) =>
+        !isCanonicalCandidateShadowedByExecutionAlias(candidate, [
+          ...primaryCandidates,
+          ...rawAutoCandidates,
+        ]),
+    );
   const defaultPrimaryIsImplicit = !hasExplicitDefaultPrimaryModel(params.cfg);
   const primaryAliasCandidates = defaultPrimaryIsImplicit
     ? autoCandidates.filter((candidate) =>
@@ -312,6 +375,8 @@ export function resolveImageModelConfigForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     candidates: [...primaryAliasCandidates, ...primaryCandidates, ...remainingAutoCandidates],
+    isProviderConfigured: (provider) =>
+      verifiedSubstituteProvider && provider === verifiedSubstituteProvider ? true : undefined,
   });
 }
 

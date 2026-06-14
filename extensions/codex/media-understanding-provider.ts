@@ -139,13 +139,14 @@ async function runBoundedCodexVisionTurn(params: BoundedCodexVisionTurnParams): 
   // Tests inject a client factory; production creates an isolated app-server
   // client so media tasks cannot reuse the interactive attempt session.
   const client = params.options.clientFactory
-    ? await params.options.clientFactory(appServer.start, params.profile)
+    ? await params.options.clientFactory(appServer.start, params.profile, params.agentDir)
     : await import("./src/app-server/shared-client.js").then(
         ({ createIsolatedCodexAppServerClient }) =>
           createIsolatedCodexAppServerClient({
             startOptions: appServer.start,
             timeoutMs,
             authProfileId: params.profile,
+            agentDir: params.agentDir,
           }),
       );
   const abortController = new AbortController();

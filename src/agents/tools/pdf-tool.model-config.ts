@@ -3,6 +3,7 @@
  *
  * Selects explicit PDF, image-model, native PDF, vision, or text-extraction fallback models.
  */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   providerSupportsNativePdfDocument,
@@ -18,7 +19,12 @@ import {
   resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
-import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
+import {
+  hasProviderAuthForTool,
+  type OpenAiFamilyMediaCandidateDecision,
+  resolveDefaultModelRef,
+  resolveOpenAiFamilyMediaCandidate,
+} from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
 
 function formatProviderModelRef(providerId: string, modelId: string): string {
@@ -27,6 +33,11 @@ function formatProviderModelRef(providerId: string, modelId: string): string {
     return modelId;
   }
   return `${providerId}/${modelId}`;
+}
+
+function providerFromModelRef(ref: string): string {
+  const slash = ref.indexOf("/");
+  return slash > 0 ? normalizeLowercaseStringOrEmpty(ref.slice(0, slash)) : "";
 }
 
 function localModelIdForProvider(providerId: string, modelId: string): string {
@@ -252,6 +263,22 @@ export function resolvePdfModelConfigForTool(params: {
       providerId: primary.provider,
       capability: "image",
     });
+  const openAiFamilyDecision: OpenAiFamilyMediaCandidateDecision | null =
+    primary.provider === "openai" && providerDefault
+      ? resolveOpenAiFamilyMediaCandidate({
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          authStore: params.authStore,
+          capability: "image",
+          openAiModel: providerDefault,
+          // PDF fallback execution uses generic complete(), not Codex's media
+          // provider. Without a PDF app-server route, OAuth-only OpenAI must
+          // drop here instead of substituting codex/<model>.
+        })
+      : null;
+  const shouldDropImplicitOpenAiCandidates =
+    primary.provider === "openai" && openAiFamilyDecision?.kind !== "keep";
   const primarySupportsNativePdf = providerSupportsNativePdfDocument({
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -275,20 +302,38 @@ export function resolvePdfModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
   });
+  if (shouldDropImplicitOpenAiCandidates) {
+    for (let i = nativePdfCandidates.length - 1; i >= 0; i--) {
+      if (providerFromModelRef(nativePdfCandidates[i] ?? "") === "openai") {
+        nativePdfCandidates.splice(i, 1);
+      }
+    }
+    for (let i = genericImageCandidates.length - 1; i >= 0; i--) {
+      if (providerFromModelRef(genericImageCandidates[i] ?? "") === "openai") {
+        genericImageCandidates.splice(i, 1);
+      }
+    }
+  }
   const textExtractionCandidates = resolveTextExtractionCandidateRefs({
     cfg: params.cfg,
     primary,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
-  });
+  }).filter(
+    (candidate) =>
+      !shouldDropImplicitOpenAiCandidates || providerFromModelRef(candidate) !== "openai",
+  );
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
   if (params.cfg?.models?.providers && typeof params.cfg.models.providers === "object") {
     // Configured provider vision models are added even when not present in static media defaults.
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
-      const providerId = providerKey.trim();
+      const providerId = normalizeLowercaseStringOrEmpty(providerKey);
+      if (shouldDropImplicitOpenAiCandidates && providerId === "openai") {
+        continue;
+      }
       const documentImageModel = providerId
         ? resolveDocumentMediaModel({
             cfg: params.cfg,
@@ -337,7 +382,12 @@ export function resolvePdfModelConfigForTool(params: {
   if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
     // Google native PDF handling is preferred when auth and a configured vision model are present.
     preferred = providerVision;
-  } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
+  } else if (
+    providerOk &&
+    !shouldDropImplicitOpenAiCandidates &&
+    primarySupportsNativePdf &&
+    (providerVision || providerDefault)
+  ) {
     preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
   } else {
     preferred = fallbackCandidates[0] ?? null;

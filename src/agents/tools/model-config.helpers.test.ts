@@ -2,7 +2,12 @@
 // stored agent auth profiles for reusable media tools.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { hasProviderAuthForTool } from "./model-config.helpers.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
+import {
+  hasDirectProviderApiKeyAuthForTool,
+  hasProviderAuthForTool,
+  resolveOpenAiFamilyMediaCandidate,
+} from "./model-config.helpers.js";
 
 describe("hasProviderAuthForTool", () => {
   afterEach(() => {
@@ -47,5 +52,180 @@ describe("hasProviderAuthForTool", () => {
 
   it("rejects providers without config, env, or profile auth", () => {
     expect(hasProviderAuthForTool({ provider: "unconfigured-provider" })).toBe(false);
+  });
+});
+
+describe("resolveOpenAiFamilyMediaCandidate", () => {
+  const agentDir = "/tmp/openclaw-model-config-helper";
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("substitutes Codex for canonical OpenAI OAuth-only media auth", () => {
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:chatgpt": {
+          provider: "openai",
+          type: "oauth",
+          access: "oauth-test",
+          refresh: "refresh-test",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    expect(
+      resolveOpenAiFamilyMediaCandidate({
+        agentDir,
+        authStore,
+        capability: "image",
+        openAiModel: "gpt-5.5",
+        codexModel: "gpt-5.5",
+      }),
+    ).toEqual({ kind: "substitute", provider: "codex", ref: "codex/gpt-5.5" });
+  });
+
+  it("keeps OpenAI media when a direct API key profile exists", () => {
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:api-key": {
+          provider: "openai",
+          type: "api_key",
+          key: "direct-openai-key",
+        },
+      },
+    };
+
+    expect(
+      hasDirectProviderApiKeyAuthForTool({
+        provider: "openai",
+        agentDir,
+        authStore,
+        modelApi: "openai-responses",
+      }),
+    ).toBe(true);
+    expect(
+      resolveOpenAiFamilyMediaCandidate({
+        agentDir,
+        authStore,
+        capability: "image",
+        openAiModel: "gpt-5.5",
+        codexModel: "gpt-5.5",
+      }),
+    ).toEqual({ kind: "keep", ref: "openai/gpt-5.5" });
+  });
+
+  it("does not treat provider apiKey OAuth profile references as direct OpenAI media auth", () => {
+    const cfg: OpenClawConfig = {
+      models: { providers: { openai: { apiKey: "openai:default" } } },
+    };
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          provider: "openai",
+          type: "oauth",
+          access: "oauth-test",
+          refresh: "refresh-test",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    expect(
+      hasDirectProviderApiKeyAuthForTool({
+        provider: "openai",
+        cfg,
+        agentDir,
+        authStore,
+        modelApi: "openai-responses",
+      }),
+    ).toBe(false);
+    expect(
+      resolveOpenAiFamilyMediaCandidate({
+        cfg,
+        agentDir,
+        authStore,
+        capability: "image",
+        openAiModel: "gpt-5.5",
+        codexModel: "gpt-5.5",
+      }),
+    ).toEqual({ kind: "substitute", provider: "codex", ref: "codex/gpt-5.5" });
+  });
+
+  it("treats provider apiKey API-key profile references as direct OpenAI media auth", () => {
+    const cfg: OpenClawConfig = {
+      models: { providers: { openai: { apiKey: "openai:default" } } },
+    };
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          provider: "openai",
+          type: "api_key",
+          key: "direct-openai-key",
+        },
+      },
+    };
+
+    expect(
+      hasDirectProviderApiKeyAuthForTool({
+        provider: "openai",
+        cfg,
+        agentDir,
+        authStore,
+        modelApi: "openai-responses",
+      }),
+    ).toBe(true);
+    expect(
+      resolveOpenAiFamilyMediaCandidate({
+        cfg,
+        agentDir,
+        authStore,
+        capability: "image",
+        openAiModel: "gpt-5.5",
+        codexModel: "gpt-5.5",
+      }),
+    ).toEqual({ kind: "keep", ref: "openai/gpt-5.5" });
+  });
+
+  it("does not treat legacy openai-codex profiles as canonical Codex OAuth", () => {
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          provider: "openai-codex",
+          type: "oauth",
+          access: "oauth-test",
+          refresh: "refresh-test",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    expect(
+      resolveOpenAiFamilyMediaCandidate({
+        agentDir,
+        authStore,
+        capability: "image",
+        openAiModel: "gpt-5.5",
+        codexModel: "gpt-5.5",
+      }),
+    ).toEqual({ kind: "drop" });
+  });
+
+  it("drops OpenAI media when neither direct auth nor verified Codex route is available", () => {
+    expect(
+      resolveOpenAiFamilyMediaCandidate({
+        agentDir,
+        authStore: { version: 1, profiles: {} },
+        capability: "image",
+        openAiModel: "gpt-5.5",
+        codexModel: "gpt-5.5",
+      }),
+    ).toEqual({ kind: "drop" });
   });
 });

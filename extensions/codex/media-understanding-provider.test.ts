@@ -182,8 +182,9 @@ describe("codex media understanding provider", () => {
 
   it("runs image understanding through a bounded Codex app-server turn", async () => {
     const { client, requests } = createFakeClient();
+    const clientFactory = vi.fn(async (_startOptions, _authProfileId, _agentDir) => client);
     const provider = buildCodexMediaUnderstandingProvider({
-      clientFactory: async () => client,
+      clientFactory,
     });
 
     const result = await provider.describeImage?.({
@@ -204,6 +205,11 @@ describe("codex media understanding provider", () => {
       "thread/start",
       "turn/start",
     ]);
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.any(Object),
+      undefined,
+      "/tmp/openclaw-agent",
+    );
     expect(requests[1]?.params).toEqual({
       model: "gpt-5.4",
       modelProvider: "openai",
