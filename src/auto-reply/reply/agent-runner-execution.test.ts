@@ -3464,7 +3464,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
   });
 
-  it("does not classify empty final payloads after block replies were sent", async () => {
+  it("classifies empty final payloads after unmatched direct block replies", async () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
@@ -3481,15 +3481,17 @@ describe("runAgentTurnWithFallback", () => {
       const result = (await params.run("openai", "gpt-5.4")) as {
         payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
       };
-      expect(
-        await params.classifyResult?.({
-          result,
-          provider: "openai",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 2,
-        }),
-      ).toBeNull();
+      const classification = await params.classifyResult?.({
+        result,
+        provider: "openai",
+        model: "gpt-5.4",
+        attempt: 1,
+        total: 2,
+      });
+      expectRecordFields(requireRecord(classification, "fallback classification"), {
+        reason: "format",
+        code: "empty_result",
+      });
       return {
         result,
         provider: "openai",
@@ -3509,7 +3511,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
   });
 
-  it("does not classify empty final payloads while block replies are buffered", async () => {
+  it("classifies empty final payloads while only block replies are buffered", async () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
@@ -3525,15 +3527,17 @@ describe("runAgentTurnWithFallback", () => {
     };
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = { payloads: [], meta: {} };
-      expect(
-        await params.classifyResult?.({
-          result,
-          provider: "openai",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 2,
-        }),
-      ).toBeNull();
+      const classification = await params.classifyResult?.({
+        result,
+        provider: "openai",
+        model: "gpt-5.4",
+        attempt: 1,
+        total: 2,
+      });
+      expectRecordFields(requireRecord(classification, "fallback classification"), {
+        reason: "format",
+        code: "empty_result",
+      });
       return {
         result,
         provider: "openai",

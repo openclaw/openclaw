@@ -76,9 +76,9 @@ import {
 } from "./embedded-agent-runner/delivery-evidence.js";
 import type { AgentToolTerminalResultFallback, AgentToolTerminalSummary } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { hasToolResultDryRunOrFailureEvidence } from "./tool-result-failure.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { hasToolResultDryRunOrFailureEvidence } from "./tool-result-failure.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -1154,7 +1154,7 @@ export async function recordToolLoopOutcome(args: {
         toolName: record?.toolName ?? args.toolName,
         toolParams: args.toolParams,
         result: args.result,
-        failed: executionThrew,
+        failed,
       });
       const messagingText =
         didSendViaMessagingTool && isPlainObject(args.toolParams)

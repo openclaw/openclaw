@@ -47,6 +47,11 @@ export function hasToolResultDryRunOrFailureEvidence(value: unknown, depth = 0):
     record.dryRun === true ||
     record.ok === false ||
     record.success === false ||
+    record.timedOut === true ||
+    Boolean(record.error) ||
+    (typeof record.exitCode === "number" &&
+      Number.isFinite(record.exitCode) &&
+      record.exitCode !== 0) ||
     isToolResultFailureStatus(record.status) ||
     isToolResultFailureStatus(record.deliveryStatus ?? record.delivery_status)
   ) {

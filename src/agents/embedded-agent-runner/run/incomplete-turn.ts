@@ -15,8 +15,8 @@ import {
 } from "../../execution-contract.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { hasToolResultDryRunOrFailureEvidence } from "../../tool-result-failure.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import { hasToolResultDryRunOrFailureEvidence } from "../../tool-result-failure.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
@@ -320,7 +320,8 @@ const QUOTED_USER_PROMPT_LINE_RE = /^[ \t]*>.*$/gmu;
 const QUOTED_USER_PROMPT_FENCED_BLOCK_RE =
   /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?=\n|$)|$)/gu;
 const QUOTED_USER_PROMPT_INDENTED_LINE_RE = /^(?: {4,}|\t).+$/gmu;
-const QUOTED_USER_PROMPT_MARKDOWN_LINK_RE = /!?\[[^\]\n]*\]\([^)\n]*\)/gu;
+const QUOTED_USER_PROMPT_MARKDOWN_IMAGE_RE = /!\[[^\]\n]*\]\([^)\n]*\)/gu;
+const QUOTED_USER_PROMPT_MARKDOWN_LINK_RE = /\[([^\]\n]*)\]\([^)\n]*\)/gu;
 const NON_ACTIONABLE_PROMPT_NORMALIZED_SET = new Set([
   "cool",
   "great",
@@ -1141,7 +1142,8 @@ function stripNonAuthorizingUserPromptExcerpts(text: string): string {
   return text
     .replace(QUOTED_USER_PROMPT_FENCED_BLOCK_RE, " ")
     .replace(QUOTED_USER_PROMPT_INDENTED_LINE_RE, " ")
-    .replace(QUOTED_USER_PROMPT_MARKDOWN_LINK_RE, " ")
+    .replace(QUOTED_USER_PROMPT_MARKDOWN_IMAGE_RE, " ")
+    .replace(QUOTED_USER_PROMPT_MARKDOWN_LINK_RE, "$1")
     .replace(QUOTED_USER_PROMPT_SEGMENT_RE, " ")
     .replace(QUOTED_USER_PROMPT_ASCII_SINGLE_QUOTED_SEGMENT_RE, " ")
     .replace(QUOTED_USER_PROMPT_LINE_RE, " ");

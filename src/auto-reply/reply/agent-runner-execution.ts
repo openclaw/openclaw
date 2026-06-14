@@ -92,7 +92,10 @@ import {
 } from "../../utils/message-channel.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  isReplyPayloadStatusNotice,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import {
@@ -120,7 +123,7 @@ import {
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
-import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
@@ -2050,13 +2053,20 @@ export async function runAgentTurnWithFallback(params: {
             });
           },
           classifyResult: async ({ result, provider, model }) => {
+            const finalPayloads = result.payloads ?? [];
             const classification = outcomePlan.classifyRunResult({
               result,
               provider,
               model,
-              hasDirectlySentBlockReply: directlySentBlockKeys.size > 0,
-              hasBlockReplyPipelineOutput: Boolean(
-                blockReplyPipeline?.hasBuffered() || blockReplyPipeline?.didStream(),
+              hasDirectlySentBlockReply: finalPayloads.some(
+                (payload) =>
+                  !isReplyPayloadStatusNotice(payload as ReplyPayload) &&
+                  directlySentBlockKeys.has(createBlockReplyContentKey(payload)),
+              ),
+              hasBlockReplyPipelineOutput: finalPayloads.some(
+                (payload) =>
+                  !isReplyPayloadStatusNotice(payload as ReplyPayload) &&
+                  blockReplyPipeline?.hasSentPayload(payload) === true,
               ),
             });
             if (classification) {

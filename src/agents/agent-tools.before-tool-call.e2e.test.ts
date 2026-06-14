@@ -644,6 +644,33 @@ describe("before_tool_call loop detection behavior", () => {
     expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
   });
 
+  it("does not mark returned message errors with receipt-like details as delivered", async () => {
+    const onToolOutcome = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "delivery failed" }],
+      details: { status: "ok", error: "delivery failed", messageId: "message-1" },
+    });
+    const tool = createWrappedTool("message", execute, {
+      ...enabledLoopDetectionContext,
+      runId: "run-returned-error-message-outcome",
+      onToolOutcome,
+    });
+
+    await expectUnblockedToolExecution(tool, "message-returned-error", {
+      action: "send",
+      to: "channel:123",
+      content: "not delivered",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        failed: true,
+      }),
+    );
+    expect(onToolOutcome.mock.calls.at(-1)?.[0]).not.toHaveProperty("didSendViaMessagingTool");
+  });
+
   it.each([
     ["dry-run", { ok: true, result: { dryRun: true } }],
     ["failure", { status: "ok", result: { status: "failed" } }],
