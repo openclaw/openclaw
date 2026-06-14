@@ -38,6 +38,7 @@ export type SessionStatus = {
   modelSelectionReason: string | null;
   runtime?: string | null;
   contextTokens: number | null;
+  estimatedCostUsd: number | null;
   flags: string[];
 };
 

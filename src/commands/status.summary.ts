@@ -418,6 +418,7 @@ export async function getStatusSummary(
           modelSelectionReason: modelSelectionDiffers ? "session override" : null,
           runtime,
           contextTokens,
+          estimatedCostUsd: entry?.estimatedCostUsd ?? null,
           flags: buildFlags(entry),
         } satisfies SessionStatus;
       }),
