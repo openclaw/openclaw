@@ -1408,6 +1408,7 @@ async function runStartupCatchupCandidate(
     job: candidate.job,
     startedAt,
   });
+  markCronJobActive(candidate.job.id);
   emit(state, {
     jobId: candidate.job.id,
     action: "started",
@@ -1459,12 +1460,11 @@ async function applyStartupCatchupOutcomes(
     // Startup catch-up runs during service bootstrap, before the timer loop is
     // armed. Reuse the in-memory store instead of forcing a second reload.
     await ensureLoaded(state, { skipRecompute: true });
-    if (!state.store) {
-      return;
-    }
-
     for (const result of outcomes) {
       applyOutcomeToStoredJob(state, result);
+    }
+    if (!state.store) {
+      return;
     }
 
     if (plan.deferredJobs.length > 0) {
