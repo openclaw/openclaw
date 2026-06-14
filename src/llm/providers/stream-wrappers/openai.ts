@@ -330,6 +330,28 @@ function suppressCompletionsReasoningEffortForThinkingOff(
   }
 }
 
+/**
+ * Applies explicit disabled-thinking intent to OpenAI-compatible Chat
+ * Completions payloads without changing enabled reasoning levels.
+ */
+export function createOpenAICompatibleCompletionsThinkingOffWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (thinkingLevel !== "off") {
+    return underlying;
+  }
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      suppressCompletionsReasoningEffortForThinkingOff(model, payloadObj);
+    });
+  };
+}
+
 function raiseMinimalReasoningForResponsesWebSearchPayload(params: {
   model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown; compat?: unknown };
   payloadObj: Record<string, unknown>;
@@ -553,9 +575,7 @@ export function createOpenAIThinkingLevelWrapper(
   return (model, context, options) => {
     if (!shouldApplyOpenAIReasoningCompatibility(model)) {
       if (thinkingLevel === "off") {
-        return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-          suppressCompletionsReasoningEffortForThinkingOff(model, payloadObj);
-        });
+        return underlying(model, context, options);
       }
       return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
         raiseMinimalReasoningForResponsesWebSearchPayload({ model, payloadObj });
@@ -567,7 +587,6 @@ export function createOpenAIThinkingLevelWrapper(
         if (existingReasoning !== undefined) {
           delete payloadObj.reasoning;
         }
-        suppressCompletionsReasoningEffortForThinkingOff(model, payloadObj);
         return;
       }
 

@@ -5,6 +5,7 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   createOpenAIAttributionHeadersWrapper,
+  createOpenAICompatibleCompletionsThinkingOffWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
   createOpenAIThinkingLevelWrapper,
@@ -502,6 +503,47 @@ describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {
   });
 });
 
+describe("createOpenAICompatibleCompletionsThinkingOffWrapper", () => {
+  it("maps completions reasoning_effort to the model's disabled value when thinkingLevel is off", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoningEffort: "high",
+    });
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe("none");
+  });
+
+  it("drops completions reasoning_effort when thinkingLevel is off and the model has no disabled effort", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoningEffort: "high",
+    });
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBareModel, { messages: [] }, {});
+
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("does not add completions reasoning_effort when thinkingLevel is off and none was sent", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("leaves enabled thinking levels unchanged", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoningEffort: "high",
+    });
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "high");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe("high");
+  });
+});
+
 describe("createOpenAIThinkingLevelWrapper", () => {
   it("overrides effort on reasoning-capable model when thinkingLevel is medium", () => {
     const { baseStreamFn, payloads } = createPayloadCapture({
@@ -531,55 +573,6 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     void wrapped(codexModel, { messages: [] }, {});
 
     expect(payloads[0]).not.toHaveProperty("reasoning");
-  });
-
-  it("maps completions reasoning_effort to the model's disabled value when thinkingLevel is off", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoningEffort: "high",
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
-    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning_effort).toBe("none");
-  });
-
-  it("drops completions reasoning_effort when thinkingLevel is off and the model has no disabled effort", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoningEffort: "high",
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
-    void wrapped(lmstudioBareModel, { messages: [] }, {});
-
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
-  });
-
-  it("does not add completions reasoning_effort when thinkingLevel is off and none was sent", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture();
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
-    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
-
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
-    expect(payloads[0]).not.toHaveProperty("reasoning");
-  });
-
-  it("maps completions reasoning_effort to none when thinkingLevel is off on native OpenAI completions", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoning: { effort: "medium" },
-      initialReasoningEffort: "high",
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
-    void wrapped(
-      {
-        api: "openai-completions",
-        provider: "openai",
-        id: "gpt-5.2",
-      } as Model<"openai-completions">,
-      { messages: [] },
-      {},
-    );
-
-    expect(payloads[0]).not.toHaveProperty("reasoning");
-    expect(payloads[0]?.reasoning_effort).toBe("none");
   });
 
   it("maps adaptive thinkingLevel to medium effort on reasoning-capable model", () => {

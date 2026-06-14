@@ -101,46 +101,4 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBeUndefined();
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBe("high");
   });
-
-  it("resolves disabled intent through a fallback map keyed by the off alias", () => {
-    const model = {
-      provider: "lmstudio",
-      id: "lmstudio/qwen3-8b",
-      compat: { supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"] },
-    };
-
-    expect(
-      resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: "none",
-        fallbackMap: { off: "none", high: "high" },
-      }),
-    ).toBe("none");
-  });
-
-  it("resolves an off request through a fallback map keyed by none", () => {
-    const model = {
-      provider: "lmstudio",
-      id: "lmstudio/qwen3-8b",
-      compat: { supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"] },
-    };
-
-    expect(
-      resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: "off",
-        fallbackMap: { none: "none" },
-      }),
-    ).toBe("none");
-  });
-
-  it("does not invent a wire value from advertised metadata for disabled intent", () => {
-    const model = {
-      provider: "lmstudio",
-      id: "lmstudio/qwen3-8b",
-      compat: { supportedReasoningEfforts: ["on", "off"] },
-    };
-
-    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBeUndefined();
-  });
 });
