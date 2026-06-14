@@ -283,7 +283,23 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     channels: Iterable<ChannelKind>,
     nextConfig: OpenClawConfig,
   ) => {
-    const initial = getActiveCounts();
+    // For channel reloads, only wait on operations/replies/embedded runs, not
+    // background tasks (e.g. context-engine turn maintenance).  Channel toggles
+    // are user-initiated and should not be blocked by system background work.
+    const getChannelReloadActiveCounts = () => {
+      const queueSize = getTotalQueueSize();
+      const pendingReplies = getTotalPendingReplies();
+      const embeddedRuns = getActiveEmbeddedRunCount();
+      const activeTasks = 0;
+      return {
+        queueSize,
+        pendingReplies,
+        embeddedRuns,
+        activeTasks,
+        totalActive: queueSize + pendingReplies + embeddedRuns,
+      };
+    };
+    const initial = getChannelReloadActiveCounts();
     if (initial.totalActive <= 0) {
       return;
     }
@@ -304,7 +320,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
         timer.unref?.();
       });
-      const current = getActiveCounts();
+      const current = getChannelReloadActiveCounts();
       if (current.totalActive <= 0) {
         params.logReload.info("active operations and replies completed; reloading channels now");
         return;
