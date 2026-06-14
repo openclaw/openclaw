@@ -183,6 +183,14 @@ function detectTargetKind(
     return "group";
   }
 
+  // If the channel plugin only supports direct chat, default to "user" instead of "group"
+  // to avoid creating phantom group sessions for DM-only channels (e.g., WeChat).
+  const plugin = getChannelPlugin(channel);
+  const chatTypes = plugin?.capabilities?.chatTypes ?? [];
+  if (chatTypes.length > 0 && chatTypes.every((t) => t === "direct")) {
+    return "user";
+  }
+
   return "group";
 }
 
