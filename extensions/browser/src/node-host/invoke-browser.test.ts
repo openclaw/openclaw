@@ -457,4 +457,72 @@ describe("runBrowserProxyCommand", () => {
     ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
+
+  it("blocks Browser Steward browser proxy mutation without trusted runtime approval", async () => {
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/navigate",
+          agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+          body: {
+            url: "https://example.com",
+            browserStewardRuntimeDelegated: true,
+          },
+          timeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow(/Browser Steward runtime guard blocked navigate: approval_required/);
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("allows Browser Steward read-only proxy status", async () => {
+    dispatcherMocks.dispatch.mockResolvedValue({
+      status: 200,
+      body: { ok: true, running: true },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "GET",
+          path: "/",
+          agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+          timeoutMs: 50,
+        }),
+      ),
+    ).resolves.toContain('"running":true');
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "GET",
+        path: "/",
+      }),
+    );
+  });
+
+  it("allows Browser Steward proxy mutation with trusted runtime delegation", async () => {
+    dispatcherMocks.dispatch.mockResolvedValue({
+      status: 200,
+      body: { ok: true },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/tabs/open",
+          agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+          browserStewardRuntimeDelegated: true,
+          body: { url: "https://example.com" },
+          timeoutMs: 50,
+        }),
+      ),
+    ).resolves.toContain('"ok":true');
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        path: "/tabs/open",
+      }),
+    );
+  });
 });

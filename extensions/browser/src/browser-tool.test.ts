@@ -322,6 +322,140 @@ describe("browser tool description", () => {
   });
 });
 
+describe("Browser Steward runtime guard", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("blocks unsafe browser mutation for the Browser Steward without approval", async () => {
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+    });
+
+    await expect(
+      tool.execute?.("call-1", { action: "open", url: "https://example.com" }),
+    ).rejects.toThrow(/Browser Steward runtime guard blocked open: approval_required/);
+    expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+  });
+
+  it("allows non-secret read-only Browser Steward status checks", async () => {
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+    });
+
+    await tool.execute?.("call-1", { action: "status" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("rejects secret-like Browser Steward values without echoing them", async () => {
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+    });
+    const secretLike = "Bearer SHOULD_NOT_APPEAR";
+
+    let thrown: unknown;
+    try {
+      await tool.execute?.("call-1", {
+        action: "act",
+        request: { kind: "type", text: secretLike },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(String(thrown)).toMatch(/browser_steward\.blocked_credential_exposure/);
+    expect(String(thrown)).not.toContain("SHOULD_NOT_APPEAR");
+  });
+
+  it("does not let the Browser Steward self-approve through tool args", async () => {
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+    });
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "open",
+        url: "https://example.com",
+        browserStewardDelegated: true,
+      }),
+    ).rejects.toThrow(/Browser Steward runtime guard blocked open: approval_required/);
+    expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes delegated Browser Steward mutation from default deny", async () => {
+    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
+      targetId: "tab-approved",
+      url: "https://example.com",
+    });
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+      browserStewardDelegated: true,
+    });
+    await tool.execute?.("call-1", {
+      action: "open",
+      url: "https://example.com",
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: undefined }),
+    );
+    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:browser-session-credential-steward:runtime-check",
+        targetId: "tab-approved",
+        browserStewardRuntimeDecision: expect.objectContaining({
+          boundaryDecision: "allow",
+          requestedAction: "open",
+          telemetryEvent: "browser_steward.boundary_decision",
+        }),
+      }),
+    );
+  });
+
+  it("blocks Browser Steward node proxy mutation before node.invoke", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+    });
+
+    await expect(
+      tool.execute?.("call-1", { action: "open", url: "https://example.com", target: "node" }),
+    ).rejects.toThrow(/Browser Steward runtime guard blocked open: approval_required/);
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("propagates trusted Browser Steward delegation to node proxy params", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+      browserStewardDelegated: true,
+    });
+
+    await tool.execute?.("call-1", {
+      action: "open",
+      url: "https://example.com",
+      target: "node",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.any(Object),
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+          browserStewardRuntimeDelegated: true,
+          path: "/tabs/open",
+        }),
+      }),
+    );
+  });
+});
+
 describe("browser tool snapshot maxChars", () => {
   registerBrowserToolAfterEachReset();
 

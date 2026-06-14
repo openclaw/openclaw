@@ -44,6 +44,11 @@ import {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
+import {
+  type BrowserStewardRuntimeDecision,
+  assertBrowserStewardRuntimeAllowed,
+  isBrowserStewardSession,
+} from "./browser/browser-steward-runtime-guard.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 
 const browserToolDeps = {
@@ -293,6 +298,9 @@ async function callBrowserProxy(params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  agentSessionKey?: string;
+  browserStewardApproved?: boolean;
+  browserStewardDelegated?: boolean;
 }): Promise<BrowserProxyResult> {
   const proxyTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
@@ -312,6 +320,9 @@ async function callBrowserProxy(params: {
         body: params.body,
         timeoutMs: proxyTimeoutMs,
         profile: params.profile,
+        agentSessionKey: params.agentSessionKey,
+        browserStewardRuntimeApproved: params.browserStewardApproved === true,
+        browserStewardRuntimeDelegated: params.browserStewardDelegated === true,
       },
       idempotencyKey: crypto.randomUUID(),
     },
@@ -420,6 +431,8 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  browserStewardApproved?: boolean;
+  browserStewardDelegated?: boolean;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -445,6 +458,17 @@ export function createBrowserTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
+      let browserStewardRuntimeDecision: BrowserStewardRuntimeDecision | undefined;
+      if (isBrowserStewardSession(opts?.agentSessionKey)) {
+        browserStewardRuntimeDecision = assertBrowserStewardRuntimeAllowed({
+          action,
+          profile,
+          agentSessionKey: opts?.agentSessionKey,
+          approved: opts?.browserStewardApproved === true,
+          delegated: opts?.browserStewardDelegated === true,
+          request: params.request ?? params,
+        });
+      }
       const requestedNode = readStringParam(params, "node");
       const requestedTimeoutMs = readToolTimeoutMs(params);
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
@@ -494,7 +518,7 @@ export function createBrowserTool(opts?: {
           });
 
       const proxyRequest = nodeTarget
-        ? async (opts: {
+        ? async (proxyOpts: {
             method: string;
             path: string;
             query?: Record<string, string | number | boolean | undefined>;
@@ -504,12 +528,15 @@ export function createBrowserTool(opts?: {
           }) => {
             const proxy = await callBrowserProxy({
               nodeId: nodeTarget.nodeId,
-              method: opts.method,
-              path: opts.path,
-              query: opts.query,
-              body: opts.body,
-              timeoutMs: opts.timeoutMs,
-              profile: opts.profile,
+              method: proxyOpts.method,
+              path: proxyOpts.path,
+              query: proxyOpts.query,
+              body: proxyOpts.body,
+              timeoutMs: proxyOpts.timeoutMs,
+              profile: proxyOpts.profile,
+              agentSessionKey: opts?.agentSessionKey,
+              browserStewardApproved: opts?.browserStewardApproved,
+              browserStewardDelegated: opts?.browserStewardDelegated,
             });
             const mapping = await persistProxyFiles(proxy.files);
             applyProxyPaths(proxy.result, mapping);
@@ -530,6 +557,7 @@ export function createBrowserTool(opts?: {
           targetId,
           baseUrl,
           profile,
+          browserStewardRuntimeDecision,
         });
       };
 
@@ -643,6 +671,7 @@ export function createBrowserTool(opts?: {
             targetId: opened.targetId,
             baseUrl,
             profile,
+            browserStewardRuntimeDecision,
           });
           return jsonResult(opened);
         }

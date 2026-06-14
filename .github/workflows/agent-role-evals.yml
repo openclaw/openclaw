@@ -13,7 +13,7 @@ on:
       live_agents:
         description: Comma or space separated agent ids for live evals
         required: false
-        default: "main,judge,program-manager,memory-knowledge-curator,market-research-analyst"
+        default: "main,judge,program-manager,memory-knowledge-curator,market-research-analyst,browser-session-credential-steward,browser-session-credential-steward-safety-boundary"
         type: string
       live_model:
         description: Optional model ref override for live evals

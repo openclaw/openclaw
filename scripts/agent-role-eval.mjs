@@ -15,11 +15,11 @@ import {
 function usage() {
   return [
     "Usage:",
-    "  node scripts/agent-role-eval.mjs [--config <path>] [--json]",
+    "  node scripts/agent-role-eval.mjs [--config <path>] [--agent <id>] [--json]",
     "  node scripts/agent-role-eval.mjs --contracts-only [--json]",
     "  node scripts/agent-role-eval.mjs --live [--agent <id>] [--model <id>] [--timeout <seconds>] [--self-contained] [--json]",
     "",
-    "Default mode runs deterministic static contract checks.",
+    "Default mode runs deterministic static contract checks. Use --agent to check one configured agent.",
     "--contracts-only validates the checked-in role contract catalog without private local agent state.",
     "--live runs real local agent turns against the same role contracts.",
     "--self-contained creates temporary agent workspaces/config/state for live evals.",
@@ -124,7 +124,9 @@ function runCatalog(args) {
 
 function runStatic(args) {
   const config = loadConfigFile(args.configPath);
-  const result = evaluateAgentStaticContracts(config);
+  const result = evaluateAgentStaticContracts(config, {
+    agentId: args.agentId,
+  });
   if (args.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
