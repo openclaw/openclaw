@@ -738,13 +738,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       await abortActive({ preferActive: true });
       return;
     }
+    const queueMode = state.sessionInfo.queueMode ?? "steer";
     if (
       !isBtw &&
-      (state.pendingChatRunId ||
-        state.pendingOptimisticUserMessage ||
-        (opts.local !== true && state.activeChatRunId))
+      (state.pendingOptimisticUserMessage ||
+        (queueMode === "steer" &&
+          (state.pendingChatRunId || (opts.local !== true && state.activeChatRunId))))
     ) {
-      chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+      chatLog.addSystem(
+        queueMode === "steer"
+          ? "agent is busy — press Esc to abort before sending a new message"
+          : "agent is busy — message could not be sent, please try again",
+      );
       tui.requestRender();
       return;
     }
@@ -809,6 +814,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           } else {
             state.pendingChatRunId = acceptedRunId;
             setActivityStatus("waiting");
+            // In non-steer queue modes, clear the optimistic send guard
+            // after the gateway accepts so the next queued message can
+            // flow through without waiting for the first streaming event.
+            if (queueMode !== "steer") {
+              state.pendingOptimisticUserMessage = false;
+            }
           }
           tui.requestRender();
         }
