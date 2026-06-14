@@ -918,6 +918,7 @@ When choosing focused proof for a touched behavior or file path, run `pnpm openc
 The match report searches scenario metadata, docs refs, code refs, coverage IDs, plugins, and provider requirements, then prints matching `qa suite --scenario ...` targets.
 Every `qa suite` scenario execution writes a `qa-evidence.json` artifact. Flow scenarios also write `qa-suite-summary.json` for existing suite/report tooling; scenarios that declare `execution.kind: vitest` or `execution.kind: playwright` run the matching test path and write `qa-vitest-report.md` or `qa-playwright-report.md` plus per-scenario logs.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
+For scorecard context, see [Maturity tests](/reference/maturity-tests).
 
 For character and style checks, run the same scenario across multiple live model
 refs and write a judged Markdown report:
@@ -975,6 +976,7 @@ When no `--judge-model` is passed, the judges default to
 ## Related docs
 
 - [Matrix QA](/concepts/qa-matrix)
+- [Maturity tests](/reference/maturity-tests)
 - [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)
 - [Testing](/help/testing)

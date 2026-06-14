@@ -122,6 +122,7 @@
           - "docs/concepts/qa-e2e-automation.md"
           - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
+          - "docs/reference/maturity-tests.md"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
