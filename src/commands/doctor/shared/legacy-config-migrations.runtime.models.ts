@@ -954,8 +954,8 @@ const CANONICAL_PROVIDER_MODEL_LEAK_KEYS = [
   "request",
 ] as const;
 
-function hasCanonicalOpenAIProvider(providers: Record<string, unknown>): boolean {
-  return Object.keys(providers).some(
+function findCanonicalOpenAIProviderKey(providers: Record<string, unknown>): string | undefined {
+  return Object.keys(providers).find(
     (providerId) => normalizeProviderId(providerId) === OPENAI_PROVIDER_ID,
   );
 }
@@ -1004,6 +1004,218 @@ function hasOwnDefinedProperty(record: Record<string, unknown>, key: string): bo
   return Object.hasOwn(record, key) && record[key] !== undefined;
 }
 
+const OPENAI_CODEX_CONTEXT_METADATA_KEYS = ["contextTokens", "contextWindow", "maxTokens"] as const;
+
+function hasUsableContextMetadata(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function hasContextBudget(value: Record<string, unknown>): boolean {
+  return (
+    hasUsableContextMetadata(value.contextTokens) || hasUsableContextMetadata(value.contextWindow)
+  );
+}
+
+function copyMissingContextMetadata(params: {
+  source: Record<string, unknown>;
+  target: Record<string, unknown>;
+  blockContextBudget?: boolean;
+}): string[] {
+  const copied: string[] = [];
+  const targetHasContextBudget = hasContextBudget(params.target);
+  for (const key of OPENAI_CODEX_CONTEXT_METADATA_KEYS) {
+    if (params.target[key] !== undefined || !hasUsableContextMetadata(params.source[key])) {
+      continue;
+    }
+    if (
+      (key === "contextTokens" || key === "contextWindow") &&
+      (targetHasContextBudget || params.blockContextBudget)
+    ) {
+      continue;
+    }
+    params.target[key] = params.source[key];
+    copied.push(key);
+  }
+  return copied;
+}
+
+function hasProviderLevelContextBudget(provider: Record<string, unknown>): boolean {
+  return hasContextBudget(provider);
+}
+
+function hasProviderLevelContextMetadata(provider: Record<string, unknown>): boolean {
+  return OPENAI_CODEX_CONTEXT_METADATA_KEYS.some((key) => hasUsableContextMetadata(provider[key]));
+}
+
+function normalizeOpenAIModelIdForComparison(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const modelId = value.trim();
+  if (!modelId) {
+    return undefined;
+  }
+  const slashIndex = modelId.indexOf("/");
+  if (slashIndex <= 0) {
+    return modelId.toLowerCase();
+  }
+  const provider = normalizeProviderId(modelId.slice(0, slashIndex));
+  if (provider !== OPENAI_PROVIDER_ID && provider !== LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+    return modelId.toLowerCase();
+  }
+  const unscoped = modelId.slice(slashIndex + 1).trim();
+  return unscoped ? unscoped.toLowerCase() : undefined;
+}
+
+function canonicalOpenAIModelId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const modelId = value.trim();
+  if (!modelId) {
+    return undefined;
+  }
+  const slashIndex = modelId.indexOf("/");
+  if (slashIndex <= 0) {
+    return modelId;
+  }
+  const provider = normalizeProviderId(modelId.slice(0, slashIndex));
+  if (provider !== OPENAI_PROVIDER_ID && provider !== LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+    return modelId;
+  }
+  const unscoped = modelId.slice(slashIndex + 1).trim();
+  return unscoped || undefined;
+}
+
+function findOpenAIModelEntry(
+  models: unknown[],
+  modelId: string,
+): { model: Record<string, unknown>; index: number } | undefined {
+  const comparable = normalizeOpenAIModelIdForComparison(modelId);
+  if (!comparable) {
+    return undefined;
+  }
+  for (const [index, model] of models.entries()) {
+    const record = getRecord(model);
+    if (!record) {
+      continue;
+    }
+    if (normalizeOpenAIModelIdForComparison(record.id) === comparable) {
+      return { model: record, index };
+    }
+  }
+  return undefined;
+}
+
+function normalizeOpenAIModelEntryId(model: Record<string, unknown>, modelId: string): boolean {
+  if (model.id === modelId) {
+    return false;
+  }
+  if (
+    normalizeOpenAIModelIdForComparison(model.id) !== normalizeOpenAIModelIdForComparison(modelId)
+  ) {
+    return false;
+  }
+  model.id = modelId;
+  return true;
+}
+
+function hasMatchingLegacyOpenAIModelEntry(params: {
+  legacyProvider: Record<string, unknown>;
+  canonicalProvider: Record<string, unknown>;
+}): boolean {
+  const canonicalModels = Array.isArray(params.canonicalProvider.models)
+    ? params.canonicalProvider.models
+    : [];
+  const legacyModels = Array.isArray(params.legacyProvider.models)
+    ? params.legacyProvider.models
+    : [];
+  return legacyModels.some((legacyModelValue) => {
+    const legacyModel = getRecord(legacyModelValue);
+    const modelId = canonicalOpenAIModelId(legacyModel?.id);
+    return Boolean(modelId && findOpenAIModelEntry(canonicalModels, modelId));
+  });
+}
+
+function hasUnmappedLegacyProviderContextMetadata(params: {
+  legacyProvider: Record<string, unknown>;
+  canonicalProvider: Record<string, unknown>;
+  modelsToMerge: unknown[];
+}): boolean {
+  return (
+    hasProviderLevelContextMetadata(params.legacyProvider) &&
+    params.modelsToMerge.length === 0 &&
+    !hasMatchingLegacyOpenAIModelEntry({
+      legacyProvider: params.legacyProvider,
+      canonicalProvider: params.canonicalProvider,
+    })
+  );
+}
+
+function copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows(params: {
+  legacyProvider: Record<string, unknown>;
+  canonicalProvider: Record<string, unknown>;
+  changes: string[];
+}): boolean {
+  let changed = false;
+
+  const canonicalModels = Array.isArray(params.canonicalProvider.models)
+    ? params.canonicalProvider.models
+    : [];
+  const legacyModels = Array.isArray(params.legacyProvider.models)
+    ? params.legacyProvider.models
+    : [];
+  for (const legacyModelValue of legacyModels) {
+    const legacyModel = getRecord(legacyModelValue);
+    const modelId = canonicalOpenAIModelId(legacyModel?.id);
+    if (!legacyModel || !modelId) {
+      continue;
+    }
+    const existing = findOpenAIModelEntry(canonicalModels, modelId);
+    if (!existing) {
+      continue;
+    }
+    const normalizedId = normalizeOpenAIModelEntryId(existing.model, modelId);
+    const copiedModelKeys = copyMissingContextMetadata({
+      source: legacyModel,
+      target: existing.model,
+      blockContextBudget: hasProviderLevelContextBudget(params.canonicalProvider),
+    });
+    const copiedProviderKeys = copyMissingContextMetadata({
+      source: params.legacyProvider,
+      target: existing.model,
+      blockContextBudget: hasProviderLevelContextBudget(params.canonicalProvider),
+    });
+    const copiedKeys = [...copiedModelKeys, ...copiedProviderKeys];
+    if (copiedKeys.length === 0 && !normalizedId) {
+      continue;
+    }
+    if (normalizedId && copiedKeys.length > 0) {
+      params.changes.push(
+        `Normalized models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].id to ${modelId} and copied ${copiedKeys.join(", ")} metadata.`,
+      );
+    } else if (normalizedId) {
+      params.changes.push(
+        `Normalized models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].id to ${modelId}.`,
+      );
+    } else if (copiedModelKeys.length > 0 && copiedProviderKeys.length === 0) {
+      params.changes.push(
+        `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.models[].${modelId} ${copiedModelKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].`,
+      );
+    } else if (copiedModelKeys.length === 0 && copiedProviderKeys.length > 0) {
+      params.changes.push(
+        `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} ${copiedProviderKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].`,
+      );
+    } else {
+      params.changes.push(
+        `Copied models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.models[].${modelId} ${copiedModelKeys.join(", ")} metadata and models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} ${copiedProviderKeys.join(", ")} metadata to models.providers.${OPENAI_PROVIDER_ID}.models[${existing.index}].`,
+      );
+    }
+    changed = true;
+  }
+  return changed;
+}
+
 function collectModelMergeBlockers(params: {
   canonical: Record<string, unknown>;
   legacy: Record<string, unknown>;
@@ -1044,8 +1256,9 @@ function getMergeableLegacyOpenAIModels(params: {
   const canonicalModelNames = new Set<string>();
   for (const m of canonicalModels) {
     const mr = getRecord(m);
-    if (typeof mr?.id === "string" && mr.id) {
-      canonicalModelIds.add(mr.id);
+    const normalizedId = normalizeOpenAIModelIdForComparison(mr?.id);
+    if (normalizedId) {
+      canonicalModelIds.add(normalizedId);
     }
     if (typeof mr?.name === "string" && mr.name) {
       canonicalModelNames.add(mr.name);
@@ -1056,7 +1269,7 @@ function getMergeableLegacyOpenAIModels(params: {
     if (!mr) {
       return false;
     }
-    const id = typeof mr.id === "string" ? mr.id : undefined;
+    const id = normalizeOpenAIModelIdForComparison(mr.id);
     const name = typeof mr.name === "string" ? mr.name : undefined;
     if (!id && !name) {
       return false;
@@ -1085,7 +1298,11 @@ function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boole
       legacy: normalized.value,
     });
     if (modelsToMerge.length === 0) {
-      return true;
+      return !hasUnmappedLegacyProviderContextMetadata({
+        canonicalProvider: canonicalEntry.value,
+        legacyProvider: normalized.value,
+        modelsToMerge,
+      });
     }
     const mergeBlockers = collectModelMergeBlockers({
       canonical: canonicalEntry.value,
@@ -1120,6 +1337,18 @@ export function collectBlockedLegacyOpenAICodexProviderWarnings(raw: unknown): s
       canonical: canonicalEntry.value,
       legacy: normalized.value,
     });
+    if (
+      hasUnmappedLegacyProviderContextMetadata({
+        canonicalProvider: canonicalEntry.value,
+        legacyProvider: normalized.value,
+        modelsToMerge,
+      })
+    ) {
+      warnings.push(
+        `models.providers.${providerId} cannot be removed automatically into models.providers.${canonicalEntry.key} because provider-level context metadata cannot be mapped safely to a canonical OpenAI model row. Add an explicit models.providers.${canonicalEntry.key}.models[] row for the affected Codex model or move the affected defaults manually before removing models.providers.${providerId}.`,
+      );
+      continue;
+    }
     if (modelsToMerge.length === 0) {
       continue;
     }
@@ -1210,7 +1439,8 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
       continue;
     }
 
-    if (!hasCanonicalOpenAIProvider(providers)) {
+    const canonicalProviderKey = findCanonicalOpenAIProviderKey(providers);
+    if (!canonicalProviderKey) {
       providers[OPENAI_PROVIDER_ID] = normalized.value;
       changes.push(
         `Moved models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} → models.providers.${OPENAI_PROVIDER_ID}.`,
@@ -1229,6 +1459,26 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
       const modelsToMerge = getMergeableLegacyOpenAIModels({
         canonical,
         legacy: normalized.value,
+      });
+      const providerContextMetadataNeedsManualMapping = hasUnmappedLegacyProviderContextMetadata({
+        legacyProvider: normalized.value,
+        canonicalProvider: canonical,
+        modelsToMerge,
+      });
+      if (providerContextMetadataNeedsManualMapping) {
+        if (normalized.changed) {
+          providers[providerId] = normalized.value;
+          providersChanged = true;
+        }
+        changes.push(
+          `Skipped removing models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} because provider-level context metadata cannot be mapped safely to a canonical OpenAI model row.`,
+        );
+        continue;
+      }
+      copyLegacyOpenAICodexContextMetadataToExistingCanonicalRows({
+        legacyProvider: normalized.value,
+        canonicalProvider: canonical,
+        changes,
       });
       const mergeBlockers =
         modelsToMerge.length > 0

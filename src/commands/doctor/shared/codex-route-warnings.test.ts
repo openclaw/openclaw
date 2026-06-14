@@ -3879,6 +3879,35 @@ describe("collectCodexRouteWarnings", () => {
     expect(store.main.agentRuntimeOverride).toBeUndefined();
   });
 
+  it("repairs legacy Codex model refs under canonical OpenAI session providers", () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "openai-codex/gpt-5.5",
+        providerOverride: "openai",
+        modelOverride: "openai-codex/gpt-5.4",
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "codex",
+      },
+    };
+
+    const result = repairCodexSessionStoreRoutes({
+      store,
+      now: 123,
+    });
+
+    expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
+    expect(store.main.updatedAt).toBe(123);
+    expect(store.main.modelProvider).toBe("openai");
+    expect(store.main.model).toBe("gpt-5.5");
+    expect(store.main.providerOverride).toBe("openai");
+    expect(store.main.modelOverride).toBe("gpt-5.4");
+    expect(store.main.agentHarnessId).toBeUndefined();
+    expect(store.main.agentRuntimeOverride).toBeUndefined();
+  });
+
   it("repairs Telegram direct session routes while preserving canonical OpenAI auth pins", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:telegram:default:direct:5550100999": {
