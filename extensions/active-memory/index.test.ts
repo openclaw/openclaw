@@ -2187,6 +2187,74 @@ describe("active-memory plugin", () => {
         {
           message: {
             role: "toolResult",
+            toolName: "memory_lookup_custom",
+            details: { results: [] },
+            content: [{ type: "text", text: "No memories found." }],
+          },
+        },
+        ["memory_lookup_custom"],
+      ),
+    ).toBe(false);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_lookup_custom",
+            details: { results: [{ id: "ramen" }] },
+            content: [
+              {
+                type: "text",
+                text: '{"results":[{"content":"User usually orders ramen."}]}',
+              },
+            ],
+          },
+        },
+        ["memory_lookup_custom"],
+      ),
+    ).toBe(true);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_lookup_custom",
+            details: {
+              persistedDetailsTruncated: true,
+              originalDetailKeys: ["results"],
+            },
+            content: [
+              {
+                type: "text",
+                text: '{"results":[{"content":"User usually orders ramen."}]}',
+              },
+            ],
+          },
+        },
+        ["memory_lookup_custom"],
+      ),
+    ).toBe(true);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_lookup_custom",
+            details: {
+              persistedDetailsTruncated: true,
+              originalDetailKeys: ["results"],
+            },
+            content: [{ type: "text", text: '{"results":[]}' }],
+          },
+        },
+        ["memory_lookup_custom"],
+      ),
+    ).toBe(false);
+    expect(
+      testing.hasUsableMemoryResultInSessionRecord(
+        {
+          message: {
+            role: "toolResult",
             toolName: "lcm_grep",
             details: { totalMatches: 1, messageCount: 1, summaryCount: 0 },
             content: [{ type: "text", text: "User usually orders ramen." }],
@@ -3471,7 +3539,10 @@ describe("active-memory plugin", () => {
             message: {
               role: "toolResult",
               toolName: "memory_search",
-              details: { disabled: true, error: "embedding request failed" },
+              details: {
+                disabled: true,
+                warning: "Memory search is disabled for this session.",
+              },
             },
           },
         ]);
@@ -3490,13 +3561,141 @@ describe("active-memory plugin", () => {
     expectLinesNotToContain(lines, "timeout_partial");
   });
 
+  it("does not recover a timeout partial when unavailable debug arrives after the last poll", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 250,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:late-unavailable-timeout";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-late-unavailable-timeout",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          if (params.abortSignal?.aborted) {
+            resolve();
+            return;
+          }
+          params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        await writeTranscriptJsonl(params.sessionFile, [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_search",
+              details: {
+                disabled: true,
+                warning: "Memory search is disabled for this session.",
+              },
+            },
+          },
+          {
+            message: {
+              role: "assistant",
+              content: "This text must not become recalled context.",
+            },
+          },
+        ]);
+        return { payloads: [] };
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? late unavailable", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    const lines = getActiveMemoryLines(sessionKey);
+    expectLinesToContain(lines, "Active Memory: status=timeout");
+    expectLinesNotToContain(lines, "timeout_partial");
+  });
+
+  it("does not recover a timeout partial while abort cleanup is still settling", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 250,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:unsettled-timeout";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-unsettled-timeout",
+      updatedAt: 0,
+    };
+    let resolveLateWrite: () => void = () => {};
+    const lateWriteDone = new Promise<void>((resolve) => {
+      resolveLateWrite = resolve;
+    });
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          if (params.abortSignal?.aborted) {
+            resolve();
+            return;
+          }
+          params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        await writeTranscriptJsonl(params.sessionFile, [
+          {
+            message: {
+              role: "assistant",
+              content: "This unsettled text must not become recalled context.",
+            },
+          },
+        ]);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 100);
+        });
+        await writeTranscriptJsonl(params.sessionFile, [
+          {
+            message: {
+              role: "assistant",
+              content: "This unsettled text must not become recalled context.",
+            },
+          },
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_search",
+              details: { disabled: true },
+            },
+          },
+        ]);
+        resolveLateWrite();
+        return { payloads: [] };
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? unsettled timeout", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    const lines = getActiveMemoryLines(sessionKey);
+    expectLinesToContain(lines, "Active Memory: status=timeout");
+    expectLinesNotToContain(lines, "timeout_partial");
+    await lateWriteDone;
+  });
+
   it("uses successful configured custom-tool output as recall evidence", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1_000,
-      toolsAllow: ["lcm_grep", "memory_search"],
+      toolsAllow: ["memory_lookup_custom", "memory_search"],
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -3510,8 +3709,8 @@ describe("active-memory plugin", () => {
         {
           message: {
             role: "toolResult",
-            toolName: "lcm_grep",
-            details: { totalMatches: 1, messageCount: 1, summaryCount: 0 },
+            toolName: "memory_lookup_custom",
+            details: { results: [{ text: "User usually orders ramen." }] },
             content: [{ type: "text", text: "User usually orders ramen." }],
           },
         },
