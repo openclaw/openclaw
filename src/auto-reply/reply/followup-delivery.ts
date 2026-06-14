@@ -2,7 +2,11 @@
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -16,7 +20,7 @@ import {
   filterMessagingToolMediaDuplicates,
   resolveMessagingToolPayloadDedupe,
 } from "./reply-payloads.js";
-import { resolveReplyToMode } from "./reply-threading.js";
+import { createReplyDeliveryContext, resolveReplyToMode } from "./reply-threading.js";
 
 function hasReplyPayloadMedia(payload: ReplyPayload): boolean {
   if (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim().length > 0) {
@@ -50,6 +54,16 @@ export function resolveFollowupDeliveryPayloads(params: {
     params.originatingAccountId,
     params.originatingChatType,
   );
+  const accountId = resolveOriginAccountId({
+    originatingAccountId: params.originatingAccountId,
+  });
+  const replyDelivery = createReplyDeliveryContext(replyToMode, params.originatingChatType);
+  const replyDeliverySource = replyMessageProvider
+    ? {
+        channel: replyMessageProvider,
+        ...(accountId ? { accountId } : {}),
+      }
+    : undefined;
   const sanitizedPayloads: ReplyPayload[] = [];
   for (const payload of params.payloads) {
     const text = payload.text;
@@ -68,14 +82,16 @@ export function resolveFollowupDeliveryPayloads(params: {
     payloads: sanitizedPayloads,
     replyToMode,
     replyToChannel,
-  });
+  }).map((payload) =>
+    setReplyPayloadMetadata(payload, {
+      replyDelivery,
+      ...(replyDeliverySource ? { replyDeliverySource } : {}),
+    }),
+  );
   const sentMediaUrlFallback = params.sentMediaUrls ?? [];
   const sentTextFallback = params.sentTexts ?? [];
   const originatingTo = resolveOriginMessageTo({
     originatingTo: params.originatingTo,
-  });
-  const accountId = resolveOriginAccountId({
-    originatingAccountId: params.originatingAccountId,
   });
   const dedupedPayloads: ReplyPayload[] = [];
   for (const payload of replyTaggedPayloads) {
@@ -91,8 +107,7 @@ export function resolveFollowupDeliveryPayloads(params: {
         payload.replyToTag ||
         payload.replyToCurrent,
       ),
-      replyToMode,
-      originatingChatType: params.originatingChatType,
+      replyDelivery: getReplyPayloadMetadata(payload)?.replyDelivery,
       accountId,
     });
     if (!decision.shouldDedupePayloads) {

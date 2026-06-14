@@ -293,7 +293,7 @@ describe("mattermostPlugin", () => {
           },
         }),
       ).toEqual({
-        replyToId: undefined,
+        replyToId: null,
         threadId: null,
       });
     });

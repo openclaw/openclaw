@@ -42,6 +42,9 @@ describe("resolveFollowupDeliveryPayloads", () => {
 
     expect(getReplyPayloadMetadata(resolved ?? {})).toEqual({
       assistantTranscriptOwned: true,
+      replyDelivery: {
+        replyToMode: "all",
+      },
     });
   });
 

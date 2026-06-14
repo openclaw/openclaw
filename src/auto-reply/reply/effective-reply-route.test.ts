@@ -19,6 +19,7 @@ describe("resolveEffectiveReplyRoute", () => {
           OriginatingChannel: "discord",
           OriginatingTo: "channel:live",
           AccountId: "live-account",
+          ChatType: "channel",
         }),
         entry: entry({
           deliveryContext: {
@@ -35,6 +36,7 @@ describe("resolveEffectiveReplyRoute", () => {
       channel: "discord",
       to: "channel:live",
       accountId: "live-account",
+      chatType: "channel",
     });
   });
 
@@ -110,7 +112,7 @@ describe("resolveEffectiveReplyRoute", () => {
           route: {
             channel: "feishu",
             accountId: "work",
-            target: { to: "user:ou_123" },
+            target: { to: "user:ou_123", chatType: "channel" },
             thread: { id: "thread:om_123", source: "explicit" },
           },
           deliveryContext: {
@@ -126,6 +128,7 @@ describe("resolveEffectiveReplyRoute", () => {
       to: "user:ou_123",
       accountId: "work",
       threadId: "thread:om_123",
+      chatType: "channel",
       inheritedExternalRoute: true,
     });
   });

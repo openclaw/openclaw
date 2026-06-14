@@ -109,6 +109,20 @@ describe("buildReplyPayloads media filter integration", () => {
     );
   });
 
+  it("records the reply policy used by dedupe and final delivery", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello" }],
+      replyToMode: "first",
+      originatingChatType: "dm",
+    });
+
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.replyDelivery).toEqual({
+      chatType: "direct",
+      replyToMode: "first",
+    });
+  });
+
   it("strips legacy bracket tool blocks from heartbeat replies", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

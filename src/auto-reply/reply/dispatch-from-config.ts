@@ -159,6 +159,11 @@ import {
   replyRunRegistry,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import {
+  createReplyDeliveryContext,
+  resolveReplyDeliveryAccountId,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -1594,6 +1599,15 @@ export async function dispatchReplyFromConfig(
   });
   const routeReplyTo = replyRoute.to;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
+  const routedReplyAccountId = routeReplyChannel
+    ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
+    : undefined;
+  const routedReplyDelivery = routeReplyChannel
+    ? createReplyDeliveryContext(
+        resolveReplyToMode(cfg, routeReplyChannel, routedReplyAccountId, replyRoute.chatType),
+        replyRoute.chatType,
+      )
+    : undefined;
   let normalizeReplyMediaPaths:
     | ReturnType<
         (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
@@ -1609,7 +1623,7 @@ export async function dispatchReplyFromConfig(
       sessionKey: acpDispatchSessionKey,
       workspaceDir,
       messageProvider: deliveryChannel,
-      accountId: replyRoute.accountId,
+      accountId: routedReplyAccountId,
       groupId,
       groupChannel: ctx.GroupChannel,
       groupSpace: ctx.GroupSpace,
@@ -1650,12 +1664,13 @@ export async function dispatchReplyFromConfig(
       sessionKey: agentRuntimeSessionKey,
       policySessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
       policyConversationType: resolveRoutedPolicyConversationType(ctx),
-      accountId: replyRoute.accountId,
+      accountId: routedReplyAccountId,
       requesterSenderId: ctx.SenderId,
       requesterSenderName: ctx.SenderName,
       requesterSenderUsername: ctx.SenderUsername,
       requesterSenderE164: ctx.SenderE164,
       threadId: routeReplyThreadId,
+      replyDelivery: routedReplyDelivery,
       cfg,
       abortSignal: options?.abortSignal,
       mirror: options?.mirror,
@@ -2478,8 +2493,9 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
-              originatingAccountId: replyRoute.accountId,
+              originatingAccountId: routedReplyAccountId,
               originatingThreadId: routeReplyThreadId,
+              originatingChatType: replyRoute.chatType,
               shouldSendToolSummaries,
               sendPolicy,
             }),
@@ -3187,8 +3203,9 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
-              originatingAccountId: replyRoute.accountId,
+              originatingAccountId: routedReplyAccountId,
               originatingThreadId: routeReplyThreadId,
+              originatingChatType: replyRoute.chatType,
               shouldSendToolSummaries,
               sendPolicy,
               isTailDispatch: true,

@@ -811,13 +811,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               toolContext,
             }),
           ),
-    resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => ({
-      replyToId: resolveSlackThreadTsValue({
+    resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
+      const resolvedReplyToId = resolveSlackThreadTsValue({
         replyToId: replyDelivery?.replyToMode === "off" ? undefined : replyToId,
         threadId,
-      }),
-      threadId: null,
-    }),
+      });
+      return {
+        replyToId:
+          replyDelivery?.replyToMode === "off" && !resolvedReplyToId ? null : resolvedReplyToId,
+        threadId: null,
+      };
+    },
   },
   outbound: slackChannelOutbound,
 });

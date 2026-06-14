@@ -5,11 +5,9 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   channelRouteTargetsMatchExact,
@@ -17,7 +15,7 @@ import {
   type ChannelRouteTargetInput,
 } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyDeliveryContext } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 /** Removes text payloads already sent by message tools. */
@@ -209,8 +207,7 @@ function resolveOriginThreadIdForPayload(params: {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
-  replyToMode?: ReplyToMode;
-  originatingChatType?: string | null;
+  replyDelivery?: ReplyDeliveryContext;
 }): string | undefined {
   const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
   if (originThreadId && !params.replyToIsExplicit) {
@@ -226,14 +223,7 @@ function resolveOriginThreadIdForPayload(params: {
     accountId: params.accountId,
     threadId: originThreadId,
     replyToId,
-    ...(params.replyToMode
-      ? {
-          replyDelivery: {
-            chatType: normalizeChatType(params.originatingChatType ?? undefined),
-            replyToMode: params.replyToMode,
-          },
-        }
-      : {}),
+    replyDelivery: params.replyDelivery,
   });
   if (transport?.threadId != null) {
     return normalizeThreadIdForComparison(transport.threadId) ?? originThreadId;
@@ -255,8 +245,7 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
-  replyToMode?: ReplyToMode;
-  originatingChatType?: string | null;
+  replyDelivery?: ReplyDeliveryContext;
   accountId?: string;
 }): boolean {
   return getMatchingMessagingToolReplyTargets(params).length > 0;
@@ -271,8 +260,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
-  replyToMode?: ReplyToMode;
-  originatingChatType?: string | null;
+  replyDelivery?: ReplyDeliveryContext;
   accountId?: string;
 }): MessagingToolSend[] {
   const provider = normalizeProviderForComparison(params.messageProvider);
@@ -292,8 +280,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
     originatingThreadId: params.originatingThreadId,
     replyToId: params.replyToId,
     replyToIsExplicit: params.replyToIsExplicit,
-    replyToMode: params.replyToMode,
-    originatingChatType: params.originatingChatType,
+    replyDelivery: params.replyDelivery,
   });
   return sentTargets.filter((target) => {
     const targetProvider = resolveTargetProviderForComparison({
@@ -370,8 +357,7 @@ export function resolveMessagingToolPayloadDedupe(params: {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
-  replyToMode?: ReplyToMode;
-  originatingChatType?: string | null;
+  replyDelivery?: ReplyDeliveryContext;
   accountId?: string;
 }): MessagingToolPayloadDedupeDecision {
   const sentTargets = params.messagingToolSentTargets ?? [];
@@ -383,8 +369,7 @@ export function resolveMessagingToolPayloadDedupe(params: {
     originatingThreadId: params.originatingThreadId,
     replyToId: params.replyToId,
     replyToIsExplicit: params.replyToIsExplicit,
-    replyToMode: params.replyToMode,
-    originatingChatType: params.originatingChatType,
+    replyDelivery: params.replyDelivery,
     accountId: params.accountId,
   });
   const matchingRoute = matchingTargets.length > 0;

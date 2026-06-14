@@ -830,6 +830,19 @@ describe("slackPlugin outbound", () => {
       replyToId: "1712345678.123456",
       threadId: null,
     });
+    expect(
+      resolveReplyTransport({
+        cfg,
+        replyToId: "9999999999.999999",
+        replyDelivery: {
+          chatType: "channel",
+          replyToMode: "off",
+        },
+      }),
+    ).toEqual({
+      replyToId: null,
+      threadId: null,
+    });
   });
 
   it("ignores explicit reply targets for off-mode final delivery", () => {

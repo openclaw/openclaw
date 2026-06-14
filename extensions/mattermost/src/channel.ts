@@ -906,7 +906,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
               : (replyToId ?? undefined)
             : (replyToId ?? (threadId != null ? String(threadId) : undefined));
       return {
-        replyToId: resolvedThreadId,
+        replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
         threadId: resolvedThreadId ?? null,
       };
     },

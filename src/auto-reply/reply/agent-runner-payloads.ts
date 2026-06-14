@@ -26,6 +26,7 @@ import {
 } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { applyReplyThreading, isRenderablePayload } from "./reply-payloads-base.js";
+import { createReplyDeliveryContext } from "./reply-threading.js";
 
 const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
   () => import("./reply-payloads-dedupe.runtime.js"),
@@ -218,6 +219,20 @@ export async function buildReplyPayloads(params: {
     }
   }
 
+  const messageProvider = resolveOriginMessageProvider({
+    originatingChannel: params.originatingChannel,
+    provider: params.messageProvider,
+  });
+  const accountId = resolveOriginAccountId({
+    originatingAccountId: params.accountId,
+  });
+  const replyDelivery = createReplyDeliveryContext(params.replyToMode, params.originatingChatType);
+  const replyDeliverySource = messageProvider
+    ? {
+        channel: messageProvider,
+        ...(accountId ? { accountId } : {}),
+      }
+    : undefined;
   const replyTaggedPayloadCandidates = await Promise.all(
     applyReplyThreading({
       payloads: sanitizedPayloads,
@@ -241,7 +256,10 @@ export async function buildReplyPayloads(params: {
       if (parsed.isSilent) {
         mediaNormalizedPayload.text = undefined;
       }
-      return mediaNormalizedPayload;
+      return setReplyPayloadMetadata(mediaNormalizedPayload, {
+        replyDelivery,
+        ...(replyDeliverySource ? { replyDeliverySource } : {}),
+      });
     }),
   );
   const replyTaggedPayloads: ReplyPayload[] = [];
@@ -277,15 +295,8 @@ export async function buildReplyPayloads(params: {
   let dedupedPayloads = silentFilteredPayloads;
   if (shouldCheckMessagingToolDedupe) {
     const dedupeRuntime = await loadReplyPayloadsDedupeRuntime();
-    const messageProvider = resolveOriginMessageProvider({
-      originatingChannel: params.originatingChannel,
-      provider: params.messageProvider,
-    });
     const originatingTo = resolveOriginMessageTo({
       originatingTo: params.originatingTo,
-    });
-    const accountId = resolveOriginAccountId({
-      originatingAccountId: params.accountId,
     });
     dedupedPayloads = [];
     for (const payload of silentFilteredPayloads) {
@@ -301,8 +312,7 @@ export async function buildReplyPayloads(params: {
           payload.replyToTag ||
           payload.replyToCurrent,
         ),
-        replyToMode: params.replyToMode,
-        originatingChatType: params.originatingChatType,
+        replyDelivery: getReplyPayloadMetadata(payload)?.replyDelivery,
         accountId,
       });
       if (!decision.shouldDedupePayloads) {
