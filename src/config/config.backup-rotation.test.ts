@@ -90,6 +90,20 @@ describe("config backup rotation", () => {
     });
   });
 
+  it.runIf(IS_WINDOWS)("hardenBackupPermissions does not throw and preserves backup files on Windows", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+
+      await fs.writeFile(`${configPath}.bak`, "secret");
+      await fs.writeFile(`${configPath}.bak.1`, "secret");
+
+      await hardenBackupPermissions(configPath, fs);
+
+      await expectRegularFile(`${configPath}.bak`);
+      await expectRegularFile(`${configPath}.bak.1`);
+    });
+  });
+
   it("cleanOrphanBackups removes stale files outside the rotation ring", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
