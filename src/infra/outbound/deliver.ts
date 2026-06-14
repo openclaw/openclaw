@@ -1891,6 +1891,9 @@ async function deliverOutboundPayloadsCore(
               unit.overrides,
             )
           : await deliveryHandler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
+        if (!hasDeliveryResultIdentity(delivery)) {
+          continue;
+        }
         results.push(delivery);
         firstMessageId ??= delivery.messageId;
         lastMessageId = delivery.messageId;
@@ -1916,6 +1919,12 @@ async function deliverOutboundPayloadsCore(
           results: deliveredResults,
         });
         recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
+        completeDeliveryDiagnostics(deliveredResults.length);
+        emitMessageSent({
+          success: true,
+          content: payloadSummary.hookContent ?? payloadSummary.text,
+          messageId: lastMessageId,
+        });
       } else {
         recordPayloadOutcome(
           suppressedPayloadOutcome({
@@ -1923,13 +1932,8 @@ async function deliverOutboundPayloadsCore(
             reason: "adapter_returned_no_identity",
           }),
         );
+        completeDeliveryDiagnostics(0);
       }
-      completeDeliveryDiagnostics(results.length - beforeCount);
-      emitMessageSent({
-        success: true,
-        content: payloadSummary.hookContent ?? payloadSummary.text,
-        messageId: lastMessageId,
-      });
     } catch (err) {
       recordPayloadOutcome({
         index: payloadIndex,
