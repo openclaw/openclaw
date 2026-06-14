@@ -59,6 +59,7 @@ export function buildMediaTarget(ctx: {
   to: string;
   account: GatewayAccount;
   replyToId?: string | null;
+  extraLocalRoots?: readonly string[];
 }): MediaTargetContext {
   const target = parseTarget(ctx.to);
   return {
@@ -66,6 +67,7 @@ export function buildMediaTarget(ctx: {
     targetId: target.id,
     account: ctx.account,
     replyToId: ctx.replyToId ?? undefined,
+    extraLocalRoots: ctx.extraLocalRoots,
   };
 }
 
@@ -307,6 +309,7 @@ export async function sendVoice(
 ): Promise<OutboundResult> {
   const resolvedMediaPath = resolveOutboundMediaPath(voicePath, "voice", {
     allowMissingLocalPath: true,
+    extraLocalRoots: ctx.extraLocalRoots ? [...ctx.extraLocalRoots] : undefined,
   });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
@@ -368,16 +371,19 @@ async function sendVoiceFromLocal(
   }
 
   // Re-check containment after the file appears to prevent symlink-race escapes.
-  const safeMediaPath = resolveQQBotPayloadLocalFilePath(mediaPath);
-  if (!safeMediaPath) {
+  const safeMediaPath = resolveOutboundMediaPath(mediaPath, "voice", {
+    extraLocalRoots: ctx.extraLocalRoots ? [...ctx.extraLocalRoots] : undefined,
+  });
+  if (!safeMediaPath.ok) {
     debugWarn(`sendVoice: blocked local voice path outside QQ Bot media storage`);
-    return { channel: "qqbot", error: "Voice path must be inside QQ Bot media storage" };
+    return { channel: "qqbot", error: safeMediaPath.error };
   }
+  const safeLocalPath = safeMediaPath.mediaPath;
 
-  const needsTranscode = shouldTranscodeVoice(safeMediaPath);
+  const needsTranscode = shouldTranscodeVoice(safeLocalPath);
 
   if (needsTranscode && !transcodeEnabled) {
-    const ext = normalizeLowercaseStringOrEmpty(path.extname(safeMediaPath));
+    const ext = normalizeLowercaseStringOrEmpty(path.extname(safeLocalPath));
     debugLog(
       `sendVoice: transcode disabled, format ${ext} needs transcode, returning error for fallback`,
     );
@@ -388,11 +394,11 @@ async function sendVoiceFromLocal(
   }
 
   try {
-    const silkBase64 = await audioFileToSilkBase64(safeMediaPath, directUploadFormats);
+    const silkBase64 = await audioFileToSilkBase64(safeLocalPath, directUploadFormats);
     let uploadBase64 = silkBase64;
 
     if (!uploadBase64) {
-      const buf = await readFileAsync(safeMediaPath);
+      const buf = await readFileAsync(safeLocalPath);
       uploadBase64 = buf.toString("base64");
       debugLog(`sendVoice: SILK conversion failed, uploading raw (${formatFileSize(buf.length)})`);
     } else {
@@ -409,7 +415,7 @@ async function sendVoiceFromLocal(
         kind: "voice",
         source: { base64: uploadBase64 },
         msgId: ctx.replyToId,
-        localPathForMeta: safeMediaPath,
+        localPathForMeta: safeLocalPath,
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     }

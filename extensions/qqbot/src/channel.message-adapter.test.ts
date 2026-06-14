@@ -36,6 +36,7 @@ type SentMediaParams = {
   to?: string;
   text?: string;
   mediaUrl?: string;
+  extraLocalRoots?: readonly string[];
 };
 
 function latestMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
@@ -113,5 +114,24 @@ describe("qqbot message adapter", () => {
     expect(proofResults.find((result) => result.capability === "text")?.status).toBe("verified");
     expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
     expect(proofResults.find((result) => result.capability === "replyTo")?.status).toBe("verified");
+  });
+
+  it("forwards mediaLocalRoots and surfaces underlying media send errors", async () => {
+    sendMediaMock.mockResolvedValueOnce({
+      error: "Voice path must be inside QQ Bot media storage",
+    });
+
+    await expect(
+      qqbotPlugin.message?.send?.media?.({
+        cfg,
+        to: "qqbot:c2c:user-1",
+        text: "voice",
+        mediaUrl: "/tmp/openclaw-tts/voice.wav",
+        mediaLocalRoots: ["/tmp/openclaw-tts"],
+      }),
+    ).rejects.toThrow("Voice path must be inside QQ Bot media storage");
+
+    const sent = latestMockArg(sendMediaMock, "sendMedia") as SentMediaParams;
+    expect(sent.extraLocalRoots).toEqual(["/tmp/openclaw-tts"]);
   });
 });

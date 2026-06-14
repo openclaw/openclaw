@@ -319,13 +319,19 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
 
   const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "media", {
     allowMissingLocalPath: true,
+    extraLocalRoots: ctx.extraLocalRoots ? [...ctx.extraLocalRoots] : undefined,
   });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
   const mediaUrl = resolvedMediaPath.mediaPath;
 
-  const target = buildMediaTarget({ to, account, replyToId });
+  const target = buildMediaTarget({
+    to,
+    account,
+    replyToId,
+    extraLocalRoots: ctx.extraLocalRoots,
+  });
 
   if (isAudioFile(mediaUrl, mimeType)) {
     const formats =
