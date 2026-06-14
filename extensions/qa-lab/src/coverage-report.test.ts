@@ -228,13 +228,14 @@ describe("qa coverage report", () => {
   });
 
   it("splits qa suite targets when matches mix execution kinds", () => {
+    const playwrightExecutionPath = "ui/src/ui/e2e/chat-flow.e2e.test.ts";
     const flowScenario = scenarioWithCoverage({
       primary: [TEST_EXECUTABLE_COVERAGE_ID],
     });
     const playwrightScenario = scenarioWithCoverage({
       primary: [TEST_BROWSER_COVERAGE_ID],
       executionKind: "playwright",
-      executionPath: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+      executionPath: playwrightExecutionPath,
       sourcePath: "qa/scenarios/ui/control-ui-chat-flow-playwright.md",
     });
     const report = renderQaScenarioMatchesMarkdownReport({
@@ -267,7 +268,7 @@ describe("qa coverage report", () => {
           docsRefs: [],
           codeRefs: [],
           executionKind: playwrightScenario.execution.kind,
-          executionPath: playwrightScenario.execution.path,
+          executionPath: playwrightExecutionPath,
         },
       ],
     });
