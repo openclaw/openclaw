@@ -98,7 +98,9 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (hasAccounts) {
       // Check if every account has its own groupAllowFrom
       const allAccountsHaveGroupAllowFrom = Object.values(accounts).every((account) => {
-        if (!account || typeof account !== "object") return false;
+        if (!account || typeof account !== "object") {
+          return false;
+        }
         const acc = account as DoctorAccountRecord;
         const groupAllowFrom = acc.groupAllowFrom as DoctorAllowFromList | undefined;
         return groupAllowFrom && Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0;
