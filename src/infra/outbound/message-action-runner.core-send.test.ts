@@ -187,6 +187,55 @@ describe("runMessageAction core send routing", () => {
     expect(mediaInput.mediaUrl).toBe("https://example.com/file.txt");
   });
 
+  it("strips trailing NO_REPLY from direct tool sends before delivery", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "t3",
+      chatId: "c1",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+    const cfg = {
+      channels: {
+        testchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:abc",
+        message: "visible update\n\nNO_REPLY",
+      },
+      toolContext: {
+        chatType: "direct",
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledOnce();
+    const textInput = firstMockArg(sendText, "send text");
+    expect(textInput.text).toBe("visible update");
+  });
+
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
     setActivePluginRegistry(
       createTestRegistry([
