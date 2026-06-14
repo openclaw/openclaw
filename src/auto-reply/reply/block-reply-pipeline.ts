@@ -16,6 +16,7 @@ export type BlockReplyPipeline = {
   stop: () => void;
   hasBuffered: () => boolean;
   didStream: () => boolean;
+  didObserveBlockReply: () => boolean;
   didStreamSubstantiveReply: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
@@ -75,44 +76,6 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
 }
 
 
-const isProgressLikeBlockReply = (payload: ReplyPayload): boolean => {
-  if (isReplyPayloadStatusNotice(payload)) {
-    return true;
-  }
-  const { trimmedText } = resolveSendableOutboundReplyParts(payload);
-  if (!trimmedText) {
-    return false;
-  }
-  // Tool/progress block replies are visible activity, but they are not a
-  // completed source-visible answer. Keep them eligible for the Discord guard.
-  const progressPrefixes = [
-    "🛠️",
-    "🛠",
-    "📖",
-    "🧠",
-    "🗺️",
-    "🗺",
-    "🔎",
-    "⏳",
-    "⚙️",
-    "⚙",
-    "🧪",
-    "📊",
-    "🔧",
-    "✉️",
-    "✉",
-    "🌐",
-    "📄",
-    "🧹",
-  ];
-  return (
-    progressPrefixes.some((prefix) => trimmedText.startsWith(prefix)) ||
-    /\b(?:tool progress|process still running|progress is visible|still working)\b/i.test(
-      trimmedText,
-    )
-  );
-};
-
 const withTimeout = async <T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -158,6 +121,7 @@ export function createBlockReplyPipeline(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
+  let didObserveBlockReply = false;
   let didStreamSubstantiveReply = false;
   let didLogTimeout = false;
 
@@ -212,6 +176,7 @@ export function createBlockReplyPipeline(params: {
         }
         sentKeys.add(payloadKey);
         const isStatusNotice = isReplyPayloadStatusNotice(payload);
+        didObserveBlockReply = true;
         if (!isStatusNotice) {
           sentContentKeys.add(contentKey);
         }
@@ -224,9 +189,7 @@ export function createBlockReplyPipeline(params: {
         }
         if (!isStatusNotice) {
           didStream = true;
-          if (!isProgressLikeBlockReply(payload)) {
-            didStreamSubstantiveReply = true;
-          }
+          didStreamSubstantiveReply = true;
         }
       })
       .catch((err: unknown) => {
@@ -358,6 +321,7 @@ export function createBlockReplyPipeline(params: {
     stop,
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
+    didObserveBlockReply: () => didObserveBlockReply,
     didStreamSubstantiveReply: () => didStreamSubstantiveReply,
     isAborted: () => aborted,
     hasSentPayload: (payload) => {

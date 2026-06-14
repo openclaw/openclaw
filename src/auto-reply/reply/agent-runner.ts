@@ -392,7 +392,7 @@ function hasCommittedMessagingTargetVisibleReplyEvidenceForCurrentSource(params:
 }
 
 function hasSuccessfulSideEffectDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  blockReplyPipeline: { didStreamSubstantiveReply: () => boolean; isAborted: () => boolean } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -408,14 +408,15 @@ function hasSuccessfulSideEffectDelivery(params: {
 }
 
 function hasSuccessfulSourceReplyDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  blockReplyPipeline: { didStreamSubstantiveReply: () => boolean; isAborted: () => boolean } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
 }): boolean {
   return (
-    (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
+    (params.blockReplyPipeline?.didStreamSubstantiveReply() &&
+      !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
@@ -2082,7 +2083,7 @@ export async function runReplyAgent(params: {
     });
 
     const hasVisibleBlockProgress = Boolean(
-      blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
+      blockReplyPipeline?.didObserveBlockReply() && !blockReplyPipeline.isAborted(),
     );
     const hasSubstantiveBlockReply = Boolean(
       blockReplyPipeline?.didStreamSubstantiveReply() && !blockReplyPipeline.isAborted(),
@@ -2140,9 +2141,7 @@ export async function runReplyAgent(params: {
         // and target-only records are activity, not proof that the current
         // route/thread received the final/status answer.
         hasVisibleReplyEvidence:
-          hasMessageToolOnlyCurrentSourceVisibleReplyEvidence ||
-          (followupRun.run.sourceReplyDeliveryMode === "message_tool_only" &&
-            hasSubstantiveBlockReply),
+          hasMessageToolOnlyCurrentSourceVisibleReplyEvidence || hasSubstantiveBlockReply,
         hasPotentialResponseActivity: hasMessageToolOnlyResponseActivity,
         hasSubstantiveFinalPayload: hasMessageToolOnlySubstantiveFinalPayload(payloadArray),
       });

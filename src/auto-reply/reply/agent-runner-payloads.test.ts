@@ -836,6 +836,8 @@ describe("buildReplyPayloads media filter integration", () => {
     };
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => false,
+      didObserveBlockReply: () => false,
+      didStreamSubstantiveReply: () => false,
       isAborted: () => false,
       hasSentPayload: () => false,
       enqueue: () => {},
@@ -868,6 +870,8 @@ describe("buildReplyPayloads media filter integration", () => {
     });
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => false,
+      didObserveBlockReply: () => false,
+      didStreamSubstantiveReply: () => false,
       isAborted: () => false,
       hasSentPayload: (payload) =>
         JSON.stringify({
@@ -898,6 +902,8 @@ describe("buildReplyPayloads media filter integration", () => {
   it("drops all final payloads when block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
+      didObserveBlockReply: () => true,
+      didStreamSubstantiveReply: () => true,
       isAborted: () => false,
       hasSentPayload: () => false,
       enqueue: () => {},
@@ -922,6 +928,8 @@ describe("buildReplyPayloads media filter integration", () => {
   it("keeps unsent final media after block pipeline streamed the text", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
+      didObserveBlockReply: () => true,
+      didStreamSubstantiveReply: () => true,
       isAborted: () => false,
       hasSentPayload: (payload) => payload.text === "response" && !payload.mediaUrl,
       enqueue: () => {},
@@ -948,6 +956,8 @@ describe("buildReplyPayloads media filter integration", () => {
   it("drops already-sent final media after block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
+      didObserveBlockReply: () => true,
+      didStreamSubstantiveReply: () => true,
       isAborted: () => false,
       hasSentPayload: (payload) => payload.text === "response" && !payload.mediaUrl,
       enqueue: () => {},
@@ -996,6 +1006,8 @@ describe("buildReplyPayloads media filter integration", () => {
   it("preserves post-stream error payloads when block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
+      didObserveBlockReply: () => true,
+      didStreamSubstantiveReply: () => true,
       isAborted: () => false,
       hasSentPayload: () => false,
       enqueue: () => {},
