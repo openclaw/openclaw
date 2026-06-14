@@ -85,6 +85,7 @@ import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
 import { recordInboundSession } from "../conversation.runtime.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
+import { runPreRouterHook } from "../pre-router.js";
 import {
   createSlackReplyDeliveryPlan,
   deliverReplies,
@@ -93,6 +94,7 @@ import {
   resolveSlackThreadTs,
 } from "../replies.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../reply.runtime.js";
+import { sendMessageSlack } from "../send.runtime.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
@@ -456,6 +458,53 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
+
+  // Optional env-gated HTTP pre-router hook. When OPENCLAW_PRE_ROUTER_URL
+  // is set, consult an external pattern-matcher service before paying
+  // for an LLM round-trip. On a hit, post the response directly to the
+  // resolved Slack thread and skip dispatch entirely. On miss, timeout,
+  // HTTP error, or malformed response, fall through to the LLM path
+  // exactly as before — the hook is fails-safe (see pre-router.ts).
+  const preRouterHit = await runPreRouterHook(
+    {
+      prompt: prepared.ctxPayload.BodyForAgent ?? message.text ?? "",
+      channel: message.channel,
+      user: message.user ?? message.bot_id ?? "",
+      ts: message.ts ?? message.event_ts ?? "",
+    },
+    {
+      log: (msg) => logVerbose(msg),
+      error: (msg) => runtime.error?.(danger(msg)),
+    },
+  );
+  if (preRouterHit !== null) {
+    const preRouterThreadTs = resolveSlackThreadTs({
+      replyToMode: prepared.replyToMode,
+      incomingThreadTs: message.thread_ts,
+      messageTs: message.ts ?? message.event_ts,
+      hasReplied: false,
+      isThreadReply: Boolean(message.thread_ts),
+    });
+    try {
+      await sendMessageSlack(prepared.replyTarget, preRouterHit, {
+        cfg,
+        token: ctx.botToken,
+        accountId: account.accountId,
+        threadTs: preRouterThreadTs,
+      });
+      logVerbose(
+        `slack pre-router hook: posted response to ${prepared.replyTarget} thread=${preRouterThreadTs ?? "-"}`,
+      );
+      return;
+    } catch (err) {
+      // Post-back failed (Slack API rejected the message, network
+      // glitch, etc.). Treat this exactly like a hook miss — fall
+      // through to LLM dispatch so the user still gets a reply.
+      runtime.error?.(
+        danger(`slack pre-router hook: post failed (${String(err)}); falling through to LLM`),
+      );
+    }
+  }
 
   // Resolve agent identity for Slack chat:write.customize overrides.
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, route.agentId);
