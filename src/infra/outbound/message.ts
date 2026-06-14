@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import { resolveOutboundChannelPluginForDelivery } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
@@ -179,7 +179,13 @@ async function resolveRequiredChannel(params: {
 }
 
 function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
-  const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+  // allowBootstrap: this preflight runs before the durable delivery path that
+  // lazily bootstraps the runtime sender (deliver.ts loadBootstrappedOutboundAdapter).
+  // Without it, a setup-only loaded shell (e.g. qqbot during onboarding) fails the
+  // send-capability gate and throws "Unknown channel" before the runtime send plugin
+  // is materialized. Bootstrapping here is idempotent and keeps the setup-shell from
+  // shadowing the send-capable runtime plugin.
+  const plugin = resolveOutboundChannelPluginForDelivery({ channel, cfg, allowBootstrap: true });
   if (!plugin) {
     throw new Error(`Unknown channel: ${channel}`);
   }
