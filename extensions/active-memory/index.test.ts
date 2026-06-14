@@ -2526,9 +2526,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(200);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 25,
+      timeoutMs: 1_000,
       maxSummaryChars: 40,
       persistTranscripts: true,
       logging: true,
@@ -3433,7 +3434,7 @@ describe("active-memory plugin", () => {
     expectLinesToContain(lines, "Active Memory: status=ok");
   });
 
-  it("returns grounded partial text when a later unavailable search reaches the timeout", async () => {
+  it("does not recover transcript partials after a later unavailable search times out", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     testing.setTimeoutPartialDataGraceMsForTests(100);
@@ -3453,6 +3454,12 @@ describe("active-memory plugin", () => {
         await writeTranscriptJsonl(params.sessionFile, [
           {
             message: {
+              role: "assistant",
+              content: "I will inspect memory before answering.",
+            },
+          },
+          {
+            message: {
               role: "toolResult",
               toolName: "memory_search",
               details: {
@@ -3467,12 +3474,6 @@ describe("active-memory plugin", () => {
               details: { disabled: true, error: "embedding request failed" },
             },
           },
-          {
-            message: {
-              role: "assistant",
-              content: "User usually orders ramen after late flights.",
-            },
-          },
         ]);
         return await waitForAbort(params.abortSignal);
       },
@@ -3483,9 +3484,10 @@ describe("active-memory plugin", () => {
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 
-    expectPrependContextContains(result, "User usually orders ramen after late flights.");
+    expect(result).toBeUndefined();
     const lines = getActiveMemoryLines(sessionKey);
-    expectLinesToContain(lines, "Active Memory: status=timeout_partial");
+    expectLinesToContain(lines, "Active Memory: status=timeout");
+    expectLinesNotToContain(lines, "timeout_partial");
   });
 
   it("uses successful configured custom-tool output as recall evidence", async () => {

@@ -2916,13 +2916,20 @@ async function maybeResolveActiveRecall(params: {
     }
 
     if (raceResult === TIMEOUT_SENTINEL) {
-      const result = await buildTimeoutRecallResult({
-        elapsedMs: Date.now() - startedAt,
-        maxSummaryChars: params.config.maxSummaryChars,
-        sessionFile,
-        searchDebug: fallbackSearchDebug,
-        subagentPromise,
-      });
+      const elapsedMs = Date.now() - startedAt;
+      const result: ActiveRecallResult = fallbackHasUsableMemoryResult
+        ? {
+            status: "timeout",
+            elapsedMs,
+            summary: null,
+            searchDebug: fallbackSearchDebug,
+          }
+        : await buildTimeoutRecallResult({
+            elapsedMs,
+            maxSummaryChars: params.config.maxSummaryChars,
+            sessionFile,
+            subagentPromise,
+          });
       if (params.config.logging) {
         params.api.logger.info?.(
           `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
