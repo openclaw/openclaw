@@ -1214,6 +1214,361 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("treats message-tool completion evidence for a different thread as missing", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "channel:C123",
+            threadId: "wrong-thread",
+            text: "The subagent is done: child completion output",
+          },
+        ],
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-message-tool-mismatch",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "discord thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "message_tool_delivery_missing",
+      error: "completion agent did not use the message tool for message-tool-only delivery",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "T456",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
+  it("treats message-tool completion evidence missing the requester thread as missing", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "channel:C123",
+            text: "The subagent is done: child completion output",
+          },
+        ],
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-message-tool-missing-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "discord thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "message_tool_delivery_missing",
+      error: "completion agent did not use the message tool for message-tool-only delivery",
+    });
+  });
+
+  it("treats message-tool completion evidence missing the requester account as missing", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C123",
+            threadId: "T456",
+            text: "The subagent is done: child completion output",
+          },
+        ],
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-message-tool-missing-account",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "discord thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "message_tool_delivery_missing",
+      error: "completion agent did not use the message tool for message-tool-only delivery",
+    });
+  });
+
+  it("accepts message-tool completion evidence for the exact requester thread", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "channel:C123",
+            threadId: "T456",
+            text: "The subagent is done: child completion output",
+          },
+        ],
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-message-tool-exact",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "discord thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "T456",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
+  it("accepts message-tool completion evidence with a topic-encoded target", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "channel:C123:topic:456",
+            text: "The subagent is done: child completion output",
+          },
+        ],
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-topic-target",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-message-tool-topic-target",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "456",
+      },
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "discord topic target completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+
+  it("accepts message-tool completion evidence that implicitly used the requester thread", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "channel:C123",
+            threadImplicit: true,
+            text: "The subagent is done: child completion output",
+          },
+        ],
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-implicit-target",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-message-tool-implicit-target",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "discord implicit thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+
   it("directly delivers direct-message subagent text when the announce agent omits the result", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -3276,6 +3631,65 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("falls back for threaded requesters when message-tool media lacks target evidence", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentMediaUrls: ["/tmp/generated-threadless-target.png"],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-targetless-message-tool-thread",
+      requesterOrigin: {
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+      },
+      sourceTool: "image_generate",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "threaded proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-threadless-target.png",
+          mediaUrls: ["/tmp/generated-threadless-target.png"],
+          replyInstruction:
+            "Tell the user the image is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-threadless-target.png"],
+        idempotencyKey:
+          "announce-channel-media-targetless-message-tool-thread:generated-media-direct",
+      }),
+    );
+  });
+
   it("accepts targetless current-chat message-tool media delivery", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -3541,6 +3955,218 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         idempotencyKey: "announce-channel-media-automatic-failed:generated-media-direct",
       }),
     );
+  });
+
+  it("directly delivers generated media when automatic payload outcome went to another thread", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-robot.png"],
+          },
+        ],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              resultCount: 1,
+              target: {
+                tool: "message",
+                provider: "slack",
+                accountId: "acct-1",
+                to: "channel:C123",
+                threadId: "wrong-thread",
+              },
+            },
+          ],
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-automatic-wrong-thread",
+      requesterOrigin: {
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+      },
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-robot.png",
+          mediaUrls: ["/tmp/generated-robot.png"],
+          replyInstruction: "Tell the user the image is ready and include the generated media.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-robot.png"],
+        idempotencyKey: "announce-channel-media-automatic-wrong-thread:generated-media-direct",
+      }),
+    );
+  });
+
+  it("directly delivers generated media when automatic payload outcome has a conflicting account", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-account.png"],
+          },
+        ],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              resultCount: 1,
+              target: {
+                tool: "message",
+                provider: "slack",
+                accountId: "acct-2",
+                to: "channel:C123",
+              },
+            },
+          ],
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-automatic-wrong-account",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-account.png",
+          mediaUrls: ["/tmp/generated-account.png"],
+          replyInstruction: "Tell the user the image is ready and include the generated media.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-account.png"],
+        idempotencyKey: "announce-channel-media-automatic-wrong-account:generated-media-direct",
+      }),
+    );
+  });
+
+  it("accepts automatic generated-media payload outcome with omitted account on the matching route", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-thread.png"],
+          },
+        ],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              resultCount: 1,
+              target: {
+                tool: "message",
+                provider: "slack",
+                to: "channel:C123",
+                threadId: "target-thread",
+              },
+            },
+          ],
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-automatic-matching-route",
+      requesterOrigin: {
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+      },
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-thread.png",
+          mediaUrls: ["/tmp/generated-thread.png"],
+          replyInstruction: "Tell the user the image is ready and include the generated media.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("directly delivers generated media suppressed by automatic final delivery", async () => {
@@ -4788,6 +5414,427 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       channel: "slack",
       accountId: "acct-1",
       to: "channel:C123",
+    });
+  });
+
+  it("does not count automatic completion delivery to a different thread as delivered", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "delegated task output" }],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              target: {
+                provider: "discord",
+                accountId: "acct-1",
+                to: "channel:C123",
+                threadId: "wrong-thread",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-auto",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-auto-mismatch",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "agent_harness_task",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:codex:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "ACP task",
+          taskLabel: "discord thread ACP completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "delegated task output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "completion agent did not produce a visible reply",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "T456",
+    });
+  });
+
+  it("does not count targetless automatic delivery evidence for a requester thread", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "delegated task output" }],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-auto",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-auto-targetless",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "agent_harness_task",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:codex:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "ACP task",
+          taskLabel: "discord thread ACP completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "delegated task output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "completion agent did not produce a visible reply",
+    });
+  });
+
+  it("does not count automatic completion delivery missing the requester thread", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "delegated task output" }],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              target: {
+                provider: "discord",
+                accountId: "acct-1",
+                to: "channel:C123",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-auto",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-auto-missing-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "agent_harness_task",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:codex:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "ACP task",
+          taskLabel: "discord thread ACP completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "delegated task output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "completion agent did not produce a visible reply",
+    });
+  });
+
+  it("does not count automatic completion delivery to a different provider", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "delegated task output" }],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              target: {
+                provider: "webchat",
+                accountId: "acct-1",
+                to: "channel:C123",
+                threadId: "T456",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-auto",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-auto-provider-mismatch",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "agent_harness_task",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:codex:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "ACP task",
+          taskLabel: "discord thread ACP completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "delegated task output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "completion agent did not produce a visible reply",
+    });
+  });
+
+  it("does not count automatic completion delivery missing the requester account", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "delegated task output" }],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              target: {
+                provider: "discord",
+                to: "channel:C123",
+                threadId: "T456",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-auto",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-auto-missing-account",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "agent_harness_task",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:codex:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "ACP task",
+          taskLabel: "discord thread ACP completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "delegated task output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "completion agent did not produce a visible reply",
+    });
+  });
+
+  it("counts automatic completion delivery to the exact thread as delivered", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "delegated task output" }],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              target: {
+                provider: "discord",
+                accountId: "acct-1",
+                to: "channel:C123",
+                threadId: "T456",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-auto",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-auto-exact",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:T456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "T456",
+      },
+      sourceTool: "agent_harness_task",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:codex:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "ACP task",
+          taskLabel: "discord thread ACP completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "delegated task output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "T456",
+    });
+  });
+
+  it("counts automatic completion delivery with a topic-encoded target as delivered", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "delegated task output" }],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              target: {
+                provider: "discord",
+                accountId: "acct-1",
+                to: "channel:C123:topic:456",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-discord-thread-auto-topic-target",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-discord-thread-auto-topic-target",
+      requesterSessionKey: "agent:main:discord:channel:C123:thread:456",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "456",
+      },
+      sourceTool: "agent_harness_task",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:codex:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "ACP task",
+          taskLabel: "discord topic target ACP completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "delegated task output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
     });
   });
 
