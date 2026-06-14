@@ -75,9 +75,9 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
     const analysis = analyzeHeartbeatTemplateForRepair(`# HEARTBEAT.md Template
 
 \`\`\`markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Keep this file empty (or with only comments) to skip heartbeat API calls
 
-# Add tasks below when you want the agent to check something periodically.
+# Add tasks below when you want the agent to check something periodically
 \`\`\`
 `);
 
@@ -86,9 +86,9 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
 
   it("recognizes the fenced docs-backed template as repairable", () => {
     const analysis = analyzeHeartbeatTemplateForRepair(`\`\`\`markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Keep this file empty (or with only comments) to skip heartbeat API calls
 
-# Add tasks below when you want the agent to check something periodically.
+# Add tasks below when you want the agent to check something periodically
 \`\`\`
 `);
 
@@ -118,9 +118,9 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
 The default runtime template is:
 
 \`\`\`markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Keep this file empty (or with only comments) to skip heartbeat API calls
 
-# Add tasks below when you want the agent to check something periodically.
+# Add tasks below when you want the agent to check something periodically
 \`\`\`
 
 Add short tasks below the comments only when you want the agent to check something periodically. Keep heartbeat instructions small because they are read during recurring wakes.
@@ -211,9 +211,9 @@ Add short tasks below the comments only when you want the agent to check somethi
       `${[
         "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
         "",
-        "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
+        "# Keep this file empty (or with only comments) to skip heartbeat API calls",
         "",
-        "# Add tasks below when you want the agent to check something periodically.",
+        "# Add tasks below when you want the agent to check something periodically",
       ].join("\n")}\n`,
     );
     expect(mocks.note).toHaveBeenCalledWith(
