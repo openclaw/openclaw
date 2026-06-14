@@ -21,7 +21,7 @@ of Docker runners. This doc is a "how we test" guide:
 - [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring.
 - [Matrix QA](/concepts/qa-matrix) - reference for `pnpm openclaw qa matrix`.
 - [QA channel](/channels/qa-channel) - the synthetic transport plugin used by repo-backed scenarios.
-- [Maturity tests](/reference/maturity-tests) - how QA evidence maps to release requirements.
+- [Maturity tests](/reference/maturity-tests) - how QA evidence maps to scorecard coverage.
 
 This page covers running the regular test suites and Docker/Parallels runners. The QA-specific runners section below ([QA-specific runners](#qa-specific-runners)) lists the concrete `qa` invocations and points back at the references above.
 </Note>
