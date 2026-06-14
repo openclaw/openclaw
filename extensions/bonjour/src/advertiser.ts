@@ -416,6 +416,12 @@ export async function startGatewayBonjourAdvertiser(
         logger.warn(
           `bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: ${classification.formatted}`,
         );
+      } else if (classification.kind === "no-valid-addresses") {
+        // IPv6-only or misconfigured interfaces have no address ciao considers
+        // valid.  Recovery would re-enter the same assertion immediately.
+        logger.warn(
+          `bonjour: disabling mDNS — no valid addresses for interface: ${classification.formatted}`,
+        );
       } else {
         const label =
           classification.kind === "netmask-assertion"
@@ -562,7 +568,14 @@ export async function startGatewayBonjourAdvertiser(
             svc,
           )}): ${classification.formatted}`,
         );
-        requestCiaoRecovery?.(classification);
+        // Skip recovery for non-recoverable classifications — the interface
+        // state won't change, so re-creating the advertiser would just fail again.
+        if (
+          classification.kind !== "interface-enumeration-failure" &&
+          classification.kind !== "no-valid-addresses"
+        ) {
+          requestCiaoRecovery?.(classification);
+        }
         return;
       }
       logger.warn(
