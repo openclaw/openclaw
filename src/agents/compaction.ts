@@ -44,9 +44,15 @@ export {
 
 const log = createSubsystemLogger("compaction");
 
+export type FallbackSummaryResult = {
+  text: string;
+  isGenericFallback: boolean;
+};
+
 type PartialSummaryError = Error & { partialSummary?: string };
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
+const COMPACTION_CIRCUIT_BREAKER_THRESHOLD = 2;
 const MERGE_SUMMARIES_INSTRUCTIONS = [
   "Merge these partial summaries into a single cohesive summary.",
   "",
@@ -274,17 +280,21 @@ export async function summarizeWithFallback(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
-}): Promise<string> {
+}): Promise<FallbackSummaryResult> {
   const { messages, contextWindow } = params;
 
   if (messages.length === 0) {
-    return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
+    return {
+      text: params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK,
+      isGenericFallback: false,
+    };
   }
 
   // Try full summarization first
   let partialSummaryFallback: string | undefined;
   try {
-    return await summarizeChunks(params);
+    const summary = await summarizeChunks(params);
+    return { text: summary, isGenericFallback: false };
   } catch (fullError) {
     log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
     partialSummaryFallback = (fullError as PartialSummaryError).partialSummary;
@@ -306,7 +316,7 @@ export async function summarizeWithFallback(params: {
         messages: smallMessages,
       });
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
-      return partialSummary + notes;
+      return { text: partialSummary + notes, isGenericFallback: false };
     } catch (partialError) {
       log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
       // Prefer the oversized retry's partial summary over the full attempt's,
@@ -322,12 +332,14 @@ export async function summarizeWithFallback(params: {
 
   // Final fallback: use best available partial summary, otherwise generic note
   if (partialSummaryFallback) {
-    return partialSummaryFallback;
+    return { text: partialSummaryFallback, isGenericFallback: false };
   }
-  return (
-    `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
-    `Summary unavailable due to size limits.`
-  );
+  return {
+    text:
+      `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
+      `Summary unavailable due to size limits.`,
+    isGenericFallback: true,
+  };
 }
 
 /** Summarizes history in multiple stages when a single pass would be too large. */
@@ -360,18 +372,40 @@ export async function summarizeInStages(params: {
   });
 
   if (plan.mode === "single") {
-    return summarizeWithFallback(params);
+    const result = await summarizeWithFallback(params);
+    return result.text;
   }
 
   const partialSummaries: string[] = [];
+  let consecutiveFallbackSplits = 0;
+
   for (const chunk of plan.chunks) {
-    partialSummaries.push(
-      await summarizeWithFallback({
-        ...params,
-        messages: chunk,
-        previousSummary: undefined,
-      }),
-    );
+    const result = await summarizeWithFallback({
+      ...params,
+      messages: chunk,
+      previousSummary: undefined,
+    });
+
+    if (result.isGenericFallback) {
+      consecutiveFallbackSplits += 1;
+    } else {
+      consecutiveFallbackSplits = 0;
+    }
+
+    partialSummaries.push(result.text);
+
+    if (consecutiveFallbackSplits >= COMPACTION_CIRCUIT_BREAKER_THRESHOLD) {
+      log.warn("compaction circuit breaker triggered in summarizeInStages", {
+        consecutiveFallbackSplits,
+        completedSplits: partialSummaries.length,
+        totalSplits: plan.chunks.length,
+      });
+      break;
+    }
+  }
+
+  if (consecutiveFallbackSplits >= COMPACTION_CIRCUIT_BREAKER_THRESHOLD) {
+    return partialSummaries.join("\n\n");
   }
 
   if (partialSummaries.length === 1) {
@@ -389,11 +423,12 @@ export async function summarizeInStages(params: {
     ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\n${custom}`
     : MERGE_SUMMARIES_INSTRUCTIONS;
 
-  return summarizeWithFallback({
+  const mergeResult = await summarizeWithFallback({
     ...params,
     messages: summaryMessages,
     customInstructions: mergeInstructions,
   });
+  return mergeResult.text;
 }
 
 /**
@@ -418,12 +453,13 @@ export async function summarizeForHandoff(params: {
   // Use a hard cap of 4000 tokens for the handoff summary as per plan
   const handoffMaxTokens = 4000;
 
-  return summarizeWithFallback({
+  const result = await summarizeWithFallback({
     ...params,
     reserveTokens: SUMMARIZATION_OVERHEAD_TOKENS,
     maxChunkTokens: Math.min(params.maxChunkTokens, handoffMaxTokens),
     customInstructions: handoffInstructions,
   });
+  return result.text;
 }
 
 /** Resolves a positive context-window token count from model metadata. */

@@ -67,8 +67,9 @@ describe("summarizeWithFallback", () => {
       contextWindow: 200_000,
     });
 
-    expect(result).toContain("Context contained 1 messages");
-    expect(result).toContain("0 oversized");
+    expect(result.text).toContain("Context contained 1 messages");
+    expect(result.text).toContain("0 oversized");
+    expect(result.isGenericFallback).toBe(true);
     // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
@@ -107,7 +108,8 @@ describe("summarizeWithFallback", () => {
       contextWindow: 200_000,
     });
 
-    expect(result).toContain("2 messages (1 oversized)");
+    expect(result.text).toContain("2 messages (1 oversized)");
+    expect(result.isGenericFallback).toBe(true);
     // Full attempt plus distinct partial transcript; timeout-classed failures do not retry.
     expect(agentSessionMocks.generateSummary.mock.calls.length).toBe(2);
   });

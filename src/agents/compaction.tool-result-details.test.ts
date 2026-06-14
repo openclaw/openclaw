@@ -74,7 +74,8 @@ describe("compaction toolResult details stripping", () => {
       contextWindow: 10000,
     });
 
-    expect(summary).toBe("summary");
+    expect(summary.text).toBe("summary");
+    expect(summary.isGenericFallback).toBe(false);
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
 
     // Summary generation receives only model-visible fields. Raw detail payloads
