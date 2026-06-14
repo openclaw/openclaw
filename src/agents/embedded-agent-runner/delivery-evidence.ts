@@ -312,12 +312,16 @@ function hasCommittedMessagingToolResultDetailsAtDepth(details: unknown, depth: 
   if (record.dryRun === true) {
     return false;
   }
-  if (record.ok === false || record.success === false) {
-    return false;
-  }
   const deliveryStatus =
     readLowercaseString(record.deliveryStatus) ?? readLowercaseString(record.delivery_status);
   const status = readLowercaseString(record.status);
+  const hasCommittedPartialChild =
+    (deliveryStatus === "partial_failed" || status === "partial_failed") &&
+    (hasResultArrayEvidence(record.results, depth) ||
+      hasSentPayloadOutcomeEvidence(record.payloadOutcomes, depth));
+  if ((record.ok === false || record.success === false) && !hasCommittedPartialChild) {
+    return false;
+  }
   if (
     deliveryStatus &&
     deliveryStatus !== "partial_failed" &&

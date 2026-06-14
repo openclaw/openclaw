@@ -1407,7 +1407,7 @@ export async function handleToolExecutionEnd(
       executedMessagingMediaUrls.length > 0 ||
       hasExecutedRichMessagingPayload);
   const hasCommittedMessagingSend =
-    !isToolError && isMessagingSend && hasCommittedMessagingToolSendResult(result);
+    !isError && isMessagingSend && hasCommittedMessagingToolSendResult(result);
   const committedMediaUrls = hasCommittedMessagingSend
     ? [
         ...new Set([

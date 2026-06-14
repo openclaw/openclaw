@@ -2003,6 +2003,7 @@ describe("messaging tool media URL tracking", () => {
       isError: false,
       result: {
         details: {
+          ok: false,
           status: "partial_failed",
           results: [{ channel: "discord", messageId: "message-1" }],
           sentBeforeError: true,
@@ -2017,6 +2018,7 @@ describe("messaging tool media URL tracking", () => {
     });
     expect(ctx.state.pendingMessagingTexts.has("tool-partial-sent")).toBe(false);
     expect(ctx.state.pendingMessagingTargets.has("tool-partial-sent")).toBe(false);
+    expect(ctx.state.lastToolError?.toolName).toBe("message");
   });
 
   it("commits message sends with ordinary success JSON results", async () => {

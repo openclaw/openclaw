@@ -403,6 +403,8 @@ export function toToolDefinitions(
                   toolCallId,
                   result: blockedResult,
                   terminalResultFallback: tool.terminalResultFallback,
+                  trustedBlockedReason: hookOutcome.deniedReason ?? "plugin-before-tool-call",
+                  trustedBlockedMessage: hookOutcome.reason,
                 });
                 return blockedResult;
               }
@@ -454,6 +456,8 @@ export function toToolDefinitions(
                 toolCallId,
                 result: blockedResult,
                 terminalResultFallback: tool.terminalResultFallback,
+                trustedBlockedReason: "plugin-before-tool-call",
+                trustedBlockedMessage: err.reason,
               });
             }
             return blockedResult;

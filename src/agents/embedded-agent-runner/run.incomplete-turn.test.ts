@@ -6250,6 +6250,27 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         results: [{ status: "sent" }],
       }),
     ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        ok: false,
+        status: "partial_failed",
+        results: [{ status: "sent", messageId: "message-6" }, { status: "failed" }],
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        success: false,
+        deliveryStatus: "partial_failed",
+        payloadOutcomes: [{ status: "sent", resultCount: 1 }, { status: "failed" }],
+      }),
+    ).toBe(true);
+    expect(
+      hasCommittedMessagingToolResultDetails({
+        ok: false,
+        status: "failed",
+        results: [{ status: "sent", messageId: "message-7" }],
+      }),
+    ).toBe(false);
   });
 
   it("treats a message-id-only JSON content receipt as committed delivery", () => {

@@ -1170,6 +1170,8 @@ export async function recordToolLoopOutcome(args: {
   result?: unknown;
   error?: unknown;
   terminalResultFallback?: AgentToolTerminalResultFallback;
+  trustedBlockedReason?: HookBlockedReason;
+  trustedBlockedMessage?: string;
 }): Promise<void> {
   if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
     return;
@@ -1183,9 +1185,7 @@ export async function recordToolLoopOutcome(args: {
       sessionId: args.ctx.sessionId,
     });
     const details = readResultDetailsRecord(args.result);
-    const deniedReason =
-      typeof details?.deniedReason === "string" ? details.deniedReason : undefined;
-    const blockedReason = deniedReason || undefined;
+    const blockedReason = args.trustedBlockedReason;
     const shouldEmitHashlessToolLoopBlock =
       blockedReason === "tool-loop" && Boolean(args.ctx.onToolOutcome);
     const record = recordToolCallOutcome(sessionState, {
@@ -1198,7 +1198,7 @@ export async function recordToolLoopOutcome(args: {
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
     if ((record?.resultHash || shouldEmitHashlessToolLoopBlock) && args.ctx.onToolOutcome) {
-      const blockedMessage = typeof details?.reason === "string" ? details.reason : undefined;
+      const blockedMessage = args.trustedBlockedMessage;
       const executionThrew = Boolean(args.error);
       const failed = executionThrew || hasToolResultFailureEvidence(details);
       const mutatingAction =
@@ -1669,6 +1669,8 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result: blockedResult,
           terminalResultFallback: tool.terminalResultFallback,
+          trustedBlockedReason: outcome.deniedReason ?? "plugin-before-tool-call",
+          trustedBlockedMessage: outcome.reason,
         });
         return blockedResult;
       }
