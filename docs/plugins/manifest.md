@@ -711,9 +711,9 @@ bundled/operator surfaces that already require Gateway HTTP auth.
 ## mediaUnderstandingProviderMetadata reference
 
 Use `mediaUnderstandingProviderMetadata` when a media-understanding provider has
-default models, auto-auth fallback priority, or native document support that
-generic core helpers need before runtime loads. Keys must also be declared in
-`contracts.mediaUnderstandingProviders`.
+default models, auto-auth fallback priority, native document support, or model
+capability overrides that generic core helpers need before runtime loads. Keys
+must also be declared in `contracts.mediaUnderstandingProviders`.
 
 ```json
 {
@@ -730,7 +730,11 @@ generic core helpers need before runtime loads. Keys must also be declared in
       "autoPriority": {
         "image": 40
       },
-      "nativeDocumentInputs": ["pdf"]
+      "nativeDocumentInputs": ["pdf"],
+      "modelCapabilityOverrides": {
+        "nonImageModels": ["example-chat"],
+        "nonImageModelFamilies": ["example-text"]
+      }
     }
   }
 }
@@ -738,12 +742,20 @@ generic core helpers need before runtime loads. Keys must also be declared in
 
 Each provider entry can include:
 
-| Field                  | Type                                | What it means                                                                |
-| ---------------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
-| `capabilities`         | `("image" \| "audio" \| "video")[]` | Media capabilities exposed by this provider.                                 |
-| `defaultModels`        | `Record<string, string>`            | Capability-to-model defaults used when config does not specify a model.      |
-| `autoPriority`         | `Record<string, number>`            | Lower numbers sort earlier for automatic credential-based provider fallback. |
-| `nativeDocumentInputs` | `"pdf"[]`                           | Native document inputs supported by the provider.                            |
+| Field                      | Type                                | What it means                                                                |
+| -------------------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
+| `capabilities`             | `("image" \| "audio" \| "video")[]` | Media capabilities exposed by this provider.                                 |
+| `defaultModels`            | `Record<string, string>`            | Capability-to-model defaults used when config does not specify a model.      |
+| `autoPriority`             | `Record<string, number>`            | Lower numbers sort earlier for automatic credential-based provider fallback. |
+| `nativeDocumentInputs`     | `"pdf"[]`                           | Native document inputs supported by the provider.                            |
+| `modelCapabilityOverrides` | `object`                            | Provider-owned corrections for overly broad model capability metadata.       |
+
+`modelCapabilityOverrides.nonImageModels` lists exact model IDs that should not
+be treated as image-capable. `nonImageModelFamilies` lists model families where
+the family itself and `family-*` variants should not be treated as image-capable.
+These overrides let a provider correct configured or catalog `input` metadata
+that is too broad for image routing; they do not change auth, endpoints,
+transport, or the provider's other declared capabilities.
 
 ## channelConfigs reference
 

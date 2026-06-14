@@ -48,4 +48,29 @@ describe("media-understanding capability registry", () => {
 
     expect(registry.get("google")?.capabilities).toEqual(["audio"]);
   });
+
+  it("uses plugin-owned model overrides before config auto-registers alias providers", () => {
+    resolveProviders.mockReturnValue([
+      {
+        id: "dashscope",
+        capabilities: ["image"],
+        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+      } as never,
+    ]);
+
+    const registry = buildMediaUnderstandingCapabilityRegistry({
+      models: {
+        providers: {
+          dashscope: {
+            models: [{ id: "qwen3.7-max", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never);
+
+    expect(registry.get("dashscope")?.modelCapabilityOverrides).toEqual({
+      nonImageModelFamilies: ["qwen3.7-max"],
+    });
+    expect(registry.get("dashscope")?.capabilities).toEqual(["image"]);
+  });
 });

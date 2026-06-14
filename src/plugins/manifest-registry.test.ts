@@ -1900,6 +1900,10 @@ describe("loadPluginManifestRegistry", () => {
               textExtraction: "ignored",
             },
           },
+          modelCapabilityOverrides: {
+            nonImageModels: ["gpt-5-text", "  gpt-5-chat  ", "", 42],
+            unsupported: ["ignored"],
+          },
         },
       },
       toolMetadata: {
@@ -1975,6 +1979,9 @@ describe("loadPluginManifestRegistry", () => {
             textExtraction: "gpt-5.4-mini",
             image: false,
           },
+        },
+        modelCapabilityOverrides: {
+          nonImageModels: ["gpt-5-text", "gpt-5-chat"],
         },
       },
     });

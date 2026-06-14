@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { configuredModelInputSupportsImage } from "./known-model-capabilities.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
 import {
   normalizeMediaExecutionProviderId,
@@ -72,6 +73,7 @@ function providerHasDeclaredCapability(
 function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
   providerId: string;
+  registry: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
   const normalizedProviderId = normalizeMediaProviderId(params.providerId);
   const providers = params.cfg?.models?.providers;
@@ -83,19 +85,27 @@ function resolveConfiguredImageProviderModel(params: {
       continue;
     }
     const models = providerCfg?.models ?? [];
-    const match = models.find(
-      (model) =>
-        Boolean(normalizeOptionalString(model?.id)) &&
-        Array.isArray(model?.input) &&
-        model.input.includes("image"),
-    );
+    const match = models.find((model) => {
+      const id = normalizeOptionalString(model?.id);
+      return Boolean(
+        id &&
+        configuredModelInputSupportsImage({
+          modelId: id,
+          input: model?.input,
+          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
+        }),
+      );
+    });
     return normalizeOptionalString(match?.id);
   }
   return undefined;
 }
 
-function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
-  const providers = cfg?.models?.providers;
+function resolveConfiguredImageProviderIds(params: {
+  cfg?: OpenClawConfig;
+  registry: Map<string, MediaUnderstandingProvider>;
+}): string[] {
+  const providers = params.cfg?.models?.providers;
   if (!providers || typeof providers !== "object") {
     return [];
   }
@@ -106,9 +116,17 @@ function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
       continue;
     }
     const models = providerCfg?.models ?? [];
-    const hasImageModel = models.some(
-      (model) => Array.isArray(model?.input) && model.input.includes("image"),
-    );
+    const hasImageModel = models.some((model) => {
+      const id = normalizeOptionalString(model?.id);
+      return Boolean(
+        id &&
+        configuredModelInputSupportsImage({
+          modelId: id,
+          input: model?.input,
+          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
+        }),
+      );
+    });
     if (hasImageModel) {
       configured.push(normalizedProviderId);
     }
@@ -149,20 +167,21 @@ export function resolveDefaultMediaModel(params: {
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
   includeConfiguredImageModels?: boolean;
 }): string | undefined {
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   if (!params.providerRegistry && params.includeConfiguredImageModels !== false) {
     const configuredImageModel =
       params.capability === "image"
         ? resolveConfiguredImageProviderModel({
             cfg: params.cfg,
             providerId: params.providerId,
+            registry,
           })
         : undefined;
     if (configuredImageModel) {
       return configuredImageModel;
     }
   }
-  const registry =
-    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   const manifestDefaultModel = normalizeOptionalString(
     provider?.defaultModels?.[params.capability],
@@ -208,7 +227,7 @@ export function resolveAutoMediaKeyProviders(params: {
   }
   return insertConfiguredImageProviders({
     prioritized,
-    configured: resolveConfiguredImageProviderIds(params.cfg),
+    configured: resolveConfiguredImageProviderIds({ cfg: params.cfg, registry }),
   });
 }
 

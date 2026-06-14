@@ -18,6 +18,9 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         "opencode-go",
         "openrouter",
         "qwen",
+        "qwencloud",
+        "modelstudio",
+        "dashscope",
         "xai",
         "zai",
       ],
@@ -71,7 +74,27 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         defaultModels: { image: "auto", audio: "openai/whisper-large-v3-turbo" },
         autoPriority: { audio: 35 },
       },
-      qwen: { capabilities: ["video"], autoPriority: { video: 20 } },
+      qwen: {
+        capabilities: ["image", "video"],
+        defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
+        autoPriority: { video: 20 },
+        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+      },
+      qwencloud: {
+        capabilities: ["image", "video"],
+        defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
+        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+      },
+      modelstudio: {
+        capabilities: ["image", "video"],
+        defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
+        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+      },
+      dashscope: {
+        capabilities: ["image", "video"],
+        defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
+        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+      },
       xai: { capabilities: ["audio"], autoPriority: { audio: 25 } },
       zai: { capabilities: ["image"], autoPriority: { image: 60 } },
     },
@@ -139,6 +162,9 @@ describe("resolveDefaultMediaModel", () => {
     );
     expect(resolveDefaultMediaModel({ providerId: "opencode-go", capability: "image" })).toBe(
       "kimi-k2.6",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "qwen", capability: "image" })).toBe(
+      "qwen-vl-max-latest",
     );
   });
 

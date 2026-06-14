@@ -297,6 +297,7 @@ vi.mock("../model-auth.js", () => ({
       opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
       "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
       openrouter: ["OPENROUTER_API_KEY"],
+      qwen: ["DASHSCOPE_API_KEY", "QWEN_API_KEY", "MODELSTUDIO_API_KEY"],
       zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
     };
     const envVar = (envVarByProvider[provider] ?? []).find((key) => {
@@ -1542,6 +1543,50 @@ describe("image tool implicit imageModel config", () => {
         createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
       );
       expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+    });
+  });
+
+  it("does not treat configured Qwen max chat metadata as the image model", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("DASHSCOPE_API_KEY", "qwen-test");
+      installImageUnderstandingProviderStubs({
+        id: "qwen",
+        capabilities: ["image"],
+        defaultModels: { image: "qwen-vl-max-latest" },
+        modelCapabilityOverrides: { nonImageModels: ["qwen3.7-max"] },
+      });
+      const defaultImageModels = new Map<string, string>([["qwen", "qwen-vl-max-latest"]]);
+      testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveAutoMediaKeyProviders: ({ capability }) => (capability === "image" ? ["qwen"] : []),
+        resolveDefaultMediaModel: ({ providerId, capability }) =>
+          capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "qwen/qwen3.7-max" } } },
+        models: {
+          mode: "merge",
+          providers: {
+            qwen: {
+              baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              apiKey: "${DASHSCOPE_API_KEY}",
+              api: "openai-completions",
+              models: [makeModelDefinition("qwen3.7-max", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "qwen/qwen-vl-max-latest",
+      });
     });
   });
 

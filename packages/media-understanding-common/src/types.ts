@@ -14,6 +14,7 @@ export type MediaUnderstandingCapabilityRegistry = Map<
   string,
   {
     capabilities?: MediaUnderstandingCapability[];
+    modelCapabilityOverrides?: MediaUnderstandingModelCapabilityOverrides;
   }
 >;
 
@@ -35,10 +36,17 @@ export type MediaUnderstandingOutput = {
   model?: string;
 };
 
+/** Provider-owned model capability facts that override unreliable external config/catalog metadata. */
+export type MediaUnderstandingModelCapabilityOverrides = {
+  nonImageModels?: string[];
+  nonImageModelFamilies?: string[];
+};
+
 /** Provider shape used for capability discovery and dispatch. */
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
+  modelCapabilityOverrides?: MediaUnderstandingModelCapabilityOverrides;
   transcribeAudio?: unknown;
   describeVideo?: unknown;
   describeImage?: unknown;

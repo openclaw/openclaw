@@ -1,5 +1,6 @@
 // Qwen tests cover index plugin behavior.
 import {
+  capturePluginRegistration,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -45,6 +46,24 @@ describe("qwen provider plugin", () => {
     const provider = await registerQwenProvider();
 
     expect(provider.suppressBuiltInModel).toBeUndefined();
+  });
+
+  it("registers Qwen Cloud media-understanding aliases with provider-owned metadata", () => {
+    const captured = capturePluginRegistration(qwenPlugin);
+
+    expect(captured.mediaUnderstandingProviders.map((provider) => provider.id)).toEqual([
+      "qwen",
+      "qwencloud",
+      "modelstudio",
+      "dashscope",
+    ]);
+    for (const provider of captured.mediaUnderstandingProviders) {
+      expect(provider.defaultModels?.image).toBe("qwen-vl-max-latest");
+      expect(provider.modelCapabilityOverrides).toEqual({
+        nonImageModelFamilies: ["qwen3.7-max"],
+      });
+      expect(provider.autoPriority).toEqual(provider.id === "qwen" ? { video: 15 } : undefined);
+    }
   });
 
   it("registers qwen-oauth as a portal provider", async () => {

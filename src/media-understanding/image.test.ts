@@ -1315,7 +1315,43 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
-  it("does not place image prompt in user content for non-copilot providers", async () => {
+  it("rejects known non-image Qwen models even when config marks image input", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "qwen",
+        id: "qwen3.7-max",
+        input: ["text", "image"],
+        api: "openai-completions",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "qwen",
+      model: "qwen3.7-max",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "should not run" }],
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "qwen",
+        model: "qwen3.7-max",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Model does not support images: qwen/qwen3.7-max");
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps OpenAI image prompt in system content", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "openai",
@@ -1352,7 +1388,6 @@ describe("describeImageWithModel", () => {
       unknown,
       { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
     ];
-    // Non-Copilot providers keep prompt in system message, images in user message
     expect(context.systemPrompt).toBe("Describe the image.");
     const userMessage = context.messages?.find((m) => m.role === "user");
     expect(userMessage).toBeDefined();

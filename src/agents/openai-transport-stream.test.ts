@@ -6342,6 +6342,58 @@ describe("openai transport stream", () => {
     expect(params.stream_options?.include_usage).toBe(true);
   });
 
+  it("keeps DashScope compatible image content on the OpenAI image_url shape", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen-vl-max-latest",
+        name: "Qwen VL Max Latest",
+        api: "openai-completions",
+        provider: "qwen",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Describe the image." },
+              {
+                type: "image",
+                data: Buffer.from("png-bytes").toString("base64"),
+                mimeType: "image/png",
+              },
+            ],
+            timestamp: 1,
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      messages?: Array<{ role?: string; content?: unknown }>;
+    };
+
+    expect(params.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Describe the image." },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
   it("enables streaming usage compat for generic providers on native DashScope endpoints", () => {
     const params = buildOpenAICompletionsParams(
       {

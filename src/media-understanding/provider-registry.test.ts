@@ -106,6 +106,35 @@ describe("media-understanding provider registry", () => {
     expect(textOnlyProvider).toBeUndefined();
   });
 
+  it("uses plugin-owned model overrides before config auto-registration", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
+        id: "dashscope",
+        capabilities: ["image"],
+        defaultModels: { image: "qwen-vl-max-latest" },
+        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+      }),
+    ]);
+    const cfg = {
+      models: {
+        providers: {
+          dashscope: {
+            models: [{ id: "qwen3.7-max", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const provider = requireMediaProvider(registry, "dashscope");
+
+    expect(provider.defaultModels?.image).toBe("qwen-vl-max-latest");
+    expect(provider.modelCapabilityOverrides).toEqual({
+      nonImageModelFamilies: ["qwen3.7-max"],
+    });
+    expect(provider.capabilities).toEqual(["image"]);
+  });
+
   it("does not override capability providers when config also has image-capable models", async () => {
     resolvePluginCapabilityProvidersMock.mockReturnValue([
       createMediaProvider({
