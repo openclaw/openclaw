@@ -1,3 +1,8 @@
+/**
+ * Subagent run manager.
+ *
+ * Waits for child runs, records terminal outcomes, creates task-runtime entries, and archives completed sessions.
+ */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -175,6 +180,7 @@ export function createSubagentRunManager(params: {
   stopSweeper(): void;
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
+  clearPendingLifecycleTimeout(runId: string): void;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
   scheduleOrphanRecovery(args?: { delayMs?: number; maxRetries?: number }): void;
   resolveSubagentSessionCompletion(args: {
@@ -259,6 +265,8 @@ export function createSubagentRunManager(params: {
         waitTerminalOutcome?.reason === "aborted" || waitTerminalOutcome?.reason === "cancelled";
       const waitStatus = waitTerminalOutcome?.status ?? wait.status;
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
+        params.clearPendingLifecycleError(runId);
+        params.clearPendingLifecycleTimeout(runId);
         if (
           markSubagentRunPausedAfterYield({
             entry,

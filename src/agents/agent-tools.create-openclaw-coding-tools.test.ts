@@ -1,3 +1,8 @@
+/**
+ * Broad coverage for createOpenClawCodingTools.
+ * Verifies plugin tools, tool policy, schema cleanup, sandbox fs tools, and
+ * assembled tool allowlist behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -859,6 +864,28 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("slack")).toBe(false);
     expect(names.has("telegram")).toBe(false);
     expect(names.has("whatsapp")).toBe(false);
+  });
+
+  it("separates the canonical message provider from transport tool policy", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:speaker-1": { deny: ["exec"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      toolPolicyMessageProvider: "discord-voice",
+      senderId: "speaker-1",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("tts")).toBe(false);
+    expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
   it("filters session tools for sub-agent sessions by default", () => {

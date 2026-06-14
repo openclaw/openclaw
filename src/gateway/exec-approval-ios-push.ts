@@ -1,3 +1,5 @@
+// Gateway iOS exec-approval push delivery.
+// Sends APNs request/resolution wakes to paired operator devices.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import {
@@ -22,6 +24,9 @@ import {
 } from "../infra/push-apns.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 
+// iOS exec-approval push delivery targets paired operator devices with APNs
+// registrations. Request pushes require approval scope; cleanup/resolved pushes
+// reuse the original targets so badges can clear even after scope changes.
 const APPROVALS_SCOPE = "operator.approvals";
 const OPERATOR_ROLE = "operator";
 
@@ -146,6 +151,8 @@ async function resolveDeliveryPlan(params: {
   isTargetVisible?: (target: ApprovalPushTarget) => boolean;
   log: GatewayLikeLogger;
 }): Promise<DeliveryPlan> {
+  // Request delivery requires current approval scope; resolution delivery may
+  // target prior node ids so existing notification badges can be cleared.
   const targets = params.explicitNodeIds?.length
     ? await loadRegisteredTargets({ deviceIds: params.explicitNodeIds })
     : await resolvePairedTargets({
@@ -187,6 +194,8 @@ async function resolveDeliveryPlan(params: {
   }
   const relayConfig = relayConfigByNodeId.values().next().value;
 
+  // Relay sends are grouped by one base URL because the wake helpers accept a
+  // single relay config; targets on other relay origins are skipped this round.
   return {
     targets: targets.filter((target) =>
       target.registration.transport === "direct"
@@ -253,6 +262,8 @@ async function sendApprovalPushes(params: {
   logThrown: boolean;
   send: ApprovalPushSender;
 }): Promise<{ attempted: number; delivered: number }> {
+  // Stale registrations are cleared on both direct and relay failures so future
+  // approval prompts do not keep targeting dead APNs device tokens.
   const results = await Promise.allSettled(
     params.plan.targets.map(async (target) => {
       const result = await params.send({
@@ -318,6 +329,8 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
   const pendingDeliveryStateById = new Map<string, Promise<ApprovalDeliveryState | null>>();
 
   const sendCleanupPushForApproval = async (approvalId: string): Promise<void> => {
+    // A resolve/expire event can arrive before the request push plan finishes;
+    // wait for the pending state so cleanup reaches the same target set.
     const deliveryState =
       approvalDeliveriesById.get(approvalId) ?? (await pendingDeliveryStateById.get(approvalId));
     approvalDeliveriesById.delete(approvalId);
@@ -345,6 +358,7 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
   };
 
   return {
+    /** Sends the initial approval notification to visible iOS operator devices. */
     async handleRequested(
       request: ExecApprovalRequest,
       opts?: { isTargetVisible?: (target: ApprovalPushTarget) => boolean },
@@ -399,10 +413,12 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
       return true;
     },
 
+    /** Sends cleanup wakes for resolved approval requests. */
     async handleResolved(resolved: ExecApprovalResolved): Promise<void> {
       await sendCleanupPushForApproval(resolved.id);
     },
 
+    /** Sends cleanup wakes for expired approval requests. */
     async handleExpired(request: ExecApprovalRequest): Promise<void> {
       await sendCleanupPushForApproval(request.id);
     },

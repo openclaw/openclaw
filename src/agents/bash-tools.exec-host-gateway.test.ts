@@ -1,3 +1,8 @@
+/**
+ * Gateway-host exec approval tests.
+ * Covers allowlist misses, auto-review, strict inline eval, diagnostics
+ * follow-ups, and gateway approval result routing.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
@@ -1062,6 +1067,51 @@ EOF`,
     expect(approvalInput?.trigger).toBe("diagnostics");
     expect(approvalInput?.outcome?.status).toBe("completed");
     expect(approvalInput?.outcome?.exitCode).toBe(0);
+  });
+
+  it("uses async agent followups for explicit webchat approval mode", async () => {
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        aggregated: "done",
+      }),
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "openclaw sessions export-trajectory --json",
+      approvalFollowupMode: "agent",
+      sessionId: "approval-session",
+      sessionStore: "/tmp/openclaw-sessions.json",
+      turnSourceChannel: "webchat",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
+    expect(requireBuildFollowupTargetInput(0)).toMatchObject({
+      direct: false,
+      expectedSessionId: "approval-session",
+      sessionStore: "/tmp/openclaw-sessions.json",
+    });
+    expect(requireSentFollowupTarget(0)?.direct).toBe(false);
+    expect(requireSentFollowupText(0)).toContain("done");
   });
 
   it("waits inline for webchat approval so the exec tool can return real output to the model", async () => {

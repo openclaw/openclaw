@@ -1,9 +1,11 @@
+// Exercises model fallback through the embedded runner integration surface.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import { runWithModelFallback } from "./model-fallback.js";
@@ -38,6 +40,8 @@ vi.mock("./models-config.js", async () => {
 });
 
 const installRunEmbeddedMocks = () => {
+  // Install the runner mocks before importing runEmbeddedAgent so the e2e path
+  // exercises fallback orchestration without live model/provider calls.
   installEmbeddedRunnerBaseE2eMocks();
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
@@ -130,6 +134,8 @@ function makeConfig(): OpenClawConfig {
 async function withAgentWorkspace<T>(
   fn: (ctx: { agentDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
+  // Each e2e case gets isolated agent/workspace dirs because usage stats and
+  // transcripts are part of the fallback behavior under test.
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-fallback-"));
   const agentDir = path.join(root, "agent");
   const workspaceDir = path.join(root, "workspace");
@@ -155,33 +161,26 @@ async function writeAuthStore(
     }
   >,
 ) {
-  await fs.writeFile(
-    path.join(agentDir, "auth-profiles.json"),
-    JSON.stringify({
+  saveAuthProfileStore(
+    {
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
-    }),
-  );
-  await fs.writeFile(
-    path.join(agentDir, "auth-state.json"),
-    JSON.stringify({
-      version: 1,
       usageStats:
         usageStats ??
         ({
           "openai:p1": { lastUsed: 1 },
           "groq:p1": { lastUsed: 2 },
         } as const),
-    }),
+    },
+    agentDir,
   );
 }
 
 async function readUsageStats(agentDir: string) {
-  const raw = await fs.readFile(path.join(agentDir, "auth-state.json"), "utf-8");
-  return JSON.parse(raw).usageStats as Record<string, Record<string, unknown> | undefined>;
+  return ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
 }
 
 function expectFailureCount(
@@ -195,9 +194,8 @@ function expectFailureCount(
 }
 
 async function writeMultiProfileAuthStore(agentDir: string) {
-  await fs.writeFile(
-    path.join(agentDir, "auth-profiles.json"),
-    JSON.stringify({
+  saveAuthProfileStore(
+    {
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
@@ -205,19 +203,14 @@ async function writeMultiProfileAuthStore(agentDir: string) {
         "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
-    }),
-  );
-  await fs.writeFile(
-    path.join(agentDir, "auth-state.json"),
-    JSON.stringify({
-      version: 1,
       usageStats: {
         "openai:p1": { lastUsed: 1 },
         "openai:p2": { lastUsed: 2 },
         "openai:p3": { lastUsed: 3 },
         "groq:p1": { lastUsed: 4 },
       },
-    }),
+    },
+    agentDir,
   );
 }
 
@@ -229,6 +222,8 @@ async function runEmbeddedFallback(params: {
   abortSignal?: AbortSignal;
   config?: OpenClawConfig;
 }) {
+  // Runs the same embedded-agent entrypoint that production fallback uses while
+  // keeping provider/model attempts deterministic through mocks.
   const cfg = params.config ?? makeConfig();
   return await runWithModelFallback({
     cfg,

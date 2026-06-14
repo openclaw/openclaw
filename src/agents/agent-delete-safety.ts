@@ -1,3 +1,4 @@
+/** Safety checks for deleting agents whose workspaces may overlap other agents. */
 import fs from "node:fs";
 import path from "node:path";
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
@@ -28,6 +29,7 @@ function workspacePathsOverlap(left: string, right: string): boolean {
   );
 }
 
+/** Lists other agents whose workspaces overlap a candidate delete target. */
 export function findOverlappingWorkspaceAgentIds(
   cfg: OpenClawConfig,
   agentId: string,

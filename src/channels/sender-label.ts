@@ -1,3 +1,4 @@
+// Sender display-label helpers shared by channel ingress and audit surfaces.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type SenderLabelParams = {
@@ -18,6 +19,7 @@ function normalizeSenderLabelParams(params: SenderLabelParams) {
   };
 }
 
+/** Resolves the best one-line sender label from available identity fields. */
 export function resolveSenderLabel(params: SenderLabelParams): string | null {
   const { name, username, tag, e164, id } = normalizeSenderLabelParams(params);
 
@@ -29,6 +31,7 @@ export function resolveSenderLabel(params: SenderLabelParams): string | null {
   return display || idPart || null;
 }
 
+/** Returns de-duplicated sender label candidates for matching and search. */
 export function listSenderLabelCandidates(params: SenderLabelParams): string[] {
   const candidates = new Set<string>();
   const { name, username, tag, e164, id } = normalizeSenderLabelParams(params);

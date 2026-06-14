@@ -1,3 +1,5 @@
+// Plugin-provided node.invoke policy adapter.
+// Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
@@ -13,6 +15,8 @@ import type { NodeSession } from "./node-registry.js";
 import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
+// Plugin node.invoke policies are the last gateway-side guard before a
+// plugin-declared dangerous node command reaches the node transport.
 function parseScopes(client: GatewayClient | null): string[] {
   return Array.isArray(client?.connect?.scopes)
     ? client.connect.scopes.filter((scope): scope is string => typeof scope === "string")
@@ -30,6 +34,8 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   }
 }
 
+// Dangerous commands must have an explicit policy. Without this check, a plugin
+// could mark a command dangerous but rely on the gateway default allow path.
 function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command: string) {
   const normalizedCommand = command.trim();
   if (!normalizedCommand) {
@@ -82,6 +88,8 @@ function createApprovalRuntime(params: {
         record,
         excludeConnId: params.client?.connId,
       });
+      // Approval requests are routed to eligible operator clients only. Falling
+      // back to broadcast is safe because the event payload carries no secret.
       if (approvalClientConnIds) {
         params.context.broadcastToConnIds(
           "plugin.approval.requested",
@@ -110,6 +118,7 @@ function createApprovalRuntime(params: {
   };
 }
 
+/** Applies the registered plugin policy for a node.invoke command, if one exists. */
 export async function applyPluginNodeInvokePolicy(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -138,6 +147,8 @@ export async function applyPluginNodeInvokePolicy(params: {
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
+    // Policies invoke the real node through this narrowed transport wrapper so
+    // they can retry/override params without getting direct registry access.
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       command: params.command,

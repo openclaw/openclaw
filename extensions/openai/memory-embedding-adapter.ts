@@ -1,3 +1,4 @@
+// Openai plugin module implements memory embedding adapter behavior.
 import {
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
@@ -29,6 +30,7 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       provider,
       runtime: {
         id: "openai",
+        sourceWideBatchEmbed: true,
         cacheKeyData: {
           provider: resolvedProvider,
           baseUrl: client.baseUrl,

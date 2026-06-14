@@ -1,3 +1,4 @@
+// Verifies CLI system-prompt construction without loading the full runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
@@ -63,6 +64,8 @@ describe("buildCliAgentSystemPrompt", () => {
   });
 
   it("includes CLI-scoped plugin command guidance", () => {
+    // Plugin command guidance is surface-filtered; CLI prompts must not leak
+    // OpenClaw-main command text into external CLI backends.
     registerPluginCommand("demo-plugin", {
       name: "demo_cli",
       description: "Demo CLI command",
@@ -87,5 +90,37 @@ describe("buildCliAgentSystemPrompt", () => {
 
     expect(prompt).toContain("CLI-only command guidance.");
     expect(prompt).not.toContain("OpenClaw-only command guidance.");
+  });
+
+  it("includes session identity in runtime when provided", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "test/model",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:peer",
+      sessionId: "session-123",
+    });
+
+    expect(prompt).toContain("agent=main");
+    expect(prompt).toContain("session=agent:main:telegram:direct:peer");
+    expect(prompt).toContain("sessionId=session-123");
+  });
+
+  it("includes Telegram rich text guidance for CLI final replies", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "anthropic/claude-opus-4-8",
+      runtimeChannel: "telegram",
+      runtimeChatType: "direct",
+      runtimeCapabilities: ["richText"],
+    });
+
+    expect(prompt).toContain("Telegram rich text is available");
+    expect(prompt).toContain("headings, tables");
+    expect(prompt).toContain("This is not legacy MarkdownV2/parse_mode");
+    expect(prompt).toContain("channel=telegram");
+    expect(prompt).not.toContain("### message tool");
   });
 });

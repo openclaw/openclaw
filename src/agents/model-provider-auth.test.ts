@@ -1,3 +1,4 @@
+// Verifies warmed provider-auth state and scoped auth-cache behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -92,6 +93,8 @@ describe("prepared provider auth state", () => {
   });
 
   it("reuses prepared runtime auth lookup data while warming providers", async () => {
+    // Warming should build one runtime lookup and carry it across provider
+    // checks instead of rediscovering auth for every catalog entry.
     const cfg = {} as OpenClawConfig;
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
@@ -218,9 +221,8 @@ describe("prepared provider auth state", () => {
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
 
     // Flip the underlying compute to false. A narrow-scope caller must NOT
-    // pick up the warmed broad answer — gateway models.list with
-    // runtimeAuthDiscovery: false maps to both flags false, and the answer
-    // must reflect that narrower scope, not the prepared broad answer.
+    // pick up the warmed broad answer; gateway models.list can disable runtime
+    // auth discovery and needs that narrower answer.
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
     await expect(
       hasAuthForModelProvider({
@@ -230,6 +232,19 @@ describe("prepared provider auth state", () => {
         allowPluginSyntheticAuth: false,
       }),
     ).resolves.toBe(false);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+
+    // Bounded browse callers may explicitly consume the prepared broad answer
+    // while keeping slow fallback discovery disabled.
+    await expect(
+      hasAuthForModelProvider({
+        provider: "openai",
+        cfg,
+        discoverExternalCliAuth: false,
+        allowPluginSyntheticAuth: false,
+        allowPreparedRuntimeAuth: true,
+      }),
+    ).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
 
     // Broad-scope caller (default flags) still hits the prepared map.

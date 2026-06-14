@@ -1,3 +1,8 @@
+/**
+ * Session conversation key helpers.
+ *
+ * Resolves threaded channel session keys through plugin hooks and generic parsing.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -14,6 +19,9 @@ import {
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
 import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 
+/**
+ * Normalized conversation id details for one channel raw id.
+ */
 export type ResolvedSessionConversation = {
   id: string;
   threadId: string | undefined;
@@ -21,6 +29,9 @@ export type ResolvedSessionConversation = {
   parentConversationCandidates: string[];
 };
 
+/**
+ * Parsed session-key conversation reference with parent/thread metadata.
+ */
 export type ResolvedSessionConversationRef = {
   channel: string;
   kind: "group" | "channel";
@@ -88,6 +99,8 @@ function buildGenericConversationResolution(rawId: string): ResolvedSessionConve
   }
 
   const parsed = parseThreadSessionSuffix(trimmed);
+  // Generic parsing treats `:thread:*` suffixes as child thread metadata while
+  // preserving the base conversation id for parent lookups.
   const id = (parsed.baseSessionKey ?? trimmed).trim();
   if (!id) {
     return null;
@@ -113,6 +126,8 @@ function normalizeSessionConversationResolution(
   return {
     id: resolved.id.trim(),
     threadId: normalizeOptionalString(resolved.threadId),
+    // When plugins omit an explicit base id, prefer the last declared parent
+    // candidate so nested topic/thread routes still collapse to their parent.
     baseConversationId:
       normalizeOptionalString(resolved.baseConversationId) ??
       dedupeConversationIds(resolved.parentConversationCandidates ?? []).at(-1) ??
@@ -143,6 +158,8 @@ function resolveBundledSessionConversationFallback(params: {
       artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
     });
   } catch {
+    // Missing or inactive bundled artifacts are optional; callers still have
+    // plugin hooks and generic `:thread:` parsing as fallbacks.
     return null;
   }
   const resolveSessionConversationLocal = loaded?.resolveSessionConversation;
@@ -196,6 +213,8 @@ function resolveSessionConversationResolution(params: {
     params.bundledFallback !== false &&
     !messaging &&
     shouldProbeBundledSessionConversationFallback(rawId);
+  // Prefer loaded plugin messaging hooks. Bundled public artifacts are only a
+  // lightweight fallback before registry bootstrap; generic parsing is last.
   const resolved =
     pluginResolved ??
     (shouldTryBundledFallback
@@ -228,6 +247,9 @@ function resolveSessionConversationResolution(params: {
   };
 }
 
+/**
+ * Resolves one raw channel conversation id into base/thread conversation metadata.
+ */
 export function resolveSessionConversation(params: {
   channel: string;
   kind: "group" | "channel";
@@ -270,6 +292,9 @@ export function resolveSessionConversationRef(
   };
 }
 
+/**
+ * Resolves thread suffix metadata from a session key, using channel hooks when available.
+ */
 export function resolveSessionThreadInfo(
   sessionKey: string | undefined | null,
   opts: SessionConversationResolutionOptions = {},
@@ -287,6 +312,9 @@ export function resolveSessionThreadInfo(
   };
 }
 
+/**
+ * Resolves the parent session key for a threaded child session.
+ */
 export function resolveSessionParentSessionKey(
   sessionKey: string | undefined | null,
 ): string | null {

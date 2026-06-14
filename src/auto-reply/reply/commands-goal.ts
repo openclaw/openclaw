@@ -1,3 +1,4 @@
+/** Handles /goal session objective commands and continuation prompt formatting. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -11,6 +12,7 @@ import {
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -36,6 +38,7 @@ const GOAL_ACTIONS = new Set([
   "status",
 ]);
 
+/** Parses /goal action text, defaulting unknown actions to goal creation. */
 export function parseGoalCommand(raw: string): { action: string; text: string } | null {
   const trimmed = raw.trim();
   const commandEnd = trimmed.search(/\s/);
@@ -85,6 +88,7 @@ function encodeGoalJsonString(trimmed: string): string {
   return JSON.stringify(trimmed).replaceAll("/", "\\/");
 }
 
+/** Formats the model prompt used to continue a newly started goal. */
 export function formatGoalContinuationPrompt(objective: string): string {
   const trimmed = objective.trim();
   return hasCommandLikeGoalText(trimmed)
@@ -92,6 +96,7 @@ export function formatGoalContinuationPrompt(objective: string): string {
     : trimmed;
 }
 
+/** Formats the model prompt used when resuming a paused goal. */
 export function formatGoalResumeContinuationPrompt(note: string): string {
   const trimmed = note.trim();
   if (!trimmed) {
@@ -102,6 +107,7 @@ export function formatGoalResumeContinuationPrompt(note: string): string {
     : `Continue pursuing the current goal. Note: ${trimmed}`;
 }
 
+/** Returns true for internally generated goal continuation prompts. */
 export function isFormattedGoalContinuationPrompt(message: string): boolean {
   const trimmed = message.trim();
   return (
@@ -145,6 +151,7 @@ function goalErrorReply(error: unknown): CommandHandlerResult {
   return goalReply(`Goal error: ${message}`);
 }
 
+/** Command handler for /goal lifecycle commands. */
 export const handleGoalCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -164,6 +171,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         const snapshot = await getSessionGoal({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
+          fallbackEntry: params.sessionEntry,
+          persist: false,
         });
         syncGoalSessionEntry(params);
         return goalReply(formatSessionGoalStatus(snapshot.goal));
@@ -182,6 +191,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           fallbackEntry: params.sessionEntry,
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         applyGoalContinuationPrompt(params, formatGoalContinuationPrompt(goal.objective));
         return goalContinuation();
       }
@@ -193,6 +203,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal paused: ${goal.objective}`);
       }
       case "resume": {
@@ -203,6 +214,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         const message = formatGoalResumeContinuationPrompt(parsed.text);
         applyGoalContinuationPrompt(params, message);
         return goalContinuation();
@@ -216,6 +228,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}`);
       }
       case "block":
@@ -227,6 +240,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
         return goalReply(`Goal blocked: ${goal.objective}`);
       }
       case "clear": {
@@ -235,6 +249,9 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           storePath: params.storePath,
         });
         syncGoalSessionEntry(params);
+        if (removed) {
+          markCommandSessionMetadataChanged(params);
+        }
         return goalReply(removed ? "Goal cleared." : "No goal to clear.");
       }
       default:

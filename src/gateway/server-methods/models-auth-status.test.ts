@@ -1,3 +1,5 @@
+// Model auth status tests cover profile health summaries, provider usage,
+// credential cleanup, secret refresh, and provider run abort side effects.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
@@ -26,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
     (params: { agentDir?: string }) => params.agentDir,
   ),
+  clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
   refreshActiveSecretsRuntimeSnapshot: vi.fn(async () => false),
   clearCurrentProviderAuthState: vi.fn(),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
@@ -55,6 +58,7 @@ vi.mock("../../agents/auth-profiles.js", async () => {
     listProfilesForProvider: mocks.listProfilesForProvider,
     removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
     resolvePersistedAuthProfileOwnerAgentDir: mocks.resolvePersistedAuthProfileOwnerAgentDir,
+    clearRuntimeAuthProfileStoreSnapshots: mocks.clearRuntimeAuthProfileStoreSnapshots,
   };
 });
 
@@ -186,7 +190,7 @@ function firstEnsureAuthProfileStoreCall() {
 
 function firstBuildAuthHealthSummaryCall() {
   return mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
-    | [{ providers?: string[] }]
+    | [{ providers?: string[]; allowKeychainPrompt?: boolean }]
     | undefined;
 }
 
@@ -364,6 +368,31 @@ describe("models.authStatus", () => {
 
     await handler(createOptions({ refresh: true }));
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.clearRuntimeAuthProfileStoreSnapshots).toHaveBeenCalledTimes(1);
+    const clearOrder = mocks.clearRuntimeAuthProfileStoreSnapshots.mock.invocationCallOrder[0];
+    const refreshReadOrder = mocks.ensureAuthProfileStore.mock.invocationCallOrder.at(-1);
+    expect(clearOrder).toBeLessThan(refreshReadOrder ?? 0);
+  });
+
+  it("keeps refreshed secrets runtime snapshots on explicit refresh", async () => {
+    mocks.refreshActiveSecretsRuntimeSnapshot.mockResolvedValueOnce(true);
+
+    await handler(createOptions({ refresh: true }));
+
+    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.clearRuntimeAuthProfileStoreSnapshots).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps last-good secrets runtime snapshots when explicit refresh fails", async () => {
+    mocks.refreshActiveSecretsRuntimeSnapshot.mockRejectedValueOnce(new Error("refresh failed"));
+
+    await handler(createOptions({ refresh: true }));
+
+    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.clearRuntimeAuthProfileStoreSnapshots).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
   });
 
   it("invalidateModelAuthStatusCache() clears the cached response", async () => {
@@ -544,6 +573,12 @@ describe("models.authStatus", () => {
     await handler(createOptions());
     const call = firstBuildAuthHealthSummaryCall();
     expect(call?.[0]?.providers).toBeUndefined();
+  });
+
+  it("builds status health without allowing keychain prompts", async () => {
+    await handler(createOptions());
+    const call = firstBuildAuthHealthSummaryCall();
+    expect(call?.[0]?.allowKeychainPrompt).toBe(false);
   });
 
   it("still flags provider as missing when apiKey env SecretRef points at an unset env var", async () => {
