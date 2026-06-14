@@ -13,6 +13,13 @@ const schtasksResponses: { code: number; stdout: string; stderr: string }[] = []
 // `finally` block deletes the temp file. Indexed by the position in
 // `schtasksCalls` so individual tests can pin which create-call they assert on.
 const xmlPayloadCaptures: Array<{ index: number; xml: string }> = [];
+const childUnref = vi.hoisted(() => vi.fn());
+const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, spawn };
+});
 
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: async (argv: string[]) => {
@@ -39,6 +46,9 @@ beforeEach(() => {
   schtasksCalls.length = 0;
   schtasksResponses.length = 0;
   xmlPayloadCaptures.length = 0;
+  childUnref.mockReset();
+  spawn.mockReset();
+  spawn.mockImplementation(() => ({ unref: childUnref }));
 });
 
 describe("installScheduledTask", () => {

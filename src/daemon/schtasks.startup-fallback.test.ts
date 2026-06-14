@@ -384,6 +384,18 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("does not treat an unrelated gateway listener as Scheduled Task launch evidence", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
   it("does not treat a gateway listener as node Scheduled Task launch evidence", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
