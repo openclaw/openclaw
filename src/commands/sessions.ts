@@ -423,6 +423,7 @@ export async function sessionsCommand(
   const totalCount = allRows.length;
   const rows = selectNewestSessionRows(allRows, limit);
   const hasMore = rows.length < totalCount;
+  const nextOffset = hasMore ? rows.length : null;
 
   if (opts.json) {
     const multi = targets.length > 1;
@@ -439,6 +440,7 @@ export async function sessionsCommand(
       count: rows.length,
       totalCount,
       limitApplied: limit ?? null,
+      nextOffset,
       hasMore,
       activeMinutes: activeMinutes ?? null,
       sessions: await Promise.all(
