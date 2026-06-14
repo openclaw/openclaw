@@ -551,7 +551,8 @@ function isCurrentSourceTargetParam(
   params: Record<string, unknown>,
 ): boolean {
   const currentChannelId = normalizeOptionalString(input.toolContext?.currentChannelId);
-  if (!currentChannelId) {
+  const currentMessagingTarget = normalizeOptionalString(input.toolContext?.currentMessagingTarget);
+  if (!currentChannelId && !currentMessagingTarget) {
     return false;
   }
   const currentChannelProvider = normalizeOptionalLowercaseString(
@@ -572,12 +573,17 @@ function isCurrentSourceTargetParam(
 
   const provider = explicitChannel ?? currentChannelProvider;
   const currentCandidates = new Set<string>();
-  addCandidateAndUnprefixedAlias(currentCandidates, currentChannelId);
-  if (provider) {
-    addCandidateAndUnprefixedAlias(
-      currentCandidates,
-      normalizeTargetForAccountBinding(provider, currentChannelId),
-    );
+  for (const currentTarget of [currentMessagingTarget, currentChannelId]) {
+    if (!currentTarget) {
+      continue;
+    }
+    addCandidateAndUnprefixedAlias(currentCandidates, currentTarget);
+    if (provider) {
+      addCandidateAndUnprefixedAlias(
+        currentCandidates,
+        normalizeTargetForAccountBinding(provider, currentTarget),
+      );
+    }
   }
 
   const explicitCandidates = new Set<string>();
@@ -632,6 +638,7 @@ function hasCurrentSourceReplyContext(input: RunMessageActionParams): boolean {
   const currentMessageId = input.toolContext?.currentMessageId;
   return Boolean(
     normalizeOptionalString(input.toolContext?.currentChannelId) ||
+    normalizeOptionalString(input.toolContext?.currentMessagingTarget) ||
     normalizeOptionalString(input.toolContext?.currentThreadTs) ||
     (typeof currentMessageId === "number" && Number.isFinite(currentMessageId)) ||
     normalizeOptionalString(currentMessageId),
@@ -668,7 +675,10 @@ async function shouldUseInternalSourceReplySink(
   if (!hasImplicitCurrentSourceRoute) {
     return false;
   }
-  if (!normalizeOptionalString(input.toolContext?.currentChannelId)) {
+  if (
+    !normalizeOptionalString(input.toolContext?.currentChannelId) &&
+    !normalizeOptionalString(input.toolContext?.currentMessagingTarget)
+  ) {
     return true;
   }
   // Configured current-source channels can infer the target and deliver through
@@ -939,7 +949,8 @@ async function buildSendPayloadParts(params: {
     readStringParam(actionParams, "mediaUrl", { trim: false }) ??
     readStringParam(actionParams, "path", { trim: false }) ??
     readStringParam(actionParams, "filePath", { trim: false }) ??
-    readStringParam(actionParams, "fileUrl", { trim: false });
+    readStringParam(actionParams, "fileUrl", { trim: false }) ??
+    readStringParam(actionParams, "image", { trim: false });
   const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
   const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
   const hasMediaHint =
@@ -1099,9 +1110,10 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     agentId,
   });
 
-  const replyToId = resolveAndApplyOutboundReplyToId(params, {
+  resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
+    matchesToolContextTarget: getChannelPlugin(channel)?.threading?.matchesToolContextTarget,
   });
   const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
     cfg,
@@ -1115,9 +1127,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     dryRun,
     resolvedTarget,
     resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
+    resolveReplyTransport: getChannelPlugin(channel)?.threading?.resolveReplyTransport,
     resolveOutboundSessionRoute,
     ensureOutboundSessionEntry,
   });
+  const resolvedReplyToId = readStringParam(params, "replyTo");
   throwIfAborted(abortSignal);
 
   const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
@@ -1220,7 +1234,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     gifPlayback: sendPayload.gifPlayback,
     forceDocument: sendPayload.forceDocument,
     bestEffort: sendPayload.bestEffort,
-    replyToId: replyToId ?? undefined,
+    replyToId: resolvedReplyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
   });
 

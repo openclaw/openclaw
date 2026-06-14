@@ -470,9 +470,15 @@ export const sendHandlers: GatewayRequestHandlers = {
       agentId?: string;
       toolContext?: {
         currentChannelId?: string;
+        currentMessagingTarget?: string;
+        currentGraphChannelId?: string;
         currentChannelProvider?: string;
         currentThreadTs?: string;
         currentMessageId?: string | number;
+        replyToMode?: "off" | "first" | "all" | "batched";
+        hasRepliedRef?: { value: boolean };
+        sameChannelThreadRequired?: boolean;
+        skipCrossContextDecoration?: boolean;
       };
       idempotencyKey: string;
     };

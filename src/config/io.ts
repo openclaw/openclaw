@@ -70,7 +70,6 @@ import {
   createMergePatch,
   formatConfigValidationFailure,
   applyUnsetPathsForWrite,
-  projectSourceOntoRuntimeShape,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveManagedUnsetPathsForWrite,
@@ -110,6 +109,7 @@ import {
   type RuntimeConfigSnapshotRefreshOptions,
   type RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
+export { projectConfigOntoRuntimeSourceSnapshot } from "./runtime-source-projection.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -1304,6 +1304,11 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
+export type BestEffortConfigSnapshot = {
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+};
+
 function createConfigFileSnapshot(params: {
   path: string;
   exists: boolean;
@@ -2151,16 +2156,26 @@ export function createConfigIO(
     };
   }
 
-  async function readBestEffortConfigLocal(): Promise<OpenClawConfig> {
+  async function readBestEffortConfigSnapshotLocal(): Promise<BestEffortConfigSnapshot> {
     const result = await readConfigFileSnapshotInternal();
     if (!result.snapshot.valid) {
-      return result.snapshot.config;
+      return {
+        config: result.snapshot.config,
+        sourceConfig: result.snapshot.sourceConfig,
+      };
     }
-    return finalizeLoadedRuntimeConfig(
-      materializeRuntimeConfig(result.snapshot.sourceConfig, "load", {
-        manifestRegistry: result.pluginMetadataSnapshot?.manifestRegistry,
-      }),
-    );
+    return {
+      config: finalizeLoadedRuntimeConfig(
+        materializeRuntimeConfig(result.snapshot.sourceConfig, "load", {
+          manifestRegistry: result.pluginMetadataSnapshot?.manifestRegistry,
+        }),
+      ),
+      sourceConfig: result.snapshot.sourceConfig,
+    };
+  }
+
+  async function readBestEffortConfigLocal(): Promise<OpenClawConfig> {
+    return (await readBestEffortConfigSnapshotLocal()).config;
   }
 
   async function readSourceConfigBestEffortLocal(): Promise<OpenClawConfig> {
@@ -2520,6 +2535,7 @@ export function createConfigIO(
     env: deps.env,
     loadConfig: loadConfigLocal,
     readBestEffortConfig: readBestEffortConfigLocal,
+    readBestEffortConfigSnapshot: readBestEffortConfigSnapshotLocal,
     readSourceConfigBestEffort: readSourceConfigBestEffortLocal,
     readConfigFileSnapshot: readConfigFileSnapshotLocal,
     readConfigFileSnapshotWithPluginMetadata: readConfigFileSnapshotWithPluginMetadataLocal,
@@ -2543,63 +2559,6 @@ export function registerConfigWriteListener(
   listener: (event: ConfigWriteNotification) => void,
 ): () => void {
   return registerRuntimeConfigWriteListener(listener);
-}
-
-function isCompatibleTopLevelRuntimeProjectionShape(params: {
-  runtimeSnapshot: OpenClawConfig;
-  candidate: OpenClawConfig;
-}): boolean {
-  const runtime = params.runtimeSnapshot as Record<string, unknown>;
-  const candidate = params.candidate as Record<string, unknown>;
-  for (const key of Object.keys(runtime)) {
-    if (!Object.hasOwn(candidate, key)) {
-      return false;
-    }
-    const runtimeValue = runtime[key];
-    const candidateValue = candidate[key];
-    const runtimeType = Array.isArray(runtimeValue)
-      ? "array"
-      : runtimeValue === null
-        ? "null"
-        : typeof runtimeValue;
-    const candidateType = Array.isArray(candidateValue)
-      ? "array"
-      : candidateValue === null
-        ? "null"
-        : typeof candidateValue;
-    if (runtimeType !== candidateType) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
-  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
-  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();
-  if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
-    return config;
-  }
-  if (config === runtimeConfigSnapshot) {
-    return runtimeConfigSourceSnapshot;
-  }
-  // This projection expects callers to pass config objects derived from the
-  // active runtime snapshot (for example shallow/deep clones with targeted edits).
-  // For structurally unrelated configs, skip projection to avoid accidental
-  // merge-patch deletions or reintroducing resolved values into source refs.
-  if (
-    !isCompatibleTopLevelRuntimeProjectionShape({
-      runtimeSnapshot: runtimeConfigSnapshot,
-      candidate: config,
-    })
-  ) {
-    return config;
-  }
-  const projectedSource = coerceConfig(
-    projectSourceOntoRuntimeShape(runtimeConfigSourceSnapshot, runtimeConfigSnapshot),
-  );
-  const runtimePatch = createMergePatch(runtimeConfigSnapshot, config);
-  return coerceConfig(applyMergePatch(projectedSource, runtimePatch));
 }
 
 export function loadConfig(options?: {
@@ -2635,6 +2594,14 @@ export async function readBestEffortConfig(options?: {
   return await createConfigIO(
     options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
   ).readBestEffortConfig();
+}
+
+export async function readBestEffortConfigSnapshot(options?: {
+  skipPluginValidation?: boolean;
+}): Promise<BestEffortConfigSnapshot> {
+  return await createConfigIO(
+    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
+  ).readBestEffortConfigSnapshot();
 }
 
 export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {

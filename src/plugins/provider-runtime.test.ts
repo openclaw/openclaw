@@ -94,6 +94,7 @@ let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolve
 let providerRuntimeTesting: typeof import("./provider-runtime.js").testing;
 let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
 let validateProviderReplayTurnsWithPlugin: typeof import("./provider-runtime.js").validateProviderReplayTurnsWithPlugin;
+let wrapProviderSimpleCompletionStreamFn: typeof import("./provider-runtime.js").wrapProviderSimpleCompletionStreamFn;
 let wrapProviderStreamFn: typeof import("./provider-runtime.js").wrapProviderStreamFn;
 let createEmptyPluginRegistry: typeof import("./registry.js").createEmptyPluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
@@ -358,6 +359,7 @@ describe("provider-runtime", () => {
       testing: providerRuntimeTesting,
       runProviderDynamicModel,
       validateProviderReplayTurnsWithPlugin,
+      wrapProviderSimpleCompletionStreamFn,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
@@ -1621,6 +1623,28 @@ describe("provider-runtime", () => {
         provider: "azure-openai-responses",
         context: createDemoResolvedModelContext({
           provider: "azure-openai-responses",
+          streamFn: wrappedStreamFn,
+        }),
+      }),
+    ).toBe(wrappedStreamFn);
+  });
+
+  it("resolves opt-in simple-completion stream wrappers", () => {
+    const wrappedStreamFn = vi.fn();
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "moonshot",
+        label: "Moonshot",
+        auth: [],
+        wrapSimpleCompletionStreamFn: ({ streamFn }) => streamFn ?? wrappedStreamFn,
+      },
+    ]);
+
+    expect(
+      wrapProviderSimpleCompletionStreamFn({
+        provider: "moonshot",
+        context: createDemoResolvedModelContext({
+          provider: "moonshot",
           streamFn: wrappedStreamFn,
         }),
       }),
