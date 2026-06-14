@@ -301,6 +301,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                                | `gmi/google/gemini-3.1-flash-lite`                         |
 | Groq                                    | `groq`                           | `GROQ_API_KEY`                                               | -                                                          |
 | Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`                      |
+| Inworld                                 | `inworld`                        | `INWORLD_API_KEY`                                            | `inworld/auto`                                             |
 | Kilo Gateway                            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                                       |
 | Kimi Coding                             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-for-coding`                                     |
 | MiniMax                                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M3`                                       |
@@ -326,6 +327,9 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 <AccordionGroup>
   <Accordion title="OpenRouter">
     Applies its app-attribution headers and Anthropic `cache_control` markers only on verified `openrouter.ai` routes. DeepSeek, Moonshot, and ZAI refs are cache-TTL eligible for OpenRouter-managed prompt caching but do not receive Anthropic cache markers. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
+  </Accordion>
+  <Accordion title="Inworld">
+    OpenAI-compatible router at `https://api.inworld.ai/v1/chat/completions`. Model refs follow `inworld/<upstream-provider>/<model>`; Inworld first-party models use the shorthand `inworld/models/<NAME>` (rewritten to the canonical `inworld/models/<NAME>` wire form before the request leaves OpenClaw). Auth is HTTP Basic with the Base64 dashboard credential shared between the LLM and TTS surfaces. Catalog is discovered from `/llm/v1alpha/models`; reasoning effort is taken from each model's `reasoningCapability.supportedLevels`.
   </Accordion>
   <Accordion title="Kilo Gateway">
     Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo/auto` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.
