@@ -309,6 +309,16 @@ async function processMessageWithPipeline(params: {
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
     },
+    // patch#gchat-thread: store current room thread so sendText can use it
+    ...(isGroup && message.thread?.name
+      ? (() => {
+          if (!process.__gchatRoomThreads) {
+            (process as NodeJS.Process & { __gchatRoomThreads?: Map<string, { threadId: string; ts: number }> }).__gchatRoomThreads = new Map();
+          }
+          (process as NodeJS.Process & { __gchatRoomThreads?: Map<string, { threadId: string; ts: number }> }).__gchatRoomThreads!.set(spaceId, { threadId: message.thread!.name!, ts: Date.now() });
+          return {};
+        })()
+      : {}),
     reply: {
       to: `googlechat:${spaceId}`,
       originatingTo: `googlechat:${spaceId}`,

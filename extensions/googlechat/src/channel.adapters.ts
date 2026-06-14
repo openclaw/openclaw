@@ -241,8 +241,15 @@ export const googlechatOutboundAdapter = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+      // patch#gchat-thread: auto-resolve thread from stored room context when no explicit threadId/replyToId
+      const _autoThread = (() => {
+        if (threadId || replyToId) return undefined;
+        const map = (process as NodeJS.Process & { __gchatRoomThreads?: Map<string, { threadId: string; ts: number }> }).__gchatRoomThreads;
+        const ctx = map?.get(to);
+        return ctx && Date.now() - ctx.ts < 3_600_000 ? ctx.threadId : undefined;
+      })();
       const thread =
-        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
+        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? _autoThread ?? undefined);
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
       const result = await sendGoogleChatMessage({
         account,
