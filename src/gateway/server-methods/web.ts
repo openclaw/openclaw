@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { listGatewayMethodDescriptorNames } from "../methods/registry.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -19,7 +20,7 @@ const resolveWebLoginProvider = () =>
   listChannelPlugins().find((plugin) =>
     [
       ...(plugin.gatewayMethods ?? []),
-      ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
+      ...listGatewayMethodDescriptorNames(plugin.gatewayMethodDescriptors),
     ].some((method) => WEB_LOGIN_METHODS.has(method)),
   ) ?? null;
 

@@ -72,6 +72,7 @@ import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptors,
   isCoreGatewayMethodClassified,
+  listGatewayMethodDescriptorNames,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
@@ -739,9 +740,7 @@ export async function startGatewayServer(
     const methods: string[] = [];
     for (const plugin of listGatewayStartupChannelPlugins()) {
       methods.push(...(plugin.gatewayMethods ?? []));
-      for (const descriptor of plugin.gatewayMethodDescriptors ?? []) {
-        methods.push(descriptor.name);
-      }
+      methods.push(...listGatewayMethodDescriptorNames(plugin.gatewayMethodDescriptors));
     }
     return methods;
   };

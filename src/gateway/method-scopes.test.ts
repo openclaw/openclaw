@@ -218,6 +218,29 @@ describe("method scope resolution", () => {
     ]);
   });
 
+  it("skips unreadable plugin gateway method descriptors during scope lookup", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["browser.request"] = pluginHandler;
+    registry.gatewayMethodDescriptors.push(
+      Object.defineProperty({}, "name", {
+        get() {
+          throw new Error("gateway descriptor exploded");
+        },
+      }) as never,
+      createPluginGatewayMethodDescriptor({
+        pluginId: "browser",
+        name: "browser.request",
+        handler: pluginHandler,
+        scope: "operator.read",
+      }),
+    );
+    setActivePluginRegistry(registry);
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([
+      "operator.read",
+    ]);
+  });
+
   it("keeps reserved admin namespaces admin-only even if a plugin scope is narrower", () => {
     setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, "operator.read");
 

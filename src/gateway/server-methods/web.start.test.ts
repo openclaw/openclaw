@@ -180,6 +180,44 @@ describe("webHandlers web.login.start", () => {
       undefined,
     );
   });
+
+  it("skips unreadable gateway method descriptors while resolving the login provider", async () => {
+    const poisonedDescriptor = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("gateway descriptor exploded");
+      },
+    });
+    const loginWithQrStart = vi.fn().mockResolvedValue({ connected: true });
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "bad",
+        gatewayMethodDescriptors: [poisonedDescriptor],
+      },
+      {
+        id: "whatsapp",
+        gatewayMethodDescriptors: [{ name: "web.login.start" }],
+        gateway: { loginWithQrStart },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await webHandlers["web.login.start"](
+      createOptions(
+        { accountId: "default" },
+        {
+          respond,
+        },
+      ),
+    );
+
+    expect(loginWithQrStart).toHaveBeenCalledWith({
+      accountId: "default",
+      force: false,
+      timeoutMs: undefined,
+      verbose: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { connected: true }, undefined);
+  });
 });
 
 describe("webHandlers web.login.wait", () => {
