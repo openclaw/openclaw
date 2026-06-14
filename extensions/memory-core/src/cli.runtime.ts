@@ -9,6 +9,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   colorize,
@@ -526,7 +527,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   try {
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
     const totalFiles = entries.filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
+      (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
     ).length;
     return { source: "sessions", totalFiles, issues };
   } catch (err) {
