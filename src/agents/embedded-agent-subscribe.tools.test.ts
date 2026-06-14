@@ -130,6 +130,9 @@ describe("isToolResultError", () => {
   it("recognizes returned failures and nonzero exits", () => {
     expect(isToolResultError({ details: { status: "failed" } })).toBe(true);
     expect(isToolResultError({ details: { status: "blocked" } })).toBe(true);
+    expect(isToolResultError({ details: { status: "denied" } })).toBe(true);
+    expect(isToolResultError({ details: { status: "rejected" } })).toBe(true);
+    expect(isToolResultError({ details: { status: "not_sent" } })).toBe(true);
     expect(isToolResultError({ details: { status: "approval-unavailable" } })).toBe(true);
     expect(isToolResultError({ details: { status: "completed", timedOut: true } })).toBe(true);
     expect(isToolResultError({ details: { status: "completed", exitCode: 1 } })).toBe(true);

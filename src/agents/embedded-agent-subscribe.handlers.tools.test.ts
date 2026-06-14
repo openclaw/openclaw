@@ -410,6 +410,9 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   it.each([
     { status: "failed" },
     { status: "blocked" },
+    { status: "denied" },
+    { status: "rejected" },
+    { status: "not_sent" },
     { ok: false },
     { success: false },
     { ok: true, dryRun: true },

@@ -140,6 +140,9 @@ const TERMINAL_TOOL_RESULT_ERROR_STATUSES = new Set([
   "timeout",
   "timed_out",
   "blocked",
+  "denied",
+  "rejected",
+  "not_sent",
   "cancelled",
   "canceled",
   "suppressed",
@@ -184,7 +187,7 @@ const ACTIONABLE_PROMPT_REQUEST_RE =
 const ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE =
   /\b(?:i|we)\s+(?:need|want|would like)\s+you(?:\s+to)?\b/i;
 const NON_AUTHORIZING_NEGATED_ACTION_REQUEST_RE =
-  /\b(?:(?:can|could|would|will)\s+you|(?:i|we)\s+(?:need|want|would like)\s+you(?:\s+to)?)\s+(?:(?:please\s+)?(?:not|never|avoid|refrain\s+from)\b|[^?\n]{0,80}\b(?:ensure|make\s+sure)\b[^?\n]{0,80}(?:\b(?:not|never)\b|\bdo\s+not\b|\bdon['’]t\b))/i;
+  /\b(?:(?:can|could|would|will)\s+you|(?:i|we)\s+(?:need|want|would like)\s+you(?:\s+to)?)\s+(?:(?:please\s+)?(?:not|never|avoid|refrain\s+from)\b|[^?\n]{0,80}\b(?:ensure|make\s+sure|understand|remember|confirm|acknowledge|note|know)\b[^?\n]{0,80}(?:\b(?:not|never)\b|\bdo\s+not\b|\bdon['’]t\b))/i;
 const NON_AUTHORIZING_DIRECT_SAFETY_CONSTRAINT_RE =
   /\b(?:please\s+)?(?:ensure|make\s+sure)\b[^?\n]{0,80}(?:\b(?:not|never)\b|\bdo\s+not\b|\bdon['’]t\b)/i;
 const NON_AUTHORIZING_ADVISORY_PROMPT_RE =
@@ -1238,6 +1241,20 @@ function hasExplicitAdvisoryFollowUpAction(text: string): boolean {
   );
 }
 
+function hasRequestGovernedAction(text: string, requestPattern: RegExp): boolean {
+  const request = requestPattern.exec(text);
+  if (!request) {
+    return false;
+  }
+  const requestTail = text.slice(request.index + request[0].length);
+  const action = PLANNING_ONLY_ACTION_VERB_RE.exec(requestTail);
+  if (!action) {
+    return false;
+  }
+  const nestedClause = /\bthat\b/i.exec(requestTail);
+  return !nestedClause || action.index < nestedClause.index;
+}
+
 function isLikelyActionableUserPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -1263,10 +1280,8 @@ function isLikelyActionableUserPrompt(text: string): boolean {
     ACTIONABLE_PROMPT_DIRECTIVE_RE.test(actionableText) ||
     ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE.test(actionableText) ||
     ACTIONABLE_PROMPT_ADDITIONAL_POLITE_DIRECTIVE_RE.test(actionableText) ||
-    (ACTIONABLE_PROMPT_REQUEST_RE.test(actionableText) &&
-      PLANNING_ONLY_ACTION_VERB_RE.test(actionableText)) ||
-    (ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE.test(actionableText) &&
-      PLANNING_ONLY_ACTION_VERB_RE.test(actionableText)) ||
+    hasRequestGovernedAction(actionableText, ACTIONABLE_PROMPT_REQUEST_RE) ||
+    hasRequestGovernedAction(actionableText, ACTIONABLE_PROMPT_FIRST_PERSON_REQUEST_RE) ||
     ACTIONABLE_PROMPT_TERSE_REQUEST_RE.test(actionableText)
   );
 }

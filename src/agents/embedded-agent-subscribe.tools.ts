@@ -557,6 +557,8 @@ export function isToolResultError(result: unknown): boolean {
     normalized === "timed_out" ||
     normalized === "blocked" ||
     normalized === "denied" ||
+    normalized === "rejected" ||
+    normalized === "not_sent" ||
     normalized === "forbidden" ||
     normalized === "unavailable" ||
     normalized === "approval-unavailable" ||

@@ -548,7 +548,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(payload).toBeNull();
   });
 
-  it.each(["blocked", "cancelled", "suppressed"])(
+  it.each(["blocked", "denied", "rejected", "not_sent", "cancelled", "suppressed"])(
     "does not synthesize a completed terminal reply from %s trailing tool output",
     (status) => {
       const payload = resolveTerminalToolResultReplyPayload({
@@ -7709,6 +7709,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "I need you not to delete the backups.",
     "We want you to avoid restarting production.",
     "I would like you to ensure you don't remove the database.",
+    "I need you to understand that you must not delete production data.",
+    "I need you to understand that deleting production data is dangerous.",
+    "I want you to remember that you should never restart production.",
+    "Can you confirm that you will not delete the backups?",
     "Please make sure you don't delete the file.",
     "Please ensure you never restart production.",
     "Make sure you do not remove the database.",
