@@ -54,8 +54,11 @@ export function toModelRow(params: {
   // Prefer model-level registry availability when present.
   // Fall back to provider-level auth heuristics only if registry availability isn't available,
   // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
-  const available =
-    availableKeys !== undefined && !allowProviderAvailabilityFallback
+  // Local providers (Ollama, LM Studio, etc.) don't need API-key auth so they are always available
+  // when configured (#92224).
+  const available = local
+    ? true
+    : availableKeys !== undefined && !allowProviderAvailabilityFallback
       ? modelIsAvailable
       : modelIsAvailable || (params.hasAuthForProvider?.(model.provider) ?? false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
