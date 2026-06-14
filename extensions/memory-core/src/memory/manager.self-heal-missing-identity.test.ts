@@ -65,14 +65,12 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     }
   });
 
-  async function createManager(
-    params: { provider?: string; vectorEnabled?: boolean } = {},
-  ): Promise<MemoryIndexManager> {
+  function createCfg(params: { provider?: string; vectorEnabled?: boolean } = {}): OpenClawConfig {
     const store =
       params.vectorEnabled === undefined
         ? { path: indexPath }
         : { path: indexPath, vector: { enabled: params.vectorEnabled } };
-    const cfg = {
+    return {
       memory: { backend: "builtin" },
       agents: {
         defaults: {
@@ -88,7 +86,12 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+  }
+
+  async function createManager(
+    params: { provider?: string; vectorEnabled?: boolean } = {},
+  ): Promise<MemoryIndexManager> {
+    const result = await getMemorySearchManager({ cfg: createCfg(params), agentId: "main" });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }
@@ -152,5 +155,105 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     expect(indexIdentityStatus(memoryManager)).toBe("missing");
     expect(statusAfter.chunks).toBe(1);
     expect(statusAfter.dirty).toBe(true);
+  });
+
+  it("refreshes a cached manager after a cli atomic reindex replaces the sqlite file", async () => {
+    await seedChunksWithNoMeta();
+    const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+
+    expect(indexIdentityStatus(memoryManager)).toBe("missing");
+
+    const cliResult = await getMemorySearchManager({
+      cfg: createCfg({ provider: "none", vectorEnabled: false }),
+      agentId: "main",
+      purpose: "cli",
+    });
+    if (!cliResult.manager) {
+      throw new Error(cliResult.error ?? "cli manager missing");
+    }
+    const cliManager = cliResult.manager as unknown as MemoryIndexManager;
+    try {
+      await cliManager.sync({ reason: "cli", force: true });
+    } finally {
+      await cliManager.close?.();
+    }
+
+    const statusAfter = memoryManager.status();
+    expect(statusAfter.custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(statusAfter.chunks).toBeGreaterThan(0);
+    expect(statusAfter.dirty).toBe(false);
+  });
+
+  it("clears stale dirty state when search first observes a cli atomic reindex replacement", async () => {
+    await seedChunksWithNoMeta();
+    const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+
+    expect(indexIdentityStatus(memoryManager)).toBe("missing");
+
+    const cliResult = await getMemorySearchManager({
+      cfg: createCfg({ provider: "none", vectorEnabled: false }),
+      agentId: "main",
+      purpose: "cli",
+    });
+    if (!cliResult.manager) {
+      throw new Error(cliResult.error ?? "cli manager missing");
+    }
+    const cliManager = cliResult.manager as unknown as MemoryIndexManager;
+    try {
+      await cliManager.sync({ reason: "cli", force: true });
+    } finally {
+      await cliManager.close?.();
+    }
+
+    const results = await memoryManager.search("Alpha topic");
+    const statusAfter = memoryManager.status();
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(statusAfter.custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(statusAfter.dirty).toBe(false);
+  });
+
+  it("preserves pending memory and session dirty work when replacement refresh clears missing identity", async () => {
+    await seedChunksWithNoMeta();
+    const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+    const dirtyState = memoryManager as unknown as {
+      dirty: boolean;
+      memoryFullRetryDirty: boolean;
+      sessionsDirty: boolean;
+      sessionsDirtyFiles: Set<string>;
+      sessionsFullRetryDirty: boolean;
+    };
+
+    expect(indexIdentityStatus(memoryManager)).toBe("missing");
+    dirtyState.dirty = true;
+    dirtyState.memoryFullRetryDirty = true;
+    dirtyState.sessionsDirty = true;
+    dirtyState.sessionsDirtyFiles.add("session-a.jsonl");
+    dirtyState.sessionsFullRetryDirty = true;
+
+    const cliResult = await getMemorySearchManager({
+      cfg: createCfg({ provider: "none", vectorEnabled: false }),
+      agentId: "main",
+      purpose: "cli",
+    });
+    if (!cliResult.manager) {
+      throw new Error(cliResult.error ?? "cli manager missing");
+    }
+    const cliManager = cliResult.manager as unknown as MemoryIndexManager;
+    try {
+      await cliManager.sync({ reason: "cli", force: true });
+    } finally {
+      await cliManager.close?.();
+    }
+
+    const statusAfter = memoryManager.status();
+
+    expect(statusAfter.custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(statusAfter.dirty).toBe(true);
+    expect(dirtyState.dirty).toBe(true);
+    expect(dirtyState.memoryFullRetryDirty).toBe(true);
+    expect(dirtyState.sessionsDirty).toBe(true);
+    expect(dirtyState.sessionsDirtyFiles.has("session-a.jsonl")).toBe(true);
+    expect(dirtyState.sessionsFullRetryDirty).toBe(true);
   });
 });

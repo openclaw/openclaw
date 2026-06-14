@@ -1,4 +1,5 @@
 // Memory Core plugin module implements manager behavior.
+import fsSync from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -8,6 +9,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
+  resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -88,7 +90,19 @@ type EmbeddingProbeCacheEntry = {
   expireAtMs: number;
 };
 
+type MemoryIndexFileSignature = {
+  dev: number;
+  ino: number;
+};
+
 const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
+
+function sameMemoryIndexFileSignature(
+  left: MemoryIndexFileSignature | null,
+  right: MemoryIndexFileSignature | null,
+): boolean {
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
+}
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   EMBEDDING_PROBE_CACHE.clear();
@@ -290,6 +304,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
   private readonlyRecoveryLastError?: string;
+  private indexFileSignature: MemoryIndexFileSignature | null = null;
+  private indexFileRefreshPendingDirtyCleanup = false;
   private indexIdentityState: MemoryIndexIdentityState = {
     status: "missing",
     reason: "index metadata is missing",
@@ -387,6 +403,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     this.sources = new Set(effectiveSettings.sources);
     this.db = this.openDatabase();
+    this.indexFileSignature = this.readCurrentIndexFileSignature();
     this.providerKey = this.computeProviderKey();
     this.cache = {
       enabled: effectiveSettings.cache.enabled,
@@ -546,6 +563,42 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  private readCurrentIndexFileSignature(): MemoryIndexFileSignature | null {
+    try {
+      const stat = fsSync.statSync(resolveUserPath(this.settings.store.path));
+      return { dev: stat.dev, ino: stat.ino };
+    } catch {
+      return null;
+    }
+  }
+
+  private refreshDatabaseHandleIfExternallyReplaced(): boolean {
+    if (this.closed || this.syncing) {
+      return false;
+    }
+    const currentSignature = this.readCurrentIndexFileSignature();
+    if (!currentSignature) {
+      return false;
+    }
+    if (!this.indexFileSignature) {
+      this.indexFileSignature = currentSignature;
+      return false;
+    }
+    if (sameMemoryIndexFileSignature(this.indexFileSignature, currentSignature)) {
+      return false;
+    }
+    try {
+      closeMemoryDatabase(this.db);
+    } catch {}
+    this.db = this.openDatabase();
+    this.indexFileSignature = this.readCurrentIndexFileSignature();
+    this.resetVectorState();
+    this.ensureSchema();
+    this.vector.dims = this.readMeta()?.vectorDims;
+    this.indexFileRefreshPendingDirtyCleanup = true;
+    return true;
+  }
+
   async warmSession(sessionKey?: string): Promise<void> {
     if (!this.settings.sync.onSessionStart) {
       return;
@@ -563,6 +616,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
+    const hadIndexIdentityDirty = this.indexIdentityDirty;
+    const refreshedDatabase =
+      this.refreshDatabaseHandleIfExternallyReplaced() || this.indexFileRefreshPendingDirtyCleanup;
     const provider =
       this.settings.provider === "none"
         ? null
@@ -579,6 +635,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.indexIdentityDirty =
       state.status === "mismatched" ||
       (state.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
+    if (refreshedDatabase && hadIndexIdentityDirty && state.status === "valid") {
+      this.dirty = this.memoryFullRetryDirty || this.pendingWatchPaths.size > 0;
+      this.sessionsDirty = this.sessionsFullRetryDirty || this.sessionsDirtyFiles.size > 0;
+    }
+    if (refreshedDatabase) {
+      this.indexFileRefreshPendingDirtyCleanup = false;
+    }
     return state;
   }
 
@@ -601,6 +664,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       await this.ensureProviderInitialized();
       this.assertRequiredProviderAvailable("search");
     }
+    this.refreshDatabaseHandleIfExternallyReplaced();
     let hasIndexedContent = this.hasIndexedContent();
     if (!hasIndexedContent) {
       try {
@@ -966,6 +1030,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closed) {
       return;
     }
+    this.refreshDatabaseHandleIfExternallyReplaced();
     if (this.syncing) {
       if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
         return this.enqueueTargetedSessionSync(params.sessionFiles);
