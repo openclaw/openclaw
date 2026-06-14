@@ -175,71 +175,16 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 | `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
-### Channel mirror dispatcher
+### Channel mirror dispatcher (internal)
 
-These are **direct function exports** from `openclaw/plugin-sdk/channel-outbound`,
-not `api.*` methods. They are the seam a messaging channel implements to support
-**pin-from-here turn mirroring** — when a session turn driven from one thread is
-re-rendered natively in another thread of the same session that ran `/pin on`.
-
-```ts
-import {
-  registerChannelMirrorDispatcher,
-  unregisterChannelMirrorDispatcher,
-  type MirrorDispatcher,
-} from "openclaw/plugin-sdk/channel-outbound";
-```
-
-| Export                                                            | Contract it owns                                                                                                                               |
-| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `registerChannelMirrorDispatcher(channel, accountId, dispatcher)` | Make `channel`'s account mirror-capable. One dispatcher **per account** the channel serves (each closes over that account's live bot/runtime). |
-| `unregisterChannelMirrorDispatcher(channel, accountId)`           | Drop that account's dispatcher. No-op if absent.                                                                                               |
-| `MirrorDispatcher`                                                | Type of the callback: `({ cfg, target, replyResolver, sessionKey }) => void \| Promise<void>`.                                                 |
-
-**Lifecycle.** Register from the account's start path and `unregister` from its
-stop path. Registration is **last-wins**: re-registering for the same
-`(channel, accountId)` replaces the previous dispatcher, so an in-process account
-reload supersedes the stale runtime instead of mirroring through a stopped bot.
-
-**What the dispatcher must do.** It re-homes the mirrored turn onto the channel's
-**own** inbound dispatch, passing the supplied `replyResolver` in place of the
-model. The resolver replays the origin run's event stream off the agent-event
-bus, so the turn renders + persists through the channel's normal pipeline
-(streaming, drafts, formatting, verbose) under **that account's own config** —
-nothing is reimplemented per channel.
-
-**Account + revocation behavior (security-sensitive).** Dispatcher resolution is
-by exact `(channel, accountId)`. A wildcard target (no pinned account) may use a
-single-account install's sole dispatcher, but a target pinning an **explicit**
-account that does not match **fails closed** — a mirror is never rendered through
-a different account than the target pinned. For a mirror-capable channel the
-native dispatcher is the **sole delivery authority**: the host suppresses the
-post-hoc raw echo for it, because that raw send bypasses the channel's
-enablement/revocation checks. The dispatcher MUST therefore run the synthesized
-inbound through the channel's normal admission path so a **revoked** destination
-(group/topic disabled, `requireTopic` unmet) is dropped — if it instead delivered
-unconditionally, content could leak to a destination whose access was disabled.
-
-**Companion: echo-admission predicate.** The native mirror runs the channel's
-admission gate, but the prompt / post-hoc **echo** path (`fireEchoDeliveries`)
-delivers through the channel-agnostic raw send, which has no such gate — so a
-disabled destination would keep receiving echoes. A channel registers an
-admission predicate so the echo path honors live enablement too:
-
-```ts
-import {
-  registerChannelEchoAdmission,
-  unregisterChannelEchoAdmission,
-  type ChannelEchoAdmission,
-} from "openclaw/plugin-sdk/channel-outbound";
-```
-
-`registerChannelEchoAdmission(channel, accountId, (cfg, target) => boolean)`
-returns `false` when an echo to `target` is currently not allowed (e.g. its
-group/topic is disabled). Same lifecycle and account-resolution rules as the
-dispatcher: per-account, last-wins, unregister on stop, and **fail closed** — a
-channel with predicates registered but none resolving for the target's account
-denies the echo. Channels that register no predicate deliver echoes unchanged.
+The pin-from-here **mirror dispatcher** and **echo-admission** registries
+(`registerChannelMirrorDispatcher` / `registerChannelEchoAdmission` and their
+`unregister*` pairs) are **not** part of the public plugin SDK. They are global,
+last-wins registries keyed by caller-provided `(channel, accountId)` strings
+with no per-plugin ownership enforcement, so they live on the repo-local
+`openclaw/plugin-sdk/channel-outbound-internal` subpath used by in-repo channel
+extensions only (it is excluded from the public export map). They will be
+promoted to a public, owner-scoped registrar only with maintainer sign-off.
 
 ### Host hooks for workflow plugins
 

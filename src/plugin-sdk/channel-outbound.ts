@@ -48,26 +48,11 @@ export type { DraftStreamLoop } from "../channels/draft-stream-loop.js";
 export { resolveChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export type { ChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
-// Channel mirror-dispatcher seam (pin-from-here turn mirroring). A channel
-// registers one dispatcher per account it serves to render mirrored turns
-// natively through its own dispatch. Contract + lifecycle + account/revocation
-// rules: docs/plugins/sdk-overview.md#channel-mirror-dispatcher.
-export {
-  registerChannelMirrorDispatcher,
-  unregisterChannelMirrorDispatcher,
-  type MirrorDispatcher,
-} from "../infra/outbound/mirror-dispatch.js";
-
-// Channel echo-admission seam. A channel registers a predicate so the prompt /
-// post-hoc echo path (fireEchoDeliveries) honors the destination's live
-// enablement — a pinned target stops receiving echoes once its group/topic is
-// disabled (revocation), matching the native mirror gate. Contract:
-// docs/plugins/sdk-overview.md#channel-mirror-dispatcher.
-export {
-  registerChannelEchoAdmission,
-  unregisterChannelEchoAdmission,
-  type ChannelEchoAdmission,
-} from "../infra/outbound/channel-admission.js";
+// NOTE: the pin-from-here mirror-dispatcher + echo-admission registries are NOT
+// exported here. They are global last-wins registries with no per-plugin
+// ownership enforcement, so they live on the repo-local `channel-outbound-internal`
+// subpath (in-repo channel extensions only) until an owner-scoped public contract
+// is approved. See src/plugin-sdk/channel-outbound-internal.ts.
 export { createChannelRunQueue } from "./channel-lifecycle.core.js";
 export type {
   ChannelRunQueue,

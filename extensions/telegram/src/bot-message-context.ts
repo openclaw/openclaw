@@ -388,6 +388,15 @@ export const buildTelegramMessageContext = async ({
       upsertPairingRequest,
     }))
   ) {
+    // Enforced for mirrors too: a DM whose access is later denied (DM policy
+    // disabled, pairing required, allowlist) must stop receiving mirrored turns
+    // — this is destination revocation, not a transient failure. Signal it so
+    // dispatchMirror keeps the handled mark (post-hoc echo suppressed) instead of
+    // un-marking and falling through to the raw echo.
+    if (isMirror) {
+      logVerbose(`Blocked telegram DM ${chatId} (access denied)`);
+      options?.onMirrorAdmissionBlocked?.();
+    }
     return null;
   }
   let initialTypingCueSent = false;

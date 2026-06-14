@@ -3,7 +3,7 @@ import {
   registerChannelMirrorDispatcher,
   unregisterChannelEchoAdmission,
   unregisterChannelMirrorDispatcher,
-} from "openclaw/plugin-sdk/channel-outbound";
+} from "openclaw/plugin-sdk/channel-outbound-internal";
 // Telegram plugin module implements bot core behavior.
 import {
   resolveChannelGroupPolicy,
@@ -433,9 +433,12 @@ export function createTelegramBotCore(
   );
 
   // Pin-from-here revocation: the prompt / post-hoc echo path delivers through
-  // the channel-agnostic raw send (no inbound admission gate), so gate it on
-  // this account's live group/topic enablement. A disabled (revoked) destination
-  // then stops receiving echoes too, matching the native mirror gate.
+  // the channel-agnostic raw send (no inbound admission gate), so gate it on this
+  // account's live enablement. A disabled (revoked) destination then stops
+  // receiving echoes too, matching the native mirror gate. Covers groups/topics
+  // (`groups[id].enabled` / topic `enabled`), direct chats (resolveTelegram-
+  // GroupConfig returns the direct config for a positive chat id, so its
+  // `enabled: false` is caught here), and a DM policy later set to `disabled`.
   registerChannelEchoAdmission("telegram", account.accountId, (_cfg, target) => {
     const raw = target.to
       .replace(/^(telegram|tg):/i, "")
@@ -452,6 +455,14 @@ export function createTelegramBotCore(
     }
     if (topicConfig?.enabled === false) {
       return false;
+    }
+    // A pinned direct chat (positive id) whose DM policy is later disabled must
+    // also stop receiving echoes — read the live account config, not the snapshot.
+    if (typeof chatId === "number" && chatId > 0) {
+      const liveDmPolicy = loadFreshTelegramAccountConfig().dmPolicy ?? dmPolicy;
+      if (liveDmPolicy === "disabled") {
+        return false;
+      }
     }
     return true;
   });
