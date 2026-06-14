@@ -104,6 +104,13 @@ function scheduleRunStatusClear(host: RunLifecycleHost, status: ChatRunUiStatus)
     }
     host.chatRunStatus = null;
     host.chatRunStatusClearTimer = null;
+    // The status toast masks a stale "active" selected-session row via
+    // hasTerminalRunStatus. Without re-reconciling here, the composer snaps back
+    // to the Stop button when the toast expires for a run that already completed
+    // locally and is only kept "active" by poll lag. Re-apply terminal while the
+    // local terminal reconcile is still in-window (publishRunStatus:false so this
+    // does not re-arm a toast and loop). (#88033)
+    reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: false });
     host.requestUpdate?.();
   }, CHAT_RUN_STATUS_TOAST_DURATION_MS);
 }

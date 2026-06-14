@@ -1,8 +1,9 @@
 // Control UI tests cover run lifecycle behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isSessionRunActive } from "../session-run-state.ts";
 import type { SessionsListResult } from "../types.ts";
 import {
+  CHAT_RUN_STATUS_TOAST_DURATION_MS,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
@@ -235,6 +236,42 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(true);
     expect(rowActive(host)).toBe(false);
     expect(host.lastLocalTerminalReconcile?.runId).toBe("r1");
+  });
+
+  it("re-terminalizes the stale selected row when the status toast expires (#88033)", () => {
+    vi.useFakeTimers();
+    try {
+      const host = makeHost({
+        chatRunId: "r1",
+        chatStream: "partial...",
+        sessionsResult: makeSessionsResult([{ key: "s1", hasActiveRun: true, status: "running" }]),
+      });
+      // Local turn completes: publishes the 5s status toast and arms the
+      // in-window stale-row reconcile.
+      reconcileChatRunLifecycle(host, {
+        outcome: "done",
+        sessionStatus: "done",
+        runId: "r1",
+        sessionKey: "s1",
+        clearLocalRun: true,
+        clearChatStream: true,
+        armLocalTerminalReconcile: true,
+      });
+      expect(host.chatRunStatus?.phase).toBe("done");
+      // A racing sessions.list refresh re-introduces a stale active row that the
+      // toast currently masks via hasTerminalRunStatus.
+      host.sessionsResult = makeSessionsResult([
+        { key: "s1", hasActiveRun: true, status: "running" },
+      ]);
+      expect(rowActive(host)).toBe(true);
+      // When the toast expires the composer must NOT snap back to the Stop
+      // button: the stale row is reconciled to terminal.
+      vi.advanceTimersByTime(CHAT_RUN_STATUS_TOAST_DURATION_MS);
+      expect(host.chatRunStatus).toBeNull();
+      expect(rowActive(host)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps suppressing multiple stale active refreshes within the window", () => {
