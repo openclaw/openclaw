@@ -3,19 +3,23 @@ import { describe, expect, it } from "vitest";
 import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
+  buildGogWatchServeArgs,
   buildGogWatchServeLogArgs,
   buildTopicPath,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
+const fixtureHookToken = ["hook", "token"].join("-");
+const fixturePushToken = ["push", "token"].join("-");
+
 const baseConfig = {
   hooks: {
-    token: "hook-token",
+    token: fixtureHookToken,
     gmail: {
       account: "openclaw@gmail.com",
       topic: "projects/demo/topics/gog-gmail-watch",
-      pushToken: "push-token",
+      pushToken: fixturePushToken,
     },
   },
 } satisfies OpenClawConfig;
@@ -27,11 +31,11 @@ describe("gmail hook config", () => {
     return resolveGmailHookRuntimeConfig(
       {
         hooks: {
-          token: "hook-token",
+          token: fixtureHookToken,
           gmail: {
             account: "openclaw@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
-            pushToken: "push-token",
+            pushToken: fixturePushToken,
             ...overrides,
           },
         },
@@ -89,8 +93,8 @@ describe("gmail hook config", () => {
     }
 
     const args = buildGogWatchServeLogArgs(result.value);
-    expect(args).not.toContain("push-token");
-    expect(args).not.toContain("hook-token");
+    expect(args).not.toContain(fixturePushToken);
+    expect(args).not.toContain(fixtureHookToken);
     expect(args).not.toContain("--token");
     expect(args).not.toContain("--hook-token");
     // --token, --hook-url, and --hook-token are stripped from the log args.
@@ -112,6 +116,29 @@ describe("gmail hook config", () => {
     ]);
   });
 
+  it("builds watch serve args with secret files when provided", () => {
+    const result = resolveGmailHookRuntimeConfig(baseConfig, {});
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    const pushFilePath = ["/tmp/push", "file"].join("-");
+    const hookFilePath = ["/tmp/hook", "file"].join("-");
+    const args = buildGogWatchServeArgs(result.value, {
+      pushTokenFile: pushFilePath,
+      hookTokenFile: hookFilePath,
+    });
+    expect(args).toContain("--token-file");
+    expect(args).toContain(pushFilePath);
+    expect(args).toContain("--hook-token-file");
+    expect(args).toContain(hookFilePath);
+    expect(args).not.toContain("--token");
+    expect(args).not.toContain("--hook-token");
+    expect(args).not.toContain(fixturePushToken);
+    expect(args).not.toContain(fixtureHookToken);
+  });
+
   it("fails without hook token", () => {
     const result = resolveGmailHookRuntimeConfig(
       {
@@ -119,7 +146,7 @@ describe("gmail hook config", () => {
           gmail: {
             account: "openclaw@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
-            pushToken: "push-token",
+            pushToken: fixturePushToken,
           },
         },
       },

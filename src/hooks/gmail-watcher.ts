@@ -6,6 +6,9 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -30,11 +33,39 @@ let shuttingDown = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
 let respawnTimeout: ReturnType<typeof setTimeout> | null = null;
 
+type GogServeSecretFiles = {
+  dir: string;
+  pushTokenFile: string;
+  hookTokenFile: string;
+  cleanup: () => void;
+};
+
 /**
  * Check if gog binary is available
  */
 function isGogAvailable(): boolean {
   return hasBinary("gog");
+}
+
+function createGogServeSecretFiles(cfg: GmailHookRuntimeConfig): GogServeSecretFiles {
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-gmail-watch-"));
+  const pushTokenFile = path.join(dir, "push-token");
+  const hookTokenFile = path.join(dir, "hook-token");
+  writeFileSync(pushTokenFile, cfg.pushToken, { mode: 0o600 });
+  writeFileSync(hookTokenFile, cfg.hookToken, { mode: 0o600 });
+  let cleaned = false;
+  return {
+    dir,
+    pushTokenFile,
+    hookTokenFile,
+    cleanup: () => {
+      if (cleaned) {
+        return;
+      }
+      cleaned = true;
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 /**
@@ -67,17 +98,27 @@ async function startGmailWatch(
  * Spawn the gog gmail watch serve process
  */
 function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
-  const args = buildGogWatchServeArgs(cfg);
+  const secretFiles = createGogServeSecretFiles(cfg);
+  const args = buildGogWatchServeArgs(cfg, {
+    pushTokenFile: secretFiles.pushTokenFile,
+    hookTokenFile: secretFiles.hookTokenFile,
+  });
   log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   let addressInUse = false;
   const invocation = resolveGogServeInvocation(args);
 
-  const child = spawn(invocation.command, invocation.args, {
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: false,
-    windowsHide: invocation.windowsHide,
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  });
+  let child: ChildProcess;
+  try {
+    child = spawn(invocation.command, invocation.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: false,
+      windowsHide: invocation.windowsHide,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
+  } catch (err) {
+    secretFiles.cleanup();
+    throw err;
+  }
 
   child.stdout?.on("data", (data: Buffer) => {
     const line = data.toString().trim();
@@ -98,10 +139,12 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   });
 
   child.on("error", (err) => {
+    secretFiles.cleanup();
     log.error(`gog process error: ${String(err)}`);
   });
 
   child.on("exit", (code, signal) => {
+    secretFiles.cleanup();
     // If a newer watcher has replaced this child, do not respawn.
     if (watcherProcess !== null && watcherProcess !== child) {
       return;
