@@ -45,6 +45,12 @@ type IncompleteTurnAttempt = Pick<
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "heartbeatToolResponse"
+  | "toolMediaUrls"
+  | "toolAudioAsVoice"
+  | "toolTrustedLocalMedia"
+  | "didDeliverSourceReplyViaMessageTool"
+  | "messagingToolSourceReplyPayloads"
   | "didSendViaMessagingTool"
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
@@ -263,6 +269,35 @@ export function resolveAttemptReplayMetadata(attempt: {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+type TerminalAttemptState = Pick<
+  EmbeddedRunAttemptResult,
+  | "clientToolCalls"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "heartbeatToolResponse"
+  | "lastToolError"
+  | "toolMediaUrls"
+  | "toolAudioAsVoice"
+  | "toolTrustedLocalMedia"
+  | "didDeliverSourceReplyViaMessageTool"
+  | "messagingToolSourceReplyPayloads"
+>;
+
+function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean {
+  return Boolean(
+    attempt.clientToolCalls ||
+    attempt.yieldDetected ||
+    attempt.didSendDeterministicApprovalPrompt ||
+    attempt.heartbeatToolResponse ||
+    attempt.lastToolError ||
+    attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
+    attempt.toolAudioAsVoice ||
+    attempt.toolTrustedLocalMedia ||
+    attempt.didDeliverSourceReplyViaMessageTool ||
+    attempt.messagingToolSourceReplyPayloads?.length,
+  );
+}
+
 /**
  * Builds the user-visible incomplete-turn warning when a terminal attempt did
  * not produce a safe final assistant response and no committed delivery/progress
@@ -288,6 +323,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
     !joinAssistantTexts(params.attempt.assistantTexts).length &&
+    !hasAttemptTerminalState(params.attempt) &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
   if (
@@ -565,6 +601,11 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "didSendDeterministicApprovalPrompt"
     | "heartbeatToolResponse"
     | "lastToolError"
+    | "toolMediaUrls"
+    | "toolAudioAsVoice"
+    | "toolTrustedLocalMedia"
+    | "didDeliverSourceReplyViaMessageTool"
+    | "messagingToolSourceReplyPayloads"
     | "replayMetadata"
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
@@ -572,13 +613,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return false;
   }
-  if (
-    params.attempt.clientToolCalls ||
-    params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.heartbeatToolResponse ||
-    params.attempt.lastToolError
-  ) {
+  if (hasAttemptTerminalState(params.attempt)) {
     return false;
   }
   if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {

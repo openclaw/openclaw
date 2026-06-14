@@ -319,6 +319,14 @@ describe("runEmbeddedAgent silent-error retry", () => {
         },
       },
     ],
+    ["tool media", { toolMediaUrls: ["file:///tmp/render.png"] }],
+    ["voice media", { toolAudioAsVoice: true }],
+    ["trusted local media", { toolTrustedLocalMedia: true }],
+    [
+      "source reply payloads",
+      { messagingToolSourceReplyPayloads: [{ text: "Delivered through the source reply." }] },
+    ],
+    ["delivered source replies", { didDeliverSourceReplyViaMessageTool: true }],
     ["tool errors", { lastToolError: { toolName: "read", error: "read failed" } }],
   ] satisfies Array<[string, Partial<EmbeddedRunAttemptResult>]>)(
     "does not retry after terminal %s",

@@ -2567,6 +2567,58 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toContain("couldn't generate a response");
   });
 
+  it.each([
+    [
+      "heartbeat responses",
+      {
+        heartbeatToolResponse: {
+          outcome: "progress" as const,
+          notify: false,
+          summary: "Still working",
+        },
+      },
+    ],
+    ["tool media", { toolMediaUrls: ["file:///tmp/render.png"] }],
+    ["voice media", { toolAudioAsVoice: true }],
+    ["trusted local media", { toolTrustedLocalMedia: true }],
+    [
+      "source reply payloads",
+      { messagingToolSourceReplyPayloads: [{ text: "Delivered through the source reply." }] },
+    ],
+    ["delivered source replies", { didDeliverSourceReplyViaMessageTool: true }],
+  ] satisfies Array<[string, Partial<EmbeddedRunAttemptResult>]>)(
+    "does not replace terminal %s with an incomplete-turn warning",
+    (_label, attemptState) => {
+      const incompleteTurnText = resolveIncompleteTurnPayloadText({
+        payloadCount: 1,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          ...attemptState,
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "error",
+            provider: "anthropic",
+            model: "claude-opus-4-8",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal reasoning before provider error",
+                thinkingSignature: JSON.stringify({
+                  id: "rs_terminal_payload",
+                  type: "reasoning",
+                }),
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      });
+
+      expect(incompleteTurnText).toBeNull();
+    },
+  );
+
   it("retries replay-safe errored turns that only emitted thinking blocks", () => {
     const assistant = {
       role: "assistant",
