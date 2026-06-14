@@ -2,6 +2,11 @@
 import type { Command } from "commander";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { collectString } from "./cli-options.js";
+import type {
+  QaLabSelfCheckCommandOptions,
+  QaProfileCommandOptions,
+  QaSuiteCommandOptions,
+} from "./cli.runtime.js";
 import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
 import { registerMantisCli } from "./mantis/cli.js";
 import {
@@ -17,6 +22,37 @@ import type { QaProviderMode, QaProviderModeInput } from "./run-config.js";
 import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
+
+type QaRunCliOptions = QaLabSelfCheckCommandOptions & {
+  outputDir?: QaProfileCommandOptions["outputDir"];
+  profile?: QaProfileCommandOptions["profile"];
+  surface?: QaProfileCommandOptions["surface"];
+  category?: QaProfileCommandOptions["category"];
+  transport?: QaProfileCommandOptions["transportId"];
+  providerMode?: QaProfileCommandOptions["providerMode"];
+  model?: QaProfileCommandOptions["primaryModel"];
+  altModel?: QaProfileCommandOptions["alternateModel"];
+  concurrency?: QaProfileCommandOptions["concurrency"];
+  allowFailures?: QaProfileCommandOptions["allowFailures"];
+  fast?: QaProfileCommandOptions["fastMode"];
+};
+
+type QaSuiteCliOptions = Omit<
+  QaSuiteCommandOptions,
+  | "transportId"
+  | "primaryModel"
+  | "alternateModel"
+  | "fastMode"
+  | "scenarioIds"
+  | "enabledPluginIds"
+> & {
+  transport?: QaSuiteCommandOptions["transportId"];
+  model?: QaSuiteCommandOptions["primaryModel"];
+  altModel?: QaSuiteCommandOptions["alternateModel"];
+  fast?: QaSuiteCommandOptions["fastMode"];
+  scenario?: QaSuiteCommandOptions["scenarioIds"];
+  enablePlugin?: QaSuiteCommandOptions["enabledPluginIds"];
+};
 
 let qaLabCliRuntimePromise: Promise<QaLabCliRuntime> | null = null;
 
@@ -41,54 +77,17 @@ function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
   return parsed;
 }
 
-async function runQaSelfCheck(opts: { repoRoot?: string; output?: string }) {
+async function runQaSelfCheck(opts: QaLabSelfCheckCommandOptions) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaLabSelfCheckCommand(opts);
 }
 
-async function runQaProfile(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  profile: string;
-  surface?: string;
-  category?: string;
-  transportId?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  allowFailures?: boolean;
-  concurrency?: number;
-}) {
+async function runQaProfile(opts: QaProfileCommandOptions) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaProfileCommand(opts);
 }
 
-async function runQaSuiteCliCommand(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  transportId?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  thinking?: string;
-  allowFailures?: boolean;
-  enabledPluginIds?: string[];
-  cliAuthMode?: string;
-  parityPack?: string;
-  pack?: string;
-  scenarioIds?: string[];
-  concurrency?: number;
-  runner?: string;
-  image?: string;
-  cpus?: number;
-  memory?: string;
-  disk?: string;
-  preflight?: boolean;
-  runtimePair?: string;
-  runtimeParityTier?: string[];
-}) {
+async function runQaSuiteCliCommand(opts: QaSuiteCommandOptions) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
 }
@@ -325,45 +324,29 @@ export function registerQaLabCli(program: Command) {
       false,
     )
     .option("--fast", "Enable provider fast mode where supported", false)
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        output?: string;
-        outputDir?: string;
-        profile?: string;
-        surface?: string;
-        category?: string;
-        transport?: string;
-        providerMode?: QaProviderModeInput;
-        model?: string;
-        altModel?: string;
-        concurrency?: number;
-        allowFailures?: boolean;
-        fast?: boolean;
-      }) => {
-        if (opts.profile?.trim()) {
-          await runQaProfile({
-            repoRoot: opts.repoRoot,
-            outputDir: opts.outputDir,
-            profile: opts.profile,
-            surface: opts.surface,
-            category: opts.category,
-            transportId: opts.transport,
-            providerMode: opts.providerMode,
-            primaryModel: opts.model,
-            alternateModel: opts.altModel,
-            concurrency: opts.concurrency,
-            allowFailures: opts.allowFailures,
-            fastMode: opts.fast,
-          });
-          return;
-        }
-        await runQaSelfCheck({
+    .action(async (opts: QaRunCliOptions) => {
+      if (opts.profile?.trim()) {
+        await runQaProfile({
           repoRoot: opts.repoRoot,
-          output: opts.output,
+          outputDir: opts.outputDir,
+          profile: opts.profile,
+          surface: opts.surface,
+          category: opts.category,
+          transportId: opts.transport,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          concurrency: opts.concurrency,
+          allowFailures: opts.allowFailures,
+          fastMode: opts.fast,
         });
-      },
-    );
+        return;
+      }
+      await runQaSelfCheck({
+        repoRoot: opts.repoRoot,
+        output: opts.output,
+      });
+    });
 
   qa.command("suite")
     .description("Run repo-backed QA scenarios against the QA gateway lane")
@@ -417,59 +400,33 @@ export function registerQaLabCli(program: Command) {
       collectString,
       [],
     )
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        outputDir?: string;
-        transport?: string;
-        runner?: string;
-        providerMode?: QaProviderModeInput;
-        model?: string;
-        altModel?: string;
-        cliAuthMode?: string;
-        parityPack?: string;
-        pack?: string;
-        scenario?: string[];
-        enablePlugin?: string[];
-        concurrency?: number;
-        allowFailures?: boolean;
-        fast?: boolean;
-        thinking?: string;
-        image?: string;
-        cpus?: number;
-        memory?: string;
-        disk?: string;
-        preflight?: boolean;
-        runtimePair?: string;
-        runtimeParityTier?: string[];
-      }) => {
-        await runQaSuiteCliCommand({
-          repoRoot: opts.repoRoot,
-          outputDir: opts.outputDir,
-          transportId: opts.transport,
-          runner: opts.runner,
-          providerMode: opts.providerMode,
-          primaryModel: opts.model,
-          alternateModel: opts.altModel,
-          fastMode: opts.fast,
-          thinking: opts.thinking,
-          cliAuthMode: opts.cliAuthMode,
-          parityPack: opts.parityPack,
-          pack: opts.pack,
-          scenarioIds: opts.scenario,
-          enabledPluginIds: opts.enablePlugin,
-          concurrency: opts.concurrency,
-          allowFailures: opts.allowFailures,
-          image: opts.image,
-          cpus: opts.cpus,
-          memory: opts.memory,
-          disk: opts.disk,
-          preflight: opts.preflight,
-          runtimePair: opts.runtimePair,
-          runtimeParityTier: opts.runtimeParityTier,
-        });
-      },
-    );
+    .action(async (opts: QaSuiteCliOptions) => {
+      await runQaSuiteCliCommand({
+        repoRoot: opts.repoRoot,
+        outputDir: opts.outputDir,
+        transportId: opts.transport,
+        runner: opts.runner,
+        providerMode: opts.providerMode,
+        primaryModel: opts.model,
+        alternateModel: opts.altModel,
+        fastMode: opts.fast,
+        thinking: opts.thinking,
+        cliAuthMode: opts.cliAuthMode,
+        parityPack: opts.parityPack,
+        pack: opts.pack,
+        scenarioIds: opts.scenario,
+        enabledPluginIds: opts.enablePlugin,
+        concurrency: opts.concurrency,
+        allowFailures: opts.allowFailures,
+        image: opts.image,
+        cpus: opts.cpus,
+        memory: opts.memory,
+        disk: opts.disk,
+        preflight: opts.preflight,
+        runtimePair: opts.runtimePair,
+        runtimeParityTier: opts.runtimeParityTier,
+      });
+    });
 
   qa.command("parity-report")
     .description("Write either a model-axis parity gate report or a runtime-axis parity report")

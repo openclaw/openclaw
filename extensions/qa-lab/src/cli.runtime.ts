@@ -100,6 +100,49 @@ type InterruptibleServer = {
   stop(): Promise<void>;
 };
 
+export type QaLabSelfCheckCommandOptions = {
+  repoRoot?: string;
+  output?: string;
+};
+
+type QaScenarioProviderCommandOptions = {
+  transportId?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+};
+
+type QaScenarioRunCommandOptions = QaScenarioProviderCommandOptions & {
+  repoRoot?: string;
+  outputDir?: string;
+  concurrency?: number;
+  allowFailures?: boolean;
+};
+
+export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
+  profile: string;
+  surface?: string;
+  category?: string;
+};
+
+export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
+  runner?: string;
+  thinking?: string;
+  cliAuthMode?: string;
+  parityPack?: string;
+  pack?: string;
+  scenarioIds?: string[];
+  enabledPluginIds?: string[];
+  image?: string;
+  cpus?: number;
+  memory?: string;
+  disk?: string;
+  preflight?: boolean;
+  runtimePair?: string;
+  runtimeParityTier?: string[];
+};
+
 function resolveQaManualLaneModels(opts: {
   providerMode: QaProviderMode;
   primaryModel?: string;
@@ -562,7 +605,7 @@ function printQaCredentialDoctorTable(
   }
 }
 
-export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output?: string }) {
+export async function runQaLabSelfCheckCommand(opts: QaLabSelfCheckCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const server = await startQaLabServer({
     repoRoot,
@@ -576,20 +619,7 @@ export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output
   }
 }
 
-export async function runQaProfileCommand(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  profile: string;
-  surface?: string;
-  category?: string;
-  transportId?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  concurrency?: number;
-  allowFailures?: boolean;
-}) {
+export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const scenarioPack = readQaScenarioPack();
   const scorecardReport = readQaScorecardTaxonomyReport(scenarioPack.scenarios);
@@ -708,11 +738,9 @@ function resolveQaProfileGroupOutputDir(
   return `${outputDir}-${executionKind}`;
 }
 
-function formatQaRunProfileNoMatchMessage(opts: {
-  profile: string;
-  surface?: string;
-  category?: string;
-}) {
+function formatQaRunProfileNoMatchMessage(
+  opts: Pick<QaProfileCommandOptions, "profile" | "surface" | "category">,
+) {
   const filters = [
     `--profile ${opts.profile}`,
     opts.surface?.trim() ? `--surface ${opts.surface.trim()}` : null,
@@ -735,31 +763,7 @@ async function withTemporaryQaProfileEnv<T>(profile: string, run: () => Promise<
   }
 }
 
-export async function runQaSuiteCommand(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  transportId?: string;
-  runner?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  thinking?: string;
-  cliAuthMode?: string;
-  parityPack?: string;
-  pack?: string;
-  scenarioIds?: string[];
-  concurrency?: number;
-  allowFailures?: boolean;
-  enabledPluginIds?: string[];
-  image?: string;
-  cpus?: number;
-  memory?: string;
-  disk?: string;
-  preflight?: boolean;
-  runtimePair?: string;
-  runtimeParityTier?: string[];
-}) {
+export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
