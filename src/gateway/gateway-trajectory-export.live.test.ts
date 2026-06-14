@@ -31,8 +31,13 @@ const DEFAULT_CODEX_MODEL = "openai/gpt-5.5";
 
 type TrajectoryExportApprovalEntry = {
   id?: string;
+  command?: string;
+  commandText?: string;
+  commandPreview?: string;
   request?: {
     command?: string;
+    commandText?: string;
+    commandPreview?: string;
   };
 };
 
@@ -91,6 +96,7 @@ async function writeLiveGatewayConfig(params: {
       port: params.port,
       auth: { mode: "token", token: params.token },
     },
+    commands: { ownerAllowFrom: ["*"] },
     plugins: { allow: ["codex"] },
     agents: {
       list: [{ id: "dev", default: true, tools: { exec: { host: "node" } } }],
@@ -203,8 +209,21 @@ function extractAssistantTexts(messages: unknown[]): string[] {
   return texts;
 }
 
+function getTrajectoryExportApprovalCommands(entry: TrajectoryExportApprovalEntry): string[] {
+  return [
+    entry.request?.command,
+    entry.request?.commandText,
+    entry.request?.commandPreview,
+    entry.command,
+    entry.commandText,
+    entry.commandPreview,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
 function isTrajectoryExportApproval(entry: TrajectoryExportApprovalEntry): boolean {
-  return Boolean(entry.request?.command?.includes("sessions export-trajectory"));
+  return getTrajectoryExportApprovalCommands(entry).some((command) =>
+    command.includes("sessions export-trajectory"),
+  );
 }
 
 function summarizeTrajectoryExportApproval(
@@ -230,6 +249,8 @@ async function waitForTrajectoryExportInstructionText(params: {
 }): Promise<string> {
   const deadline = Date.now() + params.timeoutMs;
   let finalTexts: string[] = [];
+  let assistantTexts: string[] = [];
+  let nextHistoryPollAt = 0;
   while (Date.now() < deadline) {
     const newEvents = params.events.slice(params.eventStartIndex);
     finalTexts = newEvents
@@ -239,25 +260,33 @@ async function waitForTrajectoryExportInstructionText(params: {
     if (matchedText) {
       return matchedText;
     }
+    if (Date.now() >= nextHistoryPollAt) {
+      try {
+        const history = (await params.client.request(
+          "chat.history",
+          {
+            sessionKey: params.sessionKey,
+            limit: 24,
+          },
+          { timeoutMs: 10_000 },
+        )) as { messages?: unknown[] };
+        assistantTexts = extractAssistantTexts(history.messages ?? []);
+        const matchedHistoryText = assistantTexts.find((text) =>
+          text.includes(params.expectedText),
+        );
+        if (matchedHistoryText) {
+          return matchedHistoryText;
+        }
+      } catch {
+        assistantTexts = [];
+      }
+      nextHistoryPollAt = Date.now() + 2_000;
+    }
     await new Promise((resolve) => {
       setTimeout(resolve, 500);
     });
   }
-  let assistantTexts: string[];
   let approvalSummaries: TrajectoryExportApprovalSummary[];
-  try {
-    const history = (await params.client.request(
-      "chat.history",
-      {
-        sessionKey: params.sessionKey,
-        limit: 24,
-      },
-      { timeoutMs: 10_000 },
-    )) as { messages?: unknown[] };
-    assistantTexts = extractAssistantTexts(history.messages ?? []);
-  } catch {
-    assistantTexts = [];
-  }
   try {
     const approvals = (await params.client.request(
       "exec.approval.list",
@@ -348,7 +377,9 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
       `expected trajectory export approval id; approvals=${JSON.stringify(lastApprovalSummaries)}`,
     );
   }
-  expect(approval.request?.command).toContain("sessions export-trajectory");
+  expect(getTrajectoryExportApprovalCommands(approval).join("\n")).toContain(
+    "sessions export-trajectory",
+  );
   await client.request(
     "exec.approval.resolve",
     { id: approval.id, decision: "allow-once" },
