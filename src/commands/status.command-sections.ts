@@ -354,7 +354,7 @@ export function buildStatusSessionsRows(params: {
     Age: sess.updatedAt && sess.age != null ? params.formatTimeAgo(sess.age) : "no activity",
     Model: sess.model ?? "unknown",
     Runtime: sess.runtime ?? "unknown",
-    Tokens: params.formatTokensCompact(sess),
+    Tokens: params.formatTokensCompact(sess) + (sess.estimatedCostUsd != null ? ` · $${sess.estimatedCostUsd.toFixed(2)}` : ""),
     ...(params.verbose
       ? { Cache: params.formatPromptCacheCompact(sess) || params.muted("—") }
       : {}),

@@ -250,6 +250,7 @@ function createSessionStatusRows() {
           total !== null && contextTokens ? Math.round((total / contextTokens) * 100) : null,
         model: typeof entry.model === "string" ? entry.model : null,
         contextTokens,
+        estimatedCostUsd: null,
         flags: [
           ...(entry.verboseLevel ? [`verbose:${entry.verboseLevel}`] : []),
           ...(entry.thinkingLevel ? [`think:${entry.thinkingLevel}`] : []),
