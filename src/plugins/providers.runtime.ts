@@ -25,6 +25,7 @@ import {
   resolveOwningPluginIdsForProviderRef,
   withBundledProviderVitestCompat,
 } from "./providers.js";
+import type { PluginProviderRegistration } from "./registry-types.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptionsFromValues,
@@ -306,6 +307,31 @@ function resolveRuntimeProviderPluginLoadState(
   return { loadOptions };
 }
 
+function projectPluginProviderRegistration(
+  entry: PluginProviderRegistration,
+  scope?: ReadonlySet<string>,
+): ProviderPlugin | null {
+  try {
+    const pluginId = entry.pluginId;
+    if (scope && !scope.has(pluginId)) {
+      return null;
+    }
+    return Object.assign({}, entry.provider, { pluginId });
+  } catch {
+    return null;
+  }
+}
+
+function projectPluginProviderRegistrations(
+  entries: readonly PluginProviderRegistration[],
+  onlyPluginIds?: readonly string[],
+): ProviderPlugin[] {
+  const scope = onlyPluginIds ? new Set(onlyPluginIds) : undefined;
+  return entries
+    .map((entry) => projectPluginProviderRegistration(entry, scope))
+    .filter((provider): provider is ProviderPlugin => provider !== null);
+}
+
 export function isPluginProvidersLoadInFlight(
   params: Parameters<typeof resolvePluginProviders>[0],
 ): boolean {
@@ -350,8 +376,9 @@ export function resolvePluginProviders(params: {
       return [];
     }
     const registry = loadOpenClawPlugins(loadState.loadOptions);
-    return registry.providers.map((entry) =>
-      Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
+    return projectPluginProviderRegistrations(
+      registry.providers,
+      loadState.loadOptions.onlyPluginIds,
     );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base, snapshot);
@@ -371,7 +398,8 @@ export function resolvePluginProviders(params: {
     return [];
   }
 
-  return registry.providers.map((entry) =>
-    Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
+  return projectPluginProviderRegistrations(
+    registry.providers,
+    loadState.loadOptions.onlyPluginIds,
   );
 }
