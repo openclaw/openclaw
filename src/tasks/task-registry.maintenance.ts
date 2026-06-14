@@ -879,11 +879,17 @@ export function reconcileTaskRecordForOperatorInspection(
   );
 }
 
+let reconcileCache: { result: TaskRecord[]; time: number } | null = null;
+
 export function reconcileInspectableTasks(): TaskRecord[] {
+  const now = Date.now();
+  if (reconcileCache && now - reconcileCache.time < 5) {
+    return reconcileCache.result;
+  }
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
-  return taskRegistryMaintenanceRuntime
+  const result = taskRegistryMaintenanceRuntime
     .listTaskRecords()
     .map((task) =>
       reconcileTaskRecordForOperatorInspectionWithContexts(
@@ -892,6 +898,8 @@ export function reconcileInspectableTasks(): TaskRecord[] {
         backingSessionContext,
       ),
     );
+  reconcileCache = { result, time: now };
+  return result;
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
