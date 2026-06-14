@@ -5,7 +5,11 @@
  */
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+  resolveSubagentSpawnModelSelection,
+} from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
 /** Splits a provider/model ref while preserving model-only refs. */
@@ -81,7 +85,26 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   }
 
   const modelOverrideSource = params.modelOverride?.trim() ? "user" : "auto";
-  const resolvedModelRef = splitModelRef(resolvedModel);
+  const hasConfiguredAutoModel =
+    modelOverrideSource === "auto" &&
+    Boolean(
+      resolveSubagentConfiguredModelSelection({
+        cfg: params.cfg,
+        agentId: params.targetAgentId,
+      }),
+    );
+  const configuredModelRef = hasConfiguredAutoModel ? splitModelRef(resolvedModel) : undefined;
+  const modelOrigin = configuredModelRef?.model
+    ? {
+        provider:
+          configuredModelRef.provider ??
+          resolveDefaultModelForAgent({
+            cfg: params.cfg,
+            agentId: params.targetAgentId,
+          }).provider,
+        model: configuredModelRef.model,
+      }
+    : undefined;
 
   return {
     status: "ok" as const,
@@ -93,16 +116,12 @@ export function resolveSubagentModelAndThinkingPlan(params: {
         ? {
             model: resolvedModel,
             modelOverrideSource,
-            ...(modelOverrideSource === "auto" &&
-            resolvedModelRef.provider &&
-            resolvedModelRef.model
+            ...(modelOrigin
               ? {
-                  // Auto-selected subagent models are real session overrides, not legacy
-                  // auto-fallback recoveries. Persist self-origin metadata so the child
-                  // run keeps its configured model instead of the legacy cleanup path
-                  // discarding it before first execution.
-                  modelOverrideFallbackOriginProvider: resolvedModelRef.provider,
-                  modelOverrideFallbackOriginModel: resolvedModelRef.model,
+                  // Config-selected models are session overrides, not legacy fallback residue.
+                  // Self-origin metadata keeps cleanup from discarding them before first use.
+                  modelOverrideFallbackOriginProvider: modelOrigin.provider,
+                  modelOverrideFallbackOriginModel: modelOrigin.model,
                 }
               : {}),
           }

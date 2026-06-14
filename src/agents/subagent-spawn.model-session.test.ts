@@ -114,7 +114,8 @@ describe("spawnSubagentDirect runtime model persistence", () => {
           agents: {
             defaults: {
               workspace: os.tmpdir(),
-              subagents: { model: "minimax/MiniMax-M2.7" },
+              model: { primary: "openai/gpt-5.5" },
+              subagents: { model: "gpt-5.4" },
             },
           },
         }),
@@ -143,7 +144,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expect(result.status).toBe("accepted");
     const [, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
     expect(persistedEntry?.modelOverrideSource).toBe("auto");
-    expect(persistedEntry?.modelOverrideFallbackOriginProvider).toBe("minimax");
-    expect(persistedEntry?.modelOverrideFallbackOriginModel).toBe("MiniMax-M2.7");
+    expect(persistedEntry?.modelOverrideFallbackOriginProvider).toBe("openai");
+    expect(persistedEntry?.modelOverrideFallbackOriginModel).toBe("gpt-5.4");
   });
 });
