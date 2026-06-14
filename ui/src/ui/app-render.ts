@@ -2344,20 +2344,21 @@ export function renderApp(state: AppViewState) {
             ...(agentId ? { agentId } : {}),
           },
         );
-        const content = res?.file?.content;
-        if (typeof content !== "string") {
+        const file = res?.file;
+        if (!file || typeof file.content !== "string") {
           if (isCurrentOpenRequest()) {
             chatWorkspaceFiles.error = `Failed to load ${filePath}`;
             requestHostUpdate?.();
           }
           return;
         }
+        const content = file.content;
         if (!isCurrentOpenRequest()) {
           return;
         }
         state.handleOpenSidebar({
           kind: "markdown",
-          content: buildWorkspaceFileSidebarContent(res.file.name || filePath, content),
+          content: buildWorkspaceFileSidebarContent(file.name || filePath, content),
           rawText: content,
         });
       } catch (err) {
