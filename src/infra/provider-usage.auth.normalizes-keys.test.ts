@@ -177,6 +177,11 @@ const providerRuntimeMocks = vi.hoisted(() => ({
         return token?.startsWith("sk-ant-oat01-") ? { token } : { handled: true };
       }
 
+      if (params.provider === "openai") {
+        const oauth = await params.context.resolveOAuthToken({ provider: "openai" });
+        return oauth ?? { handled: true };
+      }
+
       if (params.provider === "minimax") {
         const token = resolveToken({
           providerIds: ["minimax"],
@@ -655,6 +660,22 @@ describe("resolveProviderAuths key normalization", () => {
         });
       },
       expected: [{ provider: "openai", token: "chatgpt-token" }],
+    });
+  });
+
+  it("uses legacy openai-codex oauth-compatible profiles for ChatGPT usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      setup: async (home) => {
+        await writeAuthProfiles(home, {
+          "openai-codex:default": {
+            type: "token",
+            provider: "openai-codex",
+            token: "legacy-chatgpt-token",
+          },
+        });
+      },
+      expected: [{ provider: "openai", token: "legacy-chatgpt-token" }],
     });
   });
 

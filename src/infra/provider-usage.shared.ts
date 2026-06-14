@@ -45,7 +45,7 @@ export function resolveUsageProviderId(
   }
   const normalized = normalizeProviderId(provider);
   if (
-    normalized === "openai" &&
+    (normalized === "openai" || normalized === "openai-codex") &&
     (options?.credentialType === "oauth" || options?.credentialType === "token")
   ) {
     return "openai";

@@ -185,6 +185,9 @@ function resolveUsageCredentialProviderIds(params: {
   provider: UsageProviderId;
 }): string[] {
   const providerIds = new Set(normalizeProviderIds([params.provider]));
+  if (params.provider === "openai") {
+    providerIds.add("openai-codex");
+  }
   const providerIdSet = new Set(providerIds);
   try {
     const snapshot = loadManifestMetadataSnapshot({
@@ -213,6 +216,7 @@ function resolveUsageCredentialProviderIds(params: {
 async function resolveOAuthToken(params: {
   state: UsageAuthState;
   provider: string;
+  usageProvider?: UsageProviderId;
 }): Promise<ProviderAuth | null> {
   if (!params.state.allowAuthProfileStore) {
     return null;
@@ -243,7 +247,7 @@ async function resolveOAuthToken(params: {
         continue;
       }
       return {
-        provider: params.provider as UsageProviderId,
+        provider: params.usageProvider ?? (params.provider as UsageProviderId),
         token: resolved.apiKey,
         accountId:
           cred.type === "oauth" && "accountId" in cred
@@ -280,10 +284,26 @@ async function resolveProviderUsageAuthViaPlugin(params: {
               envDirect: options?.envDirect,
             }),
       resolveOAuthToken: async (options) => {
-        const auth = await resolveOAuthToken({
-          state: params.state,
-          provider: options?.provider ?? params.provider,
-        });
+        const requestedProvider = options?.provider;
+        const providers =
+          requestedProvider &&
+          normalizeProviderId(requestedProvider) !== normalizeProviderId(params.provider)
+            ? [requestedProvider]
+            : resolveUsageCredentialProviderIds({
+                state: params.state,
+                provider: params.provider,
+              });
+        let auth: ProviderAuth | null = null;
+        for (const provider of providers) {
+          auth = await resolveOAuthToken({
+            state: params.state,
+            provider,
+            usageProvider: params.provider,
+          });
+          if (auth) {
+            break;
+          }
+        }
         return auth
           ? {
               token: auth.token,
@@ -313,12 +333,18 @@ async function resolveProviderUsageAuthFallback(params: {
   state: UsageAuthState;
   provider: UsageProviderId;
 }): Promise<ProviderAuth | null> {
-  const oauthToken = await resolveOAuthToken({
+  for (const provider of resolveUsageCredentialProviderIds({
     state: params.state,
     provider: params.provider,
-  });
-  if (oauthToken) {
-    return oauthToken;
+  })) {
+    const oauthToken = await resolveOAuthToken({
+      state: params.state,
+      provider,
+      usageProvider: params.provider,
+    });
+    if (oauthToken) {
+      return oauthToken;
+    }
   }
   if (isOAuthOnlyUsageProvider(params.provider)) {
     return null;
