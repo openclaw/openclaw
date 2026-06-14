@@ -23,6 +23,10 @@ import {
   AgentsUpdateParamsSchema,
   type AgentsUpdateResult,
   AgentsUpdateResultSchema,
+  type AgentsSetDefaultParams,
+  AgentsSetDefaultParamsSchema,
+  type AgentsSetDefaultResult,
+  AgentsSetDefaultResultSchema,
   type AgentsDeleteParams,
   AgentsDeleteParamsSchema,
   type AgentsDeleteResult,
@@ -541,6 +545,9 @@ export const validateWakeParams = lazyCompile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = lazyCompile<AgentsListParams>(AgentsListParamsSchema);
 export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
+export const validateAgentsSetDefaultParams = lazyCompile<AgentsSetDefaultParams>(
+  AgentsSetDefaultParamsSchema,
+);
 export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
 export const validateAgentsFilesListParams = lazyCompile<AgentsFilesListParams>(
   AgentsFilesListParamsSchema,
@@ -1085,6 +1092,8 @@ export {
   AgentsCreateResultSchema,
   AgentsUpdateParamsSchema,
   AgentsUpdateResultSchema,
+  AgentsSetDefaultParamsSchema,
+  AgentsSetDefaultResultSchema,
   AgentsDeleteParamsSchema,
   AgentsDeleteResultSchema,
   AgentsFilesListParamsSchema,
@@ -1240,6 +1249,8 @@ export type {
   AgentsCreateResult,
   AgentsUpdateParams,
   AgentsUpdateResult,
+  AgentsSetDefaultParams,
+  AgentsSetDefaultResult,
   AgentsDeleteParams,
   AgentsDeleteResult,
   AgentsFilesListParams,
