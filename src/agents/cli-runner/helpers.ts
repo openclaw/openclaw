@@ -118,6 +118,7 @@ export function buildCliAgentSystemPrompt(params: {
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
+  extraSystemPromptDirective?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
   runtimeChannel?: string;
@@ -167,6 +168,7 @@ export function buildCliAgentSystemPrompt(params: {
     workspaceDir: runtimeWorkspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
+    extraSystemPromptDirective: params.extraSystemPromptDirective,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,

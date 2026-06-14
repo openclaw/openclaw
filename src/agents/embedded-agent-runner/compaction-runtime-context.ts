@@ -43,6 +43,7 @@ export type EmbeddedCompactionRuntimeContext = {
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
+  extraSystemPromptDirective?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   activeProcessSessions?: ActiveProcessSessionReference[];
@@ -169,6 +170,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
+  extraSystemPromptDirective?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   activeProcessSessions?: ActiveProcessSessionReference[];
@@ -213,6 +215,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     reasoningLevel: params.reasoningLevel,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
+    extraSystemPromptDirective: params.extraSystemPromptDirective,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     ownerNumbers: params.ownerNumbers,
     ...(activeProcessSessions.length > 0 ? { activeProcessSessions } : {}),

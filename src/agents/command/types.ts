@@ -111,6 +111,7 @@ export type AgentCommandOpts = {
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;
   extraSystemPrompt?: string;
+  extraSystemPromptDirective?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for bootstrap context behavior. */

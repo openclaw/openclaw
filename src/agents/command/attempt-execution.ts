@@ -623,6 +623,7 @@ export function runAgentAttempt(params: {
         lifecycleGeneration: params.lifecycleGeneration,
         lane: params.opts.lane,
         extraSystemPrompt: params.opts.extraSystemPrompt,
+        extraSystemPromptDirective: params.opts.extraSystemPromptDirective,
         inputProvenance: params.opts.inputProvenance,
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
@@ -741,6 +742,7 @@ export function runAgentAttempt(params: {
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
+    extraSystemPromptDirective: params.opts.extraSystemPromptDirective,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
     toolsAllow: params.opts.toolsAllow,
