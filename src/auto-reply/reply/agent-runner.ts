@@ -2145,7 +2145,11 @@ export async function runReplyAgent(params: {
     const originMessageThreadId = normalizeOptionalString(
       resolveRoutedDeliveryThreadId({ ctx: sessionCtx, sessionKey }),
     );
+    const committedMessagingToolSourceReplyDelivery =
+      runResult.didDeliverSourceReplyViaMessageTool === true ||
+      hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
     const hasMessageToolOnlyCurrentSourceVisibleReplyEvidence =
+      committedMessagingToolSourceReplyDelivery ||
       hasCommittedMessagingTargetVisibleReplyEvidenceForCurrentSource({
         messageProvider: originMessageProvider,
         originatingTo: originMessageTo,
@@ -2195,9 +2199,6 @@ export async function runReplyAgent(params: {
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
     });
-    const committedMessagingToolSourceReplyDelivery =
-      runResult.didDeliverSourceReplyViaMessageTool === true ||
-      hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
       committedMessagingToolSourceReplyDelivery

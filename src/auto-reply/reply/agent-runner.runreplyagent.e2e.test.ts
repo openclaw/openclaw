@@ -1958,6 +1958,30 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await expect(run()).resolves.toBeUndefined();
   });
 
+  it("does not surface the Discord message-tool-only guard after committed source-reply delivery without target evidence", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      didDeliverSourceReplyViaMessageTool: true,
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
   it("surfaces the Discord message-tool-only guard after target-only message.send evidence", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
