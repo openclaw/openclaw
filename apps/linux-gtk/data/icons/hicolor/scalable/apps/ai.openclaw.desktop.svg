@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e04040"/>
+      <stop offset="100%" stop-color="#c02020"/>
+    </linearGradient>
+  </defs>
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#bg)"/>
+  <!-- Lobster claw - left pincer -->
+  <path d="M38 42 C28 38, 22 48, 26 58 C30 68, 42 72, 48 64 L44 56 C40 60, 34 58, 34 52 C34 46, 38 44, 38 42Z" fill="#fff" opacity="0.95"/>
+  <!-- Lobster claw - right pincer -->
+  <path d="M90 42 C100 38, 106 48, 102 58 C98 68, 86 72, 80 64 L84 56 C88 60, 94 58, 94 52 C94 46, 90 44, 90 42Z" fill="#fff" opacity="0.95"/>
+  <!-- Claw base / body -->
+  <path d="M48 64 Q52 78, 64 82 Q76 78, 80 64 L76 58 Q72 70, 64 72 Q56 70, 52 58Z" fill="#fff" opacity="0.95"/>
+  <!-- Eye dots -->
+  <circle cx="52" cy="46" r="3" fill="#c02020"/>
+  <circle cx="76" cy="46" r="3" fill="#c02020"/>
+</svg>
