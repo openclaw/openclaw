@@ -138,6 +138,7 @@ describe("generateSlugViaLLM", () => {
   it.each([
     'HTTP 400: {"error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance."}}',
     "Authentication failed: invalid API key",
+    "Missing token or projectId in Google Cloud credentials. Use /login to re-authenticate.",
     "Provider API error (429): quota exceeded",
   ])("rejects provider/auth/quota error text before slugifying: %s", async (text) => {
     runEmbeddedAgentMock.mockResolvedValueOnce({

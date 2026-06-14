@@ -26,7 +26,7 @@ const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
 const PROVIDER_ERROR_PREFIX_RE =
   /^(?:provider\s+)?(?:api|llm|model|openai|anthropic|codex|gateway)\s+(?:request\s+)?(?:error|failed|failure)\b/i;
 const PROVIDER_ERROR_DETAIL_RE =
-  /\b(?:insufficient[_ -]?quota|quota (?:exceeded|exhausted)|exceeded your current quota|payment required|insufficient credits|credit balance|insufficient[_ -]?(?:balance|funds)|rate[_ -]?limit(?:ed)?|too many requests|invalid[_ -]?api[_ -]?key|incorrect api key|authentication failed|oauth token refresh failed|unauthorized|forbidden|permission_error|billing hard limit|spend(?:ing)? limit)\b/i;
+  /\b(?:insufficient[_ -]?quota|quota (?:exceeded|exhausted)|exceeded your current quota|payment required|insufficient credits|credit balance|insufficient[_ -]?(?:balance|funds)|rate[_ -]?limit(?:ed)?|too many requests|invalid[_ -]?api[_ -]?key|incorrect api key|authentication failed|oauth token refresh failed|missing (?:token|projectid|credentials)|google cloud credentials|re-?authenticate|unauthorized|forbidden|permission_error|billing hard limit|spend(?:ing)? limit)\b/i;
 
 function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
   const configuredTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;

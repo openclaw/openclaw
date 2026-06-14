@@ -2,12 +2,6 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
-
-### Fixes
-
-- Hooks/session-memory: reject provider, auth, and quota error payloads from model-generated memory filename slugs and trim dashes after slug truncation so failed slug generation falls back to timestamp filenames instead of creating error-derived memory files. (#64181) Thanks @Cypherm.
-
 ## 2026.6.8
 
 ### Highlights
