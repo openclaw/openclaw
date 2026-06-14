@@ -764,7 +764,7 @@ describe("withReplyDispatcher", () => {
     expect(dispatcherOptions.silentReplyContext?.conversationType).toBe("direct");
   });
 
-  it("composes custom beforeDeliver with reply_payload_sending hooks", async () => {
+  it("composes custom beforeDeliver with reply_payload_sending and message_sending hooks", async () => {
     const customBeforeDeliver = vi.fn(async (payload: { text?: string }) => ({
       text: `${payload.text ?? ""} [custom]`,
     }));
@@ -809,7 +809,15 @@ describe("withReplyDispatcher", () => {
 
     expect(customBeforeDeliver).toHaveBeenCalledTimes(2);
     expect(customBeforeDeliver).toHaveBeenCalledWith({ text: "original" }, { kind: "final" });
-    expect(runMessageSending).not.toHaveBeenCalled();
+    expect(runMessageSending).toHaveBeenCalledTimes(2);
+    expect(runMessageSending).toHaveBeenCalledWith(
+      { content: "original [custom] [plugin]", to: "conv-1" },
+      {
+        accountId: "acct-1",
+        channelId: "threads",
+        conversationId: "conv-1",
+      },
+    );
     expect(runReplyPayloadSending).toHaveBeenCalledTimes(2);
     expect(runReplyPayloadSending).toHaveBeenCalledWith(
       {
@@ -826,10 +834,68 @@ describe("withReplyDispatcher", () => {
         runId: undefined,
       },
     );
-    expect(payload).toEqual({ text: "original [custom] [plugin]" });
+    expect(payload).toEqual({ text: "message hook" });
     expect(payloadWithMetadata ? getReplyPayloadMetadata(payloadWithMetadata) : undefined).toEqual({
       assistantMessageIndex: 5,
     });
+  });
+
+  it("composes buffered custom beforeDeliver with reply_payload_sending and message_sending hooks", async () => {
+    const customBeforeDeliver = vi.fn(async (payload: { text?: string }) => ({
+      text: `${payload.text ?? ""} [custom]`,
+    }));
+    const runMessageSending = vi.fn(async () => ({ content: "message hook" }));
+    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
+      payload: {
+        ...payload,
+        text: `${payload.text ?? ""} [plugin]`,
+      },
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(
+        (hookName?: string) =>
+          hookName === "message_sending" || hookName === "reply_payload_sending",
+      ),
+      runMessageSending,
+      runReplyPayloadSending,
+    });
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+        beforeDeliver: customBeforeDeliver,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = lastTypingDispatcherOptions();
+    if (!dispatcherOptions.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+
+    const payload = await dispatcherOptions.beforeDeliver({ text: "original" }, { kind: "final" });
+
+    expect(customBeforeDeliver).toHaveBeenCalledTimes(1);
+    expect(runReplyPayloadSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "original [custom]" },
+      }),
+      expect.anything(),
+    );
+    expect(runMessageSending).toHaveBeenCalledWith(
+      { content: "original [custom] [plugin]", to: "conv-1" },
+      expect.objectContaining({ channelId: "threads" }),
+    );
+    expect(payload).toEqual({ text: "message hook" });
   });
 
   it("does not copy source conversation type onto cross-session native silent-reply targets", async () => {

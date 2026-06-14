@@ -572,13 +572,11 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     finalized,
     replyPayloadRunState,
   );
-  const globalBeforeDeliver = combineBeforeDeliverHooks(
+  const configuredBeforeDeliver = combineBeforeDeliverHooks(
+    params.dispatcherOptions.beforeDeliver,
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(finalized),
   );
-  const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
-    : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
       ? async (payload, info) => {
@@ -671,13 +669,11 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     params.ctx,
     replyPayloadRunState,
   );
-  const globalBeforeDeliver = combineBeforeDeliverHooks(
+  const composedBeforeDeliver = combineBeforeDeliverHooks(
+    params.dispatcherOptions.beforeDeliver,
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(params.ctx),
   );
-  const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
-    : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,
     beforeDeliver: composedBeforeDeliver,
