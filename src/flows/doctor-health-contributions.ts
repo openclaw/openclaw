@@ -698,6 +698,11 @@ async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<voi
   }
 }
 
+async function runNodeRuntimeHealth(_ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteNodeRuntime } = await import("../commands/doctor-node-runtime.js");
+  await noteNodeRuntime();
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
@@ -1113,6 +1118,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:disk-space",
       label: "Disk space",
       run: runDiskSpaceHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:node-runtime",
+      label: "Node.js runtime",
+      hint: "Node version, path, version manager, EOL status",
+      run: runNodeRuntimeHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
