@@ -540,6 +540,7 @@ export async function resolveReplyDirectives(params: {
         skipStoredModelOverride,
         hasResolvedHeartbeatModelOverride,
         isHeartbeat: opts?.isHeartbeat === true,
+        deferModelOverrideReset: true,
       });
   provider = modelState.provider;
   model = modelState.model;

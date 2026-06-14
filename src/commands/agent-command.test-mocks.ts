@@ -87,6 +87,27 @@ vi.mock("../agents/model-selection.js", () => {
     provider: normalizeProviderId(provider),
     model: model.trim(),
   });
+  const resolvePersistedOverrideModelRef = ({
+    defaultProvider,
+    overrideProvider,
+    overrideModel,
+  }: {
+    defaultProvider?: unknown;
+    overrideProvider?: unknown;
+    overrideModel?: unknown;
+  }): ModelRef | null => {
+    const model = typeof overrideModel === "string" ? overrideModel.trim() : "";
+    if (!model) {
+      return null;
+    }
+    const provider =
+      typeof overrideProvider === "string" && overrideProvider.trim()
+        ? overrideProvider.trim()
+        : typeof defaultProvider === "string" && defaultProvider.trim()
+          ? defaultProvider.trim()
+          : "openai";
+    return normalizeModelRef(provider, model);
+  };
   const modelKey = (provider: string, model: string) =>
     `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
@@ -203,6 +224,7 @@ vi.mock("../agents/model-selection.js", () => {
         return ref ? { ref, source: "parsed" } : null;
       },
     ),
+    resolvePersistedOverrideModelRef: vi.fn(resolvePersistedOverrideModelRef),
     resolveThinkingDefault: vi.fn(
       ({
         cfg,

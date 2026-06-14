@@ -10,6 +10,7 @@ import {
 } from "../../agents/model-catalog.runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
@@ -1243,6 +1244,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     primaryModel?: string;
     isHeartbeat?: boolean;
     skipStoredModelOverride?: boolean;
+    deferModelOverrideReset?: boolean;
   }) {
     const cfg = {} as OpenClawConfig;
     const sessionEntry = makeEntry({
@@ -1271,6 +1273,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       hasModelDirective: false,
       isHeartbeat: params.isHeartbeat,
       skipStoredModelOverride: params.skipStoredModelOverride,
+      deferModelOverrideReset: params.deferModelOverrideReset,
     });
     return { state, sessionEntry, sessionStore };
   }
@@ -1308,6 +1311,103 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
+  });
+
+  it("clears stale auto-failover overrides when origin no longer matches primary", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.3",
+      authProfileOverride: "openrouter:fallback",
+      authProfileOverrideSource: "auto",
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
+    expect(state.resetModelOverrideReason).toBe("stale-auto-fallback-origin");
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBeUndefined();
+  });
+
+  it("defers stale auto-failover cleanup until the prepared selection is persisted", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.3",
+      authProfileOverride: "openrouter:fallback",
+      authProfileOverrideSource: "auto",
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+      deferModelOverrideReset: true,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideReason).toBe("stale-auto-fallback-origin");
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBe("openrouter:fallback");
+
+    await expect(state.persistModelOverrideReset()).resolves.toBe(true);
+
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBeUndefined();
+  });
+
+  it("preserves a mixed /model directive that changes the stale row before deferred cleanup", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.3",
+      authProfileOverride: "openrouter:fallback",
+      authProfileOverrideSource: "auto",
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+      deferModelOverrideReset: true,
+    });
+
+    expect(state.resetModelOverrideReason).toBe("stale-auto-fallback-origin");
+
+    const entry = sessionStore[sessionKey];
+    expect(entry).toBeDefined();
+    // Mirrors persistInlineDirectives for a mixed `/model openai/gpt-4o hello` message.
+    applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "openai",
+        model: "gpt-4o",
+      },
+      selectionSource: "user",
+    });
+
+    await expect(state.persistModelOverrideReset()).resolves.toBe(false);
+
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-4o");
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("user");
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBeUndefined();
   });
 
   it("keeps a legacy auto pin when the current selection already matches it", async () => {

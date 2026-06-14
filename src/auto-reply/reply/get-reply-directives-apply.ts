@@ -12,7 +12,7 @@ import { resolveModelSelectionFromDirective } from "./directive-handling.model-s
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
-import type { createModelSelectionState } from "./model-selection.js";
+import type { createModelSelectionState, ModelOverrideResetReason } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -68,9 +68,9 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
 export function formatModelOverrideResetEvent(params: {
   rejectedRef?: string;
   initialModelLabel: string;
-  reason?: "disallowed" | "stale";
+  reason?: ModelOverrideResetReason;
 }): string {
-  if (params.reason === "stale") {
+  if (params.reason && params.reason !== "disallowed") {
     if (params.rejectedRef) {
       return `Stored model override ${params.rejectedRef} is stale for this session; reverted to ${params.initialModelLabel}. Pick a model again with /model if you still want to override the default.`;
     }
@@ -196,7 +196,10 @@ export async function applyInlineDirectiveOverrides(params: {
 
   let directiveAck: ReplyPayload | undefined;
 
-  if (modelState.resetModelOverride) {
+  if (
+    modelState.resetModelOverride &&
+    modelState.resetModelOverrideReason !== "stale-auto-fallback-origin"
+  ) {
     enqueueSystemEvent(
       formatModelOverrideResetEvent({
         rejectedRef: modelState.resetModelOverrideRef,

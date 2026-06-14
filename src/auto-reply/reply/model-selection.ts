@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { isStaleAutoFallbackOriginOverride } from "../../agents/auto-fallback-stale-origin.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -47,14 +48,37 @@ import {
 
 type ModelCatalog = ModelCatalogEntry[];
 
-type ModelSelectionState = {
+type DeferredModelOverrideResetGuard = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "modelOverrideSource"
+  | "modelOverrideFallbackOriginProvider"
+  | "modelOverrideFallbackOriginModel"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+  | "fallbackNoticeSelectedModel"
+  | "fallbackNoticeActiveModel"
+  | "fallbackNoticeReason"
+>;
+
+export type ModelOverrideResetReason =
+  | "disallowed"
+  | "stale-auto-fallback-origin"
+  | "stale-heartbeat-auto-fallback"
+  | "stale-legacy-openai-codex-auto"
+  | "stale-legacy-auto-fallback-without-origin";
+
+export type ModelSelectionState = {
   provider: string;
   model: string;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
   resetModelOverrideRef?: string;
-  resetModelOverrideReason?: "disallowed" | "stale";
+  resetModelOverrideReason?: ModelOverrideResetReason;
+  persistModelOverrideReset: () => Promise<boolean>;
   resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
@@ -78,6 +102,7 @@ export function createFastTestModelSelectionState(params: {
     resetModelOverride: false,
     resetModelOverrideRef: undefined,
     resetModelOverrideReason: undefined,
+    persistModelOverrideReset: async () => false,
     resolveThinkingCatalog: async () => [],
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
@@ -107,6 +132,65 @@ function loadModelCatalogRuntime() {
 
 function loadSessionAccessorRuntime() {
   return sessionAccessorRuntimeLoader.load();
+}
+
+function captureDeferredModelOverrideResetGuard(
+  entry: SessionEntry,
+): DeferredModelOverrideResetGuard {
+  return {
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
+    authProfileOverride: entry.authProfileOverride,
+    authProfileOverrideSource: entry.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+    fallbackNoticeSelectedModel: entry.fallbackNoticeSelectedModel,
+    fallbackNoticeActiveModel: entry.fallbackNoticeActiveModel,
+    fallbackNoticeReason: entry.fallbackNoticeReason,
+  };
+}
+
+function matchesDeferredModelOverrideResetGuard(
+  entry: SessionEntry,
+  guard: DeferredModelOverrideResetGuard | undefined,
+): boolean {
+  if (!guard) {
+    return true;
+  }
+  return (
+    entry.providerOverride === guard.providerOverride &&
+    entry.modelOverride === guard.modelOverride &&
+    entry.modelOverrideSource === guard.modelOverrideSource &&
+    entry.modelOverrideFallbackOriginProvider === guard.modelOverrideFallbackOriginProvider &&
+    entry.modelOverrideFallbackOriginModel === guard.modelOverrideFallbackOriginModel &&
+    entry.authProfileOverride === guard.authProfileOverride &&
+    entry.authProfileOverrideSource === guard.authProfileOverrideSource &&
+    entry.authProfileOverrideCompactionCount === guard.authProfileOverrideCompactionCount &&
+    entry.fallbackNoticeSelectedModel === guard.fallbackNoticeSelectedModel &&
+    entry.fallbackNoticeActiveModel === guard.fallbackNoticeActiveModel &&
+    entry.fallbackNoticeReason === guard.fallbackNoticeReason
+  );
+}
+
+function applyModelOverrideResetToEntry(params: {
+  entry: SessionEntry;
+  primaryProvider: string;
+  primaryModel: string;
+  staleDirectStoredOverride: boolean;
+  staleAutoFallbackOriginOverride: boolean;
+}): boolean {
+  return applyModelOverrideToSessionEntry({
+    entry: params.entry,
+    selection: {
+      provider: params.primaryProvider,
+      model: params.primaryModel,
+      isDefault: true,
+    },
+    preserveAuthProfileOverride:
+      params.staleDirectStoredOverride && !params.staleAutoFallbackOriginOverride,
+  }).updated;
 }
 
 function findSelectedCatalogEntry(params: {
@@ -142,6 +226,7 @@ export async function createModelSelectionState(params: {
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
   isHeartbeat?: boolean;
+  deferModelOverrideReset?: boolean;
 }): Promise<ModelSelectionState> {
   const timingEnabled = shouldLogModelSelectionTiming();
   const startMs = timingEnabled ? Date.now() : 0;
@@ -197,7 +282,8 @@ export async function createModelSelectionState(params: {
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
-  let resetModelOverrideReason: "disallowed" | "stale" | undefined;
+  let resetModelOverrideReason: ModelOverrideResetReason | undefined;
+  let persistModelOverrideReset = async () => false;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
   const normalizedDirectStoredOverride = normalizeStoredOverrideModel({
     providerOverride: sessionEntry?.providerOverride,
@@ -249,10 +335,22 @@ export async function createModelSelectionState(params: {
     normalizedDirectOverride !== null &&
     modelKey(normalizedCurrentSelection.provider, normalizedCurrentSelection.model) !==
       modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model);
+  const staleAutoFallbackOriginOverride =
+    directStoredModelOverride?.source === "session" &&
+    !staleHeartbeatAutoFallbackOverride &&
+    isStaleAutoFallbackOriginOverride({
+      entry: sessionEntry,
+      defaultProvider,
+      defaultModel,
+      primaryProvider,
+      primaryModel,
+    });
   const staleDirectStoredOverride =
+    staleAutoFallbackOriginOverride ||
     staleHeartbeatAutoFallbackOverride ||
     staleLegacyOpenAICodexAutoOverride ||
     staleLegacyAutoFallbackWithoutOrigin;
+  const deferSessionCleanup = params.deferModelOverrideReset === true && staleDirectStoredOverride;
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -302,23 +400,76 @@ export async function createModelSelectionState(params: {
       directStoredOverride.model,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    if (staleDirectStoredOverride || !visibilityPolicy.allowsKey(key)) {
-      const { updated } = applyModelOverrideToSessionEntry({
-        entry: sessionEntry,
-        selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
-        preserveAuthProfileOverride: staleDirectStoredOverride,
-      });
-      if (updated) {
-        sessionStore[sessionKey] = sessionEntry;
-        if (storePath) {
-          const { replaceSessionEntry } = await loadSessionAccessorRuntime();
-          await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+    const disallowedStoredOverride = !visibilityPolicy.allowsKey(key);
+    if (staleDirectStoredOverride || disallowedStoredOverride) {
+      resetModelOverrideReason = staleAutoFallbackOriginOverride
+        ? "stale-auto-fallback-origin"
+        : staleHeartbeatAutoFallbackOverride
+          ? "stale-heartbeat-auto-fallback"
+          : staleLegacyOpenAICodexAutoOverride
+            ? "stale-legacy-openai-codex-auto"
+            : staleLegacyAutoFallbackWithoutOrigin
+              ? "stale-legacy-auto-fallback-without-origin"
+              : "disallowed";
+      resetModelOverrideRef = key;
+      const resetGuard = staleDirectStoredOverride
+        ? captureDeferredModelOverrideResetGuard(sessionEntry)
+        : undefined;
+      persistModelOverrideReset = async () => {
+        const currentEntry = sessionStore[sessionKey];
+        if (!currentEntry || !matchesDeferredModelOverrideResetGuard(currentEntry, resetGuard)) {
+          return false;
         }
-      }
-      resetModelOverride = updated;
-      if (updated) {
-        resetModelOverrideRef = key;
-        resetModelOverrideReason = staleDirectStoredOverride ? "stale" : "disallowed";
+        let persistedUpdated = false;
+        if (storePath) {
+          let persistedMatched = false;
+          const { updateSessionEntry } = await loadSessionAccessorRuntime();
+          await updateSessionEntry({ storePath, sessionKey }, (persistedEntry) => {
+            if (!matchesDeferredModelOverrideResetGuard(persistedEntry, resetGuard)) {
+              return null;
+            }
+            persistedMatched = true;
+            const nextEntry = { ...persistedEntry };
+            if (
+              applyModelOverrideResetToEntry({
+                entry: nextEntry,
+                primaryProvider,
+                primaryModel,
+                staleDirectStoredOverride,
+                staleAutoFallbackOriginOverride,
+              })
+            ) {
+              persistedUpdated = true;
+              return nextEntry;
+            }
+            return null;
+          });
+          if (!persistedMatched) {
+            return false;
+          }
+        }
+        const latestEntry = sessionStore[sessionKey];
+        if (!latestEntry || !matchesDeferredModelOverrideResetGuard(latestEntry, resetGuard)) {
+          return persistedUpdated;
+        }
+        const updated = applyModelOverrideResetToEntry({
+          entry: latestEntry,
+          primaryProvider,
+          primaryModel,
+          staleDirectStoredOverride,
+          staleAutoFallbackOriginOverride,
+        });
+        if (updated) {
+          sessionStore[sessionKey] = latestEntry;
+        }
+        return updated || persistedUpdated;
+      };
+      resetModelOverride = params.deferModelOverrideReset
+        ? true
+        : await persistModelOverrideReset();
+      if (!resetModelOverride) {
+        resetModelOverrideRef = undefined;
+        resetModelOverrideReason = undefined;
       }
     }
   }
@@ -381,6 +532,7 @@ export async function createModelSelectionState(params: {
 
   if (
     !params.skipStoredModelOverride &&
+    !deferSessionCleanup &&
     sessionEntry &&
     sessionStore &&
     sessionKey &&
@@ -612,6 +764,7 @@ export async function createModelSelectionState(params: {
     resetModelOverride,
     resetModelOverrideRef,
     resetModelOverrideReason,
+    persistModelOverrideReset,
     resolveThinkingCatalog,
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,

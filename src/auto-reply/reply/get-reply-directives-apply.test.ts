@@ -27,7 +27,7 @@ describe("formatModelOverrideResetEvent", () => {
       formatModelOverrideResetEvent({
         rejectedRef: "openai/gpt-5.5",
         initialModelLabel: "openai/gpt-5.4",
-        reason: "stale",
+        reason: "stale-legacy-auto-fallback-without-origin",
       }),
     ).toBe(
       "Stored model override openai/gpt-5.5 is stale for this session; reverted to openai/gpt-5.4. Pick a model again with /model if you still want to override the default.",
