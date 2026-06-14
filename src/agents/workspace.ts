@@ -1068,10 +1068,48 @@ function resolveGlobWalkRoot(pattern: string): string {
   return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
 }
 
+// Mirror Node fs.glob's default dot behavior while walking: `*` and `**` never
+// match a path segment that begins with ".", so a dot directory can only hold a
+// match when the pattern explicitly names a literal-dot segment at the aligned
+// depth. Returns whether `dirSegments` can be a prefix of some path the pattern
+// matches; used to prune dot-directory subtrees (`.git`, `.openclaw`, …) the
+// glob could never reach. matchesGlob applies the dot rule per single segment,
+// so the only extra rule here is that `**` cannot consume a leading-dot segment.
+function globPrefixCanDescend(dirSegments: string[], patternSegments: string[]): boolean {
+  const dirLength = dirSegments.length;
+  const patternLength = patternSegments.length;
+  const match = (dirIndex: number, patternIndex: number): boolean => {
+    if (dirIndex === dirLength) {
+      // Whole directory path consumed; deeper entries may still match.
+      return true;
+    }
+    if (patternIndex === patternLength) {
+      // Pattern exhausted but directory segments remain — no descendant matches.
+      return false;
+    }
+    const segment = dirSegments[dirIndex];
+    const patternSegment = patternSegments[patternIndex];
+    if (patternSegment === "**") {
+      if (match(dirIndex, patternIndex + 1)) {
+        return true;
+      }
+      // `**` skips over directory levels but never a leading-dot segment.
+      return !segment.startsWith(".") && match(dirIndex + 1, patternIndex);
+    }
+    if (!path.matchesGlob(segment, patternSegment)) {
+      return false;
+    }
+    return match(dirIndex + 1, patternIndex + 1);
+  };
+  return match(0, 0);
+}
+
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,
+  normalizedPattern: string,
 ): AsyncGenerator<string> {
+  const patternSegments = normalizedPattern.split("/");
   const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
   let visitedEntries = 0;
   while (stack.length > 0) {
@@ -1098,6 +1136,17 @@ async function* walkWorkspaceFiles(
         ? path.join(currentRelativeDir, entry.name)
         : entry.name;
       if (entry.isDirectory()) {
+        // Skip dot-directory subtrees the glob can never match, matching
+        // fs.glob's default dot behavior instead of walking `.git`/`.openclaw`.
+        if (
+          entry.name.startsWith(".") &&
+          !globPrefixCanDescend(
+            normalizeWorkspacePatternPath(childRelativePath).split("/"),
+            patternSegments,
+          )
+        ) {
+          continue;
+        }
         stack.push(childRelativePath);
         continue;
       }
@@ -1128,6 +1177,7 @@ async function resolveExtraBootstrapPatternPaths(
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,
     resolveGlobWalkRoot(normalizedPattern),
+    normalizedPattern,
   )) {
     if (path.matchesGlob(candidate, normalizedPattern)) {
       matches.push(candidate);
