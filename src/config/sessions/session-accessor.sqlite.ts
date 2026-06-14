@@ -486,8 +486,16 @@ function resolveSqliteTranscriptScope(
       `Cannot resolve SQLite transcript scope without a session id: ${scope.sessionKey}`,
     );
   }
+  if (!scope.sessionKey) {
+    throw new Error(
+      `Cannot resolve SQLite transcript scope without a session key: ${scope.sessionId}`,
+    );
+  }
   return {
-    ...resolveSqliteScope(scope),
+    ...resolveSqliteScope({
+      ...scope,
+      sessionKey: scope.sessionKey,
+    }),
     sessionId: scope.sessionId,
   };
 }
