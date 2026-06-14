@@ -8,6 +8,7 @@ type MockFn = ReturnType<typeof vi.fn>;
 type HandlerChatLog = {
   startTool: (...args: unknown[]) => void;
   updateToolResult: (...args: unknown[]) => void;
+  hasTool?: (...args: unknown[]) => boolean;
   addSystem: (...args: unknown[]) => void;
   addPendingSystem: (...args: unknown[]) => void;
   dismissPendingSystem: (...args: unknown[]) => void;
@@ -23,6 +24,7 @@ type HandlerTui = { requestRender: (...args: unknown[]) => void };
 type MockChatLog = {
   startTool: MockFn;
   updateToolResult: MockFn;
+  hasTool: MockFn;
   addSystem: MockFn;
   addPendingSystem: MockFn;
   dismissPendingSystem: MockFn;
@@ -37,9 +39,13 @@ type MockBtwPresenter = {
 type MockTui = { requestRender: MockFn };
 
 function createMockChatLog(): MockChatLog & HandlerChatLog {
+  const visibleToolIds = new Set<string>();
   return {
-    startTool: vi.fn(),
+    startTool: vi.fn((toolCallId: string) => {
+      visibleToolIds.add(toolCallId);
+    }),
     updateToolResult: vi.fn(),
+    hasTool: vi.fn((toolCallId: string) => visibleToolIds.has(toolCallId)),
     addSystem: vi.fn(),
     addPendingSystem: vi.fn(),
     dismissPendingSystem: vi.fn(),
@@ -172,14 +178,16 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       data: {
         phase: "start",
         toolCallId: "tc1",
-        name: "exec",
-        args: { command: "echo hi" },
+        name: "bash",
+        args: { command: "/bin/bash -lc 'timeout 420 ./pm validate workflow'" },
       },
     };
 
     handleAgentEvent(evt);
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", { command: "echo hi" });
+    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "bash", {
+      command: "/bin/bash -lc 'timeout 420 ./pm validate workflow'",
+    });
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
@@ -568,12 +576,19 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const agentEvt: AgentEvent = {
       runId: "run-42",
       stream: "tool",
-      data: { phase: "start", toolCallId: "tc1", name: "exec" },
+      data: {
+        phase: "start",
+        toolCallId: "tc1",
+        name: "bash",
+        args: { command: "/bin/bash -lc './pm validate workflow'" },
+      },
     };
 
     handleAgentEvent(agentEvt);
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined);
+    expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "bash", {
+      command: "/bin/bash -lc './pm validate workflow'",
+    });
   });
 
   it("accepts chat events when session key is an alias of the active canonical key", () => {
@@ -802,10 +817,17 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent({
       runId: "run-final",
       stream: "tool",
-      data: { phase: "start", toolCallId: "tc-final", name: "session_status" },
+      data: {
+        phase: "start",
+        toolCallId: "tc-final",
+        name: "bash",
+        args: { command: "/bin/bash -lc './pm validate workflow'" },
+      },
     });
 
-    expect(chatLog.startTool).toHaveBeenCalledWith("tc-final", "session_status", undefined);
+    expect(chatLog.startTool).toHaveBeenCalledWith("tc-final", "bash", {
+      command: "/bin/bash -lc './pm validate workflow'",
+    });
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
@@ -852,7 +874,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).not.toHaveBeenCalled();
   });
 
-  it("omits tool output when verbose is on (non-full)", () => {
+  it("shows control-plane tool output when verbose is on", () => {
     const { chatLog, handleAgentEvent } = createHandlersHarness({
       state: {
         activeChatRunId: "run-123",
@@ -864,9 +886,20 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       runId: "run-123",
       stream: "tool",
       data: {
+        phase: "start",
+        toolCallId: "tc-on",
+        name: "bash",
+        args: { command: "/bin/bash -lc './pm validate workflow'" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-123",
+      stream: "tool",
+      data: {
         phase: "update",
         toolCallId: "tc-on",
-        name: "session_status",
+        name: "bash",
         partialResult: { content: [{ type: "text", text: "secret" }] },
       },
     });
@@ -877,16 +910,16 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       data: {
         phase: "result",
         toolCallId: "tc-on",
-        name: "session_status",
+        name: "bash",
         result: { content: [{ type: "text", text: "secret" }] },
         isError: false,
       },
     });
 
-    expect(chatLog.updateToolResult).toHaveBeenCalledTimes(1);
-    expect(chatLog.updateToolResult).toHaveBeenCalledWith(
+    expect(chatLog.updateToolResult).toHaveBeenCalledTimes(2);
+    expect(chatLog.updateToolResult).toHaveBeenLastCalledWith(
       "tc-on",
-      { content: [] },
+      { content: [{ type: "text", text: "secret" }] },
       { isError: false },
     );
   });
