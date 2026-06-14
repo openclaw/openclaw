@@ -126,8 +126,11 @@ function formatSourceLabelSubject(labels: Iterable<string>): { text: string; ver
 function collectToolOwners(registry: PluginManifestRegistry): Map<string, string[]> {
   const owners = new Map<string, string[]>();
   for (const plugin of registry.plugins) {
-    const pluginId = normalizePluginId(plugin.id);
-    for (const toolNameRaw of plugin.contracts?.tools ?? []) {
+    const pluginId = readManifestPluginId(plugin);
+    if (!pluginId) {
+      continue;
+    }
+    for (const toolNameRaw of readManifestToolContractNames(plugin)) {
       const toolName = normalizeToolName(toolNameRaw);
       if (!toolName) {
         continue;
@@ -139,7 +142,53 @@ function collectToolOwners(registry: PluginManifestRegistry): Map<string, string
 }
 
 function collectKnownPluginIds(registry: PluginManifestRegistry): Set<string> {
-  return new Set(registry.plugins.map((plugin) => normalizePluginId(plugin.id)));
+  return new Set(
+    registry.plugins
+      .map((plugin) => readManifestPluginId(plugin))
+      .filter((pluginId): pluginId is string => Boolean(pluginId)),
+  );
+}
+
+function readManifestPluginId(
+  plugin: PluginManifestRegistry["plugins"][number],
+): string | undefined {
+  try {
+    return normalizePluginId(plugin.id);
+  } catch {
+    return undefined;
+  }
+}
+
+function readManifestToolContractNames(
+  plugin: PluginManifestRegistry["plugins"][number],
+): string[] {
+  let tools: unknown;
+  try {
+    tools = plugin.contracts?.tools;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(tools)) {
+    return [];
+  }
+  let length: number;
+  try {
+    length = tools.length;
+  } catch {
+    return [];
+  }
+  const entries: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      const toolName = tools[index];
+      if (typeof toolName === "string") {
+        entries.push(toolName);
+      }
+    } catch {
+      // Doctor warnings should skip only the unreadable manifest tool row.
+    }
+  }
+  return entries;
 }
 
 function collectConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
