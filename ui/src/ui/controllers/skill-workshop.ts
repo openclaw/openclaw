@@ -94,6 +94,7 @@ export type SkillWorkshopState = {
   skillWorkshopQueueWidth: number;
   skillWorkshopMode: SkillWorkshopMode;
   skillWorkshopUseCurrentChatForRevisions: boolean;
+  skillWorkshopAgentId?: string | null;
 };
 
 function getErrorMessage(err: unknown): string {
@@ -297,7 +298,11 @@ export async function loadSkillWorkshopProposals(
   state.skillWorkshopLoading = true;
   state.skillWorkshopError = null;
   try {
-    const result = await state.client.request<SkillProposalManifest>("skills.proposals.list", {});
+    const agentScope = state.skillWorkshopAgentId ? { agentId: state.skillWorkshopAgentId } : {};
+    const result = await state.client.request<SkillProposalManifest>(
+      "skills.proposals.list",
+      agentScope,
+    );
     const previousByKey = new Map(
       state.skillWorkshopProposals.map((proposal) => [proposal.key, proposal]),
     );
@@ -334,9 +339,11 @@ export async function loadSkillWorkshopProposalDetail(
   state.skillWorkshopInspectingKey = proposalId;
   state.skillWorkshopError = null;
   try {
+    const agentScope = state.skillWorkshopAgentId ? { agentId: state.skillWorkshopAgentId } : {};
     const result = await state.client.request<SkillProposalInspectResult>(
       "skills.proposals.inspect",
       {
+        ...agentScope,
         proposalId,
       },
     );
@@ -375,7 +382,8 @@ export async function runSkillWorkshopLifecycleAction(
   state.skillWorkshopError = null;
   try {
     const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
-    await state.client.request(method, { proposalId });
+    const agentScope = state.skillWorkshopAgentId ? { agentId: state.skillWorkshopAgentId } : {};
+    await state.client.request(method, { ...agentScope, proposalId });
     await refreshAfterMutation(state, proposalId);
     const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
     showActionNotice(state, updated ?? previous, action === "apply" ? "Applied" : "Rejected");

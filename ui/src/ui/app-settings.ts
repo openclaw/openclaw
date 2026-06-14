@@ -140,6 +140,12 @@ function resolveDreamingAgentIdForSession(host: SettingsHost): string {
   );
 }
 
+function resolveSkillWorkshopAgentId(host: SettingsHost): string {
+  return normalizeAgentId(
+    parseAgentSessionKey(host.sessionKey)?.agentId ?? host.agentsList?.defaultId ?? "main",
+  );
+}
+
 type SettingsAppHost = SettingsHost &
   AgentFilesState &
   AgentIdentityState &
@@ -472,6 +478,7 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         await loadSkills(app);
         break;
       case "skillWorkshop":
+        app.skillWorkshopAgentId = resolveSkillWorkshopAgentId(host);
         await loadSkillWorkshopProposals(app, { force: true });
         break;
       case "agents":
