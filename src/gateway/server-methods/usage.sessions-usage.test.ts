@@ -726,4 +726,57 @@ describe("sessions.usage", () => {
       ],
     ]);
   });
+
+  it("aggregate totals include all sessions even when limit restricts the page (#76496)", async () => {
+    // Override discoverAllSessions to return 3 sessions with distinct costs
+    vi.mocked(discoverAllSessions)
+      .mockResolvedValueOnce([
+        { sessionId: "s-a", sessionFile: "/tmp/agents/main/sessions/s-a.jsonl", mtime: 300 },
+        { sessionId: "s-b", sessionFile: "/tmp/agents/main/sessions/s-b.jsonl", mtime: 200 },
+        { sessionId: "s-c", sessionFile: "/tmp/agents/main/sessions/s-c.jsonl", mtime: 100 },
+      ])
+      .mockResolvedValueOnce([]); // second agent (opus) — no extra sessions
+
+    vi.mocked(loadSessionCostSummaryFromCache).mockImplementation(async ({ sessionId }) => {
+      const cost = sessionId === "s-a" ? 0.08 : sessionId === "s-b" ? 0.04 : 0.02;
+      const tokens = sessionId === "s-a" ? 15 : sessionId === "s-b" ? 10 : 5;
+      return {
+        summary: {
+          input: tokens,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: tokens,
+          totalCost: cost,
+          inputCost: 0,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        },
+        cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
+      };
+    });
+
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      agentScope: "all",
+      limit: 1,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(mockArg(respond, 0, 0)).toBe(true);
+    const result = mockArg(respond, 0, 1) as {
+      sessions: Array<{ key: string }>;
+      totals: { totalCost: number; totalTokens: number };
+    };
+
+    // Only the most-recent session (s-a, mtime=300) appears in the page
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toContain("s-a");
+
+    // But aggregate totals must include all 3 sessions (0.08 + 0.04 + 0.02 = 0.14)
+    expect(result.totals.totalCost).toBeCloseTo(0.14);
+    expect(result.totals.totalTokens).toBe(30);
+  });
 });
