@@ -153,7 +153,21 @@ Approvals live on the node host at `~/.openclaw/exec-approvals.json`.
 
 ### Point exec at the node
 
-Configure defaults (gateway config):
+Configure defaults in `openclaw.json`:
+
+```json5
+{
+  tools: {
+    exec: {
+      host: "node",
+      security: "allowlist",
+      node: "<id-or-name>",
+    },
+  },
+}
+```
+
+Or via CLI:
 
 ```bash
 openclaw config set tools.exec.host node
