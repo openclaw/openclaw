@@ -79,6 +79,26 @@ describe("compactSkillPaths", () => {
     expect(prompt).not.toContain("~/.openclaw/skills/world-cup-soccer-openclaw-skill/SKILL.md");
   });
 
+  it("compacts managed skill paths when OS-home tilde reaches the same path", () => {
+    const home = os.homedir();
+    const stateDir = path.join(home, ".openclaw");
+    const skillDir = path.join(stateDir, "skills", "home-managed-skill");
+
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_HOME", undefined);
+
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: path.join(home, "workspace"),
+      skillDir,
+      name: "home-managed-skill",
+      description: "Home managed skill",
+    });
+
+    expect(prompt).toContain("<location>~/.openclaw/skills/home-managed-skill/SKILL.md</location>");
+    expect(prompt).not.toContain(`<location>${path.join(skillDir, "SKILL.md")}</location>`);
+  });
+
   it("normalizes compacted Windows skill locations to forward slashes", () => {
     const home = "C:\\Users\\alice";
     const skillPath = path.win32.join(home, ".openclaw-test-skills", "win-skill", "SKILL.md");

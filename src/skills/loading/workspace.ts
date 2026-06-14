@@ -27,6 +27,7 @@ import type {
   SkillEntry,
   SkillSnapshot,
 } from "../types.js";
+import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
@@ -78,9 +79,10 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
     return skills;
   }
   const preservedRoots = resolvePreservedPromptSkillPathRoots();
+  const tildeRoots = resolvePromptTildeRoots();
   return skills.map((s) => ({
     ...s,
-    filePath: shouldPreservePromptSkillPath(s.filePath, preservedRoots)
+    filePath: shouldPreservePromptSkillPath(s.filePath, preservedRoots, tildeRoots)
       ? s.filePath
       : compactHomePath(s.filePath, homes),
   }));
@@ -95,9 +97,42 @@ function resolvePreservedPromptSkillPathRoots(): string[] {
   ]);
 }
 
-function shouldPreservePromptSkillPath(filePath: string, roots: readonly string[]): boolean {
+function resolvePromptTildeRoots(): string[] {
+  const nativeHome = resolveNativeUserHomeDir();
+  if (!nativeHome) {
+    return [];
+  }
+  const resolvedNativeHome = path.resolve(nativeHome);
+  if (isContainerStateHomeWherePromptTildeEscapes(resolvedNativeHome)) {
+    return [];
+  }
+  const realNativeHome = tryRealpath(resolvedNativeHome);
+  return uniqueStrings([
+    resolvedNativeHome,
+    ...(realNativeHome ? [realNativeHome] : []),
+  ]);
+}
+
+function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
+  const configDir = path.resolve(resolveConfigDir());
+  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
+}
+
+function shouldPreservePromptSkillPath(
+  filePath: string,
+  roots: readonly string[],
+  tildeRoots: readonly string[],
+): boolean {
   const resolvedFilePath = path.resolve(filePath);
-  return roots.some((root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath));
+  const isManagedPromptSkillPath = roots.some(
+    (root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath),
+  );
+  if (!isManagedPromptSkillPath) {
+    return false;
+  }
+  return !tildeRoots.some(
+    (root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath),
+  );
 }
 
 function compactHomePath(filePath: string, homes: readonly string[]): string {
@@ -1401,6 +1436,7 @@ export function buildWorkspaceSkillSnapshot(
     ...(skillFilter === undefined ? {} : { skillFilter }),
     resolvedSkills,
     version: opts?.snapshotVersion,
+    promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };
 }
 
