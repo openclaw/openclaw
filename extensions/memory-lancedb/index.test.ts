@@ -323,6 +323,233 @@ describe("memory plugin e2e", () => {
     );
   });
 
+  test("exports LanceDB and workspace memory artifacts for the wiki bridge", async () => {
+    const dbPath = getDbPath();
+    const workspaceDir = path.join(dbPath, "workspace");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-05-21.md"), "# Daily\n", "utf8");
+
+    const toArray = vi.fn(async () => [
+      {
+        id: "older-memory",
+        text: "Use the old bridge only as a fallback.",
+        importance: 0.4,
+        category: "decision",
+        createdAt: 1_000,
+      },
+      {
+        id: "newer-memory",
+        text: "I prefer Helix for editing code.",
+        importance: 0.9,
+        category: "preference",
+        createdAt: 2_000,
+      },
+    ]);
+    const select = vi.fn(() => ({ toArray }));
+    const query = vi.fn(() => ({ select }));
+    const openTable = vi.fn(async () => ({
+      query,
+      vectorSearch: vi.fn(),
+      countRows: vi.fn(async () => 0),
+      add: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable,
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registerMemoryCapabilityForPlugin = vi.fn();
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: {
+              apiKey: OPENAI_API_KEY,
+              model: "text-embedding-3-small",
+            },
+            dbPath,
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          },
+          registerTool: vi.fn(),
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          registerMemoryCapability: registerMemoryCapabilityForPlugin,
+          on: vi.fn(),
+          resolvePath: (p: string) => p,
+        };
+
+        dynamicMemoryPlugin.register(mockApi as any);
+
+        expect(registerMemoryCapabilityForPlugin).toHaveBeenCalledTimes(1);
+        const capability = firstObjectArg(
+          registerMemoryCapabilityForPlugin as unknown as MockCallSource,
+          "memory capability",
+        );
+        const provider = capability.publicArtifacts as {
+          listArtifacts(params: { cfg: Record<string, unknown> }): Promise<unknown[]>;
+        };
+        const artifacts = await provider.listArtifacts({
+          cfg: {
+            agents: {
+              list: [
+                { id: "main", default: true, workspace: workspaceDir },
+                { id: "research", workspace: workspaceDir },
+              ],
+            },
+          },
+        });
+
+        const bridgeDir = path.join(dbPath, "wiki-bridge");
+        const bridgeFile = path.join(bridgeDir, "lancedb-memories.md");
+        expect(artifacts).toEqual([
+          {
+            kind: "memory-root",
+            workspaceDir: bridgeDir,
+            relativePath: "lancedb-memories.md",
+            absolutePath: bridgeFile,
+            agentIds: ["main", "research"],
+            contentType: "markdown",
+          },
+          {
+            kind: "memory-root",
+            workspaceDir,
+            relativePath: "MEMORY.md",
+            absolutePath: path.join(workspaceDir, "MEMORY.md"),
+            agentIds: ["main", "research"],
+            contentType: "markdown",
+          },
+          {
+            kind: "daily-note",
+            workspaceDir,
+            relativePath: "memory/2026-05-21.md",
+            absolutePath: path.join(workspaceDir, "memory", "2026-05-21.md"),
+            agentIds: ["main", "research"],
+            contentType: "markdown",
+          },
+        ]);
+        expect(select).toHaveBeenCalledWith(["id", "text", "importance", "category", "createdAt"]);
+
+        const exported = await fs.readFile(bridgeFile, "utf8");
+        expect(exported).toContain("Exported memories: 2");
+        expect(exported.indexOf("newer-memory")).toBeLessThan(exported.indexOf("older-memory"));
+        expect(exported).toContain("I prefer Helix for editing code.");
+      },
+    });
+  });
+
+  test("skips LanceDB table artifact for URI-backed dbPath", async () => {
+    const workspaceDir = path.join(getDbPath(), "workspace-uri");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Remote Durable Memory\n", "utf8");
+    await fs.rm(path.join(process.cwd(), "s3:"), { recursive: true, force: true });
+
+    const loadLanceDbModule = vi.fn(async () => {
+      throw new Error("remote URI dbPath should not be opened while listing public artifacts");
+    });
+
+    try {
+      await withMockedOpenAiMemoryPlugin({
+        ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+        loadLanceDbModule,
+        run: async (dynamicMemoryPlugin) => {
+          const registerMemoryCapabilityForPlugin = vi.fn();
+          const resolvePath = vi.fn((p: string) => p);
+          const logger = {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          };
+          const mockApi = {
+            id: "memory-lancedb",
+            name: "Memory (LanceDB)",
+            source: "test",
+            config: {},
+            pluginConfig: {
+              embedding: {
+                apiKey: OPENAI_API_KEY,
+                model: "text-embedding-3-small",
+              },
+              dbPath: "s3://memory-bucket/openclaw",
+              storageOptions: {
+                region: "us-east-1",
+                accessKeyId: "test-access-key",
+                secretAccessKey: "test-secret-key",
+              },
+              autoCapture: false,
+              autoRecall: false,
+            },
+            runtime: {},
+            logger,
+            registerTool: vi.fn(),
+            registerCli: vi.fn(),
+            registerService: vi.fn(),
+            registerMemoryCapability: registerMemoryCapabilityForPlugin,
+            on: vi.fn(),
+            resolvePath,
+          };
+
+          dynamicMemoryPlugin.register(mockApi as any);
+
+          expect(resolvePath).not.toHaveBeenCalled();
+          expect(registerMemoryCapabilityForPlugin).toHaveBeenCalledTimes(1);
+          const capability = firstObjectArg(
+            registerMemoryCapabilityForPlugin as unknown as MockCallSource,
+            "memory capability",
+          );
+          const provider = capability.publicArtifacts as {
+            listArtifacts(params: { cfg: Record<string, unknown> }): Promise<unknown[]>;
+          };
+          const artifacts = await provider.listArtifacts({
+            cfg: {
+              agents: {
+                list: [{ id: "main", default: true, workspace: workspaceDir }],
+              },
+            },
+          });
+
+          expect(artifacts).toEqual([
+            {
+              kind: "memory-root",
+              workspaceDir,
+              relativePath: "MEMORY.md",
+              absolutePath: path.join(workspaceDir, "MEMORY.md"),
+              agentIds: ["main"],
+              contentType: "markdown",
+            },
+          ]);
+          expect(loadLanceDbModule).not.toHaveBeenCalled();
+          await expect(fs.stat(path.join(process.cwd(), "s3:"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect(logger.warn).toHaveBeenCalledWith(
+            "memory-lancedb: skipping LanceDB table wiki bridge artifact for URI dbPath; workspace memory artifacts remain available",
+          );
+        },
+      });
+    } finally {
+      await fs.rm(path.join(process.cwd(), "s3:"), { recursive: true, force: true });
+    }
+  });
+
   test("registers auto-recall on before_prompt_build instead of the legacy hook", () => {
     const on = vi.fn();
     const mockApi = {
@@ -360,6 +587,7 @@ describe("memory plugin e2e", () => {
   });
 
   test("registers memory public artifact provider for memory-wiki bridge parity", async () => {
+    const dbPath = getDbPath();
     const workspaceDir = path.join(getTmpDir(), "workspace-public-artifacts");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
@@ -415,6 +643,14 @@ describe("memory plugin e2e", () => {
     ).resolves.toEqual([
       {
         kind: "memory-root",
+        workspaceDir: path.join(dbPath, "wiki-bridge"),
+        relativePath: "lancedb-memories.md",
+        absolutePath: path.join(dbPath, "wiki-bridge", "lancedb-memories.md"),
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
         workspaceDir,
         relativePath: "MEMORY.md",
         absolutePath: path.join(workspaceDir, "MEMORY.md"),
@@ -433,6 +669,7 @@ describe("memory plugin e2e", () => {
   });
 
   test("preserves memory-core sidecar capability when registering public artifacts", async () => {
+    const dbPath = getDbPath();
     const workspaceDir = path.join(getTmpDir(), "workspace-sidecar-public-artifacts");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
@@ -505,6 +742,11 @@ describe("memory plugin e2e", () => {
         },
       }),
     ).resolves.toMatchObject([
+      {
+        kind: "memory-root",
+        workspaceDir: path.join(dbPath, "wiki-bridge"),
+        relativePath: "lancedb-memories.md",
+      },
       {
         kind: "memory-root",
         workspaceDir,

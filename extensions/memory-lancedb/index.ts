@@ -8,6 +8,8 @@
 
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type * as LanceDB from "@lancedb/lancedb";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -17,6 +19,7 @@ import {
 import { BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES } from "openclaw/plugin-sdk/chat-channel-ids";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
 import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
@@ -103,6 +106,16 @@ function loadMemoryHostCoreModule(): Promise<
 > {
   memoryHostCoreModulePromise ??= import("openclaw/plugin-sdk/memory-host-core");
   return memoryHostCoreModulePromise;
+}
+
+let memoryCoreHostStatusModulePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/memory-core-host-status")>
+  | undefined;
+function loadMemoryCoreHostStatusModule(): Promise<
+  typeof import("openclaw/plugin-sdk/memory-core-host-status")
+> {
+  memoryCoreHostStatusModulePromise ??= import("openclaw/plugin-sdk/memory-core-host-status");
+  return memoryCoreHostStatusModulePromise;
 }
 
 function extractUserTextContent(message: unknown): string[] {
@@ -574,6 +587,104 @@ export function normalizeEmbeddingVector(value: unknown): number[] {
   }
 
   throw new Error("Embedding response is missing a vector");
+}
+
+function formatMemoryArtifactTimestamp(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "unknown";
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "unknown" : date.toISOString();
+}
+
+function renderMemoryTextFence(text: string): string {
+  const fenceSize = Math.max(
+    3,
+    ...Array.from(text.matchAll(/`+/g), (match) => match[0].length + 1),
+  );
+  const fence = "`".repeat(fenceSize);
+  return `${fence}text\n${text}\n${fence}`;
+}
+
+function renderLanceDbPublicArtifactMarkdown(entries: MemoryListEntry[]): string {
+  const lines = [
+    "# LanceDB Memories",
+    "",
+    "Generated from the local OpenClaw `memory-lancedb` table for `memory-wiki` bridge import.",
+    "",
+    `Exported memories: ${entries.length}`,
+    "",
+    "## Memories",
+    "",
+  ];
+  if (entries.length === 0) {
+    lines.push("_No memories exported._", "");
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  for (const entry of entries) {
+    lines.push(`### ${entry.id}`);
+    lines.push("");
+    lines.push(`- Category: \`${entry.category}\``);
+    lines.push(`- Importance: ${entry.importance}`);
+    lines.push(`- Created: ${formatMemoryArtifactTimestamp(entry.createdAt)}`);
+    lines.push("");
+    lines.push(renderMemoryTextFence(entry.text));
+    lines.push("");
+  }
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+async function writeFileIfChanged(filePath: string, content: string): Promise<void> {
+  const current = await fs.readFile(filePath, "utf8").catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (current !== content) {
+    await fs.writeFile(filePath, content, "utf8");
+  }
+}
+
+function isFilesystemDbPath(value: string): boolean {
+  return !/^[a-z][a-z0-9+.-]*:\/\//i.test(value);
+}
+
+async function collectLanceDbPublicArtifact(params: {
+  resolvedDbPath: string;
+  db: MemoryDB;
+  agentIds: string[];
+}): Promise<MemoryPluginPublicArtifact> {
+  const bridgeDir = path.join(params.resolvedDbPath, "wiki-bridge");
+  const bridgeFile = path.join(bridgeDir, "lancedb-memories.md");
+  await fs.mkdir(bridgeDir, { recursive: true });
+  const entries = await params.db.list(undefined, { orderByCreatedAt: true });
+  await writeFileIfChanged(bridgeFile, renderLanceDbPublicArtifactMarkdown(entries));
+  return {
+    kind: "memory-root",
+    workspaceDir: bridgeDir,
+    relativePath: "lancedb-memories.md",
+    absolutePath: bridgeFile,
+    agentIds: [...params.agentIds],
+    contentType: "markdown",
+  };
+}
+
+async function listMemoryWorkspaceAgentIds(params: { cfg: OpenClawConfig }): Promise<string[]> {
+  const { resolveMemoryDreamingWorkspaces } = await loadMemoryCoreHostStatusModule();
+  const agentIds: string[] = [];
+  const seen = new Set<string>();
+  for (const workspace of resolveMemoryDreamingWorkspaces(params.cfg)) {
+    for (const agentId of workspace.agentIds) {
+      if (seen.has(agentId)) {
+        continue;
+      }
+      seen.add(agentId);
+      agentIds.push(agentId);
+    }
+  }
+  return agentIds;
 }
 
 // ============================================================================
@@ -1499,14 +1610,28 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
-    api.registerMemoryCapability?.({
-      publicArtifacts: {
-        async listArtifacts(params) {
-          const { listMemoryHostPublicArtifacts } = await loadMemoryHostCoreModule();
-          return await listMemoryHostPublicArtifacts(params);
+    let loggedUriArtifactSkip = false;
+    if (typeof api.registerMemoryCapability === "function") {
+      api.registerMemoryCapability({
+        publicArtifacts: {
+          async listArtifacts(params) {
+            const { listMemoryHostPublicArtifacts } = await loadMemoryHostCoreModule();
+            const artifacts: MemoryPluginPublicArtifact[] = [];
+            const agentIds = await listMemoryWorkspaceAgentIds(params);
+            if (isFilesystemDbPath(resolvedDbPath)) {
+              artifacts.push(await collectLanceDbPublicArtifact({ resolvedDbPath, db, agentIds }));
+            } else if (!loggedUriArtifactSkip) {
+              loggedUriArtifactSkip = true;
+              api.logger.warn(
+                "memory-lancedb: skipping LanceDB table wiki bridge artifact for URI dbPath; workspace memory artifacts remain available",
+              );
+            }
+            artifacts.push(...(await listMemoryHostPublicArtifacts(params)));
+            return artifacts;
+          },
         },
-      },
-    });
+      });
+    }
 
     // ========================================================================
     // Tools

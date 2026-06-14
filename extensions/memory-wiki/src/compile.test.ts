@@ -96,13 +96,13 @@ describe("compileMemoryWikiVault", () => {
     expect(result.pageCounts.source).toBe(1);
     expect(result.claimCount).toBe(1);
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
-      "[Alpha](sources/alpha.md)",
+      "[Alpha](sources/alpha)",
     );
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "- Claims: 1",
     );
     await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
-      "[Alpha](alpha.md)",
+      "[Alpha](alpha)",
     );
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
@@ -156,13 +156,13 @@ describe("compileMemoryWikiVault", () => {
 
     await expect(
       fs.readFile(path.join(rootDir, "concepts", "index.md"), "utf8"),
-    ).resolves.toContain("[Alpha Concept](alpha-concept.md)");
+    ).resolves.toContain("[Alpha Concept](alpha-concept)");
     await expect(
       fs.readFile(path.join(rootDir, "entities", "index.md"), "utf8"),
-    ).resolves.toContain("[Alpha Entity](alpha-entity.md)");
+    ).resolves.toContain("[Alpha Entity](alpha-entity)");
     await expect(
       fs.readFile(path.join(rootDir, "syntheses", "index.md"), "utf8"),
-    ).resolves.toContain("[Alpha Synthesis](alpha-synthesis.md)");
+    ).resolves.toContain("[Alpha Synthesis](alpha-synthesis)");
   });
 
   it("bounds concurrent page reads while compiling", async () => {
@@ -292,16 +292,16 @@ describe("compileMemoryWikiVault", () => {
       "## Related",
     );
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
-      "[Alpha](../sources/alpha.md)",
+      "[Alpha](../sources/alpha)",
     );
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
-      "[Gamma](../concepts/gamma.md)",
+      "[Gamma](../concepts/gamma)",
     );
     await expect(fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8")).resolves.toContain(
-      "[Beta](../entities/beta.md)",
+      "[Beta](../entities/beta)",
     );
     await expect(fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8")).resolves.toContain(
-      "[Gamma](../concepts/gamma.md)",
+      "[Gamma](../concepts/gamma)",
     );
   });
 
@@ -352,9 +352,9 @@ describe("compileMemoryWikiVault", () => {
       path.join(rootDir, "syntheses", "alpha-synthesis.md"),
       "utf8",
     );
-    expect(synthesis).toContain("### Sources\n\n- [Alpha Source](../sources/alpha.md)");
+    expect(synthesis).toContain("### Sources\n\n- [Alpha Source](../sources/alpha)");
     expect(synthesis).toContain(
-      "### Related Pages\n\n- [Alpha Concept](../concepts/alpha-concept.md)",
+      "### Related Pages\n\n- [Alpha Concept](../concepts/alpha-concept)",
     );
   });
 
@@ -411,7 +411,7 @@ describe("compileMemoryWikiVault", () => {
 
     const firstEntity = await fs.readFile(path.join(rootDir, "entities", "entity-0.md"), "utf8");
     const sourcePage = await fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8");
-    expect(firstEntity).toContain("[Alpha](../sources/alpha.md)");
+    expect(firstEntity).toContain("[Alpha](../sources/alpha)");
     expect(firstEntity).not.toContain("### Related Pages");
     expect(sourcePage).not.toContain("### Referenced By");
   });
@@ -495,16 +495,16 @@ describe("compileMemoryWikiVault", () => {
     expect(result.pageCounts.report).toBeGreaterThanOrEqual(5);
     await expect(
       fs.readFile(path.join(rootDir, "reports", "open-questions.md"), "utf8"),
-    ).resolves.toContain("[Alpha](../entities/alpha.md): What changed after launch?");
+    ).resolves.toContain("[Alpha](../entities/alpha): What changed after launch?");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "contradictions.md"), "utf8"),
-    ).resolves.toContain("Conflicts with source.beta: [Alpha](../entities/alpha.md)");
+    ).resolves.toContain("Conflicts with source.beta: [Alpha](../entities/alpha)");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "contradictions.md"), "utf8"),
     ).resolves.toContain("`claim.alpha.db`");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "low-confidence.md"), "utf8"),
-    ).resolves.toContain("[Alpha](../entities/alpha.md): confidence 0.30");
+    ).resolves.toContain("[Alpha](../entities/alpha): confidence 0.30");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "low-confidence.md"), "utf8"),
     ).resolves.toContain("Alpha uses PostgreSQL for production writes.");
@@ -516,7 +516,7 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain("Alpha uses PostgreSQL for production writes.");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
-    ).resolves.toContain("[Alpha](../entities/alpha.md): missing updatedAt");
+    ).resolves.toContain("[Alpha](../entities/alpha): missing updatedAt");
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
     ) as {
@@ -618,16 +618,16 @@ describe("compileMemoryWikiVault", () => {
 
     await expect(
       fs.readFile(path.join(rootDir, "reports", "person-agent-directory.md"), "utf8"),
-    ).resolves.toContain("[Brad Groux](../entities/brad.md)");
+    ).resolves.toContain("[Brad Groux](../entities/brad)");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "relationship-graph.md"), "utf8"),
-    ).resolves.toContain("[Brad Groux](../entities/brad.md) -> Alice");
+    ).resolves.toContain("[Brad Groux](../entities/brad) -> Alice");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "provenance-coverage.md"), "utf8"),
     ).resolves.toContain("maintainer-whois: 1");
     await expect(
       fs.readFile(path.join(rootDir, "reports", "privacy-review.md"), "utf8"),
-    ).resolves.toContain("[Brad Groux](../entities/brad.md)");
+    ).resolves.toContain("[Brad Groux](../entities/brad)");
 
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
@@ -678,7 +678,7 @@ describe("compileMemoryWikiVault", () => {
 
     expect(second.updatedFiles).toStrictEqual([]);
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
-      "[Gamma](../concepts/gamma.md)",
+      "[Gamma](../concepts/gamma)",
     );
     await expect(
       fs.readFile(path.join(rootDir, "concepts", "gamma.md"), "utf8"),

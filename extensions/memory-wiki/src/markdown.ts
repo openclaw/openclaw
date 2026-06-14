@@ -409,8 +409,8 @@ export function formatWikiLink(params: {
     return `[[${withoutExtension}|${params.title}]]`;
   }
   const linkTarget = params.sourceRelativeTo
-    ? path.posix.relative(path.posix.dirname(params.sourceRelativeTo), params.relativePath)
-    : params.relativePath;
+    ? path.posix.relative(path.posix.dirname(params.sourceRelativeTo), withoutExtension)
+    : withoutExtension;
   return `[${params.title}](${linkTarget})`;
 }
 
