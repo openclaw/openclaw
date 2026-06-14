@@ -66,8 +66,10 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('if launchctl kickstart -k "$service_target"; then');
     expect(args[1]).toContain(
-      'if launchctl bootstrap "$domain" "$plist_path"; then\n    status=0\n  else\n    launchctl kickstart -k "$service_target"',
+      'if launchctl bootstrap "$domain" "$plist_path"; then\n    exit_status=0\n  else\n    launchctl kickstart -k "$service_target"',
     );
+    expect(args[1]).not.toMatch(/(^|\n)\s*status=/u);
+    expect(args[1]).toContain('exit "$exit_status"');
     expect(args[1]).not.toMatch(/launchctl[^\n]*\/dev\/null/);
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);
@@ -91,6 +93,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain("print_retry_count=$((print_retry_count - 1))");
     expect(args[1]).toContain("sleep 0.2");
     expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
+    expect(args[1]).not.toMatch(/(^|\n)\s*status=/u);
+    expect(args[1]).toContain('exit "$exit_status"');
     expect(args[1]).not.toContain('if launchctl start "$label"; then');
     expect(args[1]).not.toContain('basename "$service_target"');
   });
@@ -117,6 +121,8 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
     // fallback: kickstart -k on bootstrap failure so service isn't left deregistered
     expect(args[1]).toContain('launchctl kickstart -k "$service_target"');
+    expect(args[1]).not.toMatch(/(^|\n)\s*status=/u);
+    expect(args[1]).toContain('exit "$exit_status"');
   });
 
   it("sanitizes restart helper environment overrides before spawning", () => {

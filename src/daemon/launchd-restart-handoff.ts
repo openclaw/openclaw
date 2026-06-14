@@ -117,25 +117,25 @@ fi
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
-status=0
+exit_status=0
 launchctl enable "$service_target"
 if launchctl kickstart -k "$service_target"; then
-  status=0
+  exit_status=0
 else
-  status=$?
+  exit_status=$?
   if launchctl bootstrap "$domain" "$plist_path"; then
-    status=0
+    exit_status=0
   else
     launchctl kickstart -k "$service_target"
-    status=$?
+    exit_status=$?
   fi
 fi
-if [ "$status" -eq 0 ]; then
+if [ "$exit_status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2
 else
-  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$exit_status" >&2
 fi
-exit "$status"
+exit "$exit_status"
 `;
   }
 
@@ -159,23 +159,23 @@ done
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
-status=0
+exit_status=0
 launchctl enable "$service_target"
 launchctl bootout "$service_target" >/dev/null 2>&1 || true
 ${bootoutWaitLoop}
 if launchctl bootstrap "$domain" "$plist_path"; then
-  status=0
+  exit_status=0
 else
-  status=$?
+  exit_status=$?
   launchctl kickstart -k "$service_target"
-  status=$?
+  exit_status=$?
 fi
-if [ "$status" -eq 0 ]; then
+if [ "$exit_status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2
 else
-  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$exit_status" >&2
 fi
-exit "$status"
+exit "$exit_status"
 `;
   }
 
@@ -196,21 +196,21 @@ domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
 ${verifyLaunchdReload}
-status=0
+exit_status=0
 launchctl enable "$service_target"
 if launchctl bootstrap "$domain" "$plist_path"; then
-  status=0
+  exit_status=0
 else
-  status=$?
+  exit_status=$?
   launchctl kickstart -k "$service_target"
-  status=$?
+  exit_status=$?
 fi
-if [ "$status" -eq 0 ]; then
+if [ "$exit_status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2
 else
-  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$exit_status" >&2
 fi
-exit "$status"
+exit "$exit_status"
 `;
 }
 
