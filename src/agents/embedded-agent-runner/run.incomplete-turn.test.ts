@@ -4094,6 +4094,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
+  it("does not treat ASCII-single-quoted polite action text as authorization", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "The log says 'please restart production.' What does that mean?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Working on it."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it.each(["I am heading out", "That was rough"])(
     "does not classify acknowledgements for conversational prompt %s as planning-only",
     (prompt) => {
@@ -7286,6 +7301,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "I need you to check the scheduler",
     "I want you to inspect the scheduler",
     "We would like you to review the config",
+    "Can you commit the changes?",
+    "I need you to upload the report",
+    "Would you build the project?",
+    "We want you to charge the customer",
   ])("treats task-shaped prompt %s as actionable for planning-only retry", (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",

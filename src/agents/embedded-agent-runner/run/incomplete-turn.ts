@@ -166,7 +166,7 @@ const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
 const PLANNING_ONLY_ACTION_VERB_RE =
-  /\b(?:inspect(?:ing)?|investigat(?:e|ing)|check(?:ing)?|look(?:ing)?(?:\s+into|\s+at)?|read(?:ing)?|search(?:ing)?|find(?:ing)?|debug(?:ging)?|fix(?:ing)?|patch(?:ing)?|updat(?:e|ing)|chang(?:e|ing)|edit(?:ing)?|writ(?:e|ing)|implement(?:ing)?|add(?:ing)?|remov(?:e|ing)|delet(?:e|ing)|creat(?:e|ing)|mov(?:e|ing)|renam(?:e|ing)|cop(?:y|ying)|install(?:ing)?|uninstall(?:ing)?|enabl(?:e|ing)|disabl(?:e|ing)|configur(?:e|ing)|reset(?:ting)?|archiv(?:e|ing)|cancel(?:ing|led)?|stop(?:ping)?|runn?ing|run|test(?:ing)?|verify|verifying|review(?:ing)?|analy(?:s|z)(?:e|ing)|summari(?:s|z)(?:e|ing)|explain(?:ing)?|answer(?:ing)?|show(?:ing)?|shar(?:e|ing)|report(?:ing)?|prepar(?:e|ing)|captur(?:e|ing)|tak(?:e|ing)|handl(?:e|ing)|sort(?:ing|ed)?|follow(?:ing)?\s+up|get(?:ting)?\s+back|start(?:ing)?|launch(?:ing)?|send(?:ing)?|monitor(?:ing)?|refactor(?:ing)?|restart(?:ing)?|deploy(?:ing)?|ship(?:ping)?)\b/i;
+  /\b(?:inspect(?:ing)?|investigat(?:e|ing)|check(?:ing)?|look(?:ing)?(?:\s+into|\s+at)?|read(?:ing)?|search(?:ing)?|find(?:ing)?|debug(?:ging)?|fix(?:ing)?|patch(?:ing)?|updat(?:e|ing)|chang(?:e|ing)|edit(?:ing)?|writ(?:e|ing)|implement(?:ing)?|add(?:ing)?|remov(?:e|ing)|delet(?:e|ing)|creat(?:e|ing)|mov(?:e|ing)|renam(?:e|ing)|cop(?:y|ying)|install(?:ing)?|uninstall(?:ing)?|enabl(?:e|ing)|disabl(?:e|ing)|configur(?:e|ing)|reset(?:ting)?|archiv(?:e|ing)|cancel(?:ing|led)?|stop(?:ping)?|runn?ing|run|test(?:ing)?|verify|verifying|review(?:ing)?|analy(?:s|z)(?:e|ing)|summari(?:s|z)(?:e|ing)|explain(?:ing)?|answer(?:ing)?|show(?:ing)?|shar(?:e|ing)|report(?:ing)?|prepar(?:e|ing)|captur(?:e|ing)|tak(?:e|ing)|handl(?:e|ing)|sort(?:ing|ed)?|follow(?:ing)?\s+up|get(?:ting)?\s+back|start(?:ing)?|launch(?:ing)?|send(?:ing)?|monitor(?:ing)?|refactor(?:ing)?|restart(?:ing)?|deploy(?:ing)?|ship(?:ping)?|build(?:ing)?|commit(?:ting)?|upload(?:ing)?|charg(?:e|ing)|migrat(?:e|ing))\b/i;
 const ACTIONABLE_PROMPT_DIRECTIVE_RE =
   /^\s*(?:(?:ok(?:ay)?|please|pls)\s+)?(?:check|inspect|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|generate|start|launch|send|monitor|set|load|hit|ask|wire|channel)\b/i;
 const ACTIONABLE_PROMPT_POLITE_DIRECTIVE_RE =
@@ -320,6 +320,8 @@ const NON_ACTIONABLE_CONTEXT_UPDATE_RE =
   /^\s*(?:i|we)\b(?!.{0,120}\b(?:need|want|would like)\s+you\b).{0,180}\b(?:haven't|have not|am not|ain't|haven’t)\b.{0,120}\b(?:yet|though|fyi|heads up)\b/i;
 const QUOTED_USER_PROMPT_SEGMENT_RE =
   /`[^`\n]*(?:`|(?=\n|$))|"[^"\n]*(?:"|(?=\n|$))|“[^”\n]*(?:”|(?=\n|$))|‘[^’\n]*(?:’|(?=\n|$))/gu;
+const QUOTED_USER_PROMPT_ASCII_SINGLE_QUOTED_SEGMENT_RE =
+  /(?<![\p{L}\p{N}])'[^'\n]+'(?![\p{L}\p{N}])/gu;
 const QUOTED_USER_PROMPT_LINE_RE = /^[ \t]*>.*$/gmu;
 const QUOTED_USER_PROMPT_FENCED_BLOCK_RE =
   /(?:^|\n)[ \t]*(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]*(?:`{3,}|~{3,})[ \t]*(?=\n|$)|$)/gu;
@@ -1088,6 +1090,7 @@ function stripNonAuthorizingUserPromptExcerpts(text: string): string {
     .replace(QUOTED_USER_PROMPT_INDENTED_LINE_RE, " ")
     .replace(QUOTED_USER_PROMPT_MARKDOWN_LINK_RE, " ")
     .replace(QUOTED_USER_PROMPT_SEGMENT_RE, " ")
+    .replace(QUOTED_USER_PROMPT_ASCII_SINGLE_QUOTED_SEGMENT_RE, " ")
     .replace(QUOTED_USER_PROMPT_LINE_RE, " ");
 }
 
