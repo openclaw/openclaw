@@ -11,7 +11,6 @@ import {
 } from "../../infra/kysely-sync.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -300,6 +299,7 @@ export async function appendSqliteTranscriptEvent(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
 ): Promise<void> {
+  assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
   await runExclusiveSqliteSessionWrite(resolved, async () => {
     runOpenClawAgentWriteTransaction((database) => {
@@ -392,11 +392,10 @@ export async function publishSqliteTranscriptUpdate(
   scope: SessionTranscriptWriteScope,
   update: TranscriptUpdatePayload = {},
 ): Promise<void> {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  emitSessionTranscriptUpdate({
-    ...update,
-    sessionFile: formatSqliteTranscriptTarget(resolved),
-  });
+  void scope;
+  void update;
+  // SessionTranscriptUpdate.sessionFile is still a real file-path contract.
+  // SQLite updates stay quiet until listeners support typed SQLite targets.
 }
 
 function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
@@ -562,6 +561,19 @@ function parseSessionEntryRow(row: Pick<SessionEntryRow, "entry_json">): Session
       : null;
   } catch {
     return null;
+  }
+}
+
+function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    return;
+  }
+  // Message records require parent-link, idempotency, and redaction handling
+  // from appendSqliteTranscriptMessage; raw event writes would bypass those invariants.
+  if ((event as { type?: unknown }).type === "message") {
+    throw new Error(
+      "appendSqliteTranscriptEvent cannot write message transcript records; use appendSqliteTranscriptMessage instead.",
+    );
   }
 }
 
@@ -1240,9 +1252,4 @@ function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
     !Array.isArray(value) &&
     typeof (value as { role?: unknown }).role === "string"
   );
-}
-
-function formatSqliteTranscriptTarget(scope: ResolvedTranscriptScope): string {
-  const pathPart = scope.path ? `:${scope.path}` : "";
-  return `sqlite:${scope.agentId}:${scope.sessionId}${pathPart}`;
 }

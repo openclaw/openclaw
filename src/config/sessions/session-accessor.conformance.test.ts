@@ -55,6 +55,7 @@ import type { SessionEntry } from "./types.js";
 
 type AccessorAdapter = {
   name: string;
+  publishesTranscriptUpdates: boolean;
   entryScope(paths: TestPaths): SessionAccessScope;
   transcriptReadScope(paths: TestPaths, id?: string): SessionTranscriptReadScope;
   transcriptScope(paths: TestPaths, id?: string): SessionTranscriptAccessScope;
@@ -108,6 +109,7 @@ type TestPaths = {
 
 const fileBackedAdapter: AccessorAdapter = {
   name: "file-backed",
+  publishesTranscriptUpdates: true,
   entryScope: (paths) => ({
     sessionKey: "agent:main:main",
     storePath: paths.storePath,
@@ -140,6 +142,7 @@ const fileBackedAdapter: AccessorAdapter = {
 
 const sqliteAdapter: AccessorAdapter = {
   name: "sqlite",
+  publishesTranscriptUpdates: false,
   entryScope: (paths) => ({
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
@@ -329,10 +332,9 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
         const timestamp = params.old ? oldTimestamp : nowMs;
         const event = {
           id: `${params.sessionId}-event`,
-          message: { role: "assistant", content: "cleanup" },
-          runId: "lifecycle-marker-run",
+          marker: "lifecycle-marker-run",
           timestamp: new Date(timestamp).toISOString(),
-          type: "message",
+          type: "metadata",
         };
         if (adapter.name === "sqlite") {
           await adapter.appendTranscriptEvent(
@@ -631,9 +633,8 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       const scope = sqliteAdapter.transcriptScope(paths, "session-dedupe");
       const event = {
         id: "event-dedupe",
-        message: { role: "assistant", content: "first" },
-        parentId: null,
-        type: "message",
+        source: "conformance",
+        type: "metadata",
       };
 
       await appendSqliteTranscriptEvent(scope, event);
@@ -663,6 +664,18 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
           type: "message",
         }),
       ]);
+    });
+
+    it("rejects raw message transcript event writes", async () => {
+      const scope = adapter.transcriptScope(paths, "session-raw-message");
+      await expect(
+        adapter.appendTranscriptEvent(scope, {
+          id: "raw-message",
+          message: { role: "assistant", content: "raw" },
+          parentId: null,
+          type: "message",
+        }),
+      ).rejects.toThrow(/use append(?:Sqlite)?TranscriptMessage instead/);
     });
 
     it("does not report success for unchecked duplicate SQLite transcript keys", async () => {
@@ -743,14 +756,18 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
           type: "message",
         }),
       ]);
-      expect(updates).toEqual([
-        expect.objectContaining({
-          agentId: "main",
-          message: appended?.message,
-          messageId: appended?.messageId,
-          sessionKey: scope.sessionKey,
-        }),
-      ]);
+      if (adapter.publishesTranscriptUpdates) {
+        expect(updates).toEqual([
+          expect.objectContaining({
+            agentId: "main",
+            message: appended?.message,
+            messageId: appended?.messageId,
+            sessionKey: scope.sessionKey,
+          }),
+        ]);
+      } else {
+        expect(updates).toEqual([]);
+      }
     });
   },
 );
