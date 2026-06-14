@@ -105,6 +105,11 @@ function manifestSuppressionMatchesConditions(params: {
   }
   if (when.baseUrlHosts?.length) {
     const baseUrlHost = normalizeBaseUrlHost(params.baseUrl ?? configuredProvider?.baseUrl);
+    // Missing transport metadata usually means a stale/default catalog row.
+    // Suppress it unless config names a custom base URL to check.
+    if (!baseUrlHost && !params.baseUrl && !configuredProvider?.baseUrl) {
+      return true;
+    }
     if (!baseUrlHost) {
       return false;
     }
