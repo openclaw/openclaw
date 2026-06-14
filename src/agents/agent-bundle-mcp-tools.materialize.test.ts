@@ -454,6 +454,40 @@ describe("createBundleMcpToolRuntime", () => {
     ]);
   });
 
+  it("skips unreadable MCP catalog tool descriptors without dropping healthy siblings", async () => {
+    const unreadable = {
+      serverName: "multi",
+      safeServerName: "multi",
+      description: "bad",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "bad",
+    } as unknown as McpCatalogTool;
+    Object.defineProperty(unreadable, "toolName", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin MCP tool name getter exploded");
+      },
+    });
+
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        tools: [
+          unreadable,
+          {
+            serverName: "multi",
+            safeServerName: "multi",
+            toolName: "healthy",
+            description: "healthy",
+            inputSchema: { type: "object", properties: {} },
+            fallbackDescription: "healthy",
+          },
+        ],
+      }),
+    });
+
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(["multi__healthy"]);
+  });
+
   it("normalizes local $ref schemas from MCP tools before exposing them", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime({

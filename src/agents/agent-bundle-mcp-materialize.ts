@@ -181,6 +181,38 @@ function serverAllowsUtilityTool(
   return !exclude.some((pattern) => globMatches(pattern, operation));
 }
 
+function readMcpCatalogTool(tool: McpCatalogTool, index: number): McpCatalogTool | undefined {
+  try {
+    const serverName = tool.serverName;
+    const safeServerName = tool.safeServerName;
+    const toolName = tool.toolName;
+    if (
+      typeof serverName !== "string" ||
+      typeof safeServerName !== "string" ||
+      typeof toolName !== "string"
+    ) {
+      logWarn(`bundle-mcp: skipped tool descriptor ${index} because required names are invalid.`);
+      return undefined;
+    }
+    const title = typeof tool.title === "string" ? tool.title : undefined;
+    const description = typeof tool.description === "string" ? tool.description : undefined;
+    const fallbackDescription =
+      typeof tool.fallbackDescription === "string" ? tool.fallbackDescription : toolName;
+    return {
+      serverName,
+      safeServerName,
+      toolName,
+      ...(title ? { title } : {}),
+      ...(description ? { description } : {}),
+      inputSchema: tool.inputSchema,
+      fallbackDescription,
+    };
+  } catch {
+    logWarn(`bundle-mcp: skipped unreadable tool descriptor ${index}.`);
+    return undefined;
+  }
+}
+
 function addMcpUtilityTool(params: {
   tools: AnyAgentTool[];
   reservedNames: Set<string>;
@@ -239,7 +271,11 @@ export function buildBundleMcpToolsFromCatalog(params: {
 }): AnyAgentTool[] {
   const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const tools: AnyAgentTool[] = [];
-  const sortedCatalogTools = [...params.catalog.tools].toSorted((a, b) => {
+  const catalogTools = params.catalog.tools.flatMap((tool, index) => {
+    const readable = readMcpCatalogTool(tool, index);
+    return readable ? [readable] : [];
+  });
+  const sortedCatalogTools = catalogTools.toSorted((a, b) => {
     const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
     if (serverOrder !== 0) {
       return serverOrder;
