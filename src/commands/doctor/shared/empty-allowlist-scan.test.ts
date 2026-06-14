@@ -87,4 +87,25 @@ describe("doctor empty allowlist policy scan", () => {
     const [warningOptions] = extraWarningsForAccount.mock.calls[0] ?? [];
     expect(warningOptions?.prefix).toBe("channels.signal");
   });
+
+  it("does not warn on top-level groupAllowFrom when every account has its own allowlist (regression #92684)", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+            accounts: {
+              default: { groupAllowFrom: ["user-123"] },
+              work: { groupAllowFrom: ["user-456"] },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // No warnings should be emitted because every account has its own populated groupAllowFrom.
+    expect(warnings).toEqual([]);
+  });
 });

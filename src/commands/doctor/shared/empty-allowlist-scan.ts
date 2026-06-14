@@ -88,9 +88,17 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
 
     const accounts = asObjectRecord(channelConfig.accounts);
+    const hasAccounts = accounts && Object.keys(accounts).length > 0;
+
+    // Only check the top-level channel config if it has no accounts.
+    // When accounts exist, the top-level config is a fallback parent, not a
+    // real account — each account is checked individually below.
+    if (!hasAccounts) {
+      checkAccount(channelConfig, `channels.${channelName}`, channelName);
+    }
+
     if (!accounts) {
       continue;
     }
