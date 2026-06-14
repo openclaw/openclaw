@@ -1660,6 +1660,7 @@ export const fa: TranslationMap = {
       timeoutInvalid: "اگر تنظیم شود، مهلت زمانی باید بیشتر از 0 ثانیه باشد.",
       webhookUrlRequired: "URL وب‌هوک ضروری است.",
       webhookUrlInvalid: "URL وب‌هوک باید با http:// یا https:// شروع شود.",
+      telegramChatIdRequired: "Telegram To must be a numeric chat ID (e.g. -1001234567890).",
       invalidRunTime: "زمان اجرا نامعتبر است.",
       invalidIntervalAmount: "مقدار فاصله نامعتبر است.",
       cronExprRequiredShort: "عبارت Cron ضروری است.",

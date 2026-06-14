@@ -1652,6 +1652,7 @@ export const vi: TranslationMap = {
       timeoutInvalid: "Nếu đặt, thời gian chờ phải lớn hơn 0 giây.",
       webhookUrlRequired: "Bắt buộc nhập URL webhook.",
       webhookUrlInvalid: "URL webhook phải bắt đầu bằng http:// hoặc https://.",
+      telegramChatIdRequired: "Telegram To must be a numeric chat ID (e.g. -1001234567890).",
       invalidRunTime: "Thời gian chạy không hợp lệ.",
       invalidIntervalAmount: "Khoảng lặp không hợp lệ.",
       cronExprRequiredShort: "Bắt buộc nhập biểu thức cron.",

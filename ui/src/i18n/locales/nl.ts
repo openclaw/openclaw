@@ -1666,6 +1666,7 @@ export const nl: TranslationMap = {
       timeoutInvalid: "Als ingesteld, moet timeout groter zijn dan 0 seconden.",
       webhookUrlRequired: "Webhook-URL is verplicht.",
       webhookUrlInvalid: "Webhook-URL moet beginnen met http:// of https://.",
+      telegramChatIdRequired: "Telegram To must be a numeric chat ID (e.g. -1001234567890).",
       invalidRunTime: "Ongeldige uitvoeringstijd.",
       invalidIntervalAmount: "Ongeldige intervalwaarde.",
       cronExprRequiredShort: "Cron-expressie vereist.",

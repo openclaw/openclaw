@@ -1181,6 +1181,54 @@ describe("cron controller", () => {
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
 
+  it("rejects non-numeric Telegram delivery target (regression #90467)", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "not-a-number",
+    });
+    expect(errors.deliveryTo).toBe("cron.errors.telegramChatIdRequired");
+  });
+
+  it("accepts numeric Telegram delivery target", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "-1001234567890",
+    });
+    expect(errors.deliveryTo).toBeUndefined();
+  });
+
+  it("accepts empty Telegram delivery target", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "test-job",
+      scheduleKind: "every",
+      everyAmount: "30",
+      everyUnit: "minutes",
+      payloadKind: "agentTurn",
+      payloadText: "do something",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "",
+    });
+    expect(errors.deliveryTo).toBeUndefined();
+  });
+
   it("blocks add/update submit when validation errors exist", async () => {
     const request = vi.fn(async () => ({}));
     const state = createState({
