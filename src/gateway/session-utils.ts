@@ -1951,6 +1951,7 @@ export function buildGatewaySessionRow(params: {
     controlDirectorLivenessAudit: entry?.controlDirectorLivenessAudit,
     controlDirectorMissionLedger: entry?.controlDirectorMissionLedger,
     controlDirectorJudgeCompletionApproval: entry?.controlDirectorJudgeCompletionApproval,
+    controlDirectorTruthAudit: entry?.controlDirectorTruthAudit,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
 }

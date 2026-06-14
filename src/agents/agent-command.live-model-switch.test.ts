@@ -913,6 +913,110 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     ]);
   });
 
+  it("blocks unsupported Control Director truth claims before normal delivery", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/openclaw-control-qwen36-27b:latest" },
+        },
+      },
+    };
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, typeof sessionEntry & Record<string, unknown>> = {
+      "agent:main": sessionEntry,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/session-store.json";
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue({
+      payloads: [
+        {
+          text: [
+            "Verified state: local edits are present.",
+            "Remote proof passed on GitHub Actions.",
+            "Next build gap: attach the GitHub success run for this SHA.",
+            "Completion Grade: 8/10",
+            "Criticality: 10/10",
+            "Status: blocked",
+          ].join("\n"),
+        },
+      ],
+      meta: {
+        durationMs: 100,
+        aborted: false,
+        stopReason: "end_turn",
+        agentMeta: { provider: "ollama", model: "openclaw-control-qwen36-27b:latest" },
+      },
+    });
+
+    await agentCommand({
+      message: "Implement the plan and verify completion.",
+      to: "+1234567890",
+      senderIsOwner: true,
+      agentId: "main",
+      runId: "run-control-truth-required",
+    });
+
+    const deliveryArg = state.deliverAgentCommandResultMock.mock.calls[0]?.[0] as
+      | { payloads?: Array<{ text?: string }> }
+      | undefined;
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("truth gate blocked");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain(
+      "Missing evidence: successful GitHub run evidence for the implementation SHA",
+    );
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("Status: blocked");
+    expect(sessionStore["agent:main"]?.controlDirectorTruthAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-truth-required",
+        status: "blocked",
+        payloadsChecked: 1,
+        payloadsRewritten: 1,
+        claims: [
+          expect.objectContaining({
+            claimType: "remote_proof",
+            requiredEvidenceType: "github_run",
+            matchStatus: "missing",
+          }),
+        ],
+      }),
+    ]);
+    expect(sessionStore["agent:main"]?.controlDirectorMissionLedger).toEqual([
+      expect.objectContaining({
+        missionId: "control-director:run-control-truth-required",
+        runId: "run-control-truth-required",
+        status: "blocked",
+        finalStatus: "blocked",
+        truthAudit: expect.objectContaining({
+          status: "blocked",
+          payloadsRewritten: 1,
+        }),
+      }),
+    ]);
+    expect(state.emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-control-truth-required",
+        stream: "control_director_truth",
+        data: expect.objectContaining({
+          status: "blocked",
+          payloadsRewritten: 1,
+        }),
+      }),
+    );
+  });
+
   it("synthesizes a visible Control Director liveness response and queues one safe continuation", async () => {
     state.runtimeConfigMock = {
       agents: {
@@ -1538,6 +1642,73 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         runId: "run-control-guard-acp",
         action: "rewrote_unsupported_complete",
         nextStatus: "blocked",
+      }),
+    ]);
+  });
+
+  it("guards unsupported Control Director truth claims from ACP delivery", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+    state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
+      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
+      onEvent?.({
+        type: "text_delta",
+        stream: "output",
+        text: [
+          "Verified state: local edits are present.",
+          "Dashboard updated and tested.",
+          "Next build gap: attach UI smoke evidence.",
+          "Completion Grade: 8/10",
+          "Criticality: 10/10",
+          "Status: blocked",
+        ].join("\n"),
+      });
+      onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, typeof sessionEntry & Record<string, unknown>> = {
+      "agent:main": sessionEntry,
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/session-store.json";
+
+    await agentCommand({
+      message: "finish the ACP task",
+      sessionKey: "agent:main",
+      senderIsOwner: true,
+      agentId: "main",
+      runId: "run-control-truth-acp",
+    });
+
+    const deliveryArg = state.deliverAgentCommandResultMock.mock.calls[0]?.[0] as
+      | { payloads?: Array<{ text?: string }> }
+      | undefined;
+    expect(deliveryArg?.payloads?.[0]?.text).toContain("truth gate blocked");
+    expect(deliveryArg?.payloads?.[0]?.text).toContain(
+      "Missing evidence: successful dashboard/UI smoke evidence",
+    );
+    expect(sessionStore["agent:main"]?.controlDirectorTruthAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-truth-acp",
+        status: "blocked",
+        payloadsRewritten: 1,
+        claims: expect.arrayContaining([
+          expect.objectContaining({
+            claimType: "dashboard",
+            requiredEvidenceType: "ui_smoke",
+            matchStatus: "missing",
+          }),
+        ]),
       }),
     ]);
   });

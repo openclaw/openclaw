@@ -4,6 +4,7 @@ import type {
   SessionControlDirectorJudgeCompletionGate,
   SessionControlDirectorLivenessAuditEntry,
   SessionControlDirectorMissionLedgerEntry,
+  SessionControlDirectorTruthAuditEntry,
   SessionEntry,
 } from "../config/sessions/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -14,8 +15,10 @@ import {
   applyControlDirectorFinalOutputGuard,
   applyControlDirectorJudgeCompletionGate,
   applyControlDirectorLivenessWatchdog,
+  applyControlDirectorTruthGate,
   isControlDirectorAgentId,
   summarizeControlDirectorMissionFinalText,
+  type ControlDirectorClaimEvidence,
   type ControlDirectorContinuationDecision,
   type ControlDirectorFinalOutputGuardAudit,
   type ControlDirectorFinalOutputGuardResult,
@@ -25,11 +28,13 @@ import {
   type ControlDirectorLivenessWatchdogAudit,
   type ControlDirectorLivenessWatchdogResult,
   type ControlDirectorMissionSummary,
+  type ControlDirectorTruthAudit,
 } from "./control-director-contract.js";
 
 const MAX_CONTROL_DIRECTOR_GUARD_AUDIT_ENTRIES = 20;
 const MAX_CONTROL_DIRECTOR_LIVENESS_AUDIT_ENTRIES = 20;
 const MAX_CONTROL_DIRECTOR_MISSION_LEDGER_ENTRIES = 20;
+const MAX_CONTROL_DIRECTOR_TRUTH_AUDIT_ENTRIES = 20;
 const CONTROL_DIRECTOR_REQUEST_SUMMARY_MAX = 240;
 
 type ControlDirectorSessionMutationParams = {
@@ -50,6 +55,7 @@ export type ControlDirectorDeliveryGuardResult<T extends ControlDirectorGuardabl
   guardActions: string[];
   watchdogActions: string[];
   judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate;
+  truthAudit?: SessionControlDirectorTruthAuditEntry;
 };
 
 function buildSessionControlDirectorGuardAuditEntry(params: {
@@ -227,6 +233,7 @@ function buildSessionControlDirectorMissionLedgerEntry(params: {
   continuationQueued: boolean;
   judgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval | undefined;
   judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate | undefined;
+  truthAudit?: SessionControlDirectorTruthAuditEntry | undefined;
   guardActions: string[];
   watchdogActions: string[];
   existing?: SessionControlDirectorMissionLedgerEntry | undefined;
@@ -255,6 +262,7 @@ function buildSessionControlDirectorMissionLedgerEntry(params: {
       ? { judgeCompletionApproval: params.judgeCompletionApproval }
       : {}),
     ...(params.judgeCompletionGate ? { judgeCompletionGate: params.judgeCompletionGate } : {}),
+    ...(params.truthAudit ? { truthAudit: params.truthAudit } : {}),
     ...(params.guardActions.length > 0 ? { guardActions: params.guardActions } : {}),
     ...(params.watchdogActions.length > 0 ? { watchdogActions: params.watchdogActions } : {}),
   };
@@ -269,6 +277,7 @@ async function recordControlDirectorMissionLedger(
     continuationQueued: boolean;
     judgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval | undefined;
     judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate | undefined;
+    truthAudit?: SessionControlDirectorTruthAuditEntry | undefined;
     guardActions: string[];
     watchdogActions: string[];
   },
@@ -292,6 +301,7 @@ async function recordControlDirectorMissionLedger(
     continuationQueued: params.continuationQueued,
     judgeCompletionApproval: params.judgeCompletionApproval,
     judgeCompletionGate: params.judgeCompletionGate,
+    truthAudit: params.truthAudit,
     guardActions: params.guardActions,
     watchdogActions: params.watchdogActions,
     existing,
@@ -346,6 +356,73 @@ function toSessionJudgeCompletionApproval(
       ? { missingAcceptanceCriteria: approval.missingAcceptanceCriteria }
       : {}),
   };
+}
+
+function toSessionControlDirectorTruthAuditEntry(params: {
+  audit: ControlDirectorTruthAudit;
+  runId?: string | undefined;
+  ts?: number;
+}): SessionControlDirectorTruthAuditEntry {
+  return {
+    ...(params.runId ? { runId: params.runId } : {}),
+    ts: params.ts ?? Date.now(),
+    status: params.audit.status,
+    claims: params.audit.claims.map((claim) => ({
+      claim: claim.claim,
+      claimHash: claim.claimHash,
+      claimType: claim.claimType,
+      requiredEvidenceType: claim.requiredEvidenceType,
+      ...(claim.evidenceId ? { evidenceId: claim.evidenceId } : {}),
+      ...(claim.evidenceSource ? { evidenceSource: claim.evidenceSource } : {}),
+      matchStatus: claim.matchStatus,
+      ...(claim.missingCondition ? { missingCondition: claim.missingCondition } : {}),
+      ...(claim.rewriteAction ? { rewriteAction: claim.rewriteAction } : {}),
+    })),
+    missing: params.audit.missing,
+    payloadsChecked: params.audit.payloadsChecked,
+    payloadsRewritten: params.audit.payloadsRewritten,
+  };
+}
+
+async function recordControlDirectorTruthAudit(
+  params: ControlDirectorSessionMutationParams & { audit: ControlDirectorTruthAudit },
+): Promise<{
+  sessionEntry?: SessionEntry | undefined;
+  auditEntry: SessionControlDirectorTruthAuditEntry;
+}> {
+  const auditEntry = toSessionControlDirectorTruthAuditEntry({
+    audit: params.audit,
+    runId: params.runId,
+  });
+  if (params.runId) {
+    emitAgentEvent({
+      runId: params.runId,
+      sessionKey: params.sessionKey ?? params.sessionId,
+      stream: "control_director_truth",
+      data: auditEntry,
+    });
+  }
+  if (params.sessionStore && params.sessionKey && params.storePath) {
+    const entry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
+    if (entry) {
+      const nextAudit = [...(entry.controlDirectorTruthAudit ?? []), auditEntry].slice(
+        -MAX_CONTROL_DIRECTOR_TRUTH_AUDIT_ENTRIES,
+      );
+      const next: SessionEntry = {
+        ...entry,
+        controlDirectorTruthAudit: nextAudit,
+        updatedAt: auditEntry.ts,
+      };
+      await persistControlDirectorSessionEntry({
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        entry: next,
+      });
+      return { sessionEntry: next, auditEntry };
+    }
+  }
+  return { sessionEntry: params.sessionEntry, auditEntry };
 }
 
 function resolveControlDirectorJudgeCompletionApproval(params: {
@@ -431,6 +508,8 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
     safeToContinue?: boolean | undefined;
     queueContinuation?: boolean | undefined;
     judgeCompletionApproval?: ControlDirectorJudgeCompletionApproval | undefined;
+    truthEvidence?: readonly ControlDirectorClaimEvidence[] | undefined;
+    implementationSha?: string | undefined;
   },
 ): Promise<ControlDirectorDeliveryGuardResult<T>> {
   const agentId = params.agentId ?? undefined;
@@ -565,6 +644,37 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
         storePath: params.storePath,
       })) ?? sessionEntry;
   }
+  const truthEvidence: ControlDirectorClaimEvidence[] = [...(params.truthEvidence ?? [])];
+  if (judgeCompletionGate.approval && !judgeCompletionGate.audit) {
+    truthEvidence.push({
+      type: "judge_approval",
+      id: judgeCompletionGate.approval.judgeRunId ?? "judge-approval",
+      source: "control-director-judge-completion-gate",
+      summary: judgeCompletionGate.approval.evidenceSummary ?? "Judge approved completion claim.",
+      status: "passed",
+    });
+  }
+  const truthGate = applyControlDirectorTruthGate({
+    agentId,
+    payloads: finalPayloads,
+    evidence: truthEvidence,
+    implementationSha: params.implementationSha,
+  });
+  finalPayloads = truthGate.payloads;
+  let sessionTruthAudit: SessionControlDirectorTruthAuditEntry | undefined;
+  if (truthGate.audit) {
+    const recorded = await recordControlDirectorTruthAudit({
+      audit: truthGate.audit,
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+    });
+    sessionEntry = recorded.sessionEntry ?? sessionEntry;
+    sessionTruthAudit = recorded.auditEntry;
+  }
   const continuationQueued =
     params.queueContinuation === false || !agentId
       ? false
@@ -609,6 +719,7 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
         continuationQueued: livenessGuardedFinalOutput.continuation.shouldQueue,
         judgeCompletionApproval: toSessionJudgeCompletionApproval(judgeCompletionGate.approval),
         judgeCompletionGate: judgeGateSummary,
+        truthAudit: sessionTruthAudit,
         guardActions,
         watchdogActions,
       })) ?? sessionEntry;
@@ -623,5 +734,6 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
     guardActions,
     watchdogActions,
     ...(judgeGateSummary ? { judgeCompletionGate: judgeGateSummary } : {}),
+    ...(sessionTruthAudit ? { truthAudit: sessionTruthAudit } : {}),
   };
 }

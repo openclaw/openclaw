@@ -80,6 +80,58 @@ export type ControlDirectorJudgeCompletionGateResult<T extends ControlDirectorGu
   audit?: ControlDirectorFinalOutputGuardAudit;
 };
 
+export type ControlDirectorTruthClaimType =
+  | "completion"
+  | "verification"
+  | "remote_proof"
+  | "dashboard"
+  | "implementation"
+  | "external_fact";
+
+export type ControlDirectorClaimEvidenceType =
+  | "judge_approval"
+  | "command"
+  | "github_run"
+  | "ui_smoke"
+  | "repo_change"
+  | "source_citation";
+
+export type ControlDirectorClaimEvidence = {
+  type: ControlDirectorClaimEvidenceType;
+  id: string;
+  source: string;
+  summary: string;
+  status: "passed" | "failed" | "unknown";
+  exitCode?: number;
+  sha?: string;
+};
+
+export type ControlDirectorTruthClaimAudit = {
+  claim: string;
+  claimHash: string;
+  claimType: ControlDirectorTruthClaimType;
+  requiredEvidenceType: ControlDirectorClaimEvidenceType;
+  evidenceId?: string;
+  evidenceSource?: string;
+  matchStatus: "matched" | "missing";
+  missingCondition?: string;
+  rewriteAction?: "blocked_unsupported_truth_claim";
+};
+
+export type ControlDirectorTruthAudit = {
+  status: "passed" | "blocked" | "not_required";
+  claims: ControlDirectorTruthClaimAudit[];
+  missing: string[];
+  payloadsChecked: number;
+  payloadsRewritten: number;
+};
+
+export type ControlDirectorTruthGateResult<T extends ControlDirectorGuardablePayload> = {
+  payloads: T[];
+  changed: boolean;
+  audit?: ControlDirectorTruthAudit;
+};
+
 export type ControlDirectorLivenessClassification = "empty" | "reasoning-only" | "planning-only";
 
 export type ControlDirectorLivenessWatchdogAction =
@@ -286,6 +338,7 @@ export function buildControlDirectorSystemPromptSection(
     "Before saying a task is finished, verify the requested outcome with concrete evidence such as source inspection, config proof, runtime status, tests, smoke output, or command results when feasible.",
     "A completion claim must include the concrete evidence used to verify it; if that evidence is missing, report `Status: blocked` or `Status: needs_user_input` instead of `Status: complete`.",
     "A `Status: complete` claim also requires Judge approval for this exact mission, final answer, and evidence. If Judge approval is missing, invalid, stale, or scope-mismatched, report `Status: blocked` instead.",
+    "Any factual, verification, remote-proof, dashboard-tested, implemented/fixed, or success claim must be backed by matching runtime evidence. If evidence is unavailable, say it is unknown/unverified or report `Status: blocked`.",
     "If work is incomplete, do not call it complete. State the exact blocker or the next build gap and the smallest action that would close it.",
     "When the user asks for Completion Grade, Criticality, verified state, or next build gap, include those fields in every response until the user changes that reporting requirement.",
     "When reporting Completion Grade or Criticality, use numeric `/10` values unless the user explicitly asks for another scale.",
@@ -796,6 +849,251 @@ function stableControlDirectorStringList(values: readonly string[] | undefined):
   return [
     ...new Set((values ?? []).map(normalizeControlDirectorClaimPart).filter(Boolean)),
   ].toSorted();
+}
+
+function hashControlDirectorTruthClaim(claim: string): string {
+  return createHash("sha256").update(normalizeControlDirectorClaimPart(claim)).digest("hex");
+}
+
+function isControlDirectorUncertainOrBlockedClaim(line: string): boolean {
+  return (
+    /^original response summary\s*:/iu.test(line) ||
+    /\b(blocked|unsupported|missing|not delivered|not verified|unverified|cannot verify|can't verify|unknown|requires?|need(?:s|ed)?|obtain|pending)\b/iu.test(
+      line,
+    )
+  );
+}
+
+function buildControlDirectorTruthClaim(params: {
+  line: string;
+  claimType: ControlDirectorTruthClaimType;
+  requiredEvidenceType: ControlDirectorClaimEvidenceType;
+}): Omit<
+  ControlDirectorTruthClaimAudit,
+  "evidenceId" | "evidenceSource" | "matchStatus" | "missingCondition" | "rewriteAction"
+> {
+  return {
+    claim: params.line,
+    claimHash: hashControlDirectorTruthClaim(params.line),
+    claimType: params.claimType,
+    requiredEvidenceType: params.requiredEvidenceType,
+  };
+}
+
+function extractControlDirectorTruthClaims(
+  text: string,
+): Array<
+  Omit<
+    ControlDirectorTruthClaimAudit,
+    "evidenceId" | "evidenceSource" | "matchStatus" | "missingCondition" | "rewriteAction"
+  >
+> {
+  const claims: Array<
+    Omit<
+      ControlDirectorTruthClaimAudit,
+      "evidenceId" | "evidenceSource" | "matchStatus" | "missingCondition" | "rewriteAction"
+    >
+  > = [];
+  const seen = new Set<string>();
+  for (const rawLine of text.split(/\n+/u)) {
+    const line = rawLine.replace(/\s+/gu, " ").trim();
+    if (!line || isControlDirectorUncertainOrBlockedClaim(line)) {
+      continue;
+    }
+    const add = (
+      claimType: ControlDirectorTruthClaimType,
+      requiredEvidenceType: ControlDirectorClaimEvidenceType,
+    ) => {
+      const key = `${claimType}:${line}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      claims.push(buildControlDirectorTruthClaim({ line, claimType, requiredEvidenceType }));
+    };
+    const remoteProofClaim =
+      /\b(remote|github actions?|ci|workflow|linux proof)\b.*\b(passed|succeeded|success|green|verified)\b/iu.test(
+        line,
+      );
+    const dashboardClaim =
+      /\b(dashboard|control ui|webchat|ui smoke)\b.*\b(updated|tested|verified|passed|succeeded)\b/iu.test(
+        line,
+      );
+    if (/\bstatus\s*:\s*complete\b/iu.test(line) || /\b(done|finished|completed)\b/iu.test(line)) {
+      add("completion", "judge_approval");
+    }
+    if (remoteProofClaim) {
+      add("remote_proof", "github_run");
+    }
+    if (dashboardClaim) {
+      add("dashboard", "ui_smoke");
+    }
+    const verificationClaim =
+      !remoteProofClaim &&
+      !dashboardClaim &&
+      (/\b(tests?|checks?|smoke|validation|proof|command|readiness|pnpm)\b.*\b(passed|succeeded|verified|tested|green)\b/iu.test(
+        line,
+      ) ||
+        /\b(verified|tested)\b.*\b(tests?|checks?|smoke|validation|proof|command|readiness|pnpm)\b/iu.test(
+          line,
+        ));
+    if (verificationClaim) {
+      add("verification", "command");
+    }
+    if (/\b(implemented|fixed|changed|updated)\b/iu.test(line)) {
+      add("implementation", "repo_change");
+    }
+    if (
+      /\b(latest|as of|today|yesterday|tomorrow|current public|currently public)\b/iu.test(line) &&
+      !/\b(source|citation|cited|https?:\/\/)\b/iu.test(line)
+    ) {
+      add("external_fact", "source_citation");
+    }
+  }
+  return claims;
+}
+
+function findControlDirectorEvidenceForClaim(params: {
+  claim: Pick<ControlDirectorTruthClaimAudit, "requiredEvidenceType">;
+  evidence: readonly ControlDirectorClaimEvidence[];
+  implementationSha?: string | undefined;
+}): ControlDirectorClaimEvidence | undefined {
+  return params.evidence.find((candidate) => {
+    if (candidate.type !== params.claim.requiredEvidenceType || candidate.status !== "passed") {
+      return false;
+    }
+    if (candidate.type === "command" && candidate.exitCode !== 0) {
+      return false;
+    }
+    if (
+      candidate.type === "github_run" &&
+      params.implementationSha &&
+      candidate.sha !== params.implementationSha
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function missingControlDirectorTruthCondition(params: {
+  requiredEvidenceType: ControlDirectorClaimEvidenceType;
+  implementationSha?: string | undefined;
+}): string {
+  if (params.requiredEvidenceType === "command") {
+    return "command evidence with exit code 0";
+  }
+  if (params.requiredEvidenceType === "github_run") {
+    return params.implementationSha
+      ? `successful GitHub run evidence for implementation SHA ${params.implementationSha}`
+      : "successful GitHub run evidence for the implementation SHA";
+  }
+  if (params.requiredEvidenceType === "ui_smoke") {
+    return "successful dashboard/UI smoke evidence";
+  }
+  if (params.requiredEvidenceType === "repo_change") {
+    return "repo diff or commit evidence touching the claimed surface";
+  }
+  if (params.requiredEvidenceType === "source_citation") {
+    return "source evidence or explicit unknown/unverified wording for external facts";
+  }
+  return "matching Judge approval evidence";
+}
+
+function buildControlDirectorTruthBlockedText(params: {
+  blockedClaims: readonly ControlDirectorTruthClaimAudit[];
+}): string {
+  const first = params.blockedClaims[0];
+  return [
+    "Control Director truth gate blocked unsupported claims.",
+    "",
+    "Verified state: unsupported Control Director truth claim was blocked before delivery.",
+    `Unsupported claim: ${first?.claim ?? "unknown"}`,
+    `Missing evidence: ${first?.missingCondition ?? "matching runtime evidence"}`,
+    "Next build gap: collect matching evidence or revise the answer to state uncertainty.",
+    "Completion Grade: 9.9/10",
+    "Criticality: 10/10",
+    "Status: blocked",
+  ].join("\n");
+}
+
+export function applyControlDirectorTruthGate<T extends ControlDirectorGuardablePayload>(params: {
+  agentId?: string | undefined | null;
+  payloads: readonly T[] | undefined;
+  evidence?: readonly ControlDirectorClaimEvidence[] | undefined;
+  implementationSha?: string | undefined;
+}): ControlDirectorTruthGateResult<T> {
+  const payloads = [...(params.payloads ?? [])];
+  if (!isControlDirectorAgentId(params.agentId) || payloads.length === 0) {
+    return { payloads, changed: false };
+  }
+
+  const evidence = params.evidence ?? [];
+  const claims: ControlDirectorTruthClaimAudit[] = [];
+  let payloadsRewritten = 0;
+  const guardedPayloads = payloads.map((payload) => {
+    const text = typeof payload.text === "string" ? payload.text : "";
+    const payloadClaims = extractControlDirectorTruthClaims(text).map((claim) => {
+      const matched = findControlDirectorEvidenceForClaim({
+        claim,
+        evidence,
+        implementationSha: params.implementationSha,
+      });
+      if (matched) {
+        return Object.assign({}, claim, {
+          evidenceId: matched.id,
+          evidenceSource: matched.source,
+          matchStatus: "matched" as const,
+        });
+      }
+      return Object.assign({}, claim, {
+        matchStatus: "missing" as const,
+        missingCondition: missingControlDirectorTruthCondition({
+          requiredEvidenceType: claim.requiredEvidenceType,
+          implementationSha: params.implementationSha,
+        }),
+        rewriteAction: "blocked_unsupported_truth_claim" as const,
+      });
+    });
+    claims.push(...payloadClaims);
+    const blockedClaims = payloadClaims.filter((claim) => claim.matchStatus === "missing");
+    if (blockedClaims.length === 0) {
+      return payload;
+    }
+    payloadsRewritten += 1;
+    return {
+      ...payload,
+      text: buildControlDirectorTruthBlockedText({ blockedClaims }),
+    };
+  });
+
+  if (claims.length === 0) {
+    return {
+      payloads: guardedPayloads,
+      changed: false,
+      audit: {
+        status: "not_required",
+        claims: [],
+        missing: [],
+        payloadsChecked: payloads.length,
+        payloadsRewritten: 0,
+      },
+    };
+  }
+  const missing = claims
+    .filter((claim) => claim.matchStatus === "missing")
+    .map((claim) => claim.missingCondition ?? "matching runtime evidence");
+  return {
+    payloads: guardedPayloads,
+    changed: payloadsRewritten > 0,
+    audit: {
+      status: missing.length > 0 ? "blocked" : "passed",
+      claims,
+      missing,
+      payloadsChecked: payloads.length,
+      payloadsRewritten,
+    },
+  };
 }
 
 export function buildControlDirectorJudgeClaimHash(params: {

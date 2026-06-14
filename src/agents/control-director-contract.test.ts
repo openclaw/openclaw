@@ -3,6 +3,7 @@ import {
   applyControlDirectorFinalOutputGuard,
   applyControlDirectorJudgeCompletionGate,
   applyControlDirectorLivenessWatchdog,
+  applyControlDirectorTruthGate,
   buildControlDirectorJudgeClaimHash,
   buildControlDirectorSystemPromptSection,
   decideControlDirectorContinuation,
@@ -19,6 +20,7 @@ describe("Control Director contract", () => {
     expect(section).toContain("numeric `/10` values");
     expect(section).toContain("exact response format");
     expect(section).toContain("requires Judge approval");
+    expect(section).toContain("matching runtime evidence");
     expect(buildControlDirectorSystemPromptSection("builder")).toEqual([]);
   });
 
@@ -313,6 +315,227 @@ describe("Control Director contract", () => {
         requestBody: "done",
       }),
     ).toEqual({ payloads: blockedPayloads, changed: false, approval: undefined });
+  });
+
+  it("blocks unsupported remote proof claims before Control Director delivery", () => {
+    const guarded = applyControlDirectorTruthGate({
+      agentId: "main",
+      payloads: [
+        {
+          text: [
+            "Remote proof passed on GitHub Actions.",
+            "Verified state: I have local evidence only.",
+            "Next build gap: remote proof evidence must be attached.",
+            "Completion Grade: 8/10",
+            "Criticality: 10/10",
+            "Status: blocked",
+          ].join("\n"),
+        },
+      ],
+      implementationSha: "abc123",
+    });
+
+    expect(guarded.changed).toBe(true);
+    expect(guarded.audit).toMatchObject({
+      status: "blocked",
+      payloadsChecked: 1,
+      payloadsRewritten: 1,
+      claims: expect.arrayContaining([
+        expect.objectContaining({
+          claimType: "remote_proof",
+          requiredEvidenceType: "github_run",
+          matchStatus: "missing",
+          missingCondition: "successful GitHub run evidence for implementation SHA abc123",
+          rewriteAction: "blocked_unsupported_truth_claim",
+        }),
+      ]),
+    });
+    expect(guarded.payloads[0]?.text).toContain("truth gate blocked");
+    expect(guarded.payloads[0]?.text).toContain("Unsupported claim: Remote proof passed");
+    expect(guarded.payloads[0]?.text).toContain("Status: blocked");
+  });
+
+  it("blocks unsupported dashboard and command verification claims", () => {
+    const guarded = applyControlDirectorTruthGate({
+      agentId: "control-director",
+      payloads: [
+        {
+          text: [
+            "Dashboard updated and tested.",
+            "Targeted tests passed.",
+            "Verified state: no artifact was provided.",
+            "Next build gap: collect UI smoke and command evidence.",
+            "Completion Grade: 8/10",
+            "Criticality: 10/10",
+            "Status: blocked",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(guarded.changed).toBe(true);
+    expect(guarded.audit?.claims).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          claimType: "dashboard",
+          requiredEvidenceType: "ui_smoke",
+          matchStatus: "missing",
+        }),
+        expect.objectContaining({
+          claimType: "verification",
+          requiredEvidenceType: "command",
+          matchStatus: "missing",
+        }),
+        expect.objectContaining({
+          claimType: "implementation",
+          requiredEvidenceType: "repo_change",
+          matchStatus: "missing",
+        }),
+      ]),
+    );
+    expect(guarded.payloads[0]?.text).toContain("Missing evidence:");
+    expect(guarded.payloads[0]?.text).toContain("Status: blocked");
+  });
+
+  it("allows explicit uncertainty without requiring evidence", () => {
+    const text = [
+      "I cannot verify the remote proof yet.",
+      "Verified state: remote result is unverified.",
+      "Next build gap: obtain GitHub Actions success evidence.",
+      "Completion Grade: 8/10",
+      "Criticality: 10/10",
+      "Status: blocked",
+    ].join("\n");
+
+    const guarded = applyControlDirectorTruthGate({
+      agentId: "main",
+      payloads: [{ text }],
+    });
+
+    expect(guarded.changed).toBe(false);
+    expect(guarded.payloads).toEqual([{ text }]);
+    expect(guarded.audit).toMatchObject({
+      status: "not_required",
+      claims: [],
+      payloadsChecked: 1,
+      payloadsRewritten: 0,
+    });
+  });
+
+  it("blocks unsupported external current-world facts without source evidence", () => {
+    const guarded = applyControlDirectorTruthGate({
+      agentId: "main",
+      payloads: [
+        {
+          text: [
+            "As of today, the latest release is green.",
+            "Verified state: no source citation is attached.",
+            "Next build gap: cite the source or mark this unknown.",
+            "Completion Grade: 8/10",
+            "Criticality: 10/10",
+            "Status: blocked",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(guarded.changed).toBe(true);
+    expect(guarded.audit?.claims).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          claimType: "external_fact",
+          requiredEvidenceType: "source_citation",
+          matchStatus: "missing",
+        }),
+      ]),
+    );
+    expect(guarded.payloads[0]?.text).toContain(
+      "source evidence or explicit unknown/unverified wording",
+    );
+  });
+
+  it("allows truth claims with matching runtime evidence", () => {
+    const text = [
+      "Status: complete",
+      "Targeted tests passed.",
+      "Remote proof passed on GitHub Actions.",
+      "Dashboard updated and tested.",
+      "Implemented the delivery guard.",
+      "Verified evidence: command, remote, UI, repo, and Judge evidence are attached.",
+      "Next build gap: none.",
+      "Completion Grade: 10/10",
+      "Criticality: 10/10",
+    ].join("\n");
+
+    const guarded = applyControlDirectorTruthGate({
+      agentId: "main",
+      payloads: [{ text }],
+      implementationSha: "abc123",
+      evidence: [
+        {
+          type: "judge_approval",
+          id: "judge-run-1",
+          source: "judge",
+          summary: "Judge APPROVE for the final claim.",
+          status: "passed",
+        },
+        {
+          type: "command",
+          id: "pnpm-test",
+          source: "local",
+          summary: "pnpm test exited 0.",
+          status: "passed",
+          exitCode: 0,
+        },
+        {
+          type: "github_run",
+          id: "27488324163",
+          source: "GitHub Actions",
+          summary: "Workflow Sanity succeeded.",
+          status: "passed",
+          sha: "abc123",
+        },
+        {
+          type: "ui_smoke",
+          id: "ui-smoke-1",
+          source: "control-ui-smoke",
+          summary: "Dashboard smoke succeeded.",
+          status: "passed",
+        },
+        {
+          type: "repo_change",
+          id: "diff-1",
+          source: "git diff",
+          summary: "Diff touches delivery guard.",
+          status: "passed",
+        },
+        {
+          type: "source_citation",
+          id: "source-1",
+          source: "https://example.test/proof",
+          summary: "External fact source.",
+          status: "passed",
+        },
+      ],
+    });
+
+    expect(guarded.changed).toBe(false);
+    expect(guarded.payloads).toEqual([{ text }]);
+    expect(guarded.audit).toMatchObject({
+      status: "passed",
+      payloadsChecked: 1,
+      payloadsRewritten: 0,
+    });
+    expect(guarded.audit?.claims.every((claim) => claim.matchStatus === "matched")).toBe(true);
+  });
+
+  it("keeps non-Control-Director agents outside the truth gate", () => {
+    const payloads = [{ text: "Remote proof passed on GitHub Actions." }];
+
+    expect(applyControlDirectorTruthGate({ agentId: "builder", payloads })).toEqual({
+      payloads,
+      changed: false,
+    });
   });
 
   it("repairs missing Control Director report fields without changing truthful blocked status", () => {

@@ -97,6 +97,7 @@ export type GatewaySessionRow = {
   controlDirectorLivenessAudit?: SessionEntry["controlDirectorLivenessAudit"];
   controlDirectorMissionLedger?: SessionEntry["controlDirectorMissionLedger"];
   controlDirectorJudgeCompletionApproval?: SessionEntry["controlDirectorJudgeCompletionApproval"];
+  controlDirectorTruthAudit?: SessionEntry["controlDirectorTruthAudit"];
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
 

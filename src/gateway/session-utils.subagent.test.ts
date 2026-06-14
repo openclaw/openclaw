@@ -147,6 +147,25 @@ describe("listSessionsFromStore subagent metadata", () => {
               expectedClaimHash: "claim-hash-1",
               missing: ["Judge approval metadata"],
             },
+            truthAudit: {
+              ts: 9,
+              runId: "run-control-director-liveness",
+              status: "blocked",
+              claims: [
+                {
+                  claim: "Remote proof passed on GitHub Actions.",
+                  claimHash: "truth-claim-hash-1",
+                  claimType: "remote_proof",
+                  requiredEvidenceType: "github_run",
+                  matchStatus: "missing",
+                  missingCondition: "successful GitHub run evidence for the implementation SHA",
+                  rewriteAction: "blocked_unsupported_truth_claim",
+                },
+              ],
+              missing: ["successful GitHub run evidence for the implementation SHA"],
+              payloadsChecked: 1,
+              payloadsRewritten: 1,
+            },
             watchdogActions: ["queued_safe_continuation:queued"],
           },
         ],
@@ -160,6 +179,27 @@ describe("listSessionsFromStore subagent metadata", () => {
           scope: "Control Director completion",
           approvedAt: 123,
         },
+        controlDirectorTruthAudit: [
+          {
+            ts: 9,
+            runId: "run-control-director-liveness",
+            status: "blocked",
+            claims: [
+              {
+                claim: "Remote proof passed on GitHub Actions.",
+                claimHash: "truth-claim-hash-1",
+                claimType: "remote_proof",
+                requiredEvidenceType: "github_run",
+                matchStatus: "missing",
+                missingCondition: "successful GitHub run evidence for the implementation SHA",
+                rewriteAction: "blocked_unsupported_truth_claim",
+              },
+            ],
+            missing: ["successful GitHub run evidence for the implementation SHA"],
+            payloadsChecked: 1,
+            payloadsRewritten: 1,
+          },
+        ],
       } as SessionEntry,
     });
 
@@ -179,6 +219,10 @@ describe("listSessionsFromStore subagent metadata", () => {
           status: "blocked",
           expectedClaimHash: "claim-hash-1",
         }),
+        truthAudit: expect.objectContaining({
+          status: "blocked",
+          payloadsRewritten: 1,
+        }),
       }),
     ]);
     expect(row.controlDirectorJudgeCompletionApproval).toEqual(
@@ -189,6 +233,13 @@ describe("listSessionsFromStore subagent metadata", () => {
         approvedClaimHash: "claim-hash-1",
       }),
     );
+    expect(row.controlDirectorTruthAudit).toEqual([
+      expect.objectContaining({
+        runId: "run-control-director-liveness",
+        status: "blocked",
+        payloadsRewritten: 1,
+      }),
+    ]);
   });
 
   test("searches channel-derived display names before row enrichment", () => {

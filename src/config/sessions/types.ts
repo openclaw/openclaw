@@ -213,6 +213,50 @@ export type SessionControlDirectorJudgeCompletionGate = {
   missing?: string[];
 };
 
+export type SessionControlDirectorClaimEvidence = {
+  type:
+    | "judge_approval"
+    | "command"
+    | "github_run"
+    | "ui_smoke"
+    | "repo_change"
+    | "source_citation";
+  id: string;
+  source: string;
+  summary: string;
+  status: "passed" | "failed" | "unknown";
+  exitCode?: number;
+  sha?: string;
+};
+
+export type SessionControlDirectorTruthClaimAudit = {
+  claim: string;
+  claimHash: string;
+  claimType:
+    | "completion"
+    | "verification"
+    | "remote_proof"
+    | "dashboard"
+    | "implementation"
+    | "external_fact";
+  requiredEvidenceType: SessionControlDirectorClaimEvidence["type"];
+  evidenceId?: string;
+  evidenceSource?: string;
+  matchStatus: "matched" | "missing";
+  missingCondition?: string;
+  rewriteAction?: "blocked_unsupported_truth_claim";
+};
+
+export type SessionControlDirectorTruthAuditEntry = {
+  ts: number;
+  runId?: string;
+  status: "passed" | "blocked" | "not_required";
+  claims: SessionControlDirectorTruthClaimAudit[];
+  missing: string[];
+  payloadsChecked: number;
+  payloadsRewritten: number;
+};
+
 export type SessionControlDirectorMissionLedgerEntry = {
   missionId: string;
   runId?: string;
@@ -228,6 +272,7 @@ export type SessionControlDirectorMissionLedgerEntry = {
   criticality?: number;
   judgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval;
   judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate;
+  truthAudit?: SessionControlDirectorTruthAuditEntry;
   guardActions?: string[];
   watchdogActions?: string[];
 };
@@ -313,6 +358,8 @@ export type SessionEntry = {
   controlDirectorMissionLedger?: SessionControlDirectorMissionLedgerEntry[];
   /** Latest Judge approval that can authorize a Control Director complete claim. */
   controlDirectorJudgeCompletionApproval?: SessionControlDirectorJudgeCompletionApproval;
+  /** Capped audit trail for Control Director runtime truth-claim rewrites. */
+  controlDirectorTruthAudit?: SessionControlDirectorTruthAuditEntry[];
   /** Quota cascade protection and state-aware failover status. */
   quotaSuspension?: QuotaSuspension;
   /** Timestamp (ms) when the current sessionId first became active. */

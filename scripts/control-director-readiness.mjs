@@ -205,6 +205,25 @@ function detectControlDirectorJudgeCompletionGate() {
   }
 }
 
+function detectControlDirectorTruthGate() {
+  try {
+    const contractSource = fs.readFileSync(CONTROL_DIRECTOR_CONTRACT_SOURCE, "utf8");
+    const deliveryGuardSource = fs.readFileSync(
+      path.join(REPO_ROOT, "src/agents/control-director-delivery-guards.ts"),
+      "utf8",
+    );
+    return (
+      contractSource.includes("applyControlDirectorTruthGate") &&
+      contractSource.includes("ControlDirectorTruthAudit") &&
+      contractSource.includes("blocked_unsupported_truth_claim") &&
+      deliveryGuardSource.includes("applyControlDirectorTruthGate") &&
+      deliveryGuardSource.includes("controlDirectorTruthAudit")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function readOllamaEnvFromLaunchctl() {
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
   if (uid === null) {
@@ -368,6 +387,14 @@ export function buildControlDirectorReadinessScorecard(params) {
       "runtime-judge-completion-gate",
       "Control Director runtime Judge-approved completion gate is wired",
       params.runtimeJudgeCompletionGate === true,
+      true,
+    ),
+  );
+  facts.push(
+    fact(
+      "runtime-truth-gate",
+      "Control Director runtime truthfulness gate is wired",
+      params.runtimeTruthGate === true,
       true,
     ),
   );
@@ -571,6 +598,7 @@ export async function main(argv = process.argv.slice(2)) {
     explicitStatusPolicy: detectControlDirectorExplicitStatusPolicy(),
     runtimeFinalOutputGuard: detectControlDirectorRuntimeFinalOutputGuard(),
     runtimeJudgeCompletionGate: detectControlDirectorJudgeCompletionGate(),
+    runtimeTruthGate: detectControlDirectorTruthGate(),
   });
   if (args.json) {
     console.log(JSON.stringify(scorecard, null, 2));

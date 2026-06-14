@@ -28,6 +28,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "controlDirectorLivenessAudit",
   "controlDirectorMissionLedger",
   "controlDirectorJudgeCompletionApproval",
+  "controlDirectorTruthAudit",
   "pluginOwnerId",
   "systemSent",
   "abortedLastRun",
