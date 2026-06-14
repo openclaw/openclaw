@@ -60,7 +60,7 @@ describe("E2E temp state dirs", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "retries generated state cleanup after a failed removal",
     async () => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-e2e-temp-state-retry-"));

@@ -174,7 +174,7 @@ describe("package-mac-app plist stamping", () => {
     writeFileSync(
       corepackPath,
       [
-        "#!/usr/bin/env bash",
+        "#!/bin/bash",
         "set -euo pipefail",
         'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
         'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
@@ -191,7 +191,7 @@ describe("package-mac-app plist stamping", () => {
       ROOT_DIR=${JSON.stringify(tempRoot)}
       OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
       export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm install --frozen-lockfile --config.node-linker=hoisted
       run_pnpm build
@@ -214,7 +214,7 @@ describe("package-mac-app plist stamping", () => {
     const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm build
     `);

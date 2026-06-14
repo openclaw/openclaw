@@ -10,7 +10,7 @@ import { handleInvoke } from "./invoke.js";
 
 describe("node host invoke", () => {
   it.runIf(process.platform !== "win32")(
-    "reports current allow-always coverage for prepared shell-wrapped system.run commands",
+    "reports current allow-always coverage for prepared system.run commands",
     async () => {
       const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
       const skillBins: SkillBinsProvider = { current: async () => [] };
@@ -21,7 +21,7 @@ describe("node host invoke", () => {
           nodeId: "node-1",
           command: "system.run.prepare",
           paramsJSON: JSON.stringify({
-            command: ["/bin/sh", "-lc", "/bin/echo ok"],
+            command: ["/bin/echo", "ok"],
             rawCommand: "/bin/echo ok",
           }),
         },
@@ -29,7 +29,9 @@ describe("node host invoke", () => {
         skillBins,
       );
 
-      const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
+      const result = request.mock.calls.find(([method]) => method === "node.invoke.result")?.[1] as
+        | { payloadJSON?: string }
+        | undefined;
       const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
         allowAlwaysCoverage?: {
           complete?: boolean;
