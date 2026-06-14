@@ -685,9 +685,7 @@ describe("AcpSessionManager runtime config", () => {
       requestId: "run-1",
     });
 
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      thinking: "high",
-    });
+    expect(mockCallArg(runtimeState.ensureSession)).not.toHaveProperty("thinking");
     expectNoMockCallFields(runtimeState.setConfigOption, {
       key: "effort",
       value: "high",
