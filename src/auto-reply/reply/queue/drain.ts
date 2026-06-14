@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import { resolveStorePath } from "../../../config/sessions.js";
+import { readSessionEntry } from "../../../config/sessions/store-load.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
   channelRouteCompactKey,
@@ -523,19 +525,39 @@ async function runSyntheticOverflowSummary(params: {
       ]),
     )
     .digest("hex");
+  const sessionKey = normalizeOptionalString(params.source.run.sessionKey);
+  const storePath = sessionKey
+    ? resolveStorePath(params.source.run.config.session?.store, {
+        agentId: params.source.run.agentId,
+      })
+    : undefined;
   const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     input: {
       text: params.prompt,
       idempotencyKey: `followup-overflow:${params.source.run.sessionId}:${routeHash}:${params.source.messageId ?? params.source.enqueuedAt}:${promptHash}`,
       provenance: params.source.run.inputProvenance,
     },
-    target: {
-      transcriptPath: params.source.run.sessionFile,
-      sessionId: params.source.run.sessionId,
-      agentId: params.source.run.agentId,
-      sessionKey: params.source.run.sessionKey ?? params.source.run.sessionId,
-      cwd: params.source.run.cwd ?? params.source.run.workspaceDir,
-      config: params.source.run.config,
+    target: () => {
+      if (!sessionKey || !storePath) {
+        return {
+          transcriptPath: params.source.run.sessionFile,
+          sessionId: params.source.run.sessionId,
+          agentId: params.source.run.agentId,
+          sessionKey: params.source.run.sessionId,
+          cwd: params.source.run.cwd ?? params.source.run.workspaceDir,
+          config: params.source.run.config,
+        };
+      }
+      const sessionEntry = readSessionEntry(storePath, sessionKey);
+      return {
+        sessionId: sessionEntry?.sessionId ?? params.source.run.sessionId,
+        sessionKey,
+        sessionEntry,
+        storePath,
+        agentId: params.source.run.agentId,
+        cwd: params.source.run.cwd ?? params.source.run.workspaceDir,
+        config: params.source.run.config,
+      };
     },
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",

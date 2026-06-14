@@ -1,4 +1,7 @@
 // Tests collect-mode queue behavior, debounce, and drain semantics.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
@@ -2388,6 +2391,64 @@ describe("followup queue collect routing", () => {
     await done.promise;
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).toContain("- first");
+  });
+
+  it("persists overflow summaries to the session selected after queue admission", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-overflow-session-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
+    const newTranscriptPath = path.join(tempDir, "new-session.jsonl");
+    const key = `test-overflow-summary-session-rotation-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    try {
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          "agent:agent:main": {
+            sessionId: "new-session",
+            sessionFile: newTranscriptPath,
+            updatedAt: Date.now(),
+          },
+        }),
+      );
+      const first = createRun({ prompt: "first" });
+      first.run.sessionId = "old-session";
+      first.run.sessionKey = "agent:agent:main";
+      first.run.sessionFile = oldTranscriptPath;
+      first.run.config = { session: { store: storePath } };
+      const second = createRun({ prompt: "second" });
+      second.run = first.run;
+
+      enqueueFollowupRun(key, first, settings);
+      enqueueFollowupRun(key, second, settings);
+      scheduleFollowupDrain(key, async (run) => {
+        calls.push(run);
+        done.resolve();
+      });
+      await done.promise;
+
+      const recorder = calls[0]?.userTurnTranscriptRecorder;
+      expect(recorder).toBeDefined();
+      const persisted = await recorder?.persistFallback();
+      expect(await fs.realpath(persisted?.sessionFile ?? "")).toBe(
+        await fs.realpath(newTranscriptPath),
+      );
+      await expect(fs.readFile(newTranscriptPath, "utf8")).resolves.toContain(
+        "[Queue overflow] Dropped 1 message due to cap.",
+      );
+      await expect(fs.stat(oldTranscriptPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      clearFollowupQueue(key);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("clears overflow summaries when aborts empty the queue", async () => {
