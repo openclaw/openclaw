@@ -2386,6 +2386,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(text).toContain("Trajectory exports can include");
     expect(text).toContain("through exec approval");
     expect(text).toContain("Approve once");
+    const broadcast = lastBroadcastPayload(context);
+    expect(broadcast?.runId).toBe("idem-command-block");
+    expect(broadcast?.state).toBe("final");
+    const broadcastText = getMessageContent(broadcast)
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    expect(broadcastText).toContain("Trajectory exports can include");
+    expect(broadcastText).toContain("through exec approval");
+    expect(broadcastText).toContain("Approve once");
   });
 
   it("keeps slash-command block text when the final payload only adds media", async () => {
