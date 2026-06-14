@@ -1,6 +1,8 @@
 // Agent consult tool tests cover tool payload validation for consult requests.
 import { describe, expect, it } from "vitest";
 import {
+  buildRealtimeVoiceAgentConsultProgressResponse,
+  buildRealtimeVoiceAgentConsultWorkingResponse,
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPrompt,
   collectRealtimeVoiceAgentConsultVisibleText,
@@ -34,6 +36,8 @@ describe("realtime voice agent consult tool", () => {
       context: undefined,
       question: "Check the repo.",
       responseStyle: undefined,
+      workingAction: undefined,
+      workingMessage: undefined,
     });
     expect(
       parseRealtimeVoiceAgentConsultArgs({ query: "  Send a Discord message. " }),
@@ -41,6 +45,59 @@ describe("realtime voice agent consult tool", () => {
       context: undefined,
       question: "Send a Discord message.",
       responseStyle: undefined,
+      workingAction: undefined,
+      workingMessage: undefined,
+    });
+  });
+
+  it("builds configurable working responses for delegated consults", () => {
+    expect(buildRealtimeVoiceAgentConsultWorkingResponse("caller")).toEqual({
+      status: "working",
+      tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      message:
+        'Briefly tell the caller in their language that you are checking, for example: "Alles klar, ich schaue ganz kurz." Then wait for the final OpenClaw result before answering with the actual result.',
+    });
+    expect(
+      buildRealtimeVoiceAgentConsultWorkingResponse({
+        audienceLabel: "caller",
+        workingAction: "checking the calendar",
+      }),
+    ).toEqual({
+      status: "working",
+      tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      message:
+        "Briefly tell the caller in their language that you are checking the calendar. Then wait for the final OpenClaw result before answering with the actual result.",
+    });
+    expect(
+      buildRealtimeVoiceAgentConsultWorkingResponse({
+        audienceLabel: "caller",
+        workingMessage: "Alles klar, ich pruefe den Kalender kurz.",
+      }),
+    ).toEqual({
+      status: "working",
+      tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      message:
+        'Briefly tell the caller in their language: "Alles klar, ich pruefe den Kalender kurz." Then wait for the final OpenClaw result before answering with the actual result.',
+    });
+  });
+
+  it("builds progress responses for long-running delegated consults", () => {
+    expect(buildRealtimeVoiceAgentConsultProgressResponse({ audienceLabel: "caller" })).toEqual({
+      status: "progress",
+      tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      message:
+        "Briefly reassure the caller in their language that you are still working and will answer as soon as you have the result.",
+    });
+    expect(
+      buildRealtimeVoiceAgentConsultProgressResponse({
+        audienceLabel: "caller",
+        workingAction: "checking the weather forecast",
+      }),
+    ).toEqual({
+      status: "progress",
+      tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      message:
+        "Briefly reassure the caller in their language that you are still checking the weather forecast and will answer as soon as you have the result.",
     });
   });
 

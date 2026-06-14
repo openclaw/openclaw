@@ -286,6 +286,9 @@ function buildTalkCatalog(config: OpenClawConfig) {
         if (capabilities?.supportsBargeIn !== undefined) {
           entry.supportsBargeIn = capabilities.supportsBargeIn;
         }
+        if (capabilities?.emitsSpeechStartedEvent !== undefined) {
+          entry.emitsSpeechStartedEvent = capabilities.emitsSpeechStartedEvent;
+        }
         if (capabilities?.supportsToolCalls !== undefined) {
           entry.supportsToolCalls = capabilities.supportsToolCalls;
         }

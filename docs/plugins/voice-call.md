@@ -317,6 +317,7 @@ for tool work, current information, memory lookups, or workspace state.
                 consultPolicy: "substantive",
                 consultThinkingLevel: "low",
                 consultFastMode: true,
+                workingResponseMessage: "Alles klar, ich schaue ganz kurz.",
                 agentContext: { enabled: true },
                 providers: {
                   google: {

@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  buildRealtimeVoiceAgentConsultProgressResponse,
   buildRealtimeVoiceAgentConsultWorkingResponse,
   createRealtimeVoiceForcedConsultCoordinator,
   createTalkSessionController,
@@ -59,7 +60,11 @@ const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
 const FORCED_CONSULT_REASON = "provider_final_transcript_without_openclaw_agent_consult";
 const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
+const CONSULT_PROGRESS_INITIAL_DELAY_MS = 3_000;
+const CONSULT_PROGRESS_INTERVAL_MS = 6_000;
+const CONSULT_PROGRESS_MAX_UPDATES = 3;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
+const RECENT_TALK_EVENT_TEXT_MAX_CHARS = 500;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
 const logger = createSubsystemLogger("voice-call/realtime");
@@ -212,6 +217,11 @@ function buildForcedConsultSpeechPrompt(result: string): string {
   ].join("\n");
 }
 
+function buildForcedConsultInterimSpeechPrompt(response: Record<string, unknown>): string {
+  const message = typeof response.message === "string" ? response.message.trim() : "";
+  return message || "Briefly tell the caller in their language that you are checking.";
+}
+
 type PendingStreamToken = {
   expiry: number;
   from?: string;
@@ -250,6 +260,7 @@ type ForcedConsultState = {
   promise: Promise<unknown>;
   sendSpeechPrompt: boolean;
   completedAt?: number;
+  stopInterimSpeech?: () => void;
 };
 
 type NativeConsultState = {
@@ -257,6 +268,34 @@ type NativeConsultState = {
   promise: Promise<unknown>;
   partialUserTranscript?: string;
 };
+
+function readRecentTalkEventPayloadSummary(event: TalkEvent): Record<string, unknown> {
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {};
+  }
+  const record = payload as Record<string, unknown>;
+  const summary: Record<string, unknown> = {};
+  for (const key of ["text", "message", "detail", "reason", "name", "status"] as const) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      summary[key] =
+        value.length <= RECENT_TALK_EVENT_TEXT_MAX_CHARS
+          ? value
+          : `${value.slice(0, RECENT_TALK_EVENT_TEXT_MAX_CHARS - 16).trimEnd()} [truncated]`;
+    }
+  }
+  const result = record.result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    const text = readSpeakableRealtimeVoiceToolResult(result, {
+      maxChars: RECENT_TALK_EVENT_TEXT_MAX_CHARS,
+    });
+    if (text) {
+      summary.resultText = text;
+    }
+  }
+  return summary;
+}
 
 type TelephonyCloseReason = "completed" | "error";
 
@@ -285,6 +324,7 @@ function appendRecentTalkEventMetadata(
       type: event.type,
       ...(event.turnId ? { turnId: event.turnId } : {}),
       ...(event.final !== undefined ? { final: event.final } : {}),
+      ...readRecentTalkEventPayloadSummary(event),
     },
   ].slice(-12);
   call.metadata = metadata;
@@ -594,6 +634,30 @@ export class RealtimeCallHandler {
         }),
       );
     };
+    const cancelOutputAudioForBargeIn = (source: "local" | "provider", reason: string): boolean => {
+      const outputAudioActive = talk.outputAudioActive;
+      const pendingTelephonyAudio = audioPacer.hasPendingAudio();
+      if (!outputAudioActive && !pendingTelephonyAudio) {
+        return false;
+      }
+      const interruptedTurnId = outputAudioActive ? ensureTalkTurn() : talk.activeTurnId;
+      const clearedBytes = audioPacer.clearAudio();
+      console.log(
+        `[voice-call] realtime outbound audio cleared by ${source} barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+      );
+      if (!outputAudioActive || !interruptedTurnId) {
+        return clearedBytes > 0 || pendingTelephonyAudio;
+      }
+      finishOutputAudio(reason);
+      const cancelled = talk.cancelTurn({
+        turnId: interruptedTurnId,
+        payload: { callId, providerCallId: callSid, reason },
+      });
+      if (cancelled.ok) {
+        rememberTalkEvent(cancelled.event);
+      }
+      return cancelled.ok;
+    };
     emitTalkEvent({
       type: "session.started",
       payload: { callId, providerCallId: callSid, streamSid },
@@ -650,6 +714,8 @@ export class RealtimeCallHandler {
     const speechDetector = new RealtimeMulawSpeechStartDetector({
       requiredLoudChunks: BARGE_IN_REQUIRED_LOUD_CHUNKS,
     });
+    const providerEmitsSpeechStartedEvent =
+      this.realtimeProvider.capabilities?.emitsSpeechStartedEvent === true;
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
@@ -784,7 +850,7 @@ export class RealtimeCallHandler {
       },
       onEvent: (event) => {
         if (event.type === "input_audio_buffer.speech_started") {
-          ensureTalkTurn();
+          cancelOutputAudioForBargeIn("provider", "provider-barge-in");
           return;
         }
         if (event.type === "input_audio_buffer.speech_stopped") {
@@ -868,18 +934,11 @@ export class RealtimeCallHandler {
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept(audio)) {
-        const interruptedTurnId = ensureTalkTurn();
-        const clearedBytes = audioPacer.clearAudio();
         console.log(
-          `[voice-call] realtime outbound audio cleared by barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+          `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
-        finishOutputAudio("barge-in");
-        const cancelled = talk.cancelTurn({
-          turnId: interruptedTurnId,
-          payload: { callId, providerCallId: callSid, reason: "barge-in" },
-        });
-        if (cancelled.ok) {
-          rememberTalkEvent(cancelled.event);
+        if (!providerEmitsSpeechStartedEvent) {
+          cancelOutputAudioForBargeIn("local", "local-barge-in");
         }
       }
       emitTalkEvent({
@@ -1009,6 +1068,7 @@ export class RealtimeCallHandler {
   private clearForcedConsultState(callId: string): void {
     this.forcedConsultCoordinatorsByCallId.get(callId)?.clear();
     this.forcedConsultCoordinatorsByCallId.delete(callId);
+    this.forcedConsultsByCallId.get(callId)?.stopInterimSpeech?.();
     this.forcedConsultsByCallId.delete(callId);
   }
 
@@ -1096,7 +1156,18 @@ export class RealtimeCallHandler {
     console.log(
       `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
     );
-    params.clearAudio();
+    const interruptProviderOutput = (stage: "working" | "final"): void => {
+      const shouldForceInterrupt = stage === "final";
+      params.session.handleBargeIn({
+        audioPlaybackActive: shouldForceInterrupt,
+        force: shouldForceInterrupt,
+      });
+      params.clearAudio();
+      console.log(
+        `[voice-call] realtime forced agent consult interrupted provider output callId=${params.callId} providerCallId=${params.callSid} stage=${stage}`,
+      );
+    };
+    interruptProviderOutput("working");
     const state: ForcedConsultState = {
       sendSpeechPrompt: true,
       promise: Promise.resolve().then(() =>
@@ -1109,10 +1180,66 @@ export class RealtimeCallHandler {
         ),
       ),
     };
+    let consultProgressTimer: ReturnType<typeof setTimeout> | undefined;
+    let consultProgressUpdates = 0;
+    let interimSpeechStopped = false;
+    const clearConsultProgressTimer = (): void => {
+      if (!consultProgressTimer) {
+        return;
+      }
+      clearTimeout(consultProgressTimer);
+      consultProgressTimer = undefined;
+    };
+    const stopInterimSpeech = (): void => {
+      interimSpeechStopped = true;
+      clearConsultProgressTimer();
+    };
+    const sendInterimSpeech = (response: Record<string, unknown>): boolean => {
+      if (interimSpeechStopped || !state.sendSpeechPrompt || state.completedAt) {
+        return false;
+      }
+      const prompt = buildForcedConsultInterimSpeechPrompt(response);
+      console.log(
+        `[voice-call] realtime forced agent consult interim speech callId=${params.callId} providerCallId=${params.callSid} chars=${prompt.length} prompt=${JSON.stringify(prompt)}`,
+      );
+      params.session.sendUserMessage(prompt);
+      return true;
+    };
+    const scheduleProgressResponse = (delayMs: number): void => {
+      clearConsultProgressTimer();
+      consultProgressTimer = setTimeout(() => {
+        consultProgressTimer = undefined;
+        consultProgressUpdates += 1;
+        if (
+          !sendInterimSpeech(
+            buildRealtimeVoiceAgentConsultProgressResponse({
+              audienceLabel: "caller",
+            }),
+          ) ||
+          consultProgressUpdates >= CONSULT_PROGRESS_MAX_UPDATES
+        ) {
+          return;
+        }
+        scheduleProgressResponse(CONSULT_PROGRESS_INTERVAL_MS);
+      }, delayMs);
+      consultProgressTimer.unref?.();
+    };
+    state.stopInterimSpeech = stopInterimSpeech;
     this.forcedConsultsByCallId.set(params.callId, state);
+    if (
+      sendInterimSpeech(
+        buildRealtimeVoiceAgentConsultWorkingResponse({
+          audienceLabel: "caller",
+          workingMessage: this.config.workingResponseMessage,
+        }),
+      )
+    ) {
+      scheduleProgressResponse(CONSULT_PROGRESS_INITIAL_DELAY_MS);
+    }
     try {
       const result = await state.promise;
       state.completedAt = Date.now();
+      stopInterimSpeech();
       coordinator.markDelivered(params.handle);
       const text = readSpeakableRealtimeVoiceToolResult(result, {
         keys: ["text", "output"],
@@ -1125,8 +1252,12 @@ export class RealtimeCallHandler {
         return;
       }
       if (state.sendSpeechPrompt) {
-        params.clearAudio();
-        params.session.sendUserMessage(buildForcedConsultSpeechPrompt(text));
+        interruptProviderOutput("final");
+        const prompt = buildForcedConsultSpeechPrompt(text);
+        console.log(
+          `[voice-call] realtime forced agent consult final speech callId=${params.callId} providerCallId=${params.callSid} chars=${prompt.length}`,
+        );
+        params.session.sendUserMessage(prompt);
       }
       console.log(
         `[voice-call] realtime forced agent consult completed callId=${params.callId} providerCallId=${params.callSid} elapsedMs=${Date.now() - startedAt}`,
@@ -1137,6 +1268,7 @@ export class RealtimeCallHandler {
         `[voice-call] realtime forced agent consult failed callId=${params.callId} providerCallId=${params.callSid} error=${formatErrorMessage(error)}`,
       );
     } finally {
+      stopInterimSpeech();
       const cleanupTimer = setTimeout(() => {
         if (this.forcedConsultsByCallId.get(params.callId) === state) {
           this.forcedConsultsByCallId.delete(params.callId);
@@ -1261,13 +1393,24 @@ export class RealtimeCallHandler {
       bridge.submitToolResult(bridgeCallId, result);
       emitFinalToolEvent(result);
     };
-    const submitWorkingResponse = () => {
-      if (
+    let consultProgressTimer: ReturnType<typeof setTimeout> | undefined;
+    let consultProgressUpdates = 0;
+    const clearConsultProgressTimer = (): void => {
+      if (!consultProgressTimer) {
+        return;
+      }
+      clearTimeout(consultProgressTimer);
+      consultProgressTimer = undefined;
+    };
+    const shouldSendContinuingConsultResponse = (): boolean =>
+      Boolean(
         handler &&
         name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
         bridge.bridge.supportsToolResultContinuation &&
-        !this.config.fastContext.enabled
-      ) {
+        !this.config.fastContext.enabled,
+      );
+    const submitWorkingResponse = (): boolean => {
+      if (shouldSendContinuingConsultResponse()) {
         emitTalkEvent?.({
           type: "tool.progress",
           turnId,
@@ -1276,9 +1419,56 @@ export class RealtimeCallHandler {
         });
         bridge.submitToolResult(
           bridgeCallId,
-          buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
+          buildRealtimeVoiceAgentConsultWorkingResponse({
+            audienceLabel: "caller",
+            workingAction: readConsultArgText(args, "workingAction"),
+            workingMessage:
+              this.config.workingResponseMessage ?? readConsultArgText(args, "workingMessage"),
+          }),
           { willContinue: true },
         );
+        return true;
+      }
+      return false;
+    };
+    const submitProgressResponse = (): boolean => {
+      if (!shouldSendContinuingConsultResponse()) {
+        return false;
+      }
+      consultProgressUpdates += 1;
+      emitTalkEvent?.({
+        type: "tool.progress",
+        turnId,
+        callId: bridgeCallId,
+        payload: { name, status: "progress", update: consultProgressUpdates },
+      });
+      bridge.submitToolResult(
+        bridgeCallId,
+        buildRealtimeVoiceAgentConsultProgressResponse({
+          audienceLabel: "caller",
+          workingAction: readConsultArgText(args, "workingAction"),
+        }),
+        { willContinue: true },
+      );
+      return true;
+    };
+    const scheduleProgressResponse = (delayMs: number): void => {
+      if (!shouldSendContinuingConsultResponse()) {
+        return;
+      }
+      clearConsultProgressTimer();
+      consultProgressTimer = setTimeout(() => {
+        consultProgressTimer = undefined;
+        if (!submitProgressResponse() || consultProgressUpdates >= CONSULT_PROGRESS_MAX_UPDATES) {
+          return;
+        }
+        scheduleProgressResponse(CONSULT_PROGRESS_INTERVAL_MS);
+      }, delayMs);
+      consultProgressTimer.unref?.();
+    };
+    const startConsultProgressResponses = (): void => {
+      if (submitWorkingResponse()) {
+        scheduleProgressResponse(CONSULT_PROGRESS_INITIAL_DELAY_MS);
       }
     };
     if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
@@ -1300,6 +1490,7 @@ export class RealtimeCallHandler {
           return;
         }
         forcedConsult.sendSpeechPrompt = false;
+        forcedConsult.stopInterimSpeech?.();
         const result = await forcedConsult.promise.catch((error: unknown) => ({
           error: formatErrorMessage(error),
         }));
@@ -1312,12 +1503,16 @@ export class RealtimeCallHandler {
         console.log(
           `[voice-call] realtime tool call sharing in-flight agent consult callId=${callId} ageMs=${Date.now() - existingNativeConsult.startedAt}`,
         );
-        submitWorkingResponse();
-        submitFinalToolResult(await existingNativeConsult.promise);
+        startConsultProgressResponses();
+        try {
+          submitFinalToolResult(await existingNativeConsult.promise);
+        } finally {
+          clearConsultProgressTimer();
+        }
         return;
       }
 
-      submitWorkingResponse();
+      startConsultProgressResponses();
       const state: NativeConsultState = {
         startedAt,
         promise: Promise.resolve(),
@@ -1357,6 +1552,7 @@ export class RealtimeCallHandler {
           this.consumePartialUserTranscript(callId, state.partialUserTranscript);
         }
       } finally {
+        clearConsultProgressTimer();
         if (this.nativeConsultsInFlightByCallId.get(callId) === state) {
           this.nativeConsultsInFlightByCallId.delete(callId);
         }
@@ -1389,6 +1585,7 @@ export class RealtimeCallHandler {
     console.log(
       `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${status} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
     );
+    clearConsultProgressTimer();
     submitFinalToolResult(result);
     if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME && status === "ok") {
       this.consumePartialUserTranscript(callId, context.partialUserTranscript);

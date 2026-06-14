@@ -165,6 +165,11 @@
       "help": "Optional fast mode override for the regular agent run behind realtime openclaw_agent_consult calls.",
       "advanced": true
     },
+    "realtime.workingResponseMessage": {
+      "label": "Working Response Message",
+      "help": "Optional exact short message the realtime voice agent speaks while OpenClaw handles a delegated consult.",
+      "advanced": true
+    },
     "realtime.fastContext.enabled": {
       "label": "Enable Fast Realtime Context",
       "help": "Searches memory/session context before the full consult agent.",
@@ -529,6 +534,10 @@
           },
           "consultFastMode": {
             "type": "boolean"
+          },
+          "workingResponseMessage": {
+            "type": "string",
+            "minLength": 1
           },
           "tools": {
             "type": "array",
