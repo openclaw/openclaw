@@ -178,20 +178,26 @@ function resolveRelevantSetupMigrationPluginIds(params: {
     env: params.env,
   });
   for (const plugin of registry.plugins) {
-    const paths = plugin.configContracts?.compatibilityMigrationPaths;
-    if (!paths?.length) {
+    try {
+      const paths = plugin.configContracts?.compatibilityMigrationPaths;
+      if (!paths?.length) {
+        continue;
+      }
+      if (
+        paths.some(
+          (pathPattern) =>
+            collectPluginConfigContractMatches({
+              root: params.config,
+              pathPattern,
+            }).length > 0,
+        )
+      ) {
+        ids.add(plugin.id);
+      }
+    } catch {
+      // Manifest rows are plugin-owned metadata. One unreadable setup row must
+      // not block migrations or setup lookup for unrelated plugins.
       continue;
-    }
-    if (
-      paths.some(
-        (pathPattern) =>
-          collectPluginConfigContractMatches({
-            root: params.config,
-            pathPattern,
-          }).length > 0,
-      )
-    ) {
-      ids.add(plugin.id);
     }
   }
   return [...ids].toSorted();
@@ -357,9 +363,18 @@ function findUniqueSetupManifestOwner(params: {
   normalizedId: string;
   listIds: (record: PluginManifestRecord) => readonly string[];
 }): PluginManifestRecord | undefined {
-  const matches = params.registry.plugins.filter((entry) =>
-    params.listIds(entry).some((id) => normalizeProviderId(id) === params.normalizedId),
-  );
+  const matches: PluginManifestRecord[] = [];
+  for (const entry of params.registry.plugins) {
+    try {
+      if (params.listIds(entry).some((id) => normalizeProviderId(id) === params.normalizedId)) {
+        matches.push(entry);
+      }
+    } catch {
+      // Manifest rows are plugin-owned metadata. One unreadable setup row must
+      // not block migrations or setup lookup for unrelated plugins.
+      continue;
+    }
+  }
   if (matches.length === 0) {
     return undefined;
   }
@@ -492,81 +507,87 @@ export function resolvePluginSetupRegistry(params?: {
     });
 
   for (const record of manifestRegistry.plugins) {
-    if (scopedPluginIds && !scopedPluginIds.has(record.id)) {
-      continue;
-    }
-    if (record.setup?.requiresRuntime === false) {
-      pushDescriptorRuntimeDisabledDiagnostic({
+    try {
+      if (scopedPluginIds && !scopedPluginIds.has(record.id)) {
+        continue;
+      }
+      if (record.setup?.requiresRuntime === false) {
+        pushDescriptorRuntimeDisabledDiagnostic({
+          record,
+          diagnostics,
+        });
+        continue;
+      }
+      const setupRegistration = resolveSetupRegistration(record);
+      if (!setupRegistration) {
+        continue;
+      }
+
+      const recordProviders: ProviderPlugin[] = [];
+      const recordCliBackends: CliBackendPlugin[] = [];
+      const api = buildSetupPluginApi({
         record,
+        setupSource: setupRegistration.setupSource,
+        handlers: {
+          registerProvider(provider) {
+            const key = `${record.id}:${normalizeProviderId(provider.id)}`;
+            if (providerKeys.has(key)) {
+              return;
+            }
+            providerKeys.add(key);
+            providers.push({
+              pluginId: record.id,
+              provider,
+            });
+            recordProviders.push(provider);
+          },
+          registerCliBackend(backend) {
+            const key = `${record.id}:${normalizeProviderId(backend.id)}`;
+            if (cliBackendKeys.has(key)) {
+              return;
+            }
+            cliBackendKeys.add(key);
+            cliBackends.push({
+              pluginId: record.id,
+              backend,
+            });
+            recordCliBackends.push(backend);
+          },
+          registerConfigMigration(migrate) {
+            configMigrations.push({
+              pluginId: record.id,
+              migrate,
+            });
+          },
+          registerAutoEnableProbe(probe) {
+            autoEnableProbes.push({
+              pluginId: record.id,
+              probe,
+            });
+          },
+        },
+      });
+
+      try {
+        const result = setupRegistration.register(api);
+        if (result && typeof result.then === "function") {
+          // Keep setup registration sync-only.
+          ignoreAsyncSetupRegisterResult(result);
+        }
+      } catch {
+        continue;
+      }
+      pushSetupDescriptorDriftDiagnostics({
+        record,
+        providers: recordProviders,
+        cliBackends: recordCliBackends,
         diagnostics,
       });
-      continue;
-    }
-    const setupRegistration = resolveSetupRegistration(record);
-    if (!setupRegistration) {
-      continue;
-    }
-
-    const recordProviders: ProviderPlugin[] = [];
-    const recordCliBackends: CliBackendPlugin[] = [];
-    const api = buildSetupPluginApi({
-      record,
-      setupSource: setupRegistration.setupSource,
-      handlers: {
-        registerProvider(provider) {
-          const key = `${record.id}:${normalizeProviderId(provider.id)}`;
-          if (providerKeys.has(key)) {
-            return;
-          }
-          providerKeys.add(key);
-          providers.push({
-            pluginId: record.id,
-            provider,
-          });
-          recordProviders.push(provider);
-        },
-        registerCliBackend(backend) {
-          const key = `${record.id}:${normalizeProviderId(backend.id)}`;
-          if (cliBackendKeys.has(key)) {
-            return;
-          }
-          cliBackendKeys.add(key);
-          cliBackends.push({
-            pluginId: record.id,
-            backend,
-          });
-          recordCliBackends.push(backend);
-        },
-        registerConfigMigration(migrate) {
-          configMigrations.push({
-            pluginId: record.id,
-            migrate,
-          });
-        },
-        registerAutoEnableProbe(probe) {
-          autoEnableProbes.push({
-            pluginId: record.id,
-            probe,
-          });
-        },
-      },
-    });
-
-    try {
-      const result = setupRegistration.register(api);
-      if (result && typeof result.then === "function") {
-        // Keep setup registration sync-only.
-        ignoreAsyncSetupRegisterResult(result);
-      }
     } catch {
+      // Manifest rows are plugin-owned metadata. One unreadable setup row must
+      // not block migrations or setup lookup for unrelated plugins.
       continue;
     }
-    pushSetupDescriptorDriftDiagnostics({
-      record,
-      providers: recordProviders,
-      cliBackends: recordCliBackends,
-      diagnostics,
-    });
   }
 
   const registry = {

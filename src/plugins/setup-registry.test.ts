@@ -649,6 +649,83 @@ describe("setup-registry module loader", () => {
     expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toStrictEqual([]);
   });
 
+  it("skips unreadable manifest rows while building the setup registry", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          get setup() {
+            throw new Error("setup registry setup exploded");
+          },
+        } as never,
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+          }) {
+            api.registerProvider({ id: "openai", label: "OpenAI", auth: [] });
+          },
+        },
+      });
+    });
+
+    expect(resolvePluginSetupRegistry({ env: {} }).providers).toEqual([
+      {
+        pluginId: "openai",
+        provider: { id: "openai", label: "OpenAI", auth: [] },
+      },
+    ]);
+  });
+
+  it("skips unreadable manifest rows during setup owner lookup", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          get setup() {
+            throw new Error("setup owner setup exploded");
+          },
+        } as never,
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+          }) {
+            api.registerProvider({ id: "openai", label: "OpenAI", auth: [] });
+          },
+        },
+      });
+    });
+
+    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
+  });
+
   it("does not load setup-api modules from the current working directory", () => {
     const pluginRoot = makeTempDir();
     const workspaceRoot = makeTempDir();
