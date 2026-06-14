@@ -78,8 +78,14 @@ export function mergeAttemptToolMediaPayloads(params: {
     ) {
       // Message-tool-only source replies are transcript mirrors of a send that
       // already happened elsewhere; attaching generated media here would create
-      // a duplicate channel delivery.
-      return appendHostOwnedMedia(payloads);
+      // a duplicate channel delivery or leave trusted TTS media on a suppressed
+      // mirror payload. Preserve the newer harness-owned provenance split, then
+      // emit only remaining trusted local media as a standalone payload.
+      const trustedMediaPayloads =
+        params.toolTrustedLocalMedia && mergeableMediaUrls.length > 0
+          ? [buildMediaPayload(mergeableMediaUrls, true)]
+          : [];
+      return appendHostOwnedMedia([...payloads, ...trustedMediaPayloads]);
     }
     if (mergeableMediaUrls.length === 0 && shouldSplitHostOwnedMedia) {
       return appendHostOwnedMedia(payloads);
