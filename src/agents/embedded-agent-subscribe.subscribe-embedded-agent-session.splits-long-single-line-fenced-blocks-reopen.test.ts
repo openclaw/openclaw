@@ -122,23 +122,42 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.isCompacting()).toBe(false);
   });
 
-  it("resets assistant usage to a zero snapshot after compaction without retry", () => {
-    // When compaction ends the active assistant message is synthetic, so usage
-    // should reset to a zero snapshot instead of carrying stale token totals.
+  it("clears stale usage for pre-compaction messages only", () => {
+    // Only assistant messages before the latest compactionSummary should be
+    // zeroed; messages after the compactionSummary carry valid LLM usage data.
     const listeners: SessionEventHandler[] = [];
+    const staleUsage = {
+      input: 120,
+      output: 30,
+      cacheRead: 5,
+      cacheWrite: 0,
+      totalTokens: 155,
+      cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+    };
+    const freshUsage = {
+      input: 50,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 70,
+      cost: { input: 0.0005, output: 0.0004, cacheRead: 0, cacheWrite: 0, total: 0.0009 },
+    };
     const session = {
       messages: [
         {
           role: "assistant",
           content: [{ type: "text", text: "old" }],
-          usage: {
-            input: 120,
-            output: 30,
-            cacheRead: 5,
-            cacheWrite: 0,
-            totalTokens: 155,
-            cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
-          },
+          usage: { ...staleUsage },
+        },
+        {
+          role: "compactionSummary",
+          content: [{ type: "text", text: "summary" }],
+          timestamp: Date.now(),
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "new" }],
+          usage: { ...freshUsage },
         },
       ],
       subscribe: (listener: SessionEventHandler) => {
@@ -156,7 +175,10 @@ describe("subscribeEmbeddedAgentSession", () => {
       listener({ type: "compaction_end", willRetry: false });
     }
 
-    const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;
-    expect(usage).toEqual(makeZeroUsageSnapshot());
+    const preCompactionUsage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;
+    expect(preCompactionUsage).toEqual(makeZeroUsageSnapshot());
+
+    const postCompactionUsage = (session.messages?.[2] as { usage?: unknown } | undefined)?.usage;
+    expect(postCompactionUsage).toEqual(freshUsage);
   });
 });
