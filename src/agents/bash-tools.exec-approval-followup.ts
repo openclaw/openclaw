@@ -268,6 +268,7 @@ function buildAgentFollowupArgs(params: {
   return {
     sessionKey: params.sessionKey,
     message: buildExecApprovalFollowupPrompt(params.resultText),
+    suppressPromptPersistence: true,
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
     channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
