@@ -10,7 +10,7 @@ import {
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { ensureContextWindowCacheLoaded, resolveContextTokensForModel } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
@@ -511,7 +511,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const runtimeContextTokens = await resolveStatusRuntimeContextTokens({
+  const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: activeStatusProvider,
     model: modelRefs.active.model || model,
