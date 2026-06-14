@@ -1575,7 +1575,7 @@ async function runTelegramQaRttChecks(params: {
         rttMs,
       });
       passed += 1;
-    } catch (error) {
+    } catch {
       failures += 1;
       samples.push({
         status: "fail",
