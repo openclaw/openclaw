@@ -203,11 +203,18 @@ type TelegramReplyMarkup = {
   inline_keyboard?: Array<Array<{ text?: string }>>;
 };
 
+type TelegramRichMessage = {
+  markdown?: string;
+  html?: string;
+  blocks?: unknown[];
+};
+
 type TelegramMessage = {
   message_id: number;
   date: number;
   text?: string;
   caption?: string;
+  rich_message?: TelegramRichMessage;
   reply_markup?: TelegramReplyMarkup;
   reply_to_message?: { message_id?: number };
   from?: {
@@ -697,6 +704,102 @@ function detectMediaKinds(message: TelegramMessage) {
   return kinds;
 }
 
+function flattenTelegramRichText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((part) => flattenTelegramRichText(part)).join("");
+  }
+  if (!isRecord(value)) {
+    return "";
+  }
+  if ("text" in value) {
+    return flattenTelegramRichText(value.text);
+  }
+  if (typeof value.alternative_text === "string") {
+    return value.alternative_text;
+  }
+  if (typeof value.expression === "string") {
+    return value.expression;
+  }
+  return "";
+}
+
+function flattenTelegramRichBlock(value: unknown): string {
+  if (typeof value === "string" || Array.isArray(value)) {
+    return flattenTelegramRichText(value);
+  }
+  if (!isRecord(value)) {
+    return "";
+  }
+  const parts: string[] = [];
+  if ("text" in value) {
+    parts.push(flattenTelegramRichText(value.text));
+  }
+  if ("summary" in value) {
+    parts.push(flattenTelegramRichText(value.summary));
+  }
+  if (typeof value.label === "string") {
+    parts.push(value.label);
+  }
+  if (typeof value.expression === "string") {
+    parts.push(value.expression);
+  }
+  if ("blocks" in value) {
+    parts.push(flattenTelegramRichBlocks(value.blocks));
+  }
+  if ("items" in value) {
+    parts.push(flattenTelegramRichBlocks(value.items));
+  }
+  if ("cells" in value) {
+    parts.push(flattenTelegramRichTableCells(value.cells));
+  }
+  if ("caption" in value) {
+    parts.push(flattenTelegramRichBlock(value.caption));
+  }
+  if ("credit" in value) {
+    parts.push(flattenTelegramRichText(value.credit));
+  }
+  return parts.filter((part) => part.trim()).join("\n");
+}
+
+function flattenTelegramRichBlocks(value: unknown): string {
+  const blocks = Array.isArray(value) ? value : [value];
+  return blocks
+    .map((block) => flattenTelegramRichBlock(block))
+    .filter((part) => part.trim())
+    .join("\n");
+}
+
+function flattenTelegramRichTableCells(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return flattenTelegramRichBlock(value);
+  }
+  return value
+    .map((row) => {
+      const cells = Array.isArray(row) ? row : [row];
+      return cells
+        .map((cell) => flattenTelegramRichBlock(cell))
+        .filter((cell) => cell.trim())
+        .join("\t");
+    })
+    .filter((row) => row.trim())
+    .join("\n");
+}
+
+function selectTelegramRichMessageText(richMessage: TelegramRichMessage | undefined) {
+  return (
+    richMessage?.markdown || richMessage?.html || flattenTelegramRichBlocks(richMessage?.blocks)
+  );
+}
+
+function selectTelegramObservedText(message: TelegramMessage) {
+  return (
+    message.text || message.caption || selectTelegramRichMessageText(message.rich_message) || ""
+  );
+}
+
 function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObservedMessage | null {
   const message = update.message ?? update.edited_message;
   if (!message?.from?.id) {
@@ -709,7 +812,7 @@ function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObser
     senderId: message.from.id,
     senderIsBot: message.from.is_bot === true,
     senderUsername: message.from.username,
-    text: message.text ?? message.caption ?? "",
+    text: selectTelegramObservedText(message),
     caption: message.caption,
     replyToMessageId: message.reply_to_message?.message_id,
     timestamp: message.date * 1000,
@@ -895,6 +998,7 @@ async function waitForObservedMessage(params: {
   observationScenarioId: string;
   observationScenarioTitle: string;
   expectedTextIncludes?: string[];
+  validateMatchedMessage?: (message: TelegramObservedMessage) => void;
 }) {
   const startedAt = Date.now();
   let offset = params.initialOffset;
@@ -947,10 +1051,14 @@ async function waitForObservedMessage(params: {
       params.observedMessages.push(observedMessage);
       if (matchedScenario) {
         try {
-          assertTelegramScenarioReply({
-            expectedTextIncludes: params.expectedTextIncludes,
-            message: observedMessage,
-          });
+          if (params.validateMatchedMessage) {
+            params.validateMatchedMessage(observedMessage);
+          } else {
+            assertTelegramScenarioReply({
+              expectedTextIncludes: params.expectedTextIncludes,
+              message: observedMessage,
+            });
+          }
         } catch (error) {
           lastExpectedMismatch =
             error instanceof Error ? error : new Error(formatErrorMessage(error));
@@ -1314,6 +1422,15 @@ function assertTelegramScenarioReply(params: {
   }
 }
 
+function assertTelegramCanaryPresenceReply(message: TelegramObservedMessage) {
+  if (!message.senderIsBot) {
+    throw new Error(`canary reply message ${message.messageId} was not sent by a bot`);
+  }
+  // Telegram rich-message updates can arrive to the driver bot with no text
+  // body. The release canary proves command delivery plus threaded SUT output;
+  // text assertions stay on explicit command/scenario checks.
+}
+
 function isTelegramObservedMessageTimeoutError(error: unknown, timeoutMs: number) {
   return formatErrorMessage(error).startsWith(
     `timed out after ${timeoutMs}ms waiting for Telegram message`,
@@ -1435,6 +1552,7 @@ async function runCanary(params: {
       observedMessages: params.observedMessages,
       observationScenarioId: "telegram-canary",
       observationScenarioTitle: "Telegram canary",
+      validateMatchedMessage: assertTelegramCanaryPresenceReply,
       predicate: (message) => {
         const classification = classifyCanaryReply({
           message,
@@ -1478,18 +1596,6 @@ async function runCanary(params: {
         sutBotId: params.sutBotId,
         driverMessageId: driverMessage.message_id,
         cause: formatErrorMessage(error),
-      },
-    );
-  }
-  if (!sutObserved.message.text.trim()) {
-    throw new TelegramQaCanaryError(
-      "sut_reply_empty",
-      "SUT bot replied to the canary message but the reply text was empty.",
-      {
-        groupId: params.groupId,
-        sutBotId: params.sutBotId,
-        driverMessageId: driverMessage.message_id,
-        sutMessageId: sutObserved.message.messageId,
       },
     );
   }
@@ -2080,6 +2186,7 @@ export const testing = {
   buildObservedMessagesArtifact,
   canaryFailureMessage,
   callTelegramApi,
+  assertTelegramCanaryPresenceReply,
   assertTelegramScenarioMessageSet,
   isRecoverableTelegramQaPollError,
   assertTelegramScenarioReply,

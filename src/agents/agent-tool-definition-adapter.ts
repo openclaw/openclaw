@@ -361,6 +361,8 @@ export function toToolDefinitions(
       description: tool.description ?? "",
       parameters: tool.parameters,
       terminalResultFallback: tool.terminalResultFallback,
+      prepareArguments: tool.prepareArguments,
+      executionMode: tool.executionMode,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;

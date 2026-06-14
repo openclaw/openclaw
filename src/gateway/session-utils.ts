@@ -2037,8 +2037,8 @@ export function buildGatewaySessionRow(params: {
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
-  const needsTranscriptTotalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
+  const freshSessionTotalTokens = resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry));
+  const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
     !skipTranscriptUsage &&
@@ -2082,10 +2082,10 @@ export function buildGatewaySessionRow(params: {
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
-    resolvePositiveNumber(transcriptUsage?.totalTokens);
+    freshSessionTotalTokens ?? resolveNonNegativeNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
-    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
+    freshSessionTotalTokens !== undefined ||
+    (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const goal = entry?.goal

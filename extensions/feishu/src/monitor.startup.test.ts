@@ -54,8 +54,8 @@ async function waitForStartedAccount(started: string[], accountId: string) {
   );
 }
 
-afterEach(() => {
-  stopFeishuMonitor();
+afterEach(async () => {
+  await stopFeishuMonitor();
 });
 
 afterAll(() => {

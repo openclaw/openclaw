@@ -69,6 +69,8 @@ export type RunCliAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Immutable lifecycle ownership captured when this execution was admitted. */
+  lifecycleGeneration?: string;
   lane?: string;
   jobId?: string;
   extraSystemPrompt?: string;

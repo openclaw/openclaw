@@ -301,6 +301,7 @@ export function parseFeishuMessageEvent(
     chatId: event.message.chat_id,
     messageId: event.message.message_id,
     replyTargetMessageId: event.message.reply_target_message_id?.trim() || undefined,
+    typingTargetMessageId: event.message.typing_target_message_id?.trim() || undefined,
     suppressReplyTarget: event.message.suppress_reply_target === true,
     senderId: senderUserId || senderOpenId || "",
     // Keep the historical field name, but fall back to user_id when open_id is unavailable
@@ -1403,6 +1404,8 @@ export async function handleFeishuMessage(params: {
       : isTopicSession || configReplyInThread
         ? topicReplyTargetMessageId
         : defaultReplyTargetMessageId;
+    const typingTargetMessageId =
+      ctx.typingTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId);
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : directThreadReply;
     const lastRouteThreadId =
       isGroup && (isTopicSession || configReplyInThread || threadReply)
@@ -1528,6 +1531,7 @@ export async function handleFeishuMessage(params: {
               chatId: ctx.chatId,
               allowReasoningPreview,
               replyToMessageId: replyTargetMessageId,
+              typingTargetMessageId,
               skipReplyToInMessages: !isGroup && !directThreadReply,
               replyInThread,
               rootId: ctx.rootId,
@@ -1704,6 +1708,7 @@ export async function handleFeishuMessage(params: {
           chatId: ctx.chatId,
           allowReasoningPreview,
           replyToMessageId: replyTargetMessageId,
+          typingTargetMessageId,
           skipReplyToInMessages: !isGroup && !directThreadReply,
           replyInThread,
           rootId: ctx.rootId,
