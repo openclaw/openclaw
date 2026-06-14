@@ -470,6 +470,44 @@ describe("plugin status reports", () => {
     });
   });
 
+  it("skips unreadable gateway method descriptor rows in inspect reports", () => {
+    const plugin = createPluginRecord({ id: "healthy" });
+    const poisonedDescriptor = Object.defineProperty({}, "owner", {
+      get() {
+        throw new Error("inspect gateway descriptor owner exploded");
+      },
+    }) as ReturnType<typeof createPluginLoadResult>["gatewayMethodDescriptors"][number];
+    const gatewayMethodDescriptors = [
+      poisonedDescriptor,
+      poisonedDescriptor,
+      {
+        name: "healthy.ping",
+        handler: () => undefined,
+        scope: "operator.read",
+        owner: { kind: "plugin", pluginId: "healthy" },
+      },
+    ] as ReturnType<typeof createPluginLoadResult>["gatewayMethodDescriptors"];
+    Object.defineProperty(gatewayMethodDescriptors, "0", {
+      get() {
+        throw new Error("inspect gateway descriptor row exploded");
+      },
+    });
+    const report = createPluginLoadResult({
+      plugins: [plugin],
+      gatewayMethodDescriptors,
+    });
+
+    const inspect = expectInspectReport("healthy", {
+      report: {
+        ...report,
+        workspaceDir: "/workspace",
+      },
+      resolvedConfig: {},
+    });
+
+    expect(inspect.gatewayMethods).toEqual(["healthy.ping"]);
+  });
+
   it("carries installed-index compatibility metadata into registry snapshot reports", () => {
     loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
       snapshot: createInstalledPluginIndexSnapshot([

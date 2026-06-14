@@ -38,6 +38,34 @@ export type PluginShapeSummary = {
   usesLegacyBeforeAgentStart: boolean;
 };
 
+export function listPluginGatewayMethodNames(
+  descriptors: Pick<PluginRegistry, "gatewayMethodDescriptors">["gatewayMethodDescriptors"],
+  pluginId: string,
+): string[] {
+  const names: string[] = [];
+  let descriptorCount: number;
+  try {
+    descriptorCount = descriptors?.length ?? 0;
+  } catch {
+    return names;
+  }
+  for (let index = 0; index < descriptorCount; index += 1) {
+    try {
+      const descriptor = descriptors?.[index];
+      if (descriptor?.owner.kind === "plugin" && descriptor.owner.pluginId === pluginId) {
+        const name = descriptor.name;
+        if (typeof name === "string") {
+          names.push(name);
+        }
+      }
+    } catch {
+      // Gateway descriptors are plugin-owned metadata. A malformed row must
+      // not hide status/inspect data for healthy rows from the same plugin.
+    }
+  }
+  return names;
+}
+
 function buildPluginCapabilityEntries(
   plugin: PluginRegistry["plugins"][number],
 ): PluginCapabilityEntry[] {
@@ -113,9 +141,9 @@ export function buildPluginShapeSummary(params: {
   const toolCount = params.report.tools.filter(
     (entry) => entry.pluginId === params.plugin.id,
   ).length;
-  const gatewayMethodCount = (params.report.gatewayMethodDescriptors ?? []).filter(
-    (descriptor) =>
-      descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === params.plugin.id,
+  const gatewayMethodCount = listPluginGatewayMethodNames(
+    params.report.gatewayMethodDescriptors,
+    params.plugin.id,
   ).length;
   const capabilityCount = capabilities.length;
   const shape = derivePluginInspectShape({
