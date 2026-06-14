@@ -12,6 +12,7 @@ import type { PluginRegistry } from "../registry-types.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
   setActivePluginRegistry,
 } from "../runtime.js";
 
@@ -45,6 +46,9 @@ function installStandaloneRegistry(
       break;
     case "http-route":
       pinActivePluginHttpRouteRegistry(registry);
+      break;
+    case "session-extension":
+      pinActivePluginSessionExtensionRegistry(registry);
       break;
   }
 }
@@ -84,6 +88,9 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
         break;
       case "http-route":
         pinActivePluginHttpRouteRegistry(registry);
+        break;
+      case "session-extension":
+        pinActivePluginSessionExtensionRegistry(registry);
         break;
     }
     return registry;
