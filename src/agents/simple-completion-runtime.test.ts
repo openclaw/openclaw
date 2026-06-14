@@ -71,7 +71,7 @@ beforeEach(() => {
   );
   hoisted.completeMock.mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
 
-  hoisted.resolveModelMock.mockReturnValue({
+  const resolvedModel = {
     model: {
       provider: "anthropic",
       id: "claude-opus-4-6",
@@ -80,10 +80,9 @@ beforeEach(() => {
       setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
     },
     modelRegistry: {},
-  });
-  hoisted.resolveModelAsyncMock.mockImplementation((...args: unknown[]) =>
-    Promise.resolve(hoisted.resolveModelMock(...args)),
-  );
+  };
+  hoisted.resolveModelMock.mockReturnValue(resolvedModel);
+  hoisted.resolveModelAsyncMock.mockResolvedValue(resolvedModel);
   hoisted.getApiKeyForModelMock.mockResolvedValue({
     apiKey: "sk-test",
     source: "env:TEST_API_KEY",
