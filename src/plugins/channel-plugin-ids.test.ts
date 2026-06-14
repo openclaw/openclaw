@@ -344,6 +344,21 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "memory-mmr",
+        channels: [],
+        activation: {
+          onStartup: false,
+          onConfigPaths: [
+            "agents.defaults.memorySearch.query.hybrid.mmr.enabled",
+            "agents.*.memorySearch.query.hybrid.mmr.enabled",
+          ],
+        },
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "demo-global-sidecar",
         channels: [],
         activation: {
@@ -1492,6 +1507,52 @@ describe("resolveGatewayStartupPluginIds", () => {
         },
       } as OpenClawConfig,
       expected: ["browser", "demo-config-startup"],
+    });
+
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+        },
+        agents: {
+          defaults: {
+            memorySearch: {
+              query: {
+                hybrid: {
+                  mmr: {
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-mmr"],
+    });
+
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+        },
+        agents: {
+          defaults: {
+            memorySearch: {
+              query: {
+                hybrid: {
+                  mmr: {
+                    enabled: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser"],
     });
   });
 
