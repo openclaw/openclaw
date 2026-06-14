@@ -1019,6 +1019,7 @@ function hasVisibleCompletionDeliveryForTarget(params: {
     threadId?: string | number;
   };
   automaticDeliveryRequested: boolean;
+  generatedMediaCompletion?: boolean;
 }): boolean {
   if (hasTargetedMessagingToolDeliveryEvidence(params)) {
     return true;
@@ -1027,6 +1028,15 @@ function hasVisibleCompletionDeliveryForTarget(params: {
     return false;
   }
   if (!hasConcreteDeliveryTarget(params.deliveryTarget)) {
+    return true;
+  }
+  if (
+    params.generatedMediaCompletion === true &&
+    collectPayloadOutcomeDeliveredMediaUrls(params.result, {
+      countAmbiguousSinglePayloadFailure: false,
+      deliveryTarget: params.deliveryTarget,
+    }).length > 0
+  ) {
     return true;
   }
   if (hasMatchingAutomaticDeliveryTarget(params)) {
@@ -1327,12 +1337,14 @@ function collectAutomaticCompletionDeliveredMediaUrls(params: {
       addUrls(
         collectPayloadOutcomeDeliveredMediaUrls(params.result, {
           countAmbiguousSinglePayloadFailure: true,
+          deliveryTarget: params.deliveryTarget,
         }),
       );
     } else if (hasPayloadDeliveryOutcomes(params.result)) {
       addUrls(
         collectPayloadOutcomeDeliveredMediaUrls(params.result, {
           countAmbiguousSinglePayloadFailure: false,
+          deliveryTarget: params.deliveryTarget,
         }),
       );
     } else if (!hasSuppressedPayloadDeliveryStatus(params.result)) {
@@ -1374,9 +1386,36 @@ function hasSuppressedPayloadDeliveryStatus(
   );
 }
 
+function payloadOutcomeMatchesGeneratedMediaDeliveryTarget(
+  record: Record<string, unknown>,
+  deliveryTarget?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  },
+): boolean {
+  if (!deliveryTarget || !hasConcreteDeliveryTarget(deliveryTarget)) {
+    return true;
+  }
+  const target = normalizeMessageToolTargetRecord(record.target ?? record.deliveryTarget);
+  if (!target) {
+    return !requiresExactTargetEvidence(deliveryTarget);
+  }
+  return sourceDeliveryTargetsMatchGeneratedMediaEvidence(target, deliveryTarget);
+}
+
 function collectPayloadOutcomeDeliveredMediaUrls(
   result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
-  options: { countAmbiguousSinglePayloadFailure: boolean },
+  options: {
+    countAmbiguousSinglePayloadFailure: boolean;
+    deliveryTarget?: {
+      channel?: string;
+      accountId?: string;
+      to?: string;
+      threadId?: string | number;
+    };
+  },
 ): string[] {
   const payloads = Array.isArray(result.payloads) ? result.payloads : [];
   const deliveryStatus = getPayloadDeliveryStatusRecord(result);
@@ -1397,6 +1436,9 @@ function collectPayloadOutcomeDeliveredMediaUrls(
       payloadOutcomes.length === 1 &&
       payloads.length === 1;
     if (status !== "sent" && !ambiguousSinglePayloadFailure) {
+      continue;
+    }
+    if (!payloadOutcomeMatchesGeneratedMediaDeliveryTarget(record, options.deliveryTarget)) {
       continue;
     }
     const index =
@@ -1856,6 +1898,7 @@ async function sendSubagentAnnounceDirectly(params: {
           result: directAnnounceResult,
           deliveryTarget,
           automaticDeliveryRequested: shouldDeliverAgentFinal,
+          generatedMediaCompletion: expectedMediaUrls.length > 0,
         })
       ) &&
       !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
@@ -1951,6 +1994,7 @@ async function sendSubagentAnnounceDirectly(params: {
           result: directAnnounceResult,
           deliveryTarget,
           automaticDeliveryRequested: shouldDeliverAgentFinal,
+          generatedMediaCompletion: expectedMediaUrls.length > 0,
         })
       )
     ) {

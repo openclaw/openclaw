@@ -3945,6 +3945,218 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("directly delivers generated media when automatic payload outcome went to another thread", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-robot.png"],
+          },
+        ],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              resultCount: 1,
+              target: {
+                tool: "message",
+                provider: "slack",
+                accountId: "acct-1",
+                to: "channel:C123",
+                threadId: "wrong-thread",
+              },
+            },
+          ],
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-automatic-wrong-thread",
+      requesterOrigin: {
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+      },
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-robot.png",
+          mediaUrls: ["/tmp/generated-robot.png"],
+          replyInstruction: "Tell the user the image is ready and include the generated media.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-robot.png"],
+        idempotencyKey: "announce-channel-media-automatic-wrong-thread:generated-media-direct",
+      }),
+    );
+  });
+
+  it("directly delivers generated media when automatic payload outcome has a conflicting account", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-account.png"],
+          },
+        ],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              resultCount: 1,
+              target: {
+                tool: "message",
+                provider: "slack",
+                accountId: "acct-2",
+                to: "channel:C123",
+              },
+            },
+          ],
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-automatic-wrong-account",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-account.png",
+          mediaUrls: ["/tmp/generated-account.png"],
+          replyInstruction: "Tell the user the image is ready and include the generated media.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-account.png"],
+        idempotencyKey: "announce-channel-media-automatic-wrong-account:generated-media-direct",
+      }),
+    );
+  });
+
+  it("accepts automatic generated-media payload outcome with omitted account on the matching route", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-thread.png"],
+          },
+        ],
+        deliveryStatus: {
+          status: "sent",
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "sent",
+              resultCount: 1,
+              target: {
+                tool: "message",
+                provider: "slack",
+                to: "channel:C123",
+                threadId: "target-thread",
+              },
+            },
+          ],
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-automatic-matching-route",
+      requesterOrigin: {
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "target-thread",
+      },
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "proof image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-thread.png",
+          mediaUrls: ["/tmp/generated-thread.png"],
+          replyInstruction: "Tell the user the image is ready and include the generated media.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("directly delivers generated media suppressed by automatic final delivery", async () => {
     const callGateway = createGatewayMock({
       result: {
