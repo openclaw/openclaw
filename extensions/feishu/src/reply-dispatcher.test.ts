@@ -392,6 +392,27 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("targets typing at the inbound message while replies stay on the thread root", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_topic_root",
+      typingTargetMessageId: "om_topic_child",
+      replyInThread: true,
+      messageCreateTimeMs: Date.now() - 30_000,
+    });
+
+    await options.onReplyStart?.();
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(addTypingIndicatorMock, "typing indicator params", {
+      messageId: "om_topic_child",
+    });
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      replyToMessageId: "om_topic_root",
+      replyInThread: true,
+    });
+  });
+
   it("streams auto mode plain final text when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });

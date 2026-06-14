@@ -5,6 +5,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   forumMessagingForTest,
   parseTelegramTargetForTest,
@@ -30,9 +31,8 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: vi.fn().mockReturnValue({}),
-  readSessionEntry: vi.fn(),
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
@@ -52,13 +52,13 @@ const mockedModuleIds = [
   "../../config/sessions/main-session.js",
   "../../config/sessions/delivery-info.js",
   "../../config/sessions/paths.js",
-  "../../config/sessions/store-load.js",
+  "../../config/sessions/session-accessor.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
   "../../infra/outbound/target-id-resolution.js",
 ];
 
-import { loadSessionStore, readSessionEntry } from "../../config/sessions/store-load.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
@@ -114,8 +114,7 @@ beforeEach(() => {
   extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   normalizeTelegramTargetForDeliveryTest.mockClear();
   vi.mocked(resolveOutboundTarget).mockReset();
-  vi.mocked(loadSessionStore).mockReset().mockReturnValue({});
-  vi.mocked(readSessionEntry).mockReset().mockReturnValue(undefined);
+  vi.mocked(loadSessionEntry).mockReset().mockReturnValue(undefined);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -173,11 +172,10 @@ function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
 
 const AGENT_ID = "agent-b";
 
-type SessionStore = ReturnType<typeof loadSessionStore>;
+type SessionStore = Record<string, SessionEntry>;
 
 function setSessionStore(store: SessionStore) {
-  vi.mocked(loadSessionStore).mockReturnValue(store);
-  vi.mocked(readSessionEntry).mockImplementation((_storePath, sessionKey) => store[sessionKey]);
+  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => store[sessionKey]);
 }
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
@@ -227,7 +225,11 @@ describe("resolveDeliveryTarget — issue #91613 cross-room drain fix", () => {
       expect(result.error.message).toContain("shared");
       expect(result.error.message).toContain("wrong room");
     }
-    expect(readSessionEntry).toHaveBeenCalledWith("/tmp/test-store.json", "agent:test:main");
+    expect(loadSessionEntry).toHaveBeenCalledWith({
+      agentId: AGENT_ID,
+      sessionKey: "agent:test:main",
+      storePath: "/tmp/test-store.json",
+    });
   });
 
   it("REFUSES a channel-only keyless cron whose `to` is still inherited from the shared bucket", async () => {

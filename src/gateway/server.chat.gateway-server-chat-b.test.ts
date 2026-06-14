@@ -18,7 +18,6 @@ import {
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
-  readSessionStore,
   rpcReq,
   testState,
   writeSessionStore,
@@ -1969,9 +1968,7 @@ describe("gateway server chat", () => {
       expect(firstAssistantTimingCallIndex).toBeGreaterThanOrEqual(0);
       expect(
         broadcastToConnIds.mock.invocationCallOrder[firstAssistantTimingCallIndex],
-      ).toBeLessThan(
-        broadcast.mock.invocationCallOrder[0],
-      );
+      ).toBeLessThan(broadcast.mock.invocationCallOrder[0]);
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
@@ -2232,7 +2229,10 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("expected session store path");
       }
-      const stored = readSessionStore(sessionStorePath);
+      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
+        string,
+        { lastChannel?: string; lastTo?: string } | undefined
+      >;
       expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
       expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
     });
@@ -2717,6 +2717,39 @@ describe("gateway server chat", () => {
       expect(full.ok).toBe(true);
       expect(full.unavailableReason).toBeUndefined();
       expect(JSON.stringify(full.message)).toContain("abcdefghij");
+      expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+    });
+  });
+
+  test("chat.message.get returns archive-backed rows surfaced by history", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await fs.writeFile(
+        path.join(sessionDir, "sess-main.jsonl.reset.2026-02-16T22-26-34.000Z"),
+        [
+          JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+          JSON.stringify({
+            id: "msg-archive-full-assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "archive abcdefghij" }],
+              timestamp: Date.now(),
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const historyMessages = await fetchHistoryMessages(ws, { maxChars: 12 });
+      expect(JSON.stringify(historyMessages)).toContain("archive abcd\\n...(truncated)...");
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-archive-full-assistant",
+      });
+      expect(full.ok).toBe(true);
+      expect(full.unavailableReason).toBeUndefined();
+      expect(JSON.stringify(full.message)).toContain("archive abcdefghij");
       expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
     });
   });

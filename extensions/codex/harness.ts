@@ -3,6 +3,8 @@
  */
 import type {
   AgentHarness,
+  AgentHarnessCompactParams,
+  AgentHarnessCompactResult,
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
@@ -25,6 +27,12 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
 /** Public model-listing types exposed for Codex app-server catalog callers. */
 export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
 
+type CodexAppServerAgentHarness = AgentHarness & {
+  compactAfterContextEngine?(
+    params: AgentHarnessCompactParams,
+  ): Promise<AgentHarnessCompactResult | undefined>;
+};
+
 /**
  * Creates the Codex app-server harness used for attempts, side questions,
  * compaction, reset, and disposal.
@@ -41,7 +49,7 @@ export function createCodexAppServerAgentHarness(options?: {
       id.trim().toLowerCase(),
     ),
   );
-  return {
+  const harness: CodexAppServerAgentHarness = {
     id: options?.id ?? "codex",
     label: options?.label ?? "Codex agent harness",
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
@@ -80,6 +88,13 @@ export function createCodexAppServerAgentHarness(options?: {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    compactAfterContextEngine: async (params) => {
+      const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
+      return maybeCompactCodexAppServerSession(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        allowNonManualNativeRequest: true,
+      });
+    },
     reset: async (params) => {
       if (params.sessionFile) {
         const { clearCodexAppServerBinding } = await import("./src/app-server/session-binding.js");
@@ -92,4 +107,5 @@ export function createCodexAppServerAgentHarness(options?: {
       await clearSharedCodexAppServerClientAndWait();
     },
   };
+  return harness;
 }

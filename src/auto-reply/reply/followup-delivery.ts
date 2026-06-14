@@ -2,6 +2,7 @@
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -60,7 +61,7 @@ export function resolveFollowupDeliveryPayloads(params: {
     if (stripped.shouldSkip && !hasMedia) {
       continue;
     }
-    sanitizedPayloads.push({ ...payload, text: stripped.text });
+    sanitizedPayloads.push(copyReplyPayloadMetadata(payload, { ...payload, text: stripped.text }));
   }
   const replyTaggedPayloads = applyReplyThreading({
     payloads: sanitizedPayloads,

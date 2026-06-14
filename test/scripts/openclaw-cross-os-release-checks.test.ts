@@ -21,6 +21,7 @@ import {
   agentOutputHasExpectedOkMarker,
   agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseSmokePluginAllowlist,
+  buildCrossOsReleaseSmokeMemorySlotConfigArgs,
   buildDiscordFetchInit,
   buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
@@ -546,6 +547,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "phone-control",
       "talk-voice",
     ]);
+    expect(allowlist).not.toContain("memory-core");
+    expect(buildCrossOsReleaseSmokeMemorySlotConfigArgs()).toEqual([
+      "config",
+      "set",
+      "plugins.slots.memory",
+      JSON.stringify("none"),
+      "--strict-json",
+    ]);
   });
 
   it("can stage packaged-upgrade baselines without npm lifecycle scripts", () => {
@@ -597,6 +606,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(source).toContain('agentRuntime: { id: "openclaw" }');
     expect(source).toContain('"--merge"');
     expect(source).toContain(providerOverride);
+    expect(source.match(/args: buildCrossOsReleaseSmokeMemorySlotConfigArgs\(\)/g)).toHaveLength(2);
     expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
     expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
     const agentTurnArgCalls = source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g) ?? [];
