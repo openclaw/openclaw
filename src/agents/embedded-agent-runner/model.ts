@@ -1656,7 +1656,9 @@ export async function resolveModelAsync(
   let model =
     explicitModel?.kind === "resolved" && !providerRuntimeMetadataShouldWin
       ? explicitModel.model
-      : undefined;
+      : options?.skipAgentDiscovery && !explicitModel && !providerRuntimeMetadataShouldWin
+        ? await resolveStaticCatalogFallbackModel()
+        : undefined;
   model ??= await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh

@@ -352,9 +352,12 @@ describe("runEmbeddedAgent", () => {
     expect(resolveModelCall?.[1]).toBe("openrouter/auto");
     expect(resolveModelCall?.[2]).toBe(agentDir);
     expect(resolveModelCall?.[3]).toBe(cfg);
-    expect(
-      (resolveModelCall?.[4] as { skipAgentDiscovery?: boolean } | undefined)?.skipAgentDiscovery,
-    ).toBe(true);
+    expect(resolveModelCall?.[4]).toEqual(
+      expect.objectContaining({
+        allowBundledStaticCatalogFallback: true,
+        skipAgentDiscovery: true,
+      }),
+    );
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
   });
 
