@@ -143,6 +143,24 @@ describe("registerWorkboardCli", () => {
     expect(after?.metadata?.automation?.dispatchCount).toBeUndefined();
   });
 
+  it("lets gateway runtime choose dispatch scopes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const program = createProgram(store);
+    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({
+      started: [],
+      startFailures: [],
+    });
+
+    await program.parseAsync(["workboard", "dispatch"], { from: "user" });
+
+    expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
+      "workboard.cards.dispatch",
+      expect.objectContaining({ json: false }),
+      { boardId: undefined },
+      { mode: "cli" },
+    );
+  });
+
   it("rejects ambiguous card id prefixes", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const prefix = await createAmbiguousPrefix(store);
