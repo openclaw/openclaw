@@ -17,6 +17,7 @@ import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessageToolSendActionName } from "./embedded-agent-messaging.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
+import { isToolResultFailureStatus } from "./tool-result-failure.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
@@ -549,25 +550,7 @@ export function isToolResultError(result: unknown): boolean {
   if (details?.ok === false || details?.success === false) {
     return true;
   }
-  const hasFailureStatus =
-    normalized === "error" ||
-    normalized === "failed" ||
-    normalized === "failure" ||
-    normalized === "timeout" ||
-    normalized === "timed_out" ||
-    normalized === "blocked" ||
-    normalized === "denied" ||
-    normalized === "rejected" ||
-    normalized === "not_sent" ||
-    normalized === "forbidden" ||
-    normalized === "unavailable" ||
-    normalized === "approval-unavailable" ||
-    normalized === "disabled" ||
-    normalized === "aborted" ||
-    normalized === "cancelled" ||
-    normalized === "canceled" ||
-    normalized === "killed" ||
-    normalized === "invalid";
+  const hasFailureStatus = isToolResultFailureStatus(normalized);
   if (hasFailureStatus && !explicitlySuccessful) {
     return true;
   }

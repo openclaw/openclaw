@@ -15,6 +15,7 @@ import {
 } from "../../execution-contract.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { hasToolResultDryRunOrFailureEvidence } from "../../tool-result-failure.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
@@ -133,24 +134,6 @@ const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"
   hadPotentialSideEffects: true,
   replaySafe: false,
 };
-const TERMINAL_TOOL_RESULT_ERROR_STATUSES = new Set([
-  "error",
-  "failed",
-  "partial_failed",
-  "timeout",
-  "timed_out",
-  "blocked",
-  "denied",
-  "rejected",
-  "not_sent",
-  "cancelled",
-  "canceled",
-  "suppressed",
-  "dry_run",
-  "cancelled_by_message_sending_hook",
-  "cancelled-by-message-sending-hook",
-]);
-
 export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
   lastAssistant?: { stopReason?: string } | null;
@@ -171,6 +154,8 @@ const PLANNING_ONLY_PROGRESS_RESULT_RE =
   /^(?:i(?:'m| am)\s+)?(?:checking|running|working|inspecting|reading|searching|looking|debugging|testing|verifying|investigating|reviewing|fetching|probing|monitoring)\b(?:\s*:|\s+(?:normally|smoothly|well|fine|healthy|successfully|as expected|idle|ready|available|unavailable|complete|completed|finished|failed|blocked|version\s+v?\d[\w.-]*\b|\d+\b|no\b|none\b)|(?![^.!?\n]{0,160}\b(?:if|whether)\b)[^.!?\n]{1,160}\b(?:returned|showed|reported|revealed|produced|found|failed|blocked|denied|rejected|not[_ ]sent|(?:is|are|was|were)\s+(?:unavailable|blocked|denied|rejected)|requires?\b[^.!?\n]{0,100}\b(?:is|are)\s+unavailable)\b)/i;
 const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is|can't|cannot|won't|will not|wouldn't|would not|refus(?:e|ed|ing)|declin(?:e|ed|ing))\b/i;
+const PLANNING_ONLY_REFUSAL_RE =
+  /\b(?:can't|cannot|won't|will not|wouldn't|would not|refus(?:e|ed|ing)|declin(?:e|ed|ing))\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
 const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
 const PLANNING_ONLY_MAX_VISIBLE_TEXT = 700;
@@ -629,38 +614,6 @@ function hasToolCallContent(message: AgentMessage): boolean {
   });
 }
 
-function hasTerminalToolResultDryRunOrFailureEvidence(value: unknown, depth = 0): boolean {
-  if (Array.isArray(value)) {
-    return (
-      depth < 3 &&
-      value.some((entry) => hasTerminalToolResultDryRunOrFailureEvidence(entry, depth + 1))
-    );
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const record = value as Record<string, unknown>;
-  const status = normalizeLowercaseStringOrEmpty(record.status);
-  const deliveryStatus = normalizeLowercaseStringOrEmpty(
-    record.deliveryStatus ?? record.delivery_status,
-  );
-  if (
-    record.dryRun === true ||
-    record.ok === false ||
-    record.success === false ||
-    TERMINAL_TOOL_RESULT_ERROR_STATUSES.has(status) ||
-    TERMINAL_TOOL_RESULT_ERROR_STATUSES.has(deliveryStatus)
-  ) {
-    return true;
-  }
-  if (depth >= 3) {
-    return false;
-  }
-  return [record.result, record.results, record.payloadOutcomes].some((entry) =>
-    hasTerminalToolResultDryRunOrFailureEvidence(entry, depth + 1),
-  );
-}
-
 function resolveTrailingToolResultText(messages: readonly AgentMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
@@ -675,7 +628,7 @@ function resolveTrailingToolResultText(messages: readonly AgentMessage[]): strin
           : undefined;
       if (
         (message as { isError?: boolean }).isError === true ||
-        hasTerminalToolResultDryRunOrFailureEvidence(details)
+        hasToolResultDryRunOrFailureEvidence(details)
       ) {
         return null;
       }
@@ -1255,6 +1208,34 @@ function hasRequestGovernedAction(text: string, requestPattern: RegExp): boolean
   return !nestedClause || action.index < nestedClause.index;
 }
 
+function normalizeActionVerbForComparison(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/(?:ing|ed)$/i, "")
+    .replace(/([a-z])\1$/i, "$1")
+    .replace(/e$/i, "");
+}
+
+function isSafetyConstrainedPlanningPromise(prompt: string, assistantText: string): boolean {
+  const refusal = PLANNING_ONLY_REFUSAL_RE.exec(assistantText);
+  if (!refusal || !PLANNING_ONLY_PROMISE_RE.test(assistantText.slice(0, refusal.index))) {
+    return false;
+  }
+  const requestedAction = PLANNING_ONLY_ACTION_VERB_RE.exec(
+    stripNonAuthorizingUserPromptExcerpts(prompt),
+  );
+  const constrainedAction = PLANNING_ONLY_ACTION_VERB_RE.exec(
+    assistantText.slice(refusal.index + refusal[0].length),
+  );
+  return Boolean(
+    requestedAction &&
+    constrainedAction &&
+    normalizeActionVerbForComparison(requestedAction[0]) !==
+      normalizeActionVerbForComparison(constrainedAction[0]),
+  );
+}
+
 function isLikelyActionableUserPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -1442,7 +1423,7 @@ function isSingleActionThenNarrativePattern(params: {
 
 export function isPlanningOnlyAssistantText(
   assistantTexts?: readonly string[],
-  options: { singleActionNarrative?: boolean } = {},
+  options: { singleActionNarrative?: boolean; allowSafetyConstraintPromise?: boolean } = {},
 ): boolean {
   const text = (assistantTexts ?? []).join("\n\n").trim();
   if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT || text.includes("```")) {
@@ -1479,7 +1460,10 @@ export function isPlanningOnlyAssistantText(
   ) {
     return false;
   }
-  return !PLANNING_ONLY_COMPLETION_RE.test(classifierText);
+  return (
+    !PLANNING_ONLY_COMPLETION_RE.test(classifierText) ||
+    options.allowSafetyConstraintPromise === true
+  );
 }
 
 export function isPlanningOnlyAssistantTextForPrompt(params: {
@@ -1487,9 +1471,16 @@ export function isPlanningOnlyAssistantTextForPrompt(params: {
   prompt?: string;
   singleActionNarrative?: boolean;
 }): boolean {
+  const classifierText = normalizePlanningOnlyClassifierText(
+    (params.assistantTexts ?? []).join("\n\n").trim(),
+  );
+  const allowSafetyConstraintPromise =
+    typeof params.prompt === "string" &&
+    isSafetyConstrainedPlanningPromise(params.prompt, classifierText);
   if (
     !isPlanningOnlyAssistantText(params.assistantTexts, {
       singleActionNarrative: params.singleActionNarrative,
+      allowSafetyConstraintPromise,
     })
   ) {
     return false;
@@ -1497,9 +1488,6 @@ export function isPlanningOnlyAssistantTextForPrompt(params: {
   if (typeof params.prompt !== "string") {
     return true;
   }
-  const classifierText = normalizePlanningOnlyClassifierText(
-    (params.assistantTexts ?? []).join("\n\n").trim(),
-  );
   const directAnswerQuestion = isDirectAnswerQuestionPrompt(params.prompt);
   if (
     PLANNING_ONLY_ACK_PLACEHOLDER_RE.test(classifierText) &&
@@ -1567,7 +1555,13 @@ function resolvePlanningOnlyTurnClassification(params: {
   ) {
     return null;
   }
-  if (PLANNING_ONLY_COMPLETION_RE.test(classifierText)) {
+  if (
+    PLANNING_ONLY_COMPLETION_RE.test(classifierText) &&
+    !(
+      typeof params.prompt === "string" &&
+      isSafetyConstrainedPlanningPromise(params.prompt, classifierText)
+    )
+  ) {
     return null;
   }
 

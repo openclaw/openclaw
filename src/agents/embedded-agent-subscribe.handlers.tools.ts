@@ -43,6 +43,7 @@ import {
   getMessagingToolResultContentDeliveryState,
   hasCommittedMessagingToolDeliveryEvidence,
   hasCommittedMessagingToolResultDetails,
+  hasExplicitMessagingToolNonDeliveryEvidence,
 } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
@@ -66,6 +67,7 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import { hasToolResultDryRunOrFailureEvidence } from "./tool-result-failure.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -83,23 +85,6 @@ const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModu
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
-const TOOL_RESULT_FAILURE_STATUSES = new Set([
-  "error",
-  "failed",
-  "partial_failed",
-  "timeout",
-  "timed_out",
-  "blocked",
-  "denied",
-  "rejected",
-  "not_sent",
-  "cancelled",
-  "canceled",
-  "suppressed",
-  "dry_run",
-  "cancelled_by_message_sending_hook",
-  "cancelled-by-message-sending-hook",
-]);
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
@@ -308,64 +293,6 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
 
 function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
   return readRecordField(asOptionalObjectRecord(result)?.details);
-}
-
-function hasToolResultFailureDetails(details: Record<string, unknown> | undefined): boolean {
-  if (!details) {
-    return false;
-  }
-  const status = normalizeOptionalLowercaseString(details.status);
-  const deliveryStatus =
-    normalizeOptionalLowercaseString(details.deliveryStatus) ??
-    normalizeOptionalLowercaseString(details.delivery_status);
-  return (
-    details.ok === false ||
-    details.success === false ||
-    TOOL_RESULT_FAILURE_STATUSES.has(status ?? "") ||
-    TOOL_RESULT_FAILURE_STATUSES.has(deliveryStatus ?? "")
-  );
-}
-
-function hasToolResultDryRunOrFailureEvidence(value: unknown, depth = 0): boolean {
-  if (Array.isArray(value)) {
-    return (
-      depth < 3 && value.some((entry) => hasToolResultDryRunOrFailureEvidence(entry, depth + 1))
-    );
-  }
-  const record = readRecordField(value);
-  if (!record) {
-    return false;
-  }
-  if (record.dryRun === true || hasToolResultFailureDetails(record)) {
-    return true;
-  }
-  if (depth >= 3) {
-    return false;
-  }
-  return [record.result, record.results, record.payloadOutcomes].some((entry) =>
-    hasToolResultDryRunOrFailureEvidence(entry, depth + 1),
-  );
-}
-
-function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean {
-  if (Array.isArray(value)) {
-    return (
-      depth < 3 && value.some((entry) => hasMessagingToolNonDeliveryEvidence(entry, depth + 1))
-    );
-  }
-  const record = readRecordField(value);
-  if (!record) {
-    return false;
-  }
-  if (record.dryRun === true || hasToolResultFailureDetails(record)) {
-    return true;
-  }
-  if (depth >= 3) {
-    return false;
-  }
-  return [record.result, record.results, record.payloadOutcomes].some((entry) =>
-    hasMessagingToolNonDeliveryEvidence(entry, depth + 1),
-  );
 }
 
 const EXPLICIT_MESSAGING_TOOL_SUCCESS_TEXT = new Set(["ok", "sent", "success"]);
@@ -706,7 +633,7 @@ function extractMessagingToolSourceReplyPayload(
   }
   const sourceReply = readRecordField(details.sourceReply) ?? details;
   if (
-    hasMessagingToolNonDeliveryEvidence(sourceReply) ||
+    hasExplicitMessagingToolNonDeliveryEvidence(sourceReply) ||
     !hasCommittedMessagingToolResultDetails(details)
   ) {
     return undefined;
@@ -765,8 +692,8 @@ function hasCommittedMessagingToolSendResult(result: unknown): boolean {
     return true;
   }
   if (
-    hasMessagingToolNonDeliveryEvidence(resultRecord) ||
-    hasMessagingToolNonDeliveryEvidence(details)
+    hasExplicitMessagingToolNonDeliveryEvidence(resultRecord) ||
+    hasExplicitMessagingToolNonDeliveryEvidence(details)
   ) {
     return false;
   }

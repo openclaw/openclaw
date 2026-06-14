@@ -286,6 +286,10 @@ function hasExplicitNonDeliveryEvidenceAtDepth(value: unknown, depth: number): b
   );
 }
 
+export function hasExplicitMessagingToolNonDeliveryEvidence(value: unknown): boolean {
+  return hasExplicitNonDeliveryEvidenceAtDepth(value, 0);
+}
+
 function hasNestedExplicitNonDeliveryEvidence(record: Record<string, unknown>, depth: number) {
   if (depth >= 3) {
     return false;

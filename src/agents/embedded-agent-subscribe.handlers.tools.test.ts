@@ -2448,6 +2448,9 @@ describe("messaging tool media URL tracking", () => {
         },
       ],
       ["tool-nested-failed-ok", { details: { status: "ok", result: { status: "failed" } } }],
+      ["tool-nested-failure-ok", { details: { status: "ok", result: { status: "failure" } } }],
+      ["tool-nested-unknown-ok", { details: { status: "ok", result: { status: "unknown" } } }],
+      ["tool-nested-pending-ok", { details: { status: "ok", result: { status: "pending" } } }],
     ] satisfies Array<[string, ToolExecutionEndEvent["result"]]>) {
       const { ctx } = createTestContext();
       await handleToolExecutionStart(ctx, {

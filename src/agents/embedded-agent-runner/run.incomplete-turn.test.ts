@@ -616,6 +616,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it.each([
     { ok: true, result: { status: "failed" } },
+    { ok: true, result: { status: "failure" } },
+    { ok: true, result: { status: "unknown" } },
     { success: true, result: { dryRun: true } },
   ])(
     "does not synthesize a completed terminal reply from nested non-delivery details",
@@ -7962,6 +7964,38 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(resolvePlanningOnlyRetryInstruction(params)).toBeNull();
     expect(resolvePlanningOnlyBlockedPayloadText(params)).toBeNull();
+  });
+
+  it.each([
+    "I'll check the config, but I won't change it.",
+    "I'll check the config, but I will not change it.",
+    "I'll check the config, but I refuse to change it.",
+  ])("keeps safety-constrained promise %s planning-only", (assistantText) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Can you check the config without changing it?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({ assistantTexts: [assistantText] }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("preserves a promise-prefixed blocker for the requested action", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      prompt: "Can you check the config?",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll check the config, but I can't access it."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
   });
 });
 

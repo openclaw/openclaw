@@ -72,9 +72,11 @@ import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   getMessagingToolResultContentDeliveryState,
   hasCommittedMessagingToolResultDetails,
+  hasExplicitMessagingToolNonDeliveryEvidence,
 } from "./embedded-agent-runner/delivery-evidence.js";
 import type { AgentToolTerminalResultFallback, AgentToolTerminalSummary } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { hasToolResultDryRunOrFailureEvidence } from "./tool-result-failure.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -227,31 +229,6 @@ const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
 const TOOL_OUTCOME_RESULT_TEXT_MAX_CHARS = 64_000;
-const TOOL_OUTCOME_FAILURE_STATUSES = new Set([
-  "error",
-  "failed",
-  "failure",
-  "partial_failed",
-  "timeout",
-  "timed_out",
-  "blocked",
-  "denied",
-  "rejected",
-  "not_sent",
-  "forbidden",
-  "unavailable",
-  "approval-unavailable",
-  "disabled",
-  "aborted",
-  "cancelled",
-  "canceled",
-  "killed",
-  "invalid",
-  "suppressed",
-  "dry_run",
-  "cancelled_by_message_sending_hook",
-  "cancelled-by-message-sending-hook",
-]);
 
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
@@ -972,63 +949,6 @@ function readResultDetailsRecord(result: unknown): Record<string, unknown> | und
   return isPlainObject(result) && isPlainObject(result.details) ? result.details : undefined;
 }
 
-function hasFailedToolResultStatus(details: Record<string, unknown> | undefined): boolean {
-  if (!details) {
-    return false;
-  }
-  if (details.ok === false || details.success === false) {
-    return true;
-  }
-  const status = typeof details.status === "string" ? details.status.trim().toLowerCase() : "";
-  const deliveryStatus =
-    typeof details.deliveryStatus === "string"
-      ? details.deliveryStatus.trim().toLowerCase()
-      : typeof details.delivery_status === "string"
-        ? details.delivery_status.trim().toLowerCase()
-        : "";
-  return (
-    TOOL_OUTCOME_FAILURE_STATUSES.has(status) || TOOL_OUTCOME_FAILURE_STATUSES.has(deliveryStatus)
-  );
-}
-
-function hasToolResultFailureEvidence(value: unknown, depth = 0): boolean {
-  if (Array.isArray(value)) {
-    return depth < 3 && value.some((entry) => hasToolResultFailureEvidence(entry, depth + 1));
-  }
-  if (!isPlainObject(value)) {
-    return false;
-  }
-  if (value.dryRun === true || hasFailedToolResultStatus(value)) {
-    return true;
-  }
-  if (depth >= 3) {
-    return false;
-  }
-  return [value.result, value.results, value.payloadOutcomes].some((entry) =>
-    hasToolResultFailureEvidence(entry, depth + 1),
-  );
-}
-
-function hasMessagingToolNonDeliveryEvidence(value: unknown, depth = 0): boolean {
-  if (Array.isArray(value)) {
-    return (
-      depth < 3 && value.some((entry) => hasMessagingToolNonDeliveryEvidence(entry, depth + 1))
-    );
-  }
-  if (!isPlainObject(value)) {
-    return false;
-  }
-  if (value.dryRun === true || hasFailedToolResultStatus(value)) {
-    return true;
-  }
-  if (depth >= 3) {
-    return false;
-  }
-  return [value.result, value.results, value.payloadOutcomes].some((entry) =>
-    hasMessagingToolNonDeliveryEvidence(entry, depth + 1),
-  );
-}
-
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -1119,7 +1039,7 @@ function hasCommittedMessagingToolSendOutcome(params: {
   if (hasCommittedMessagingToolResultDetails(details)) {
     return true;
   }
-  if (hasMessagingToolNonDeliveryEvidence(details)) {
+  if (hasExplicitMessagingToolNonDeliveryEvidence(details)) {
     return false;
   }
   if (contentReceipt) {
@@ -1211,7 +1131,7 @@ export async function recordToolLoopOutcome(args: {
     if ((record?.resultHash || shouldEmitHashlessToolLoopBlock) && args.ctx.onToolOutcome) {
       const blockedMessage = args.trustedBlockedMessage;
       const executionThrew = Boolean(args.error);
-      const failed = executionThrew || hasToolResultFailureEvidence(details);
+      const failed = executionThrew || hasToolResultDryRunOrFailureEvidence(details);
       const mutatingAction =
         !blockedReason &&
         buildToolMutationState(record?.toolName ?? args.toolName, args.toolParams).mutatingAction;

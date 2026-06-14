@@ -548,6 +548,7 @@ describe("before_tool_call loop detection behavior", () => {
     { status: "aborted" },
     { status: "killed" },
     { status: "invalid" },
+    { status: "unknown" },
     { status: "ok", result: { status: "failed" } },
     { status: "ok", result: { dryRun: true } },
   ])("marks returned failure details as failed replay-safety observations", async (details) => {
