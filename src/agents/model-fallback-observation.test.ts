@@ -149,7 +149,7 @@ describe("log fallback coalescer", () => {
       requestedProvider: "modelstudio",
       requestedModel: "glm-5",
       candidate: { provider: "modelstudio", model: "glm-5" },
-      reason: "probe" as const,
+      reason: "auth" as const,
     };
     const first = logModelFallbackDecision(params);
     // probe_cooldown_candidate does not produce fallbackStepFields

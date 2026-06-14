@@ -67,9 +67,21 @@ function resolveCoalesceState(
     // window expired — flush the old entry
     coalesceState.delete(key);
   }
-  // enforce bounded size
+  // enforce bounded size — prune expired entries first, then evict the
+  // oldest entry if the map is still at capacity after pruning.
   if (coalesceState.size >= MAX_COALESCE_ENTRIES) {
     pruneCoalesceState(now);
+    if (coalesceState.size >= MAX_COALESCE_ENTRIES) {
+      let oldestKey = "";
+      let oldestTime = Infinity;
+      for (const [k, e] of coalesceState) {
+        if (e.lastLoggedAt < oldestTime) {
+          oldestTime = e.lastLoggedAt;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey) coalesceState.delete(oldestKey);
+    }
   }
   coalesceState.set(key, { lastLoggedAt: now, suppressed: 0 });
   return {
