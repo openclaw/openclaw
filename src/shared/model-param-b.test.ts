@@ -10,6 +10,13 @@ describe("shared/model-param-b", () => {
     expect(inferParamBFromIdOrName("(70b) + m1.5b + qwen-14b")).toBe(70);
   });
 
+  it("keeps the larger of two adjacent b-sized tokens", () => {
+    expect(inferParamBFromIdOrName("8b-70b")).toBe(70);
+    expect(inferParamBFromIdOrName("qwen2-7b-13b")).toBe(13);
+    expect(inferParamBFromIdOrName("7b 13b")).toBe(13);
+    expect(inferParamBFromIdOrName("2b_70b")).toBe(70);
+  });
+
   it("ignores malformed, zero, and non-delimited matches", () => {
     expect(inferParamBFromIdOrName("abc70beta 0b x70b2")).toBeNull();
     expect(inferParamBFromIdOrName("model 0b")).toBeNull();
