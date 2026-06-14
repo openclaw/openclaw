@@ -20,4 +20,36 @@ contracts: memoryRerankers
 
 ## Configuration
 
-See [External reranker](/plugins/external-reranker) for full configuration guide.
+Configure the plugin under `plugins.memory-external-reranker`:
+
+```json
+{
+  "plugins": {
+    "memory-external-reranker": {
+      "provider": "llamacpp",
+      "model": "qwen3-reranker",
+      "endpointPath": "/v1/rerank"
+    }
+  }
+}
+```
+
+### Private or localhost endpoints
+
+If `models.providers.<provider>.baseUrl` points to localhost or a private IP
+(for example `http://localhost:8080` or `http://127.0.0.1:8080`), you must opt
+in explicitly:
+
+```json
+{
+  "plugins": {
+    "memory-external-reranker": {
+      "provider": "llamacpp",
+      "model": "qwen3-reranker",
+      "allowPrivateNetwork": true
+    }
+  }
+}
+```
+
+Without this opt-in, reranking fails fast with an explicit configuration error.

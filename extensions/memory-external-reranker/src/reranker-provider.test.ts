@@ -9,6 +9,7 @@ const { fetchGuardMock } = vi.hoisted(() => ({
 import {
   DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS,
   ExternalMmrReranker,
+  requiresRerankerPrivateNetworkOptIn,
   resolveRerankerNetworkPolicy,
   setExternalRerankerFetchGuardForTesting,
 } from "./reranker.js";
@@ -69,13 +70,13 @@ describe("ExternalMmrReranker", () => {
 
       const reranker = new ExternalMmrReranker(
         { provider: "llamacpp", model: "qwen3" },
-        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+        makeTestConfig({ llamacpp: { baseUrl: "https://api.example.com" } }),
       );
 
       await reranker.rerank({ query: "neural networks", documents: sampleDocs, limit: 10 });
 
       expect(mock).toHaveBeenCalledTimes(1);
-      expect(guardCallOpts(mock).url).toBe("http://localhost:8080/v1/rerank");
+      expect(guardCallOpts(mock).url).toBe("https://api.example.com/v1/rerank");
       expect(guardCallOpts(mock).timeoutMs).toBe(DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS);
       expect(guardCallOpts(mock).policy).toBeUndefined();
       expect(guardCallBody(mock)).toMatchObject({
@@ -119,15 +120,15 @@ describe("ExternalMmrReranker", () => {
 
       const reranker = new ExternalMmrReranker(
         { provider: "llamacpp", model: "qwen3", modelFallbacks: ["qwen3-large"] },
-        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+        makeTestConfig({ llamacpp: { baseUrl: "https://api.example.com" } }),
       );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
       await reranker.rerank({ query: "test", documents: docs, limit: 5 });
 
       expect(mockFn).toHaveBeenCalledTimes(2);
-      expect(guardCallOpts(mockFn, 0).url).toBe("http://localhost:8080/v1/rerank");
-      expect(guardCallOpts(mockFn, 1).url).toBe("http://localhost:8080/v1/rerank");
+      expect(guardCallOpts(mockFn, 0).url).toBe("https://api.example.com/v1/rerank");
+      expect(guardCallOpts(mockFn, 1).url).toBe("https://api.example.com/v1/rerank");
       expect(guardCallBody(mockFn, 0)).toMatchObject({ model: "qwen3" });
       expect(guardCallBody(mockFn, 1)).toMatchObject({ model: "qwen3-large" });
     });
@@ -148,7 +149,7 @@ describe("ExternalMmrReranker", () => {
 
       const reranker = new ExternalMmrReranker(
         { provider: "llamacpp", model: "qwen3", modelFallbacks: ["gpt-rerank"] },
-        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+        makeTestConfig({ llamacpp: { baseUrl: "https://api.example.com" } }),
       );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
@@ -164,13 +165,13 @@ describe("ExternalMmrReranker", () => {
 
       const reranker = new ExternalMmrReranker(
         { provider: "llamacpp", model: "qwen3", endpointPath: "/rerank" },
-        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+        makeTestConfig({ llamacpp: { baseUrl: "https://api.example.com" } }),
       );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
       await reranker.rerank({ query: "test", documents: docs, limit: 5 });
 
-      expect(guardCallOpts(mock).url).toBe("http://localhost:8080/rerank");
+      expect(guardCallOpts(mock).url).toBe("https://api.example.com/rerank");
     });
   });
 
@@ -180,7 +181,7 @@ describe("ExternalMmrReranker", () => {
 
       const reranker = new ExternalMmrReranker(
         { provider: "llamacpp", model: "qwen3", topN: 3 },
-        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+        makeTestConfig({ llamacpp: { baseUrl: "https://api.example.com" } }),
       );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
@@ -199,7 +200,7 @@ describe("ExternalMmrReranker", () => {
 
       const reranker = new ExternalMmrReranker(
         { provider: "llamacpp", model: "qwen3" },
-        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+        makeTestConfig({ llamacpp: { baseUrl: "https://api.example.com" } }),
       );
 
       const docs: RerankDocument[] = [
@@ -216,6 +217,13 @@ describe("ExternalMmrReranker", () => {
   });
 
   describe("SSRF policy", () => {
+    it("detects private/loopback literal reranker hosts that require explicit opt-in", () => {
+      expect(requiresRerankerPrivateNetworkOptIn("http://localhost:8082")).toBe(true);
+      expect(requiresRerankerPrivateNetworkOptIn("http://127.0.0.1:8082")).toBe(true);
+      expect(requiresRerankerPrivateNetworkOptIn("https://api.cohere.com")).toBe(false);
+      expect(requiresRerankerPrivateNetworkOptIn("not-a-url")).toBe(false);
+    });
+
     it("policy is undefined by default (no private-network opt-in)", () => {
       expect(resolveRerankerNetworkPolicy({ baseUrl: "http://localhost:8080" })).toBeUndefined();
     });
@@ -259,18 +267,20 @@ describe("ExternalMmrReranker", () => {
       expect(guardCallOpts(mock).policy).toMatchObject({ allowPrivateNetwork: true });
     });
 
-    it("policy is undefined when opt-in flag is not set, even for private baseUrl", async () => {
-      const mock = mockOkGuard([{ index: 0, relevance_score: 0.9 }]);
+    it("throws actionable opt-in error for private/loopback baseUrl when opt-in is disabled", async () => {
+      const mockFn = vi.fn();
+      setExternalRerankerFetchGuardForTesting(mockFn);
 
       const reranker = new ExternalMmrReranker(
         { provider: "local", model: "qwen3-reranker" },
-        makeTestConfig({ local: { baseUrl: "http://127.0.0.1:8082" } }),
+        makeTestConfig({ local: { baseUrl: "http://localhost:8082" } }),
       );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
-      await reranker.rerank({ query: "test", documents: docs, limit: 5 });
-
-      expect(guardCallOpts(mock).policy).toBeUndefined();
+      await expect(reranker.rerank({ query: "test", documents: docs, limit: 5 })).rejects.toThrow(
+        /allowPrivateNetwork=true/,
+      );
+      expect(mockFn).not.toHaveBeenCalled();
     });
   });
 });
