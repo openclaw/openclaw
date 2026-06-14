@@ -20,8 +20,11 @@ import {
   resolveExecModePolicy,
   resolveExecPolicyForMode,
 } from "../infra/exec-approvals.js";
+import {
+  isRequestedExecTargetAllowed,
+  resolveExecTarget,
+} from "../infra/exec-target-resolution.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
-import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 
 // Resolved exec config layers come from global config, agent config, legacy

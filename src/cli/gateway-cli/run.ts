@@ -543,6 +543,14 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   const { cfg, snapshot, startupConfigSnapshotRead } = await readGatewayStartupConfig({
     startupTrace,
   });
+  const { buildCurrentGlobalExecPolicyClampWarning } =
+    await import("./exec-policy-startup-warning.js");
+  // Startup only logs the global floor mismatch once; per-agent clamps remain visible
+  // in `openclaw exec-policy show` without adding per-turn or per-tool log noise.
+  const execPolicyClampWarning = buildCurrentGlobalExecPolicyClampWarning(cfg);
+  if (execPolicyClampWarning) {
+    gatewayLog.warn(execPolicyClampWarning);
+  }
   void maybeLogPendingControlUiBuild(cfg).catch((err: unknown) => {
     gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
   });
