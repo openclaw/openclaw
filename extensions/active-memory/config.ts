@@ -14,6 +14,7 @@ import {
   DEFAULT_CACHE_TTL_MS,
   DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
   DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS,
+  DEFAULT_AGENT_ID,
   DEFAULT_MAX_SUMMARY_CHARS,
   DEFAULT_MIN_TIMEOUT_MS,
   DEFAULT_QMD_SEARCH_MODE,
@@ -225,9 +226,15 @@ function normalizePluginConfig(
           value === "direct" || value === "group" || value === "channel" || value === "explicit",
       )
     : [];
+  const hasExplicitAgents = Array.isArray(raw.agents);
+  const configuredAgents = hasExplicitAgents ? normalizeStringEntries(raw.agents) : [];
+  const agentList = Array.isArray(cfg?.agents?.list)
+    ? normalizeStringEntries(cfg.agents.list.map((agent) => agent.id))
+    : [];
+  const allConfiguredAgents = agentList.length > 0 ? agentList : [DEFAULT_AGENT_ID];
   return {
     enabled: raw.enabled !== false,
-    agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
+    agents: hasExplicitAgents ? configuredAgents : allConfiguredAgents,
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallback:
       typeof raw.modelFallback === "string" && raw.modelFallback.trim()
