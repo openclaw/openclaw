@@ -108,6 +108,35 @@ describe("codex app-server session binding", () => {
     expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("round-trips plugin app policy context destructive approval mode", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    const pluginAppPolicyContext = {
+      fingerprint: "plugin-policy-1",
+      apps: {
+        "google-calendar-app": {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated" as const,
+          pluginName: "google-calendar",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "on-request" as const,
+          mcpServerNames: ["google-calendar"],
+        },
+      },
+      pluginAppIds: {
+        "google-calendar": ["google-calendar-app"],
+      },
+    };
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-123",
+      cwd: tempDir,
+      pluginAppPolicyContext,
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
   it("round-trips context-engine binding metadata", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await writeCodexAppServerBinding(sessionFile, {

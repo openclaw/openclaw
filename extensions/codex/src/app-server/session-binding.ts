@@ -333,6 +333,7 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
       entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
+      !isValidDestructiveApprovalMode(entry.destructiveApprovalMode) ||
       !Array.isArray(entry.mcpServerNames) ||
       entry.mcpServerNames.some((serverName) => typeof serverName !== "string")
     ) {
@@ -343,6 +344,9 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
       marketplaceName: entry.marketplaceName,
       pluginName: entry.pluginName,
       allowDestructiveActions: entry.allowDestructiveActions,
+      ...(entry.destructiveApprovalMode
+        ? { destructiveApprovalMode: entry.destructiveApprovalMode }
+        : {}),
       mcpServerNames: entry.mcpServerNames,
     };
   }
@@ -364,6 +368,12 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
     apps: parsedApps,
     pluginAppIds: parsedPluginAppIds,
   };
+}
+
+function isValidDestructiveApprovalMode(
+  value: unknown,
+): value is PluginAppPolicyContext["apps"][string]["destructiveApprovalMode"] | undefined {
+  return value === undefined || value === "auto" || value === "deny" || value === "on-request";
 }
 
 /** Removes the Codex app-server binding sidecar if present. */

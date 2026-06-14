@@ -859,6 +859,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       configured: true,
       enabled: true,
       allowDestructiveActions: false,
+      destructiveApprovalMode: "deny",
       pluginPolicies: [
         {
           configKey: "google-calendar",
@@ -866,6 +867,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
+          destructiveApprovalMode: "auto",
         },
         {
           configKey: "slack",
@@ -873,9 +875,86 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "slack",
           enabled: false,
           allowDestructiveActions: false,
+          destructiveApprovalMode: "deny",
         },
       ],
     });
+  });
+
+  it("parses on-request native Codex plugin destructive policy", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "on-request",
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+            allow_destructive_actions: false,
+          },
+          gmail: {
+            marketplaceName: "openai-curated",
+            pluginName: "gmail",
+            allow_destructive_actions: true,
+          },
+        },
+      },
+    });
+
+    expect(config.codexPlugins?.allow_destructive_actions).toBe("on-request");
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "on-request",
+      pluginPolicies: [
+        {
+          configKey: "gmail",
+          marketplaceName: "openai-curated",
+          pluginName: "gmail",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "auto",
+        },
+        {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated",
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "on-request",
+        },
+        {
+          configKey: "slack",
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          enabled: true,
+          allowDestructiveActions: false,
+          destructiveApprovalMode: "deny",
+        },
+      ],
+    });
+  });
+
+  it("rejects unsupported native Codex plugin destructive policy strings", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "ask",
+        plugins: {
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+          },
+        },
+      },
+    });
+
+    expect(config.codexPlugins).toBeUndefined();
   });
 
   it("defaults native Codex plugin destructive policy to enabled", () => {
@@ -895,6 +974,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       configured: true,
       enabled: true,
       allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
       pluginPolicies: [
         {
           configKey: "slack",
@@ -902,6 +982,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "slack",
           enabled: true,
           allowDestructiveActions: true,
+          destructiveApprovalMode: "auto",
         },
       ],
     });

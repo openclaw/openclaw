@@ -23,7 +23,7 @@ export type CodexPluginConfigEntry = {
   enabled?: boolean;
   marketplaceName?: string;
   pluginName?: string;
-  allow_destructive_actions?: boolean;
+  allow_destructive_actions?: boolean | "on-request";
 };
 
 export type CodexPluginsConfigBlock = {

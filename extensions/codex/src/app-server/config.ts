@@ -67,7 +67,8 @@ export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "dange
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
-export type CodexPluginDestructivePolicy = boolean;
+export type CodexPluginDestructivePolicy = boolean | "on-request";
+export type CodexPluginDestructiveApprovalMode = "auto" | "deny" | "on-request";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -115,13 +116,15 @@ export type ResolvedCodexPluginPolicy = {
   marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
   pluginName: string;
   enabled: boolean;
-  allowDestructiveActions: CodexPluginDestructivePolicy;
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 };
 
 export type ResolvedCodexPluginsPolicy = {
   configured: boolean;
   enabled: boolean;
-  allowDestructiveActions: CodexPluginDestructivePolicy;
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
   pluginPolicies: ResolvedCodexPluginPolicy[];
 };
 
@@ -258,6 +261,7 @@ const codexAppServerApprovalPolicySchema = z.enum([
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
+const codexPluginDestructivePolicySchema = z.union([z.boolean(), z.literal("on-request")]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
     (value) => (value === null ? null : normalizeCodexServiceTier(value)),
@@ -275,14 +279,14 @@ const codexPluginEntryConfigSchema = z
     enabled: z.boolean().optional(),
     marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME).optional(),
     pluginName: z.string().trim().min(1).optional(),
-    allow_destructive_actions: z.boolean().optional(),
+    allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
   })
   .strict();
 
 const codexPluginsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    allow_destructive_actions: z.boolean().optional(),
+    allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
     plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
   })
   .strict();
@@ -380,19 +384,25 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   const config = readCodexPluginConfig(pluginConfig).codexPlugins;
   const configured = config !== undefined;
   const enabled = config?.enabled === true;
-  const allowDestructiveActions = config?.allow_destructive_actions ?? true;
+  const destructivePolicy = resolveCodexPluginDestructivePolicy(
+    config?.allow_destructive_actions ?? true,
+  );
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
       if (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME || !entry.pluginName) {
         return [];
       }
+      const entryDestructivePolicy = resolveCodexPluginDestructivePolicy(
+        entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
+      );
       return [
         {
           configKey,
           marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
-          allowDestructiveActions: entry.allow_destructive_actions ?? allowDestructiveActions,
+          allowDestructiveActions: entryDestructivePolicy.allowDestructiveActions,
+          destructiveApprovalMode: entryDestructivePolicy.destructiveApprovalMode,
         },
       ];
     })
@@ -400,8 +410,22 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   return {
     configured,
     enabled,
-    allowDestructiveActions,
+    allowDestructiveActions: destructivePolicy.allowDestructiveActions,
+    destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,
+  };
+}
+
+function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolicy): {
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
+} {
+  if (policy === "on-request") {
+    return { allowDestructiveActions: true, destructiveApprovalMode: "on-request" };
+  }
+  return {
+    allowDestructiveActions: policy,
+    destructiveApprovalMode: policy ? "auto" : "deny",
   };
 }
 

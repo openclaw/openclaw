@@ -258,12 +258,12 @@ export function readCodexPluginMigrationConfigEntry(
 
 function readExistingAllowDestructiveActions(
   config: MigrationProviderContext["config"],
-): boolean | undefined {
+): boolean | "on-request" | undefined {
   const value = readMigrationConfigPath(config as Record<string, unknown>, [
     ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
     "allow_destructive_actions",
   ]);
-  return asBoolean(value);
+  return value === "on-request" ? "on-request" : asBoolean(value);
 }
 
 export function buildCodexPluginsConfigValue(
