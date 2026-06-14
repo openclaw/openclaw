@@ -1712,6 +1712,14 @@ export function resolveSessionModelRef(
   return resolved;
 }
 
+function isGoogleGeminiCliImageCapableCandidate(candidate: string): boolean {
+  const modelId = candidate.split("/").pop() ?? candidate;
+  if (modelId === "pro" || modelId === "flash" || modelId === "flash-lite") {
+    return true;
+  }
+  return modelId.startsWith("gemini-") && /(?:^|[-.])(pro|flash)(?:[-.]|$)/u.test(modelId);
+}
+
 export async function resolveGatewayModelSupportsImages(params: {
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
   provider?: string;
@@ -1765,6 +1773,12 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
+      if (
+        normalizedProvider === "google-gemini-cli" &&
+        normalizedCandidates.some(isGoogleGeminiCliImageCapableCandidate)
+      ) {
+        return true;
+      }
       return false;
     }
     if (
@@ -1776,6 +1790,12 @@ export async function resolveGatewayModelSupportsImages(params: {
           candidate === "haiku" ||
           candidate.startsWith("claude-"),
       )
+    ) {
+      return true;
+    }
+    if (
+      normalizedProvider === "google-gemini-cli" &&
+      normalizedCandidates.some(isGoogleGeminiCliImageCapableCandidate)
     ) {
       return true;
     }
