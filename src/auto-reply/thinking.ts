@@ -60,6 +60,10 @@ type ResolvedThinkingProfile = {
   defaultLevel?: ThinkLevel | null;
 };
 
+function isFixedBudgetThinkingLevel(level: ThinkLevel): boolean {
+  return level === "minimal" || level === "low" || level === "medium" || level === "high";
+}
+
 function buildCatalogModelKey(provider: string, model: string): string {
   const providerId = provider.trim();
   const modelId = model.trim();
@@ -376,9 +380,10 @@ function resolveSupportedThinkingLevelFromProfile(
     return level;
   }
   const requestedRank = THINKING_LEVEL_RANKS[level];
-  // `adaptive` is a provider strategy, not a budget fallback for medium/high requests.
+  // `adaptive` is a provider strategy, not a fixed-budget fallback.
+  // Effort-style xhigh/max still clamp to the strongest supported non-off level.
   const ranked = profile.levels
-    .filter((entry) => level === "adaptive" || entry.id !== "adaptive")
+    .filter((entry) => !isFixedBudgetThinkingLevel(level) || entry.id !== "adaptive")
     .toSorted((a, b) => b.rank - a.rank);
   return (
     ranked.find((entry) => entry.id !== "off" && entry.rank <= requestedRank)?.id ??

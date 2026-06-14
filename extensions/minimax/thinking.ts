@@ -2,14 +2,14 @@
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 
 const BUDGET_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
-const M3_THINKING_LEVELS = [...BUDGET_THINKING_LEVELS, "adaptive"] as const;
+const ADAPTIVE_THINKING_LEVELS = ["off", "adaptive"] as const;
 
 export function resolveMinimaxThinkingProfile(
   modelId: string,
 ): ProviderThinkingProfile | undefined {
   if (/^MiniMax-M3(\b|[-.])/i.test(modelId)) {
     return {
-      levels: M3_THINKING_LEVELS.map((id) => ({ id })),
+      levels: ADAPTIVE_THINKING_LEVELS.map((id) => ({ id })),
       defaultLevel: "adaptive",
     };
   }

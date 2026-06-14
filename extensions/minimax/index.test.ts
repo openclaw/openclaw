@@ -81,14 +81,7 @@ describe("minimax provider hooks", () => {
     const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
 
     expect(apiProvider.resolveThinkingProfile?.({ modelId: "MiniMax-M3" } as never)).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "adaptive" },
-      ],
+      levels: [{ id: "off" }, { id: "adaptive" }],
       defaultLevel: "adaptive",
     });
     expect(apiProvider.resolveThinkingProfile?.({ modelId: "MiniMax-M2.7" } as never)).toEqual({
@@ -96,14 +89,7 @@ describe("minimax provider hooks", () => {
       defaultLevel: "off",
     });
     expect(portalProvider.resolveThinkingProfile?.({ modelId: "MiniMax-M3" } as never)).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "adaptive" },
-      ],
+      levels: [{ id: "off" }, { id: "adaptive" }],
       defaultLevel: "adaptive",
     });
   });

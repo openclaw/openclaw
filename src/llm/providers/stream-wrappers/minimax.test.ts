@@ -145,32 +145,7 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
     expect(capturedThinking).toEqual({ type: "disabled" });
   });
 
-  it("preserves explicit budget thinking for MiniMax-M3", () => {
-    let capturedThinking: unknown = undefined;
-    const baseStreamFn: StreamFn = (model, context, options) => {
-      const payload: Record<string, unknown> = {
-        thinking: { type: "enabled", budget_tokens: 1024 },
-      };
-      options?.onPayload?.(payload, model);
-      capturedThinking = payload.thinking;
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn, "medium");
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M3",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(capturedThinking).toEqual({ type: "enabled", budget_tokens: 1024 });
-  });
-
-  it("rewrites explicit MiniMax-M3 adaptive thinking to adaptive", () => {
+  it("rewrites MiniMax-M3 default budget thinking to adaptive", () => {
     let capturedThinking: unknown = undefined;
     const baseStreamFn: StreamFn = (model, context, options) => {
       const payload: Record<string, unknown> = {

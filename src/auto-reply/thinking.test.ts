@@ -647,7 +647,7 @@ describe("listThinkingLevels", () => {
     ).toBe("high");
   });
 
-  it("does not use adaptive as a fallback for budget requests", () => {
+  it("does not use adaptive as a fallback for fixed budget requests", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
       ({ provider, context }) =>
         provider === "demo" && context.modelId === "adaptive-only"
@@ -665,6 +665,27 @@ describe("listThinkingLevels", () => {
         level: "medium",
       }),
     ).toBe("off");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "demo",
+        model: "adaptive-only",
+        level: "high",
+      }),
+    ).toBe("off");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "demo",
+        model: "adaptive-only",
+        level: "xhigh",
+      }),
+    ).toBe("adaptive");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "demo",
+        model: "adaptive-only",
+        level: "max",
+      }),
+    ).toBe("adaptive");
     expect(
       resolveSupportedThinkingLevel({
         provider: "demo",
