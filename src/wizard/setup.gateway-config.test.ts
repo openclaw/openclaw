@@ -172,7 +172,7 @@ describe("configureGatewayForSetup", () => {
     }
   });
 
-  it("enables insecure local control ui auth for fresh quickstart loopback setups", async () => {
+  it("keeps insecure local control ui auth disabled for fresh quickstart loopback setups", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
 
     const result = await runGatewayConfig({
@@ -180,7 +180,7 @@ describe("configureGatewayForSetup", () => {
       textQueue: [],
     });
 
-    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
+    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).not.toBe(true);
   });
 
   it("preserves explicit control ui auth policy in quickstart", async () => {
@@ -201,7 +201,25 @@ describe("configureGatewayForSetup", () => {
     expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(false);
   });
 
-  it("enables insecure local control ui auth when quickstart reuses an existing loopback config", async () => {
+  it("preserves explicit insecure local control ui auth opt-in in quickstart", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const result = await runGatewayConfig({
+      flow: "quickstart",
+      textQueue: [],
+      nextConfig: {
+        gateway: {
+          controlUi: {
+            allowInsecureAuth: true,
+          },
+        },
+      },
+    });
+
+    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
+  });
+
+  it("keeps insecure local control ui auth disabled when quickstart reuses an existing loopback config", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
     const prompter = createPrompter({
       selectQueue: [],
@@ -227,7 +245,7 @@ describe("configureGatewayForSetup", () => {
       runtime,
     });
 
-    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
+    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).not.toBe(true);
   });
 
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
