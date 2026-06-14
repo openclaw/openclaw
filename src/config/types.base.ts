@@ -276,6 +276,11 @@ export type SessionMaintenanceConfig = {
    * Default: 80% of maxDiskBytes.
    */
   highWaterBytes?: number | string;
+  /**
+   * Session keys that should never be pruned (e.g., ["agent:ceo:main"]).
+   * Supports exact key matches only. Merged with runtime preserve sets.
+   */
+  preserveKeys?: string[];
 };
 
 export type LoggingConfig = {
