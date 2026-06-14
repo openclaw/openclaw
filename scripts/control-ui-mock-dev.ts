@@ -299,32 +299,6 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
     },
   ];
   const sessionWorkspaceRoot = repoRoot;
-  const browserFiles = [
-    {
-      kind: "read",
-      missing: false,
-      name: "package.json",
-      path: "package.json",
-      size: 92750,
-      updatedAtMs: baseTime - 800_000,
-    },
-    {
-      kind: "read",
-      missing: false,
-      name: "vite.config.ts",
-      path: "ui/vite.config.ts",
-      size: 9860,
-      updatedAtMs: baseTime - 900_000,
-    },
-    {
-      kind: "modified",
-      missing: false,
-      name: "chat-flow.e2e.test.ts",
-      path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
-      size: 24950,
-      updatedAtMs: baseTime - 25_000,
-    },
-  ];
   const sessionFileContentByPath = new Map([
     [
       "ui/src/ui/views/chat.ts",

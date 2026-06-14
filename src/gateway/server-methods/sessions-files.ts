@@ -9,7 +9,6 @@ import {
   type SessionFileEntry,
   type SessionFileRelevance,
   type SessionsFilesGetParams,
-  type SessionsFilesListParams,
   validateSessionsFilesGetParams,
   validateSessionsFilesListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -457,7 +456,7 @@ async function toBrowserEntry(
 function sortBrowserEntries(
   entries: readonly SessionFileBrowserEntry[],
 ): SessionFileBrowserEntry[] {
-  return [...entries].sort((a, b) => {
+  return entries.toSorted((a, b) => {
     if (a.kind !== b.kind) {
       return a.kind === "directory" ? -1 : 1;
     }
@@ -466,7 +465,7 @@ function sortBrowserEntries(
 }
 
 function sortDirents<T extends { name: string }>(dirents: readonly T[]): T[] {
-  return [...dirents].sort((a, b) => a.name.localeCompare(b.name));
+  return dirents.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 function matchesSearch(entryPath: string, name: string, query: string): boolean {
@@ -615,7 +614,7 @@ async function loadSessionFiles(params: {
   return {
     root,
     fileRoot,
-    files: [...files.values()].sort((a, b) => {
+    files: [...files.values()].toSorted((a, b) => {
       if (a.kind !== b.kind) {
         return a.kind === "modified" ? -1 : 1;
       }
@@ -663,13 +662,13 @@ async function findSessionFile(
   }
   const resolved = resolveWorkspacePath(loaded.root, params.path);
   if (!resolved || !loaded.root) {
-    return { ...(loaded.root ? { root: loaded.root } : {}) };
+    return loaded.root ? { root: loaded.root } : {};
   }
   const relevance = buildSessionRelevanceMap(loaded.files, loaded.root, loaded.fileRoot);
   const browserPath = toDisplayPath(loaded.root, resolved);
   const sessionKind = relevance.get(browserPath);
   if (!sessionKind) {
-    return { ...(loaded.root ? { root: loaded.root } : {}) };
+    return loaded.root ? { root: loaded.root } : {};
   }
   const touched: TouchedFile = {
     path: browserPath,
@@ -711,7 +710,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const result = await buildListResult(params as SessionsFilesListParams);
+    const result = await buildListResult(params);
     respond(true, {
       sessionKey: params.sessionKey,
       ...result,
