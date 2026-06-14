@@ -3453,7 +3453,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       if (rawMessage) {
         const userEchoEntry = entry ?? loadSessionEntry(sessionKey, sessionLoadOptions).entry;
         if (userEchoEntry?.echoTargets?.length) {
-          fireEchoDeliveries(
+          void fireEchoDeliveries(
             {
               cfg,
               sessionKey,
@@ -4429,7 +4429,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     const echoEntry =
                       entry ?? loadSessionEntry(sessionKey, sessionLoadOptions).entry;
                     if (echoEntry?.echoTargets?.length) {
-                      fireEchoDeliveries(
+                      void fireEchoDeliveries(
                         {
                           cfg,
                           sessionKey,
@@ -4782,7 +4782,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       const echoEntry =
                         entry ?? loadSessionEntry(sessionKey, sessionLoadOptions).entry;
                       if (echoEntry?.echoTargets?.length) {
-                        fireEchoDeliveries(
+                        void fireEchoDeliveries(
                           {
                             cfg,
                             sessionKey,

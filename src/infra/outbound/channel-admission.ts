@@ -13,8 +13,15 @@ export type EchoAdmissionTarget = {
   threadId?: string | number;
 };
 
-/** Returns false when an echo delivery to this target is currently not allowed. */
-export type ChannelEchoAdmission = (cfg: OpenClawConfig, target: EchoAdmissionTarget) => boolean;
+/**
+ * Returns false when an echo delivery to this target is currently not allowed.
+ * May be async — telegram re-checks DM pairing/allowlist authorization, which is
+ * resolved through the ingress resolver.
+ */
+export type ChannelEchoAdmission = (
+  cfg: OpenClawConfig,
+  target: EchoAdmissionTarget,
+) => boolean | Promise<boolean>;
 
 const admissions = new Map<string, Map<string, ChannelEchoAdmission>>();
 
@@ -77,11 +84,11 @@ function resolveChannelEchoAdmission(
  * for the target's account, deny (never echo through an unverified account).
  * Channels with no predicate registered deliver as before (return true).
  */
-export function isEchoTargetAdmissible(
+export async function isEchoTargetAdmissible(
   cfg: OpenClawConfig,
   channel: string,
   target: EchoAdmissionTarget,
-): boolean {
+): Promise<boolean> {
   const byAccount = admissions.get(channel);
   if (!byAccount || byAccount.size === 0) {
     return true;
@@ -90,7 +97,7 @@ export function isEchoTargetAdmissible(
   if (!admission) {
     return false;
   }
-  return admission(cfg, target);
+  return await admission(cfg, target);
 }
 
 export function resetChannelEchoAdmissionForTest(): void {

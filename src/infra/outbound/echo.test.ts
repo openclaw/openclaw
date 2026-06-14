@@ -259,7 +259,7 @@ describe("fireEchoDeliveries", () => {
     resetChannelEchoAdmissionForTest();
   });
 
-  it("suppresses echo delivery to a target whose channel reports it inadmissible (revocation)", () => {
+  it("suppresses echo delivery to a target whose channel reports it inadmissible (revocation)", async () => {
     // The channel-agnostic echo send bypasses the channel's own inbound admission
     // gate, so a disabled (revoked) destination would still receive echoes. The
     // admission predicate makes the echo path honor live enablement: fail closed.
@@ -267,7 +267,7 @@ describe("fireEchoDeliveries", () => {
     const entry = makeEntry([
       makeTarget({ channel: "telegram", to: "telegram:-100", accountId: "default", threadId: 1 }),
     ]);
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -282,12 +282,12 @@ describe("fireEchoDeliveries", () => {
     expect(mockDeliver).not.toHaveBeenCalled();
   });
 
-  it("delivers when the channel predicate admits the target", () => {
+  it("delivers when the channel predicate admits the target", async () => {
     registerChannelEchoAdmission("telegram", "default", () => true);
     const entry = makeEntry([
       makeTarget({ channel: "telegram", to: "telegram:-100", accountId: "default", threadId: 1 }),
     ]);
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -301,9 +301,9 @@ describe("fireEchoDeliveries", () => {
     expect(mockDeliver).toHaveBeenCalledOnce();
   });
 
-  it("never passes session or mirror to deliver (loop-safety contract)", () => {
+  it("never passes session or mirror to deliver (loop-safety contract)", async () => {
     const entry = makeEntry([makeTarget({ channel: "discord", to: "999" })]);
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -334,11 +334,11 @@ describe("fireEchoDeliveries", () => {
     expect(callArgs).toHaveProperty("silent", true);
   });
 
-  it("delivers assistant echo natively (no prefix) when prefixed:false", () => {
+  it("delivers assistant echo natively (no prefix) when prefixed:false", async () => {
     // Production path: handleMessageSent passes { prefixed: false } so the response
     // mirrors to pinned channels as a native reply, not a marked "[echo]" message.
     const entry = makeEntry([makeTarget({ channel: "discord", to: "999" })]);
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -356,11 +356,11 @@ describe("fireEchoDeliveries", () => {
     expect(payloads[0].text).toBe("hello");
   });
 
-  it("still prefixes assistant echo with [echo] when prefixed is not disabled", () => {
+  it("still prefixes assistant echo with [echo] when prefixed is not disabled", async () => {
     // Default API behavior (no options) keeps the legacy "[echo]" marker; only the
     // message:sent hook opts out via { prefixed: false }.
     const entry = makeEntry([makeTarget({ channel: "discord", to: "999" })]);
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -377,9 +377,9 @@ describe("fireEchoDeliveries", () => {
     expect(payloads[0].text).toMatch(/\[echo\] hello$/);
   });
 
-  it("prefixes user echo payload with [via <channel>]", () => {
+  it("prefixes user echo payload with [via <channel>]", async () => {
     const entry = makeEntry([makeTarget({ channel: "discord", to: "999" })]);
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -396,11 +396,11 @@ describe("fireEchoDeliveries", () => {
     expect(payloads[0].text).toMatch(/\[via telegram\] hi there$/);
   });
 
-  it("prefixes text payloads and preserves non-text payloads in mixed array", () => {
+  it("prefixes text payloads and preserves non-text payloads in mixed array", async () => {
     const entry = makeEntry([makeTarget({ channel: "discord", to: "999" })]);
     const textPayload = { text: "hello" } as ReplyPayload;
     const mediaPayload = { media: "image.png" } as unknown as ReplyPayload;
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -419,12 +419,12 @@ describe("fireEchoDeliveries", () => {
     expect(payloads[1]).toEqual(mediaPayload);
   });
 
-  it("delivers to each resolved target independently", () => {
+  it("delivers to each resolved target independently", async () => {
     const entry = makeEntry([
       makeTarget({ channel: "discord", to: "111" }),
       makeTarget({ channel: "slack", to: "222" }),
     ]);
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -442,9 +442,9 @@ describe("fireEchoDeliveries", () => {
     expect(channels).toContain("slack");
   });
 
-  it("does not deliver when all targets are self-excluded", () => {
+  it("does not deliver when all targets are self-excluded", async () => {
     const entry = makeEntry([makeTarget({ channel: "telegram", to: "123" })]);
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -461,9 +461,9 @@ describe("fireEchoDeliveries", () => {
     expect(mockDeliver).not.toHaveBeenCalled();
   });
 
-  it("does not deliver when entry has no echo targets", () => {
+  it("does not deliver when entry has no echo targets", async () => {
     const entry = makeEntry([]);
-    fireEchoDeliveries(
+    await fireEchoDeliveries(
       {
         cfg: fakeCfg,
         sessionKey: "agent:main",
@@ -478,11 +478,11 @@ describe("fireEchoDeliveries", () => {
     expect(mockDeliver).not.toHaveBeenCalled();
   });
 
-  it("swallows delivery errors without propagating", () => {
+  it("swallows delivery errors without propagating", async () => {
     mockDeliver.mockRejectedValue(new Error("transport down"));
     const entry = makeEntry([makeTarget({ channel: "discord", to: "999" })]);
 
-    expect(() => {
+    await expect(
       fireEchoDeliveries(
         {
           cfg: fakeCfg,
@@ -493,8 +493,8 @@ describe("fireEchoDeliveries", () => {
           role: "assistant",
         },
         [{ text: "hello" }],
-      );
-    }).not.toThrow();
+      ),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -506,7 +506,7 @@ describe("targetMatchesSessionParticipant (no arbitrary chat ids)", () => {
     lastThreadId: "77",
   } as unknown as SessionEntry;
 
-  it("accepts the session's own bound participant identity", () => {
+  it("accepts the session's own bound participant identity", async () => {
     expect(
       targetMatchesSessionParticipant(boundEntry, {
         channel: "telegram",
@@ -517,7 +517,7 @@ describe("targetMatchesSessionParticipant (no arbitrary chat ids)", () => {
     ).toBe(true);
   });
 
-  it("rejects a different channel / chat id / thread (arbitrary target)", () => {
+  it("rejects a different channel / chat id / thread (arbitrary target)", async () => {
     expect(targetMatchesSessionParticipant(boundEntry, { channel: "discord", to: "999" })).toBe(
       false,
     );
@@ -539,7 +539,7 @@ describe("targetMatchesSessionParticipant (no arbitrary chat ids)", () => {
     ).toBe(false);
   });
 
-  it("fails closed when the session has no known participant", () => {
+  it("fails closed when the session has no known participant", async () => {
     expect(
       targetMatchesSessionParticipant({} as SessionEntry, { channel: "telegram", to: "12345" }),
     ).toBe(false);

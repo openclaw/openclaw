@@ -120,7 +120,7 @@ function prefixPayloads(payloads: ReplyPayload[], prefix: string): ReplyPayload[
 // (deliver.ts:1003). If that hook fires for echo deliveries, echo-hook.ts
 // re-enters fireEchoDeliveries -> infinite loop. Omitting session/mirror
 // keeps canEmitInternalHook=false and breaks the cycle.
-export function fireEchoDeliveries(
+export async function fireEchoDeliveries(
   ctx: EchoDeliveryContext,
   payloads: ReplyPayload[],
   options?: {
@@ -133,7 +133,7 @@ export function fireEchoDeliveries(
      */
     filterTargets?: (target: SessionEchoTarget) => boolean;
   },
-): void {
+): Promise<void> {
   const resolvedTargets = resolveEchoTargets(ctx.sessionEntry, {
     originChannel: ctx.originChannel,
     originTo: ctx.originTo,
@@ -145,18 +145,30 @@ export function fireEchoDeliveries(
     ? resolvedTargets.filter(options.filterTargets)
     : resolvedTargets;
 
-  // Honor the destination channel's live enablement. The echo path delivers via
-  // the channel-agnostic raw send (no per-message admission gate), so a disabled
-  // (revoked) group/topic would keep receiving echoes unless we check here. Fail
-  // closed: drop targets a registered channel predicate reports as inadmissible.
-  const targets = filteredTargets.filter((target) => {
-    if (
+  // Honor the destination channel's live enablement/authorization. The echo path
+  // delivers via the channel-agnostic raw send (no per-message admission gate), so
+  // a disabled (revoked) group/topic — or a DM whose pairing/allowlist access was
+  // revoked — would keep receiving echoes unless we check here. The predicate may
+  // be async (telegram re-checks DM access). Fail closed: drop targets a registered
+  // channel predicate reports as inadmissible.
+  const admissions = await Promise.all(
+    filteredTargets.map((target) =>
       isEchoTargetAdmissible(ctx.cfg, target.channel, {
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-      })
-    ) {
+      }).catch((err: unknown) => {
+        // Fail closed on a predicate error: do not echo to a target we could not
+        // verify, and never reject the (fire-and-forget) echo as a whole.
+        log.warn(
+          `Echo admission check failed for ${target.channel}:${target.to}: ${formatErrorMessage(err)}`,
+        );
+        return false;
+      }),
+    ),
+  );
+  const targets = filteredTargets.filter((target, index) => {
+    if (admissions[index]) {
       return true;
     }
     log.warn(

@@ -30,9 +30,11 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
+import { resolveTelegramDmAllow } from "./access-groups.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
+import { isTelegramDmAccessAllowed } from "./dm-access.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   getTelegramSpooledReplayDeferredParticipant,
@@ -439,7 +441,7 @@ export function createTelegramBotCore(
   // (`groups[id].enabled` / topic `enabled`), direct chats (resolveTelegram-
   // GroupConfig returns the direct config for a positive chat id, so its
   // `enabled: false` is caught here), and a DM policy later set to `disabled`.
-  registerChannelEchoAdmission("telegram", account.accountId, (_cfg, target) => {
+  registerChannelEchoAdmission("telegram", account.accountId, async (cfgForAdmission, target) => {
     const raw = target.to
       .replace(/^(telegram|tg):/i, "")
       .replace(/^group:/i, "")
@@ -456,11 +458,34 @@ export function createTelegramBotCore(
     if (topicConfig?.enabled === false) {
       return false;
     }
-    // A pinned direct chat (positive id) whose DM policy is later disabled must
-    // also stop receiving echoes — read the live account config, not the snapshot.
+    // A pinned direct chat (positive id) must re-pass live DM authorization, so a
+    // DM whose access is later revoked (policy disabled, pairing dropped, removed
+    // from the allowlist) stops receiving echoes. The chat id IS the DM user's id,
+    // so it doubles as the sender for the access decision.
     if (typeof chatId === "number" && chatId > 0) {
-      const liveDmPolicy = loadFreshTelegramAccountConfig().dmPolicy ?? dmPolicy;
+      const liveCfg = loadFreshTelegramAccountConfig();
+      const liveDmPolicy = liveCfg.dmPolicy ?? dmPolicy;
       if (liveDmPolicy === "disabled") {
+        return false;
+      }
+      const dmAllow = await resolveTelegramDmAllow({
+        cfg: cfgForAdmission,
+        allowFrom: liveCfg.allowFrom ?? allowFrom,
+        dmPolicy: liveDmPolicy,
+        accountId: account.accountId,
+        senderId: String(chatId),
+      });
+      const allowed = await isTelegramDmAccessAllowed({
+        dmPolicy: liveDmPolicy,
+        msg: {
+          from: { id: chatId, is_bot: false, first_name: "echo-target" },
+          chat: { id: chatId, type: "private" },
+        } as never,
+        chatId,
+        effectiveDmAllow: dmAllow.effectiveAllow,
+        accountId: account.accountId,
+      });
+      if (!allowed) {
         return false;
       }
     }

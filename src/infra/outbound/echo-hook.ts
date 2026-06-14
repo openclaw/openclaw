@@ -70,7 +70,7 @@ async function handleMessageSent(event: InternalHookEvent): Promise<void> {
   }
 
   const sessionKey = event.sessionKey;
-  fireEchoDeliveries(
+  void fireEchoDeliveries(
     {
       cfg: resolved.cfg,
       sessionKey,
@@ -122,7 +122,7 @@ async function handleMessageReceived(event: InternalHookEvent): Promise<void> {
     return;
   }
 
-  fireEchoDeliveries(
+  void fireEchoDeliveries(
     {
       cfg: resolved.cfg,
       sessionKey: event.sessionKey,

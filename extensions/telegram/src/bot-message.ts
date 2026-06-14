@@ -282,7 +282,16 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         type: chatType,
         ...(chatType === "supergroup" ? { is_forum: threadId != null } : {}),
       },
-      from: { id: 0, is_bot: false, first_name: "mirror" },
+      // For a DM the chat id IS the target user's id; use it as the synthetic
+      // sender so the DM access gate evaluates the REAL pinned participant
+      // (an authorized/paired DM passes; a revoked one is denied → suppressed).
+      // A synthetic sender of 0 would falsely reject every paired/allowlisted DM.
+      // Groups skip the per-message sender gate, so 0 is fine there.
+      from: {
+        id: chatType === "private" && Number.isFinite(numericChatId) ? numericChatId : 0,
+        is_bot: false,
+        first_name: "mirror",
+      },
       // Minimal non-empty body: the body is never used (replyResolver supplies the
       // reply from the bus) but the inbound pipeline drops empty messages.
       text: "·",
