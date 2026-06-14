@@ -1527,6 +1527,24 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("passes safety timeout cancellation reason into native compaction abort", async () => {
+    const safetyTimeoutModule = await import("./compaction-safety-timeout.js");
+    const timeoutReason = new Error("Compaction timed out");
+    timeoutReason.name = "CompactionTimeoutError";
+    vi.mocked(safetyTimeoutModule.compactWithSafetyTimeout).mockImplementationOnce(
+      async (compact, _timeoutMs, opts) => {
+        (opts?.onCancel as ((reason: unknown) => void) | undefined)?.(timeoutReason);
+        return await compact(undefined);
+      },
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("summary");
+    expect(sessionAbortCompactionMock).toHaveBeenCalledWith(timeoutReason);
+  });
+
   it("aborts in-flight compaction when the caller abort signal fires", async () => {
     const { compactWithSafetyTimeout } = await vi.importActual<
       typeof import("./compaction-safety-timeout.js")

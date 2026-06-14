@@ -5,6 +5,7 @@ import {
   compactContextEngineWithSafetyTimeout,
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
+  isCompactionTimeoutResultAccepted,
   resolveCompactionTimeoutMs,
 } from "./embedded-agent-runner/compaction-safety-timeout.js";
 
@@ -45,6 +46,101 @@ describe("compactWithSafetyTimeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("preserves cooperative partial progress produced by timeout cancellation", async () => {
+    vi.useFakeTimers();
+    const compactPromise = compactWithSafetyTimeout(
+      (signal) =>
+        new Promise<string>((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              queueMicrotask(() => resolve("partial summary after chunk 1"));
+            },
+            { once: true },
+          );
+        }),
+      30,
+    );
+    const assertion = expect(compactPromise).resolves.toBe("partial summary after chunk 1");
+
+    await vi.advanceTimersByTimeAsync(30);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps timeout acceptance alive through the native commit continuation", async () => {
+    vi.useFakeTimers();
+    let timeoutReason: unknown;
+    let outcome:
+      | { status: "pending" }
+      | { status: "resolved"; value: string }
+      | { status: "rejected"; message: string } = { status: "pending" };
+    const compactPromise = compactWithSafetyTimeout(async (signal) => {
+      const compactResult = await new Promise<string>((resolve) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            timeoutReason = signal.reason;
+            queueMicrotask(() => resolve("native partial summary ready"));
+          },
+          { once: true },
+        );
+      });
+
+      if (signal?.aborted && !isCompactionTimeoutResultAccepted(signal.reason)) {
+        return "native result dropped as aborted";
+      }
+      return compactResult;
+    }, 30);
+    compactPromise.then(
+      (value) => {
+        outcome = { status: "resolved", value };
+      },
+      (error: unknown) => {
+        outcome = { status: "rejected", message: (error as Error).message };
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(30);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(outcome).toEqual({
+      status: "resolved",
+      value: "native partial summary ready",
+    });
+    expect(isCompactionTimeoutResultAccepted(timeoutReason)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("expires timeout-result acceptance after the safety wrapper rejects", async () => {
+    vi.useFakeTimers();
+    let timeoutReason: unknown;
+    const compactPromise = compactWithSafetyTimeout(
+      (signal) =>
+        new Promise<string>((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              timeoutReason = signal.reason;
+              setTimeout(() => resolve("late partial summary"), 1);
+            },
+            { once: true },
+          );
+        }),
+      30,
+    );
+    const assertion = expect(compactPromise).rejects.toThrow("Compaction timed out");
+
+    await vi.advanceTimersByTimeAsync(30);
+    await assertion;
+    expect(isCompactionTimeoutResultAccepted(timeoutReason)).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("preserves compaction errors and clears timer", async () => {
     vi.useFakeTimers();
     const error = new Error("provider exploded");
@@ -57,7 +153,7 @@ describe("compactWithSafetyTimeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("calls onCancel when compaction times out", async () => {
+  it("passes the timeout reason to onCancel when compaction times out", async () => {
     vi.useFakeTimers();
     const onCancel = vi.fn();
 
@@ -69,6 +165,11 @@ describe("compactWithSafetyTimeout", () => {
     await vi.advanceTimersByTimeAsync(30);
     await timeoutAssertion;
     expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onCancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(onCancel.mock.calls[0]?.[0]).toMatchObject({
+      name: "CompactionTimeoutError",
+      message: "Compaction timed out",
+    });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -89,6 +190,7 @@ describe("compactWithSafetyTimeout", () => {
     controller.abort(reason);
     await abortAssertion;
     expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledWith(reason);
     expect(vi.getTimerCount()).toBe(0);
   });
 

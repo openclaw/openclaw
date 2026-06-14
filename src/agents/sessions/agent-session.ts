@@ -32,6 +32,7 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isContextOverflow } from "../../llm/utils/overflow.js";
+import { isCompactionTimeoutResultAccepted } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import type {
   Agent,
   AgentEvent,
@@ -302,6 +303,10 @@ type CompactionWorkOutcome =
 
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+
+function isCompactionTimeoutAbortReason(reason: unknown): boolean {
+  return isCompactionTimeoutResultAccepted(reason);
+}
 
 // ============================================================================
 // AgentSession Class
@@ -1834,9 +1839,9 @@ export class AgentSession {
   /**
    * Cancel in-progress compaction (manual or auto).
    */
-  abortCompaction(): void {
-    this.compactionAbortController?.abort();
-    this.autoCompactionAbortController?.abort();
+  abortCompaction(reason?: unknown): void {
+    this.compactionAbortController?.abort(reason);
+    this.autoCompactionAbortController?.abort(reason);
   }
 
   /**
@@ -1933,7 +1938,7 @@ export class AgentSession {
       ),
     );
 
-    if (options.signal.aborted) {
+    if (options.signal.aborted && !isCompactionTimeoutAbortReason(options.signal.reason)) {
       return { status: "aborted" };
     }
 
