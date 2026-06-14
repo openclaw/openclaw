@@ -1,7 +1,7 @@
 // Command queue tests cover bounded command execution and queue ordering.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, STARVATION_PROMOTION_MS } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -872,6 +872,76 @@ describe("command queue", () => {
     } finally {
       blocker.resolve();
       commandQueueA.resetAllLanes();
+    }
+  });
+
+  it("preserves foreground priority over aged background work", async () => {
+    vi.useFakeTimers();
+    try {
+      const { task: _blocker, release } = enqueueBlockedMainTask();
+      const calls: string[] = [];
+
+      // Enqueue a background task while the blocker is active
+      const bgTask = enqueueCommand(
+        async () => {
+          calls.push("background");
+        },
+        { priority: "background" },
+      );
+
+      // Advance time past the starvation threshold
+      vi.advanceTimersByTime(STARVATION_PROMOTION_MS + 1);
+
+      // Now enqueue a foreground task — fresh foreground always beats
+      // aged background because promotion lifts by one tier, not to infinity
+      const fgTask = enqueueCommand(
+        async () => {
+          calls.push("foreground");
+        },
+        { priority: "foreground" },
+      );
+
+      release();
+      await Promise.all([bgTask, fgTask]);
+
+      // Foreground always wins over background, even when background is aged
+      expect(calls).toEqual(["foreground", "background"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("promotes aged background above fresh background (starvation guard)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { task: _blocker, release } = enqueueBlockedMainTask();
+      const calls: string[] = [];
+
+      // Enqueue a background task and let it age past the threshold
+      const agedBg = enqueueCommand(
+        async () => {
+          calls.push("aged-bg");
+        },
+        { priority: "background" },
+      );
+
+      vi.advanceTimersByTime(STARVATION_PROMOTION_MS + 1);
+
+      // Enqueue a fresh background task — same static priority but not aged
+      const freshBg = enqueueCommand(
+        async () => {
+          calls.push("fresh-bg");
+        },
+        { priority: "background" },
+      );
+
+      release();
+      await Promise.all([agedBg, freshBg]);
+
+      // Aged background promotes to normal tier, beating fresh background
+      expect(calls).toEqual(["aged-bg", "fresh-bg"]);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
