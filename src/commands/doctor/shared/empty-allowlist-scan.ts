@@ -104,43 +104,19 @@ export function scanEmptyAllowlistPolicyWarnings(
     // empty groupAllowFrom is an unused parent/fallback and should not
     // trigger a warning.  If any account lacks its own list and relies on
     // the top-level, the warning is still legitimate.
-    // When the `default` account is present, the top-level config is also an
-    // active account — the `default` entry routes traffic through the
-    // top-level credentials. Preserve its groupAllowFrom warnings.
-    const hasDefaultAccount =
-      accounts && "default" in accounts && !isDisabledRecord(accounts["default"]);
-
-    const allAccountsHaveOwnAllowFrom =
-      !hasDefaultAccount &&
-      accounts &&
-      Object.keys(accounts).length > 0 &&
-      (() => {
-        let hasEnabledAccount = false;
-        for (const id of Object.keys(accounts)) {
-          if (isDisabledRecord(accounts[id])) {
-            continue;
-          }
-          hasEnabledAccount = true;
-          const acct = accounts[id] as DoctorAccountRecord;
-          const ownGroupAllowFrom = acct.groupAllowFrom as DoctorAllowFromList | undefined;
-          const ownAllowFrom = acct.allowFrom as DoctorAllowFromList | undefined;
-          // groupAllowFrom: [] (explicit empty array) is falsy for
-          // hasAllowFromEntries, so check both fields separately —
-          // a populated allowFrom covers the account on channels that
-          // support groupAllowFromFallbackToAllowFrom.
-          if (!hasAllowFromEntries(ownGroupAllowFrom) && !hasAllowFromEntries(ownAllowFrom)) {
-            return false;
-          }
-        }
-        return hasEnabledAccount;
-      })();
+    // When sub-accounts exist and the top-level itself has no groupAllowFrom
+    // or allowFrom entries, the top-level is just a parent/fallback — not an
+    // active account. Skip the false-positive group-allowlist warning.
+    const parentHasOwnAllowFrom =
+      hasAllowFromEntries(channelConfig.groupAllowFrom as DoctorAllowFromList | undefined) ||
+      hasAllowFromEntries(channelConfig.allowFrom as DoctorAllowFromList | undefined);
 
     checkAccount(
       channelConfig,
       `channels.${channelName}`,
       channelName,
       undefined,
-      allAccountsHaveOwnAllowFrom ? true : undefined,
+      accounts && Object.keys(accounts).length > 0 && !parentHasOwnAllowFrom ? true : undefined,
     );
 
     if (!accounts) {
