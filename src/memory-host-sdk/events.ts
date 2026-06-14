@@ -21,6 +21,23 @@ export type MemoryHostRecallRecordedEvent = {
   }>;
 };
 
+/** Event emitted when recall hits are visible but excluded from short-term promotion. */
+export type MemoryHostRecallSkippedEvent = {
+  type: "memory.recall.skipped";
+  timestamp: string;
+  query: string;
+  reason: "non-short-term-memory-path";
+  eligibleResultCount: number;
+  skippedResultCount: number;
+  results: Array<{
+    path: string;
+    startLine: number;
+    endLine: number;
+    score: number;
+    reason: "non-short-term-memory-path";
+  }>;
+};
+
 /** Event emitted when deep-dream candidates are promoted into durable memory. */
 export type MemoryHostPromotionAppliedEvent = {
   type: "memory.promotion.applied";
@@ -51,6 +68,7 @@ export type MemoryHostDreamCompletedEvent = {
 /** Append-only memory host event schema stored as JSONL. */
 export type MemoryHostEvent =
   | MemoryHostRecallRecordedEvent
+  | MemoryHostRecallSkippedEvent
   | MemoryHostPromotionAppliedEvent
   | MemoryHostDreamCompletedEvent;
 
