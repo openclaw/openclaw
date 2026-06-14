@@ -900,6 +900,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   failure_alert_after INTEGER,
   failure_alert_channel TEXT,
   failure_alert_to TEXT,
+  failure_alert_thread_id TEXT,
   failure_alert_cooldown_ms INTEGER,
   failure_alert_include_skipped INTEGER,
   failure_alert_mode TEXT,

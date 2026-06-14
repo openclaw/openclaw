@@ -262,6 +262,7 @@ export interface CronJobs {
   failure_alert_disabled: number | null;
   failure_alert_include_skipped: number | null;
   failure_alert_mode: string | null;
+  failure_alert_thread_id: string | null;
   failure_alert_to: string | null;
   failure_delivery_account_id: string | null;
   failure_delivery_channel: string | null;

@@ -1355,6 +1355,7 @@ One-shot jobs stay enabled until retry attempts are exhausted, then disable whil
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
 - `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.
+- Per-job `failureAlert.threadId` is set on the cron job, not in global `cron.failureAlert`. Announce alerts use it for chat threads/topics; webhook alerts do not.
 
 ### `cron.failureDestination`
 

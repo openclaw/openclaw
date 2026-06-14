@@ -218,7 +218,7 @@ function createCronDeliveryPatchSchema(): TSchema {
 // The schema declares `type: "object"` to stay compatible with providers that
 // enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot).  The
 // description tells the LLM that `false` is also accepted.
-function createCronFailureAlertSchema(): TSchema {
+function createCronFailureAlertSchema(params: { nullableThreadIdClear: boolean }): TSchema {
   return Type.Optional(
     Type.Unsafe<Record<string, unknown> | false>({
       type: "object",
@@ -226,6 +226,7 @@ function createCronFailureAlertSchema(): TSchema {
         after: optionalPositiveIntegerSchema({ description: "Failures before alert" }),
         channel: Type.Optional(Type.String({ description: "Alert channel" })),
         to: Type.Optional(Type.String({ description: "Alert target" })),
+        threadId: deliveryThreadIdSchema({ nullableClears: params.nullableThreadIdClear }),
         cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
         includeSkipped: Type.Optional(
           Type.Boolean({ description: "Skipped runs count toward alert" }),
@@ -258,7 +259,7 @@ function createCronJobObjectSchema(): TSchema {
         enabled: Type.Optional(Type.Boolean()),
         deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first run" })),
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
-        failureAlert: createCronFailureAlertSchema(),
+        failureAlert: createCronFailureAlertSchema({ nullableThreadIdClear: false }),
       },
       { additionalProperties: true },
     ),
@@ -285,7 +286,7 @@ function createCronPatchObjectSchema(): TSchema {
         deleteAfterRun: Type.Optional(Type.Boolean()),
         agentId: nullableStringSchema("Agent id, or null to clear it"),
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
-        failureAlert: createCronFailureAlertSchema(),
+        failureAlert: createCronFailureAlertSchema({ nullableThreadIdClear: true }),
       },
       { additionalProperties: true },
     ),

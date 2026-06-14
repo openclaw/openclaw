@@ -146,6 +146,7 @@ export function registerCronEditCommand(cron: Command) {
         `Failure alert channel (${getCronChannelOptions()})`,
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
+      .option("--failure-alert-thread-id <id>", "Telegram forum topic thread id for failure alerts")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
       .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
       .option("--failure-alert-exclude-skipped", "Alert only on execution errors")
@@ -458,6 +459,11 @@ export function registerCronEditCommand(cron: Command) {
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";
           const hasFailureAlertChannel = typeof opts.failureAlertChannel === "string";
           const hasFailureAlertTo = typeof opts.failureAlertTo === "string";
+          const failureAlertThreadId = parseCronThreadIdOption(
+            opts.failureAlertThreadId,
+            "--failure-alert-thread-id",
+          );
+          const hasFailureAlertThreadId = typeof failureAlertThreadId === "number";
           const hasFailureAlertCooldown = typeof opts.failureAlertCooldown === "string";
           const hasFailureAlertIncludeSkipped =
             typeof opts.failureAlertIncludeSkipped === "boolean";
@@ -474,6 +480,7 @@ export function registerCronEditCommand(cron: Command) {
             hasFailureAlertAfter ||
             hasFailureAlertChannel ||
             hasFailureAlertTo ||
+            hasFailureAlertThreadId ||
             hasFailureAlertCooldown ||
             hasFailureAlertIncludeSkipped ||
             hasFailureAlertExcludeSkipped ||
@@ -501,6 +508,9 @@ export function registerCronEditCommand(cron: Command) {
             if (hasFailureAlertTo) {
               const to = normalizeOptionalString(opts.failureAlertTo) ?? "";
               failureAlert.to = to ? to : undefined;
+            }
+            if (hasFailureAlertThreadId) {
+              failureAlert.threadId = failureAlertThreadId;
             }
             if (hasFailureAlertCooldown) {
               const cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));

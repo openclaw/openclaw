@@ -10,6 +10,7 @@ import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
   TimeoutSecondsFieldSchema,
+  DeliveryThreadIdFieldSchema,
   TrimmedNonEmptyStringFieldSchema,
   parseDeliveryInput,
   parseOptionalField,
@@ -439,6 +440,66 @@ function coerceFailureDestination(value: UnknownRecord) {
   return next;
 }
 
+function coerceFailureAlert(
+  value: UnknownRecord,
+  options: { preserveThreadIdNull?: boolean } = {},
+) {
+  const next: UnknownRecord = { ...value };
+  if ("channel" in next) {
+    if (next.channel === undefined) {
+      delete next.channel;
+    } else {
+      const channel = normalizeOptionalLowercaseString(next.channel);
+      if (channel) {
+        next.channel = channel;
+      }
+    }
+  }
+  if ("to" in next) {
+    if (next.to === undefined) {
+      delete next.to;
+    } else {
+      const to = normalizeOptionalString(next.to);
+      if (to) {
+        next.to = to;
+      }
+    }
+  }
+  if ("threadId" in next) {
+    if (next.threadId === undefined) {
+      delete next.threadId;
+    } else if (options.preserveThreadIdNull && next.threadId === null) {
+      next.threadId = null;
+    } else {
+      const threadId = parseOptionalField(DeliveryThreadIdFieldSchema, next.threadId);
+      if (threadId !== undefined) {
+        next.threadId = threadId;
+      }
+    }
+  }
+  if ("mode" in next) {
+    if (next.mode === undefined) {
+      delete next.mode;
+    } else {
+      const mode = normalizeOptionalLowercaseString(next.mode);
+      if (mode === "announce" || mode === "webhook") {
+        next.mode = mode;
+      }
+    }
+  }
+  if ("accountId" in next) {
+    if (next.accountId === undefined) {
+      delete next.accountId;
+    } else {
+      const accountId = normalizeOptionalString(next.accountId);
+      if (accountId) {
+        next.accountId = accountId;
+      }
+    }
+  }
+  return next;
+}
+
 function normalizeSessionTarget(raw: unknown) {
   if (typeof raw !== "string") {
     return undefined;
@@ -549,6 +610,18 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.delivery)) {
     next.delivery = coerceDelivery(base.delivery);
+  }
+
+  if ("failureAlert" in base) {
+    if (base.failureAlert === false) {
+      next.failureAlert = false;
+    } else if (isRecord(base.failureAlert)) {
+      next.failureAlert = coerceFailureAlert(base.failureAlert, {
+        preserveThreadIdNull: !options.applyDefaults,
+      });
+    } else {
+      delete next.failureAlert;
+    }
   }
 
   if (options.applyDefaults) {

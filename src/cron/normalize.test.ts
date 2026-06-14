@@ -895,6 +895,71 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
   });
 
+  it("preserves nullable failure alert thread clears in patches", () => {
+    const normalized = normalizeCronJobPatch({
+      failureAlert: {
+        threadId: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.failureAlert).toEqual({
+      threadId: null,
+    });
+    expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
+  });
+
+  it("preserves invalid failure alert thread ids for protocol validation", () => {
+    const normalized = normalizeCronJobPatch({
+      failureAlert: {
+        threadId: {},
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.failureAlert).toEqual({
+      threadId: {},
+    });
+    expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(false);
+  });
+
+  it("preserves invalid failure alert fields for protocol validation", () => {
+    const normalized = normalizeCronJobPatch({
+      failureAlert: {
+        channel: "   ",
+        mode: "webook",
+        to: "   ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.failureAlert).toEqual({
+      channel: "   ",
+      mode: "webook",
+      to: "   ",
+    });
+    expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(false);
+  });
+
+  it("preserves invalid failure alert fields on create for protocol validation", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "bad alert",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+      failureAlert: {
+        mode: "webook",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.failureAlert).toEqual({
+      mode: "webook",
+    });
+    expect(validateCronAddParams(normalized)).toBe(false);
+  });
+
   it("normalizes cron stagger values in patch schedules", () => {
     const normalized = normalizeCronJobPatch({
       schedule: { kind: "cron", expr: "0 * * * *", staggerMs: "30000" },

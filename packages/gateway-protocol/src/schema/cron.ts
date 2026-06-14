@@ -264,6 +264,21 @@ export const CronFailureAlertSchema = Type.Object(
     after: Type.Optional(Type.Integer({ minimum: 1 })),
     channel: Type.Optional(CronAnnounceChannelSchema),
     to: Type.Optional(NonBlankString),
+    threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    includeSkipped: Type.Optional(Type.Boolean()),
+    mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
+    accountId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+const CronFailureAlertPatchSchema = Type.Object(
+  {
+    after: Type.Optional(Type.Integer({ minimum: 1 })),
+    channel: Type.Optional(CronAnnounceChannelSchema),
+    to: Type.Optional(NonBlankString),
+    threadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
     cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
     includeSkipped: Type.Optional(Type.Boolean()),
     mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
@@ -498,7 +513,7 @@ export const CronJobPatchSchema = Type.Object(
     wakeMode: Type.Optional(CronWakeModeSchema),
     payload: Type.Optional(CronPayloadPatchSchema),
     delivery: Type.Optional(CronDeliveryPatchSchema),
-    failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+    failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertPatchSchema])),
     state: Type.Optional(CronJobStatePatchSchema),
   },
   { additionalProperties: false },

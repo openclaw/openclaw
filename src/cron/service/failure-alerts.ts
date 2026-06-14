@@ -1,6 +1,14 @@
 /** Resolves and emits cron failure-alert notifications. */
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalThreadValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import {
+  resolveTargetPrefixedChannel,
+  stripTargetProviderPrefix,
+} from "../../infra/outbound/channel-target-prefix.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
@@ -12,6 +20,7 @@ type ResolvedFailureAlert = {
   cooldownMs: number;
   channel: CronMessageChannel;
   to?: string;
+  threadId?: string | number;
   mode?: "announce" | "webhook";
   accountId?: string;
   includeSkipped: boolean;
@@ -43,6 +52,78 @@ function normalizeTo(input: unknown): string | undefined {
   }
   const to = input.trim();
   return to ? to : undefined;
+}
+
+function resolveAnnounceComparisonChannel(params: {
+  channel?: CronMessageChannel;
+  to?: string;
+}): CronMessageChannel {
+  if (params.channel && params.channel !== "last") {
+    return params.channel;
+  }
+  return (
+    (resolveTargetPrefixedChannel(params.to) as CronMessageChannel | undefined) ??
+    params.channel ??
+    "last"
+  );
+}
+
+function normalizeComparisonTarget(params: {
+  channel: CronMessageChannel;
+  to?: string;
+}): string | undefined {
+  if (!params.to) {
+    return undefined;
+  }
+  const target =
+    params.channel === "last" ? params.to : stripTargetProviderPrefix(params.to, params.channel);
+  return normalizeTo(target);
+}
+
+function resolveDeliveryThreadForFailureAlert(params: {
+  job: CronJob;
+  mode?: "announce" | "webhook";
+  alertChannel: CronMessageChannel;
+  alertTo?: string;
+  alertAccountId?: string;
+  explicitThreadId?: string | number;
+}): string | number | undefined {
+  if (params.mode === "webhook") {
+    return undefined;
+  }
+  if (params.explicitThreadId !== undefined) {
+    return params.explicitThreadId;
+  }
+  const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  if (deliveryPlan.mode !== "announce") {
+    return undefined;
+  }
+  const rawDeliveryTo = normalizeTo(deliveryPlan.to);
+  const deliveryChannel = resolveAnnounceComparisonChannel({
+    channel: deliveryPlan.channel,
+    to: rawDeliveryTo,
+  });
+  const alertChannel = resolveAnnounceComparisonChannel({
+    channel: params.alertChannel,
+    to: params.alertTo,
+  });
+  const deliveryTo = normalizeComparisonTarget({
+    channel: deliveryChannel,
+    to: rawDeliveryTo,
+  });
+  const alertTo = normalizeComparisonTarget({
+    channel: alertChannel,
+    to: params.alertTo,
+  });
+  const deliveryAccountId = normalizeTo(deliveryPlan.accountId);
+  if (
+    alertChannel !== deliveryChannel ||
+    alertTo !== deliveryTo ||
+    params.alertAccountId !== deliveryAccountId
+  ) {
+    return undefined;
+  }
+  return normalizeOptionalThreadValue(deliveryPlan.threadId);
 }
 
 function clampPositiveInt(value: unknown, fallback: number): number {
@@ -77,7 +158,14 @@ export function resolveFailureAlert(
   }
 
   const mode = jobConfig?.mode ?? globalConfig?.mode;
+  const channel =
+    normalizeCronMessageChannel(jobConfig?.channel) ??
+    normalizeCronMessageChannel(job.delivery?.channel) ??
+    "last";
   const explicitTo = normalizeTo(jobConfig?.to);
+  const to = mode === "webhook" ? explicitTo : (explicitTo ?? normalizeTo(job.delivery?.to));
+  const explicitThreadId = normalizeOptionalThreadValue(jobConfig?.threadId);
+  const accountId = jobConfig?.accountId ?? globalConfig?.accountId;
 
   // Announce alerts inherit the job delivery target; webhook alerts require an
   // explicit alert target so chat recipients are not reused as URLs.
@@ -87,13 +175,18 @@ export function resolveFailureAlert(
       jobConfig?.cooldownMs ?? globalConfig?.cooldownMs,
       DEFAULT_FAILURE_ALERT_COOLDOWN_MS,
     ),
-    channel:
-      normalizeCronMessageChannel(jobConfig?.channel) ??
-      normalizeCronMessageChannel(job.delivery?.channel) ??
-      "last",
-    to: mode === "webhook" ? explicitTo : (explicitTo ?? normalizeTo(job.delivery?.to)),
+    channel,
+    to,
+    threadId: resolveDeliveryThreadForFailureAlert({
+      job,
+      mode,
+      alertChannel: channel,
+      alertTo: to,
+      alertAccountId: accountId,
+      explicitThreadId,
+    }),
     mode,
-    accountId: jobConfig?.accountId ?? globalConfig?.accountId,
+    accountId,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
   };
 }
@@ -106,6 +199,7 @@ function emitFailureAlert(
     consecutiveErrors: number;
     channel: CronMessageChannel;
     to?: string;
+    threadId?: string | number;
     mode?: "announce" | "webhook";
     accountId?: string;
     status: "error" | "skipped";
@@ -135,6 +229,7 @@ function emitFailureAlert(
         text,
         channel: params.channel,
         to: params.to,
+        threadId: params.threadId,
         mode: params.mode,
         accountId: params.accountId,
       })
@@ -191,6 +286,7 @@ export function maybeEmitFailureAlert(
     consecutiveErrors: params.consecutiveCount,
     channel: params.alertConfig.channel,
     to: params.alertConfig.to,
+    threadId: params.alertConfig.threadId,
     mode: params.alertConfig.mode,
     accountId: params.alertConfig.accountId,
     status: params.status,
