@@ -1661,7 +1661,7 @@ export const FIELD_HELP: Record<string, string> = {
   "session.writeLock.staleMs":
     "Milliseconds before an existing session transcript lock can be treated as stale and reclaimed. Default: 1800000; env override: OPENCLAW_SESSION_WRITE_LOCK_STALE_MS.",
   "session.writeLock.maxHoldMs":
-    "Milliseconds a held in-process session transcript lock may remain held before the watchdog releases it. Default: 300000; env override: OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS.",
+    "Milliseconds a held session transcript lock may remain held before it is reclaimed: the holder's own in-process watchdog releases it, and a contending writer may also reclaim it once this deadline passes if the lock file is unchanged. Default: 300000; env override: OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS.",
   "session.agentToAgent":
     "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
   "session.agentToAgent.maxPingPongTurns":

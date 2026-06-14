@@ -98,8 +98,11 @@ Transcript mutations use a session write lock on the transcript file. Lock acqui
 `session.writeLock.acquireTimeoutMs` before surfacing a busy-session error; the default is `60000`
 ms. Raise this only when legitimate prep, cleanup, compaction, or transcript mirror work contends
 longer on slow machines. `session.writeLock.staleMs` controls when an existing lock can be
-reclaimed as stale; the default is `1800000` ms. `session.writeLock.maxHoldMs` controls the
-in-process watchdog release threshold; the default is `300000` ms. Emergency env overrides are
+reclaimed as stale; the default is `1800000` ms. `session.writeLock.maxHoldMs` is the hard hold
+limit: the holder's own in-process watchdog releases the lock at this threshold, and a contending
+writer may also reclaim a lock held past this deadline (when the lock file is unchanged) so a
+wedged holder whose watchdog cannot fire does not pin the session; the default is `300000` ms.
+Emergency env overrides are
 `OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`, `OPENCLAW_SESSION_WRITE_LOCK_STALE_MS`, and
 `OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS`.
 

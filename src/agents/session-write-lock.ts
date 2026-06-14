@@ -51,7 +51,10 @@ export const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
 export const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
-const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
+// "too-old" (past global staleMs) stays report-only — a live holder may still be within its own
+// maxHoldMs. "hold-exceeded" (past the holder's OWN recorded maxHoldMs) is overdue by contract and
+// reclaimable; acquire's remove-if-unchanged still skips a lock whose file changed (e.g. a release). (#87483)
+const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old"]);
 
 /**
  * Yield control to the event loop so other sessions can make progress
