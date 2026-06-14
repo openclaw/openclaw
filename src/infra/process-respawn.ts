@@ -60,7 +60,6 @@ export function rewritePnpmVersionedEntryPath(entryPath: string): string {
 
   const scope = match[1] ? `@${match[1]}` : "";
   const pkgName = match[2];
-  const _rest = match[3];
 
   // Don't rewrite if there is no stable wrapper to aim at (e.g. nested dep).
   // The stable wrapper lives at `node_modules/<scope><name>/openclaw.mjs`
