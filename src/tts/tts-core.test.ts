@@ -1,5 +1,6 @@
 // TTS core tests cover provider selection, synthesis, and error handling.
 import { describe, expect, it, vi } from "vitest";
+import type { PreparedSimpleCompletionModel } from "../agents/simple-completion-runtime.js";
 import type { AssistantMessage, Model, Usage } from "../llm/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
@@ -96,5 +97,140 @@ describe("TTS core", () => {
     } finally {
       setTimeoutSpy.mockRestore();
     }
+  });
+
+  it("strips reasoning content from summarization output (regression #90364)", async () => {
+    const config = {
+      provider: "openai",
+      model: {
+        id: "gpt-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    } as unknown as ResolvedTtsConfig;
+    const testUsage: Usage = {
+      input: 10,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 30,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const auth = { kind: "api-key" as const, apiKey: "test-key" };
+    const assistant = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text",
+          text: "<thinking>Internal reasoning that should not be spoken.</thinking>The weather today is sunny with a high of 75°F.",
+        },
+      ],
+      api: "openai-completions",
+      provider: "openai",
+      model: "gpt-5.5",
+      stopReason: "stop",
+      usage: testUsage,
+      timestamp: Date.now(),
+    } satisfies AssistantMessage;
+
+    const result = await summarizeText(
+      {
+        text: "Long text about the weather that should be summarized for speech.",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      },
+      {
+        completeSimple: vi.fn(async () => assistant),
+        prepareSimpleCompletionModel: vi.fn(
+          async () =>
+            ({
+              model: {
+                id: "gpt-5.5",
+                api: "openai-completions",
+                provider: "openai",
+                baseUrl: "https://api.openai.com/v1",
+              },
+              auth,
+            }) as unknown as PreparedSimpleCompletionModel,
+        ),
+        requireApiKey: vi.fn(() => "key"),
+      },
+    );
+
+    expect(result.summary).toBe("The weather today is sunny with a high of 75°F.");
+    expect(result.summary).not.toContain("<thinking>");
+    expect(result.summary).not.toContain("Internal reasoning");
+  });
+
+  it("strips multiple reasoning blocks from summarization output", async () => {
+    const config = {
+      provider: "openai",
+      model: {
+        id: "gpt-5.5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    } as unknown as ResolvedTtsConfig;
+    const testUsage: Usage = {
+      input: 10,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 30,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const auth = { kind: "api-key" as const, apiKey: "test-key" };
+
+    // Test multiple reasoning blocks
+    const assistant = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text",
+          text: "<thinking>First thought.</thinking>Result: <thinking>Second thought.</thinking>Final answer.",
+        },
+      ],
+      api: "openai-completions",
+      provider: "openai",
+      model: "gpt-5.5",
+      stopReason: "stop",
+      usage: testUsage,
+      timestamp: Date.now(),
+    } satisfies AssistantMessage;
+
+    const result = await summarizeText(
+      {
+        text: "What is the answer?",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      },
+      {
+        completeSimple: vi.fn(async () => assistant),
+        prepareSimpleCompletionModel: vi.fn(
+          async () =>
+            ({
+              model: {
+                id: "gpt-5.5",
+                api: "openai-completions",
+                provider: "openai",
+                baseUrl: "https://api.openai.com/v1",
+              },
+              auth,
+            }) as unknown as PreparedSimpleCompletionModel,
+        ),
+        requireApiKey: vi.fn(() => "key"),
+      },
+    );
+
+    expect(result.summary).toBe("Result: Final answer.");
+    expect(result.summary).not.toContain("<thinking>");
+    expect(result.summary).not.toContain("First thought");
+    expect(result.summary).not.toContain("Second thought");
   });
 });
