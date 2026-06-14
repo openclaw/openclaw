@@ -208,7 +208,7 @@ const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
 const SINGLE_ACTION_RESULT_STYLE_RE =
   /\b(?:(?:i(?:'ll| will)|let me)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
 const SINGLE_ACTION_RESULT_CLAUSE_RE =
-  /\blet me \w+(?:\s+\w+){0,3}\s*:\s*(?:there\b|no\b|none\b|the\b|this\b|that\b|it\b|[a-z0-9_.-]+\s+(?:is|are|was|were|has|have|shows?|showed|returned|reported|contains?|failed|passed|completed|finished|succeeded)\b)/i;
+  /\b(?:i(?:'ll| will)|let me)\s+\w+(?:\s+\w+){0,3}\s*:\s*(?:there\b|no\b|none\b|the\b|this\b|that\b|it\b|[a-z0-9_.-]+\s+(?:is|are|was|were|has|have|shows?|showed|returned|reported|contains?|failed|passed|completed|finished|succeeded)\b)/i;
 const RETRY_SAFE_TOOL_NAMES = new Set([
   "read",
   "search",

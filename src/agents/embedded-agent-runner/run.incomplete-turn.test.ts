@@ -4328,6 +4328,28 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBeNull();
   });
 
+  it.each([
+    "I'll check: the endpoint is healthy.",
+    "I will verify: there are no scheduled jobs.",
+    "I'll inspect: the deployment completed.",
+  ])(
+    "does not misclassify a promise-prefixed result clause as planning-only: %s",
+    (assistantText) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        prompt: "Please check the scheduler and tell me the result.",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [assistantText],
+        }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    },
+  );
+
   it("does not misclassify a direct answer that starts with a wait phrase", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",

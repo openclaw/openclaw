@@ -1994,10 +1994,14 @@ export async function runReplyAgent(params: {
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
       committedMessagingToolSourceReplyDelivery,
     });
-    const successfulDirectSourceReplyDelivery =
-      Boolean(blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted()) ||
+    const hasDeliveredBlockStream = Boolean(
+      blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
+    );
+    const successfulNonStreamDirectSourceReplyDelivery =
       hasSuccessfulDirectBlockReplyDelivery(directlySentBlockPayloads) ||
       committedMessagingToolSourceReplyDelivery;
+    const successfulDirectSourceReplyDelivery =
+      hasDeliveredBlockStream || successfulNonStreamDirectSourceReplyDelivery;
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
       committedMessagingToolSourceReplyDelivery
@@ -2026,8 +2030,13 @@ export async function runReplyAgent(params: {
       await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
     };
-    const returnSideEffectProgressIfNeeded = async (): Promise<ReplyPayload | undefined> => {
-      if (successfulDirectSourceReplyDelivery) {
+    const returnSideEffectProgressIfNeeded = async (
+      hadDeliveredFinalPayload = false,
+    ): Promise<ReplyPayload | undefined> => {
+      if (
+        successfulNonStreamDirectSourceReplyDelivery ||
+        (hasDeliveredBlockStream && hadDeliveredFinalPayload)
+      ) {
         return undefined;
       }
       const sideEffectProgressPayload = buildSideEffectProgressPayload({
@@ -2155,9 +2164,6 @@ export async function runReplyAgent(params: {
     const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
       (payload) => !isReplyPayloadStatusNotice(payload),
     );
-    const hasDeliveredBlockStream = Boolean(
-      blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
-    );
     const canDeliverStandaloneFallbackNotice =
       fallbackSuppressingSideEffectDelivery &&
       !successfulDirectSourceReplyDelivery &&
@@ -2177,7 +2183,8 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
-      const sideEffectProgressPayload = await returnSideEffectProgressIfNeeded();
+      const sideEffectProgressPayload =
+        await returnSideEffectProgressIfNeeded(hadDeliveredFinalPayload);
       if (sideEffectProgressPayload) {
         return sideEffectProgressPayload;
       }

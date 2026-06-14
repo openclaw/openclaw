@@ -1803,11 +1803,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
     { name: "empty payloads", payloads: [] },
     { name: "stripped NO_REPLY", payloads: [{ text: "NO_REPLY" }] },
   ])(
-    "does not surface cron progress after a streamed source reply with $name",
+    "surfaces cron progress after a progress-only block stream with $name",
     async ({ payloads }) => {
       const onBlockReply = vi.fn();
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-        await params.onBlockReply?.({ text: "streamed final answer" });
+        await params.onBlockReply?.({ text: "Checking status..." });
         return {
           payloads,
           successfulCronAdds: 1,
@@ -1825,13 +1825,46 @@ describe("runReplyAgent typing (heartbeat)", () => {
         },
       });
 
-      await expect(run()).resolves.toBeUndefined();
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
       expect(onBlockReply).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "streamed final answer" }),
+        expect.objectContaining({ text: "Checking status..." }),
         expect.anything(),
+      );
+      expect(payload?.text).toBe(
+        "A scheduled task was created, but the agent did not provide a final response.",
       );
     },
   );
+
+  it("does not surface cron progress after a block stream delivered the matching final payload", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "streamed final answer" });
+      return {
+        payloads: [{ text: "streamed final answer" }],
+        successfulCronAdds: 1,
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: true,
+      opts: { onBlockReply },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "streamed final answer" }),
+      expect.anything(),
+    );
+  });
 
   it("surfaces side-effect progress after a directly delivered status-only reply", async () => {
     const onBlockReply = vi.fn();
