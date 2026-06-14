@@ -20,6 +20,7 @@ import {
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
+import type { TelegramAllowFromEntry } from "../allow-from.js";
 import {
   firstDefined,
   isSenderAllowed,
@@ -203,7 +204,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
   accountId?: string;
   dmPolicy?: DmPolicy;
-  allowFrom?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
   senderId?: string;
   isGroup?: boolean;
   isForum?: boolean;
@@ -227,7 +228,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   storeAllowFrom: string[];
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
-  groupAllowOverride?: Array<string | number>;
+  groupAllowOverride?: readonly TelegramAllowFromEntry[];
   effectiveGroupAllow: NormalizedAllowFrom;
   hasGroupAllowOverride: boolean;
 }> {
@@ -286,8 +287,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
 
 async function isTelegramDmAllowedByConfiguredAllowFrom(params: {
   cfg?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
-  groupAllowOverride?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
+  groupAllowOverride?: readonly TelegramAllowFromEntry[];
   accountId: string;
   senderId?: string;
 }): Promise<boolean> {
@@ -323,8 +324,8 @@ export class TelegramPairingStoreReadError extends Error {
 // Could add bounded retries to absorb short FD-pressure spikes; deferred. See #85555.
 export async function loadTelegramPairingStoreIfNeeded(params: {
   cfg?: OpenClawConfig;
-  allowFrom?: Array<string | number>;
-  groupAllowOverride?: Array<string | number>;
+  allowFrom?: readonly TelegramAllowFromEntry[];
+  groupAllowOverride?: readonly TelegramAllowFromEntry[];
   accountId: string;
   senderId?: string;
   isGroup: boolean;

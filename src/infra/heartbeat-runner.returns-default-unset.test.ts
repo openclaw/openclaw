@@ -54,6 +54,31 @@ function normalizeWhatsAppTargetForTest(raw: string): string | null {
   return /^\+\d{7,15}$/u.test(normalized) ? normalized : null;
 }
 
+function readAllowFromEntryNumberForTest(entry: unknown): string | undefined {
+  if (typeof entry === "string" || typeof entry === "number") {
+    return String(entry);
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return undefined;
+  }
+  const number = (entry as Record<string, unknown>)["number"];
+  return typeof number === "string" || typeof number === "number" ? String(number) : undefined;
+}
+
+function normalizeWhatsAppAllowFromEntryNumbersForTest(entries: readonly unknown[]): string[] {
+  return entries.flatMap((entry) => {
+    const raw = readAllowFromEntryNumberForTest(entry);
+    if (!raw) {
+      return [];
+    }
+    if (raw === "*") {
+      return [raw];
+    }
+    const normalized = normalizeWhatsAppTargetForTest(raw);
+    return normalized ? [normalized] : [];
+  });
+}
+
 function isWhatsAppGroupJidForTest(raw: string): boolean {
   return /^\d+@g\.us$/u.test(raw.trim().toLowerCase());
 }
@@ -246,7 +271,8 @@ beforeAll(async () => {
   });
   whatsappPlugin.config = {
     ...whatsappPlugin.config,
-    resolveAllowFrom: ({ cfg }) => cfg.channels?.whatsapp?.allowFrom?.map((entry) => entry) ?? [],
+    resolveAllowFrom: ({ cfg }) =>
+      normalizeWhatsAppAllowFromEntryNumbersForTest(cfg.channels?.whatsapp?.allowFrom ?? []),
   };
 
   const telegramPlugin = createOutboundTestPlugin({
@@ -284,9 +310,17 @@ beforeAll(async () => {
       const channel = cfg.channels?.telegram;
       const normalized = accountId?.trim();
       if (normalized && channel?.accounts?.[normalized]?.allowFrom) {
-        return channel.accounts[normalized].allowFrom?.map((entry) => String(entry)) ?? [];
+        return (
+          channel.accounts[normalized].allowFrom
+            ?.map(readAllowFromEntryNumberForTest)
+            .filter((entry): entry is string => entry !== undefined) ?? []
+        );
       }
-      return channel?.allowFrom?.map((entry) => String(entry)) ?? [];
+      return (
+        channel?.allowFrom
+          ?.map(readAllowFromEntryNumberForTest)
+          .filter((entry): entry is string => entry !== undefined) ?? []
+      );
     },
   };
 

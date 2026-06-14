@@ -76,6 +76,35 @@ export type MessageReceivedHookEvent = InternalHookEvent & {
   context: MessageReceivedHookContext;
 };
 
+export type MessagePreAuthHookContext = {
+  /** Stable sender identifier before channel authorization */
+  senderId: string;
+  /** Raw message content available before authorization and preprocessing */
+  content: string;
+  /** Channel identifier (for example "whatsapp" or "telegram") */
+  channelId: string;
+  /** Provider account ID for multi-account setups */
+  accountId?: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender display/profile name when the provider exposes it */
+  senderName?: string;
+  /** Sender username when the provider exposes it */
+  senderUsername?: string;
+  /** Additional provider-specific metadata */
+  metadata?: Record<string, unknown>;
+};
+
+export type MessagePreAuthHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "pre-auth";
+  context: MessagePreAuthHookContext;
+};
+
 export type MessageSentHookContext = {
   /** Recipient identifier */
   to: string;
@@ -394,6 +423,23 @@ export function isMessageReceivedEvent(
   }
   return (
     hasStringContextField(context, "from") &&
+    hasStringContextField(context, "content") &&
+    hasStringContextField(context, "channelId")
+  );
+}
+
+export function isMessagePreAuthEvent(
+  event: InternalHookEvent,
+): event is MessagePreAuthHookEvent {
+  if (!isHookEventTypeAndAction(event, "message", "pre-auth")) {
+    return false;
+  }
+  const context = getHookContext<MessagePreAuthHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "senderId") &&
     hasStringContextField(context, "content") &&
     hasStringContextField(context, "channelId")
   );

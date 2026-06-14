@@ -71,6 +71,7 @@ type SenderContext = {
   id?: string;
   name?: string;
   e164?: string;
+  group?: string;
 };
 
 type ReplyDeliveryInfo = { kind: ReplyLifecycleKind };
@@ -376,6 +377,7 @@ export async function buildWhatsAppInboundContext(params: {
         fallbackE164: params.sender.e164,
       }),
       SenderE164: params.sender.e164,
+      SenderGroup: params.sender.group,
       CommandSource:
         params.commandSource ??
         (params.commandTurn?.source === "native" || params.commandTurn?.source === "text"

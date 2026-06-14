@@ -48,6 +48,7 @@ export type PluginHookMessageContext = {
   replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  senderGroup?: string;
   replyToIsQuote?: boolean;
   trace?: DiagnosticTraceContext;
   traceId?: string;
@@ -80,6 +81,7 @@ export type PluginHookInboundClaimEvent = {
   replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  senderGroup?: string;
   replyToIsQuote?: boolean;
   threadId?: string | number;
   messageId?: string;
@@ -106,6 +108,7 @@ export type PluginHookMessageReceivedEvent = {
   replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  senderGroup?: string;
   replyToIsQuote?: boolean;
   sessionKey?: string;
   runId?: string;
@@ -113,6 +116,19 @@ export type PluginHookMessageReceivedEvent = {
   traceId?: string;
   spanId?: string;
   parentSpanId?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookMessagePreAuthEvent = {
+  channelId: string;
+  senderId: string;
+  content: string;
+  accountId?: string;
+  conversationId?: string;
+  timestamp?: number;
+  messageId?: string;
+  senderName?: string;
+  senderUsername?: string;
   metadata?: Record<string, unknown>;
 };
 

@@ -13,11 +13,13 @@ import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookMessageContext,
+  PluginHookMessagePreAuthEvent,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
 } from "../plugins/hook-message.types.js";
 import type {
   MessagePreprocessedHookContext,
+  MessagePreAuthHookContext,
   MessageReceivedHookContext,
   MessageSentHookContext,
   MessageTranscribedHookContext,
@@ -45,6 +47,7 @@ export type CanonicalInboundMessageHookContext = {
   replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  senderGroup?: string;
   replyToIsQuote?: boolean;
   provider?: string;
   surface?: string;
@@ -152,6 +155,7 @@ export function deriveInboundMessageHookContext(
     replyToIdFull: ctx.ReplyToIdFull,
     replyToBody: ctx.ReplyToBody,
     replyToSender: ctx.ReplyToSender,
+    senderGroup: ctx.SenderGroup,
     replyToIsQuote: ctx.ReplyToIsQuote,
     provider: ctx.Provider,
     surface: ctx.Surface,
@@ -262,6 +266,9 @@ export function toPluginMessageContext(
   if ("replyToSender" in canonical && canonical.replyToSender !== undefined) {
     context.replyToSender = canonical.replyToSender;
   }
+  if ("senderGroup" in canonical && canonical.senderGroup) {
+    context.senderGroup = canonical.senderGroup;
+  }
   if ("replyToIsQuote" in canonical && canonical.replyToIsQuote !== undefined) {
     context.replyToIsQuote = canonical.replyToIsQuote;
   }
@@ -325,6 +332,7 @@ export function toPluginInboundClaimContext(
     sessionKey: canonical.sessionKey,
     parentConversationId: conversation.parentConversationId,
     senderId: canonical.senderId,
+    senderGroup: canonical.senderGroup,
     messageId: canonical.messageId,
     runId: canonical.runId,
     callDepth: canonical.callDepth,
@@ -373,6 +381,7 @@ export function toPluginInboundClaimEvent(
     ...(canonical.replyToIdFull !== undefined ? { replyToIdFull: canonical.replyToIdFull } : {}),
     ...(canonical.replyToBody !== undefined ? { replyToBody: canonical.replyToBody } : {}),
     ...(canonical.replyToSender !== undefined ? { replyToSender: canonical.replyToSender } : {}),
+    senderGroup: canonical.senderGroup,
     ...(canonical.replyToIsQuote !== undefined ? { replyToIsQuote: canonical.replyToIsQuote } : {}),
     threadId: canonical.threadId,
     messageId: canonical.messageId,
@@ -393,6 +402,7 @@ export function toPluginInboundClaimEvent(
       replyToIdFull: canonical.replyToIdFull,
       replyToBody: canonical.replyToBody,
       replyToSender: canonical.replyToSender,
+      senderGroup: canonical.senderGroup,
       replyToIsQuote: canonical.replyToIsQuote,
       mediaPath: canonical.mediaPath,
       mediaUrl: canonical.mediaUrl,
@@ -424,6 +434,7 @@ export function toPluginMessageReceivedEvent(
     ...(canonical.replyToIdFull !== undefined ? { replyToIdFull: canonical.replyToIdFull } : {}),
     ...(canonical.replyToBody !== undefined ? { replyToBody: canonical.replyToBody } : {}),
     ...(canonical.replyToSender !== undefined ? { replyToSender: canonical.replyToSender } : {}),
+    senderGroup: canonical.senderGroup,
     ...(canonical.replyToIsQuote !== undefined ? { replyToIsQuote: canonical.replyToIsQuote } : {}),
     sessionKey: canonical.sessionKey,
     runId: canonical.runId,
@@ -450,6 +461,7 @@ export function toPluginMessageReceivedEvent(
       mediaPaths: canonical.mediaPaths,
       mediaUrls: canonical.mediaUrls,
       mediaTypes: canonical.mediaTypes,
+      senderGroup: canonical.senderGroup,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -457,6 +469,34 @@ export function toPluginMessageReceivedEvent(
   };
   assignTraceFields(event, canonical.trace);
   return event;
+}
+
+export function toPluginMessagePreAuthEvent(
+  canonical: CanonicalInboundMessageHookContext,
+): PluginHookMessagePreAuthEvent {
+  return {
+    channelId: canonical.channelId,
+    senderId: canonical.senderId ?? canonical.from,
+    content: canonical.content,
+    accountId: canonical.accountId,
+    conversationId: canonical.conversationId,
+    timestamp: canonical.timestamp,
+    messageId: canonical.messageId,
+    senderName: canonical.senderName,
+    senderUsername: canonical.senderUsername,
+    metadata: {
+      from: canonical.from,
+      to: canonical.to,
+      provider: canonical.provider,
+      surface: canonical.surface,
+      originatingChannel: canonical.originatingChannel,
+      originatingTo: canonical.originatingTo,
+      senderE164: canonical.senderE164,
+      senderGroup: canonical.senderGroup,
+      groupId: canonical.groupId,
+      topicName: canonical.topicName,
+    },
+  };
 }
 
 export function toPluginMessageSentEvent(
@@ -501,8 +541,35 @@ export function toInternalMessageReceivedContext(
       mediaPaths: canonical.mediaPaths,
       mediaUrls: canonical.mediaUrls,
       mediaTypes: canonical.mediaTypes,
+      senderGroup: canonical.senderGroup,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
+      topicName: canonical.topicName,
+    },
+  };
+}
+
+export function toInternalMessagePreAuthContext(
+  canonical: CanonicalInboundMessageHookContext,
+): MessagePreAuthHookContext {
+  return {
+    senderId: canonical.senderId ?? canonical.from,
+    content: canonical.content,
+    channelId: canonical.channelId,
+    accountId: canonical.accountId,
+    conversationId: canonical.conversationId,
+    timestamp: canonical.timestamp,
+    messageId: canonical.messageId,
+    senderName: canonical.senderName,
+    senderUsername: canonical.senderUsername,
+    metadata: {
+      from: canonical.from,
+      to: canonical.to,
+      provider: canonical.provider,
+      surface: canonical.surface,
+      senderE164: canonical.senderE164,
+      senderGroup: canonical.senderGroup,
+      groupId: canonical.groupId,
       topicName: canonical.topicName,
     },
   };
@@ -547,6 +614,7 @@ function toInternalInboundMessageHookContextBase(canonical: CanonicalInboundMess
     senderId: canonical.senderId,
     senderName: canonical.senderName,
     senderUsername: canonical.senderUsername,
+    senderGroup: canonical.senderGroup,
     provider: canonical.provider,
     surface: canonical.surface,
     mediaPath: canonical.mediaPath,

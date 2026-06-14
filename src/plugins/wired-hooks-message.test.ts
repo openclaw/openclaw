@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 import type {
+  PluginHookMessagePreAuthEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -62,6 +63,24 @@ describe("message_sending hook runner", () => {
       expectedResult: expected,
       channelCtx: demoChannelCtx,
     });
+  });
+});
+
+describe("message_pre_auth hook runner", () => {
+  it("invokes registered hooks without returning a reply", async () => {
+    const handler = vi.fn();
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "message_pre_auth", handler }]);
+    const event: PluginHookMessagePreAuthEvent = {
+      channelId: "whatsapp",
+      senderId: "+15551234567",
+      senderName: "Requester",
+      content: "Let me in",
+    };
+    const ctx = { channelId: "whatsapp", senderId: "+15551234567" };
+
+    await runner.runMessagePreAuth(event, ctx);
+
+    expect(handler).toHaveBeenCalledWith(event, ctx);
   });
 });
 

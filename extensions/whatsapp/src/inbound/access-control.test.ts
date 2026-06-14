@@ -1,9 +1,11 @@
 // Whatsapp tests cover access control plugin behavior.
-import { beforeAll, describe, expect, it } from "vitest";
+import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   readAllowFromStoreMock,
   sendMessageMock,
   getAccessControlTestConfig,
+  runMessagePreAuthMock,
   setAccessControlTestConfig,
   setupAccessControlTestHarness,
   upsertPairingRequestMock,
@@ -17,6 +19,10 @@ let resolveWhatsAppCommandAuthorized: typeof import("../inbound-policy.js").reso
 beforeAll(async () => {
   ({ checkInboundAccessControl } = await import("./access-control.js"));
   ({ resolveWhatsAppCommandAuthorized } = await import("../inbound-policy.js"));
+});
+
+afterEach(() => {
+  clearInternalHooks();
 });
 
 async function checkUnauthorizedWorkDmSender() {
@@ -38,6 +44,12 @@ function expectSilentlyBlocked(result: { allowed: boolean }) {
   expect(result.allowed).toBe(false);
   expect(upsertPairingRequestMock).not.toHaveBeenCalled();
   expect(sendMessageMock).not.toHaveBeenCalled();
+}
+
+async function flushPreAuthHooks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 async function checkCommandAuthorizedForDm(params: {
@@ -108,7 +120,7 @@ describe("checkInboundAccessControl pairing grace", () => {
       connectedAtMs,
       pairingGraceMs: 30_000,
       sock: { sendMessage: sendMessageMock },
-      remoteJid: "15550001111@s.whatsapp.net",
+      remoteJid: "sender@s.whatsapp.net",
     });
   }
 
@@ -155,6 +167,155 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(commandAuthorized).toBe(false);
   });
 
+  it("emits pre-auth hooks for silently blocked allowlist DMs", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15559999999"],
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      content: "Let me in",
+      group: false,
+      pushName: "Requester",
+      isFromMe: false,
+      messageId: "msg-1",
+      messagePreAuthHookRunner: {
+        hasHooks: (hookName) => hookName === "message_pre_auth",
+        runMessagePreAuth: runMessagePreAuthMock as never,
+      },
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "sender@s.whatsapp.net",
+    });
+    await flushPreAuthHooks();
+
+    expectSilentlyBlocked(result);
+    expect(runMessagePreAuthMock).toHaveBeenCalledTimes(1);
+    expect(runMessagePreAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "whatsapp",
+        senderId: "+15550001111",
+        senderName: "Requester",
+        content: "Let me in",
+        accountId: "default",
+        conversationId: "+15550001111",
+        messageId: "msg-1",
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        senderId: "+15550001111",
+      }),
+    );
+  });
+
+  it("does not emit pre-auth hooks for allowlisted DMs", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      content: "hello",
+      group: false,
+      pushName: "Known",
+      isFromMe: false,
+      messagePreAuthHookRunner: {
+        hasHooks: (hookName) => hookName === "message_pre_auth",
+        runMessagePreAuth: runMessagePreAuthMock as never,
+      },
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "sender@s.whatsapp.net",
+    });
+    await flushPreAuthHooks();
+
+    expect(result.allowed).toBe(true);
+    expect(runMessagePreAuthMock).not.toHaveBeenCalled();
+  });
+
+  it("does not emit pre-auth hooks for disabled DMs", async () => {
+    const internalPreAuthHandler = vi.fn(async () => undefined);
+    registerInternalHook("message:pre-auth", internalPreAuthHandler);
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "disabled",
+          allowFrom: ["+15559999999"],
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      content: "Let me in",
+      group: false,
+      pushName: "Requester",
+      isFromMe: false,
+      messagePreAuthHookRunner: {
+        hasHooks: (hookName) => hookName === "message_pre_auth",
+        runMessagePreAuth: runMessagePreAuthMock as never,
+      },
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "sender@s.whatsapp.net",
+    });
+    await flushPreAuthHooks();
+
+    expectSilentlyBlocked(result);
+    expect(runMessagePreAuthMock).not.toHaveBeenCalled();
+    expect(internalPreAuthHandler).not.toHaveBeenCalled();
+  });
+  it("allows grouped allowFrom entries for DM allowlist access", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: [{ number: "+15550001111", group: "friends" }],
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      content: "hello",
+      group: false,
+      pushName: "Known",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "sender@s.whatsapp.net",
+    });
+    const commandAuthorized = await checkCommandAuthorizedForDm({ cfg });
+
+    expect(result.allowed).toBe(true);
+    expect(commandAuthorized).toBe(true);
+  });
   it("inherits channel-level dmPolicy when account-level dmPolicy is unset", async () => {
     // Account has allowFrom set, but no dmPolicy override. Should inherit the channel default.
     // With dmPolicy=allowlist, unauthorized senders are silently blocked.

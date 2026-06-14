@@ -20,6 +20,7 @@ import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runti
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
+  TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
@@ -1287,7 +1288,7 @@ export const registerTelegramHandlers = ({
     senderUsername: string;
     effectiveGroupAllow: NormalizedAllowFrom;
     hasGroupAllowOverride: boolean;
-    groupConfig?: TelegramGroupConfig;
+    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
     topicConfig?: TelegramTopicConfig;
   }) => {
     const {
@@ -1338,7 +1339,7 @@ export const registerTelegramHandlers = ({
       cfg,
       telegramCfg,
       topicConfig,
-      groupConfig,
+      groupConfig: groupConfig as TelegramGroupConfig | undefined,
       effectiveGroupAllow,
       senderId,
       senderUsername,

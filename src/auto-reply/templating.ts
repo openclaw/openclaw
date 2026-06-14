@@ -242,6 +242,7 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
+  SenderGroup?: string;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;

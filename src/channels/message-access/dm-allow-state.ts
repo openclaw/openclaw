@@ -7,10 +7,29 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { ChannelId } from "../plugins/types.public.js";
 import { readChannelIngressStoreAllowFromForDmPolicy } from "./store-allow-from.js";
 
+function readDmAllowAuditEntryValue(entry: unknown): string | number | undefined {
+  if (typeof entry === "string" || typeof entry === "number") {
+    return entry;
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return undefined;
+  }
+  const number = (entry as Record<string, unknown>).number;
+  return typeof number === "string" || typeof number === "number" ? number : undefined;
+}
+
+export function normalizeDmAllowAuditEntries(
+  entries: readonly unknown[] | null | undefined,
+): string[] {
+  return normalizeStringEntries(
+    (entries ?? []).map(readDmAllowAuditEntryValue).filter((entry) => entry != null),
+  );
+}
+
 export async function resolveDmAllowAuditState(params: {
   provider: ChannelId;
   accountId: string;
-  allowFrom?: Array<string | number> | null;
+  allowFrom?: readonly unknown[] | null;
   dmPolicy?: string | null;
   normalizeEntry?: (raw: string) => string;
   readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
@@ -20,9 +39,7 @@ export async function resolveDmAllowAuditState(params: {
   allowCount: number;
   isMultiUserDm: boolean;
 }> {
-  const configAllowFrom = normalizeStringEntries(
-    Array.isArray(params.allowFrom) ? params.allowFrom : undefined,
-  );
+  const configAllowFrom = normalizeDmAllowAuditEntries(params.allowFrom);
   const hasWildcard = configAllowFrom.includes("*");
   const storeAllowFrom = await readChannelIngressStoreAllowFromForDmPolicy({
     provider: params.provider,

@@ -12,10 +12,12 @@ import {
   toPluginInboundClaimEvent,
   toPluginInboundClaimContext,
   toInternalMessagePreprocessedContext,
+  toInternalMessagePreAuthContext,
   toInternalMessageReceivedContext,
   toInternalMessageSentContext,
   toInternalMessageTranscribedContext,
   toPluginMessageContext,
+  toPluginMessagePreAuthEvent,
   toPluginMessageReceivedEvent,
   toPluginMessageSentEvent,
 } from "./message-hook-mappers.js";
@@ -299,6 +301,7 @@ describe("message hook mappers", () => {
       ...deriveInboundMessageHookContext(
         makeInboundCtx({
           TopicName: "Deployments",
+          SenderGroup: "friends",
           MediaPaths: ["/tmp/audio.ogg", "/tmp/photo.jpg"],
           MediaUrls: ["https://cdn.example.com/audio.ogg", "https://cdn.example.com/photo.jpg"],
           MediaTypes: ["audio/ogg", "image/jpeg"],
@@ -320,6 +323,7 @@ describe("message hook mappers", () => {
       runId: "run-1",
       messageId: "msg-1",
       senderId: "sender-1",
+      senderGroup: "friends",
       trace,
       traceId: "11111111111111111111111111111111",
       spanId: "2222222222222222",
@@ -339,6 +343,7 @@ describe("message hook mappers", () => {
       threadId: 42,
       messageId: "msg-1",
       senderId: "sender-1",
+      senderGroup: "friends",
       sessionKey: "session-1",
       runId: "run-1",
       trace: receivedEvent.trace,
@@ -348,6 +353,7 @@ describe("message hook mappers", () => {
     });
     expect(receivedMetadata?.messageId).toBe("msg-1");
     expect(receivedMetadata?.senderName).toBe("User One");
+    expect(receivedMetadata?.senderGroup).toBe("friends");
     expect(receivedMetadata?.threadId).toBe(42);
     expect(receivedMetadata?.topicName).toBe("Deployments");
     expect(receivedMetadata?.mediaPath).toBe("/tmp/audio.ogg");
@@ -372,6 +378,7 @@ describe("message hook mappers", () => {
     });
     expect(internalMetadata?.senderUsername).toBe("userone");
     expect(internalMetadata?.senderE164).toBe("+15551234567");
+    expect(internalMetadata?.senderGroup).toBe("friends");
     expect(internalMetadata?.topicName).toBe("Deployments");
     expect(internalMetadata?.mediaPath).toBe("/tmp/audio.ogg");
     expect(internalMetadata?.mediaUrl).toBe("https://cdn.example.com/audio.ogg");
@@ -382,6 +389,33 @@ describe("message hook mappers", () => {
       "https://cdn.example.com/photo.jpg",
     ]);
     expect(internalMetadata?.mediaTypes).toEqual(["audio/ogg", "image/jpeg"]);
+  });
+
+  it("maps pre-auth payloads without session or run correlation", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        BodyForCommands: "Let me in",
+        SenderId: "+15551234567",
+        SenderName: "Requester",
+        SessionKey: undefined,
+      }),
+    );
+
+    expect(toPluginMessagePreAuthEvent(canonical)).toMatchObject({
+      channelId: "demo-chat",
+      senderId: "+15551234567",
+      senderName: "Requester",
+      content: "Let me in",
+      accountId: "acc-1",
+      conversationId: "demo-chat:chat:456",
+    });
+    expect(toPluginMessageContext(canonical).sessionKey).toBeUndefined();
+    expect(toInternalMessagePreAuthContext(canonical)).toMatchObject({
+      channelId: "demo-chat",
+      senderId: "+15551234567",
+      senderName: "Requester",
+      content: "Let me in",
+    });
   });
 
   it("passes frozen trace copies to inbound claim and sent plugin hooks", () => {
@@ -437,6 +471,7 @@ describe("message hook mappers", () => {
       sessionKey: "session-1",
       parentConversationId: undefined,
       senderId: "sender-1",
+      senderGroup: undefined,
       messageId: "msg-1",
       runId: undefined,
       trace: undefined,
@@ -490,6 +525,7 @@ describe("message hook mappers", () => {
       sessionKey: "session-1",
       parentConversationId: undefined,
       senderId: "sender-1",
+      senderGroup: undefined,
       messageId: "msg-1",
       runId: undefined,
       trace: undefined,

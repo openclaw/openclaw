@@ -420,6 +420,9 @@ export async function processMessage(params: {
   }
 
   const sender = getSenderIdentity(params.msg);
+  const senderGroup = inboundPolicy.resolveSenderGroup(
+    sender.e164 ?? (params.msg.chatType === "group" ? undefined : params.msg.from),
+  );
   const dmRouteTarget = resolveWhatsAppDmRouteTarget({
     msg: params.msg,
     senderE164: sender.e164 ?? undefined,
@@ -496,6 +499,7 @@ export async function processMessage(params: {
       id: getPrimaryIdentityId(sender) ?? undefined,
       name: sender.name ?? undefined,
       e164: sender.e164 ?? undefined,
+      group: senderGroup,
     },
     ...(audioTranscript !== undefined ? { transcript: audioTranscript } : {}),
     ...(audioTranscript !== undefined ? { mediaTranscribedIndexes: [0] } : {}),

@@ -152,6 +152,25 @@ const TelegramCustomCommandConfig = {
   pattern: TelegramCommandNamePattern,
   patternDescription: "use a-z, 0-9, underscore; max 32 chars",
 } as const;
+const TelegramAllowFromGroupSchema = z.enum([
+  "trusted",
+  "partner",
+  "friends",
+  "family",
+  "work",
+  "restricted",
+]);
+const TelegramGroupedAllowFromEntrySchema = z
+  .object({
+    number: z.union([z.string(), z.number()]),
+    group: TelegramAllowFromGroupSchema,
+  })
+  .strict();
+const TelegramAllowFromEntrySchema = z.union([
+  z.string(),
+  z.number(),
+  TelegramGroupedAllowFromEntrySchema,
+]);
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -205,7 +224,7 @@ export const TelegramDirectSchema = z
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: z.array(TelegramAllowFromEntrySchema).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
     errorPolicy: TelegramErrorPolicySchema,
@@ -268,7 +287,7 @@ export const TelegramAccountSchemaBase = z
     tokenFile: z.string().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: z.array(TelegramAllowFromEntrySchema).optional(),
     defaultTo: z.union([z.string(), z.number()]).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
