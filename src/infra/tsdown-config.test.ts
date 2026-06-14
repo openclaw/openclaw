@@ -271,6 +271,15 @@ describe("tsdown config", () => {
     expect(alwaysBundle("not-a-runtime-dependency")).toBe(false);
   });
 
+  // Regression test for session store runtime entry
+  // See: https://github.com/openclaw/openclaw/pull/65962
+  it("includes config/sessions/store.runtime entry", () => {
+    const unifiedGraph = unifiedDistGraph();
+    const entries = entryKeys(unifiedGraph!);
+
+    expect(entries).toContain("config/sessions/store.runtime");
+  });
+
   it("suppresses unresolved imports from extension source", () => {
     const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
     const handled: TsdownLog[] = [];
