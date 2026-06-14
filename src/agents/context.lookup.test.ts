@@ -1,8 +1,8 @@
 // Covers context-token lookup caches, catalog warmup, and provider-qualified
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type DiscoveredModel = {
   id: string;
@@ -709,7 +709,7 @@ describe("lookupContextTokens", () => {
     ]);
 
     const cfg = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
-    const { resolveContextTokensForModel, lookupContextTokens } = await importContextModule();
+    const { resolveContextTokensForModel } = await importContextModule();
 
     // Act 1: First call with cfg triggers warming (allowAsyncLoad not set)
     const firstResult = resolveContextTokensForModel({
