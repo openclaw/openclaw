@@ -201,6 +201,65 @@ describe("subagent-orphan-recovery", () => {
     });
   });
 
+  it("finalizes stale aborted runs instead of resuming them", async () => {
+    mockSingleAbortedSession();
+    const staleStartedAt = Date.now() - 3 * 60 * 60 * 1_000;
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        createdAt: staleStartedAt,
+        startedAt: staleStartedAt,
+      }),
+    );
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.recovered).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+    const finalizeParams = requireRecord(
+      firstCallParam(
+        vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).mock.calls,
+        "stale finalize",
+      ),
+      "stale finalize params",
+    );
+    expect(finalizeParams.runId).toBe("run-1");
+    expect(finalizeParams.childSessionKey).toBe("agent:main:subagent:test-session-1");
+    expect(finalizeParams.error).toContain("stale aborted subagent run not resumed");
+  });
+
+  it("reports stale finalization failures for scheduler retry", async () => {
+    mockSingleAbortedSession();
+    vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).mockResolvedValueOnce(0);
+    const staleStartedAt = Date.now() - 3 * 60 * 60 * 1_000;
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        createdAt: staleStartedAt,
+        startedAt: staleStartedAt,
+      }),
+    );
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.recovered).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.failedRuns).toEqual([
+      {
+        runId: "run-1",
+        childSessionKey: "agent:main:subagent:test-session-1",
+        error: expect.stringContaining("stale aborted subagent run not resumed"),
+      },
+    ]);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+  });
+
   it("skips runs that have already ended", async () => {
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set(
