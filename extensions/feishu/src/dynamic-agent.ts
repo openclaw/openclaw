@@ -127,7 +127,7 @@ export async function maybeCreateDynamicAgent(params: {
 
   return {
     created: committed.result?.created ?? false,
-    updatedCfg: committed.nextConfig,
+    updatedCfg: runtime.config.current() as OpenClawConfig,
     agentId: committed.result?.agentId,
   };
 }

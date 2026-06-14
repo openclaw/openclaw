@@ -16,7 +16,7 @@ afterEach(async () => {
   await fs.promises.rm(tempRoot, { recursive: true, force: true });
 });
 
-function createRuntime(currentCfg?: OpenClawConfig) {
+function createRuntime(currentCfg?: OpenClawConfig, persistedCfg?: OpenClawConfig) {
   let runtimeCfg = structuredClone(currentCfg ?? ({} as OpenClawConfig));
   const mutateConfigFile = vi.fn(
     async (params: {
@@ -28,7 +28,7 @@ function createRuntime(currentCfg?: OpenClawConfig) {
       const draft = structuredClone(runtimeCfg);
       const result = await params.mutate(draft, { snapshot: {} as never, previousHash: null });
       runtimeCfg = draft;
-      return { nextConfig: runtimeCfg, result };
+      return { nextConfig: persistedCfg ?? runtimeCfg, result };
     },
   );
   return {
@@ -230,6 +230,32 @@ describe("maybeCreateDynamicAgent", () => {
         },
       ],
     });
+  });
+
+  it("returns refreshed runtime config instead of the persisted source config", async () => {
+    const currentCfg = {
+      channels: { feishu: { appSecret: "resolved-secret" } },
+      agents: { list: [] },
+      bindings: [],
+    } as OpenClawConfig;
+    const persistedCfg = {
+      channels: { feishu: { appSecret: { source: "env", id: "FEISHU_APP_SECRET" } } },
+      agents: { list: [] },
+      bindings: [],
+    } as OpenClawConfig;
+    const { runtime } = createRuntime(currentCfg, persistedCfg);
+
+    const result = await maybeCreateDynamicAgent({
+      cfg: currentCfg,
+      runtime,
+      senderOpenId: "ou_sender",
+      dynamicCfg: createDynamicConfig(),
+      configWritesAllowed: true,
+      log: vi.fn(),
+    });
+
+    expect(result.updatedCfg.channels?.feishu?.appSecret).toBe("resolved-secret");
+    expect(result.updatedCfg.bindings).toHaveLength(1);
   });
 
   it("returns runtime current config when binding already exists", async () => {
