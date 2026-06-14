@@ -154,6 +154,28 @@ export function applyAgentConfig(
   };
 }
 
+/** Mark one agent as the default and clear the flag from every other entry. */
+export function setDefaultAgent(cfg: OpenClawConfig, agentId: string): OpenClawConfig {
+  const id = normalizeAgentId(agentId);
+  const nextList = [...listAgentEntries(cfg)];
+  for (let index = 0; index < nextList.length; index += 1) {
+    const entry = nextList[index];
+    const shouldDefault = normalizeAgentId(entry.id) === id;
+    // Only the target stays/becomes default; clearing the rest keeps resolveDefaultAgentId single.
+    if (Boolean(entry.default) === shouldDefault) {
+      continue;
+    }
+    nextList[index] = { ...entry, default: shouldDefault };
+  }
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      list: nextList,
+    },
+  };
+}
+
 /** Remove an agent and any config references that route or allow traffic to it. */
 export function pruneAgentConfig(
   cfg: OpenClawConfig,

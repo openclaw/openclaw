@@ -690,6 +690,10 @@ export class AgentsNamespace {
     return await this.client.request("agents.update", params);
   }
 
+  async setDefault(params: { agentId: string }): Promise<unknown> {
+    return await this.client.request("agents.setDefault", params);
+  }
+
   async delete(params: Record<string, unknown>): Promise<unknown> {
     return await this.client.request("agents.delete", params);
   }
