@@ -2474,6 +2474,7 @@ export const dispatchTelegramMessage = async ({
     !suppressFailureFallback &&
     (dispatchError ||
       (!deliverySummary.delivered &&
+        !suppressSilentReplyFallback &&
         (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
   if (shouldSendFailureFallback) {
     const fallbackText = dispatchError
