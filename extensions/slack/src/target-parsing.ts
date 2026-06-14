@@ -1,3 +1,4 @@
+// Slack plugin module implements target parsing behavior.
 import {
   buildMessagingTarget,
   ensureTargetId,
@@ -6,7 +7,7 @@ import {
   type MessagingTarget,
   type MessagingTargetKind,
   type MessagingTargetParseOptions,
-} from "openclaw/plugin-sdk/messaging-targets";
+} from "openclaw/plugin-sdk/channel-targets";
 
 export type SlackTargetKind = MessagingTargetKind;
 

@@ -1,4 +1,5 @@
-import type { APIMessage } from "discord-api-types/v10";
+// Discord plugin module implements send.messages behavior.
+import type { APIChannel, APIMessage } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import {
   createChannelMessage,
@@ -25,28 +26,48 @@ import type {
   DiscordThreadList,
 } from "./send.types.js";
 
+function formatDiscordThreadInitialMessageError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export class DiscordThreadInitialMessageError extends Error {
+  readonly initialMessageError: string;
+  readonly thread: APIChannel;
+
+  constructor(thread: APIChannel, error: unknown) {
+    const initialMessageError = formatDiscordThreadInitialMessageError(error);
+    super(
+      `Discord thread was created, but sending the initial message failed: ${initialMessageError}`,
+    );
+    this.name = "DiscordThreadInitialMessageError";
+    this.initialMessageError = initialMessageError;
+    this.thread = thread;
+  }
+}
+
 export async function readMessagesDiscord(
   channelId: string,
-  query: DiscordMessageQuery = {},
+  query: DiscordMessageQuery | undefined,
   opts: DiscordReactOpts,
 ): Promise<APIMessage[]> {
+  const messageQuery = query ?? {};
   const rest = resolveDiscordRest(opts);
   const limit =
-    typeof query.limit === "number" && Number.isFinite(query.limit)
-      ? Math.min(Math.max(Math.floor(query.limit), 1), 100)
+    typeof messageQuery.limit === "number" && Number.isFinite(messageQuery.limit)
+      ? Math.min(Math.max(Math.floor(messageQuery.limit), 1), 100)
       : undefined;
   const params: Record<string, string | number> = {};
   if (limit) {
     params.limit = limit;
   }
-  if (query.before) {
-    params.before = query.before;
+  if (messageQuery.before) {
+    params.before = messageQuery.before;
   }
-  if (query.after) {
-    params.after = query.after;
+  if (messageQuery.after) {
+    params.after = messageQuery.after;
   }
-  if (query.around) {
-    params.around = query.around;
+  if (messageQuery.around) {
+    params.around = messageQuery.around;
   }
   return await listChannelMessages(rest, channelId, params);
 }
@@ -68,7 +89,10 @@ export async function editMessageDiscord(
 ): Promise<APIMessage> {
   const rest = resolveDiscordRest(opts);
   return await editChannelMessage(rest, channelId, messageId, {
-    body: { content: payload.content },
+    body: {
+      content: payload.content,
+      ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
+    },
   });
 }
 
@@ -154,9 +178,13 @@ export async function createThreadDiscord(
   // For non-forum channels, send the initial message separately after thread creation.
   // Forum channels handle this via the `message` field in the request body.
   if (!isForumLike && payload.content?.trim() && "id" in thread) {
-    await createChannelMessage(rest, thread.id, {
-      body: { content: payload.content },
-    });
+    try {
+      await createChannelMessage(rest, thread.id, {
+        body: { content: payload.content },
+      });
+    } catch (error) {
+      throw new DiscordThreadInitialMessageError(thread, error);
+    }
   }
 
   return thread;

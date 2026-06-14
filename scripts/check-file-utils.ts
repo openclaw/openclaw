@@ -1,3 +1,4 @@
+// Check File Utils helper supports OpenClaw script workflows.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -26,7 +27,7 @@ export function collectFilesSync(
     if (!current) {
       continue;
     }
-    let entries: fs.Dirent[] = [];
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {

@@ -1,3 +1,4 @@
+// Covers config IO permission-denied errors and recovery messaging.
 import { describe, expect, it } from "vitest";
 import { createConfigIO } from "./io.js";
 
@@ -42,7 +43,7 @@ describe("config io EACCES handling", () => {
     expect(snapshot.issues[0].message).toContain("chown");
     expect(snapshot.issues[0].message).toContain(configPath);
     // Should also emit to the logger
-    expect(errors.some((e) => e.includes("chown"))).toBe(true);
+    expect(errors.join("\n")).toContain("chown");
   });
 
   it("includes configPath in the chown hint for the correct remediation command", async () => {

@@ -1,4 +1,9 @@
+// Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -12,10 +17,6 @@ import {
   resolveSessionStoreKey,
 } from "../gateway/session-store-key.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 export { clearPluginOwnedSessionState } from "./host-hook-cleanup.js";
 import {
   buildPluginAgentTurnPrepareContext,
@@ -26,8 +27,10 @@ import {
   type PluginNextTurnInjectionEnqueueResult,
   type PluginNextTurnInjectionRecord,
   type PluginSessionExtensionProjection,
+  type PluginSessionExtensionRegistration,
 } from "./host-hooks.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
 const log = createSubsystemLogger("plugins/host-hook-state");
 const PROJECTION_FAILED = Symbol("plugin-session-extension-projection-failed");
@@ -395,6 +398,43 @@ export async function drainPluginNextTurnInjectionContext(params: {
   };
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Session-extension JSON reads are caller-typed by namespace.
+export function getPluginSessionExtensionSync<T extends PluginJsonValue = PluginJsonValue>(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+  sessionKey?: string;
+  namespace: string;
+}): T | undefined {
+  const pluginId = params.pluginId.trim();
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const namespace = normalizeNamespace(params.namespace);
+  if (!pluginId || !sessionKey || !namespace) {
+    return undefined;
+  }
+  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
+  const value = loaded.entry?.pluginExtensions?.[pluginId]?.[namespace] as
+    | PluginJsonValue
+    | undefined;
+  return value as T | undefined;
+}
+
+export function getPluginSessionExtensionStateSync(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+  sessionKey?: string;
+}): Record<string, PluginJsonValue> | undefined {
+  const pluginId = params.pluginId.trim();
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!pluginId || !sessionKey) {
+    return undefined;
+  }
+  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
+  const value = loaded.entry?.pluginExtensions?.[pluginId] as
+    | Record<string, PluginJsonValue>
+    | undefined;
+  return value ? (copyJsonValue(value) as Record<string, PluginJsonValue>) : undefined;
+}
+
 export async function patchPluginSessionExtension(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -419,10 +459,10 @@ export async function patchPluginSessionExtension(params: {
   }
   const nextPluginValue = params.value as PluginJsonValue;
   const registry = getActivePluginRegistry();
-  const registered = (registry?.sessionExtensions ?? []).some(
+  const registration = (registry?.sessionExtensions ?? []).find(
     (entry) => entry.pluginId === pluginId && entry.extension.namespace === namespace,
   );
-  if (!registered) {
+  if (!registration) {
     return { ok: false, error: `unknown plugin session extension: ${pluginId}/${namespace}` };
   }
   const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey: params.sessionKey });
@@ -430,11 +470,24 @@ export async function patchPluginSessionExtension(params: {
     return { ok: false, error: `unknown session key: ${params.sessionKey}` };
   }
   const canonicalKey = loaded.canonicalKey ?? params.sessionKey;
+  // Promote the projected value into a top-level SessionEntry slot when the
+  // extension opted in via `sessionEntrySlotKey`. The slot is a read-only
+  // mirror: writes still go through patchSessionExtension; the host overwrites
+  // the slot value on every patch and clears it on unset.
+  const rawSlotKey = normalizeOptionalString(registration.extension.sessionEntrySlotKey);
+  const normalizedSlotKey = rawSlotKey ? normalizeSessionEntrySlotKey(rawSlotKey) : undefined;
+  if (normalizedSlotKey?.ok === false) {
+    log.warn(
+      `plugin session extension slot promotion skipped for ${pluginId}/${namespace}: ${normalizedSlotKey.error}`,
+    );
+  }
+  const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
   const nextValue = await updateSessionStore(loaded.storePath, (store) => {
     const entry = store[loaded.storeKey];
     if (!entry) {
       return undefined;
     }
+    const entryRecord = entry as Record<string, unknown>;
     const pluginExtensions = { ...entry.pluginExtensions };
     const pluginState = { ...pluginExtensions[pluginId] };
     if (params.unset === true) {
@@ -452,16 +505,92 @@ export async function patchPluginSessionExtension(params: {
     } else {
       delete entry.pluginExtensions;
     }
+    const storedSlotKeys = { ...entry.pluginExtensionSlotKeys };
+    const pluginSlotKeys = { ...storedSlotKeys[pluginId] };
+    const previousSlotKey = normalizeSessionEntrySlotKey(pluginSlotKeys[namespace]);
+    if (previousSlotKey.ok && previousSlotKey.key !== slotKey) {
+      delete entryRecord[previousSlotKey.key];
+    }
+    if (slotKey && params.unset !== true) {
+      pluginSlotKeys[namespace] = slotKey;
+    } else {
+      delete pluginSlotKeys[namespace];
+    }
+    if (Object.keys(pluginSlotKeys).length > 0) {
+      storedSlotKeys[pluginId] = pluginSlotKeys;
+    } else {
+      delete storedSlotKeys[pluginId];
+    }
+    if (Object.keys(storedSlotKeys).length > 0) {
+      entry.pluginExtensionSlotKeys = storedSlotKeys;
+    } else {
+      delete entry.pluginExtensionSlotKeys;
+    }
+    if (slotKey) {
+      const projected = projectSessionExtensionValueForSlot({
+        registration,
+        sessionKey: canonicalKey,
+        sessionId: entry.sessionId,
+        nextValue: params.unset === true ? undefined : nextPluginValue,
+      });
+      if (projected === undefined) {
+        delete entryRecord[slotKey];
+      } else {
+        entryRecord[slotKey] = projected;
+      }
+    }
     entry.updatedAt = Date.now();
     return pluginState[namespace] as PluginJsonValue | undefined;
   });
   return { ok: true, key: canonicalKey, value: nextValue };
 }
 
+/**
+ * Resolve the value that should be mirrored to `SessionEntry[slotKey]` for a
+ * promoted session-extension namespace. Failures are swallowed so a
+ * misbehaving projector cannot block the primary patch from being persisted.
+ */
+function projectSessionExtensionValueForSlot(params: {
+  registration: { pluginId: string; extension: PluginSessionExtensionRegistration };
+  sessionKey: string;
+  sessionId?: string;
+  nextValue: PluginJsonValue | undefined;
+}): PluginJsonValue | undefined {
+  if (params.nextValue === undefined) {
+    return undefined;
+  }
+  const projected = projectSessionExtensionValue({
+    pluginId: params.registration.pluginId,
+    namespace: params.registration.extension.namespace,
+    project: params.registration.extension.project,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    state: params.nextValue,
+  });
+  if (projected === PROJECTION_FAILED) {
+    return undefined;
+  }
+  if (isPromiseLike(projected)) {
+    discardUnexpectedPromiseProjection(projected);
+    return undefined;
+  }
+  if (projected === undefined || !isPluginJsonValue(projected)) {
+    return undefined;
+  }
+  return copyJsonValue(projected);
+}
+
 export async function projectPluginSessionExtensions(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): Promise<PluginSessionExtensionProjection[]> {
+  return collectPluginSessionExtensionProjections(params);
+}
+
+function collectPluginSessionExtensionProjections(params: {
+  sessionKey: string;
+  entry: SessionEntry;
+}): PluginSessionExtensionProjection[] {
   const registry = getActivePluginRegistry();
   const extensions = registry?.sessionExtensions ?? [];
   if (extensions.length === 0) {
@@ -545,46 +674,5 @@ export function projectPluginSessionExtensionsSync(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): PluginSessionExtensionProjection[] {
-  const registry = getActivePluginRegistry();
-  const extensions = registry?.sessionExtensions ?? [];
-  if (extensions.length === 0) {
-    return [];
-  }
-  const projections: PluginSessionExtensionProjection[] = [];
-  for (const registration of extensions) {
-    const state = params.entry.pluginExtensions?.[registration.pluginId]?.[
-      registration.extension.namespace
-    ] as PluginJsonValue | undefined;
-    if (state === undefined) {
-      continue;
-    }
-    const projected = projectSessionExtensionValue({
-      pluginId: registration.pluginId,
-      namespace: registration.extension.namespace,
-      project: registration.extension.project,
-      sessionKey: params.sessionKey,
-      sessionId: params.entry.sessionId,
-      state,
-    });
-    if (projected === PROJECTION_FAILED) {
-      continue;
-    }
-    if (isPromiseLike(projected)) {
-      discardUnexpectedPromiseProjection(projected);
-      continue;
-    }
-    if (projected === undefined || !isPluginJsonValue(projected)) {
-      // Validate the projection regardless of whether the extension has a
-      // `project` function: with a projector the value can be arbitrary;
-      // without one the persisted state could be hand-edited or malformed.
-      // Either way the size + shape check should run before projection.
-      continue;
-    }
-    projections.push({
-      pluginId: registration.pluginId,
-      namespace: registration.extension.namespace,
-      value: copyJsonValue(projected),
-    });
-  }
-  return projections;
+  return collectPluginSessionExtensionProjections(params);
 }

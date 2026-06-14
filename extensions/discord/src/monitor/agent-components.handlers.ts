@@ -1,5 +1,9 @@
-import { logError } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
+// Discord plugin module implements agent components.handlers behavior.
+import { logError } from "openclaw/plugin-sdk/logging-core";
+import {
+  resolveDiscordComponentEntryWithPersistence,
+  resolveDiscordModalEntryWithPersistence,
+} from "../components-registry.js";
 import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
 import {
   type AgentComponentContext,
@@ -46,7 +50,10 @@ async function handleDiscordComponentEvent(params: {
     return;
   }
 
-  const entry = resolveDiscordComponentEntry({ id: parsed.componentId, consume: false });
+  const entry = await resolveDiscordComponentEntryWithPersistence({
+    id: parsed.componentId,
+    consume: false,
+  });
   if (!entry) {
     try {
       await params.interaction.reply({
@@ -93,7 +100,7 @@ async function handleDiscordComponentEvent(params: {
   if (!componentAllowed) {
     return;
   }
-  const consumed = resolveDiscordComponentEntry({
+  const consumed = await resolveDiscordComponentEntryWithPersistence({
     id: parsed.componentId,
     consume: !entry.reusable,
   });
@@ -122,14 +129,21 @@ async function handleDiscordComponentEvent(params: {
   }
 
   const values = params.values ? mapSelectValues(consumed, params.values) : undefined;
-  if (consumed.callbackData) {
+  const selectedCallbackData =
+    consumed.kind === "select" &&
+    consumed.callbackDataKind === "callback" &&
+    params.values?.length === 1
+      ? params.values[0]?.trim()
+      : undefined;
+  const pluginCallbackData = consumed.callbackData ?? selectedCallbackData;
+  if (pluginCallbackData) {
     const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
       ctx: params.ctx,
       interaction: params.interaction,
       interactionCtx,
       channelCtx,
       isAuthorizedSender: commandAuthorized,
-      data: consumed.callbackData,
+      data: pluginCallbackData,
       kind: consumed.kind === "select" ? "select" : "button",
       values,
       messageId: consumed.messageId ?? params.interaction.message?.id,
@@ -138,11 +152,21 @@ async function handleDiscordComponentEvent(params: {
       return;
     }
   }
-  // Preserve explicit callback payloads for button fallbacks so Discord
-  // behaves like Telegram when buttons carry synthetic command text. Select
-  // fallbacks still need their chosen values in the synthesized event text.
+  // Command actions opt into synthetic command fallback. Opaque callback actions
+  // are plugin data only; falling through as slash commands would execute data.
+  const buttonCallbackFallback =
+    consumed.kind === "button" && consumed.callbackDataKind !== "callback"
+      ? consumed.callbackData?.trim()
+      : undefined;
+  const selectedCommandFallback =
+    consumed.kind === "select" &&
+    consumed.callbackDataKind === "command" &&
+    params.values?.length === 1
+      ? params.values[0]?.trim()
+      : undefined;
   const eventText =
-    (consumed.kind === "button" ? consumed.callbackData?.trim() : undefined) ||
+    buttonCallbackFallback ||
+    selectedCommandFallback ||
     (await loadComponentsRuntime()).formatDiscordComponentEventText({
       kind: consumed.kind === "select" ? "select" : "button",
       label: consumed.label,
@@ -193,7 +217,10 @@ async function handleDiscordModalTrigger(params: {
     }
     return;
   }
-  const entry = resolveDiscordComponentEntry({ id: parsed.componentId, consume: false });
+  const entry = await resolveDiscordComponentEntryWithPersistence({
+    id: parsed.componentId,
+    consume: false,
+  });
   if (!entry || entry.kind !== "modal-trigger") {
     try {
       await params.interaction.reply({
@@ -246,7 +273,7 @@ async function handleDiscordModalTrigger(params: {
     return;
   }
 
-  const consumed = resolveDiscordComponentEntry({
+  const consumed = await resolveDiscordComponentEntryWithPersistence({
     id: parsed.componentId,
     consume: !entry.reusable,
   });
@@ -263,7 +290,10 @@ async function handleDiscordModalTrigger(params: {
   }
 
   const resolvedModalId = consumed.modalId ?? modalId;
-  const modalEntry = resolveDiscordModalEntry({ id: resolvedModalId, consume: false });
+  const modalEntry = await resolveDiscordModalEntryWithPersistence({
+    id: resolvedModalId,
+    consume: false,
+  });
   if (!modalEntry) {
     try {
       await params.interaction.reply({

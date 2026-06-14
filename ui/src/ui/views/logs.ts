@@ -1,3 +1,4 @@
+// Control UI view renders logs screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -55,7 +56,7 @@ export function renderLogs(props: LogsProps) {
   const exportLabel = needle || levelFiltered ? "filtered" : "visible";
 
   return html`
-    <section class="card">
+    <section class="card card--fill-height">
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Logs</div>

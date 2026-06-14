@@ -1,3 +1,4 @@
+// Daemon inspect tests cover service inspection and diagnostic output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -112,7 +113,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
       await fs.mkdir(systemdDir, { recursive: true });
       await fs.writeFile(path.join(systemdDir, "openclaw-test.service"), TEST_SERVICE_CONTENTS);
       const result = await findExtraGatewayServices({ HOME: tmpHome });
-      expect(result).toEqual([]);
+      expect(result).toStrictEqual([]);
     } finally {
       await fs.rm(tmpHome, { recursive: true, force: true });
     }
@@ -130,7 +131,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
           GATEWAY_SERVICE_CONTENTS,
         );
         const result = await findExtraGatewayServices({ HOME: tmpHome });
-        expect(result).toEqual([]);
+        expect(result).toStrictEqual([]);
       } finally {
         await fs.rm(tmpHome, { recursive: true, force: true });
       }
@@ -175,7 +176,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
           COMPANION_SERVICE_CONTENTS,
         );
         const result = await findExtraGatewayServices({ HOME: tmpHome });
-        expect(result).toEqual([]);
+        expect(result).toStrictEqual([]);
       } finally {
         await fs.rm(tmpHome, { recursive: true, force: true });
       }
@@ -241,7 +242,7 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
 </dict></plist>`,
       );
       const result = await findExtraGatewayServices({ HOME: tmpHome });
-      expect(result).toEqual([]);
+      expect(result).toStrictEqual([]);
     } finally {
       await fs.rm(tmpHome, { recursive: true, force: true });
     }
@@ -261,7 +262,28 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
 </dict></plist>`,
       );
       const result = await findExtraGatewayServices({ HOME: tmpHome });
-      expect(result).toEqual([]);
+      expect(result).toStrictEqual([]);
+    } finally {
+      await fs.rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not report non-gateway LaunchAgents that mention clawdbot in environment values", async () => {
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    const launchdDir = path.join(tmpHome, "Library", "LaunchAgents");
+    try {
+      await fs.mkdir(launchdDir, { recursive: true });
+      await fs.writeFile(
+        path.join(launchdDir, "com.github.facebook.watchman.plist"),
+        `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>com.github.facebook.watchman</string>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>/Users/test/Projects/clawdbot2/node_modules/.bin:/opt/homebrew/bin</string></dict>
+<key>ProgramArguments</key><array><string>/opt/homebrew/bin/watchman</string><string>--foreground</string></array>
+</dict></plist>`,
+      );
+      const result = await findExtraGatewayServices({ HOME: tmpHome });
+      expect(result).toStrictEqual([]);
     } finally {
       await fs.rm(tmpHome, { recursive: true, force: true });
     }
@@ -318,7 +340,7 @@ describe("findExtraGatewayServices (win32)", () => {
 
   it("skips schtasks queries unless deep mode is enabled", async () => {
     const result = await findExtraGatewayServices({});
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(execSchtasksMock).not.toHaveBeenCalled();
   });
 
@@ -330,14 +352,16 @@ describe("findExtraGatewayServices (win32)", () => {
     });
 
     const result = await findExtraGatewayServices({}, { deep: true });
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("collects only non-openclaw marker tasks from schtasks output", async () => {
+    // Real schtasks /Query /FO LIST /V output prefixes root-folder task
+    // names with a backslash (e.g. TaskName:\OpenClaw Gateway).
     execSchtasksMock.mockResolvedValueOnce({
       code: 0,
       stdout: [
-        "TaskName: OpenClaw Gateway",
+        "TaskName:\\OpenClaw Gateway",
         "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
         "",
         "TaskName: Clawdbot Legacy",
@@ -351,6 +375,8 @@ describe("findExtraGatewayServices (win32)", () => {
     });
 
     const result = await findExtraGatewayServices({}, { deep: true });
+    // The \OpenClaw Gateway task is the live launcher — it must be skipped.
+    // Only the unrelated clawdbot task should be flagged.
     expect(result).toEqual([
       {
         platform: "win32",
@@ -359,6 +385,37 @@ describe("findExtraGatewayServices (win32)", () => {
         scope: "system",
         marker: "clawdbot",
         legacy: true,
+      },
+    ]);
+  });
+
+  it("reports duplicate root tasks that only share the gateway task prefix", async () => {
+    execSchtasksMock.mockResolvedValueOnce({
+      code: 0,
+      stdout: [
+        "TaskName:\\OpenClaw Gateway",
+        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "",
+        "TaskName:\\OpenClaw Gateway (dev)",
+        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run --profile dev",
+        "",
+        "TaskName:\\OpenClaw Gateway Backup",
+        "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "",
+      ].join("\n"),
+      stderr: "",
+    });
+
+    const result = await findExtraGatewayServices({}, { deep: true });
+    expect(result).toEqual([
+      {
+        platform: "win32",
+        label: "\\OpenClaw Gateway Backup",
+        detail:
+          "task: \\OpenClaw Gateway Backup, run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        scope: "system",
+        marker: "openclaw",
+        legacy: false,
       },
     ]);
   });

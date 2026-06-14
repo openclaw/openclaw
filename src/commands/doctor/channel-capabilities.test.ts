@@ -1,3 +1,4 @@
+// Doctor channel capability tests cover channel capability inspection and diagnostics.
 import { describe, expect, it } from "vitest";
 import { getDoctorChannelCapabilities } from "./channel-capabilities.js";
 
@@ -33,7 +34,7 @@ describe("doctor channel capabilities", () => {
     expect(getDoctorChannelCapabilities("msteams")).toEqual({
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     });
   });

@@ -1,3 +1,4 @@
+// Whatsapp tests cover channel outbound plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -99,6 +100,17 @@ describe("whatsappChannelOutbound", () => {
       gifPlayback: undefined,
       preserveLeadingWhitespace: true,
     });
+  });
+
+  it("rejects non-WhatsApp provider-prefixed outbound targets", () => {
+    const result = whatsappChannelOutbound.resolveTarget?.({
+      to: "telegram:1234567890",
+      allowFrom: [],
+      mode: undefined,
+    });
+
+    expect(result?.ok).toBe(false);
+    expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
 
   it("preserves indentation for payload delivery", async () => {

@@ -1,14 +1,15 @@
+// Discord plugin module implements agent components context behavior.
 import { ChannelType } from "discord-api-types/v10";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logError } from "openclaw/plugin-sdk/text-runtime";
-import {
-  type AgentComponentContext,
-  type AgentComponentInteraction,
-  type AgentComponentMessageInteraction,
-  type ComponentInteractionContext,
-  type DiscordChannelContext,
+import type {
+  AgentComponentContext,
+  AgentComponentInteraction,
+  AgentComponentMessageInteraction,
+  ComponentInteractionContext,
+  DiscordChannelContext,
 } from "./agent-components.types.js";
-import { normalizeDiscordSlug } from "./allow-list.js";
+import { normalizeDiscordDisplaySlug, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 
 function formatUsername(user: { username: string; discriminator?: string | null }): string {
@@ -72,6 +73,7 @@ export function resolveDiscordChannelContext(
   const channelInfo = resolveDiscordChannelInfoSafe(channel);
   const channelName = channelInfo.name;
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+  const displayChannelSlug = channelName ? normalizeDiscordDisplaySlug(channelName) : "";
   const channelType = channelInfo.type;
   const isThread = isThreadChannelType(channelType);
 
@@ -86,7 +88,16 @@ export function resolveDiscordChannelContext(
     }
   }
 
-  return { channelName, channelSlug, channelType, isThread, parentId, parentName, parentSlug };
+  return {
+    channelName,
+    channelSlug,
+    displayChannelSlug,
+    channelType,
+    isThread,
+    parentId,
+    parentName,
+    parentSlug,
+  };
 }
 
 export async function resolveComponentInteractionContext(params: {

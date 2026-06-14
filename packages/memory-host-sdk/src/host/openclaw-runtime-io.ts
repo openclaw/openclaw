@@ -1,9 +1,12 @@
+// Narrow IO/runtime facade re-exported for memory host helpers.
+
 export {
   CHARS_PER_TOKEN_ESTIMATE,
   DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
   DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
   applyWindowsSpawnProgramPolicy,
   configureSqliteWalMaintenance,
+  root,
   createSubsystemLogger,
   detectMime,
   estimateStringChars,
@@ -21,7 +24,6 @@ export {
   shouldIgnoreWarning,
   splitShellArgs,
   truncateUtf16Safe,
-  writeFileWithinRoot,
 } from "./openclaw-runtime.js";
 
 export type {

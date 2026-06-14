@@ -1,3 +1,4 @@
+// Appcast tests validate generated update appcast metadata.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { canonicalSparkleBuildFromVersion } from "../scripts/sparkle-build.ts";
@@ -9,6 +10,18 @@ type AppcastItem = {
   shortVersion: string | null;
   sparkleVersion: number | null;
 };
+
+describe("canonicalSparkleBuildFromVersion", () => {
+  it("keeps pre-transition appcast builds on the legacy date key", () => {
+    expect(canonicalSparkleBuildFromVersion("2026.6.2")).toBe(2026060290);
+  });
+
+  it("uses monthly patch build keys from the June 2026 floor onward", () => {
+    expect(canonicalSparkleBuildFromVersion("2026.6.5-beta.2")).toBe(2606000502);
+    expect(canonicalSparkleBuildFromVersion("2026.6.32-beta.1")).toBe(2606003201);
+    expect(canonicalSparkleBuildFromVersion("2026.6.32")).toBe(2606003290);
+  });
+});
 
 function parseItems(appcast: string): AppcastItem[] {
   return [...appcast.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((match) => {
@@ -32,9 +45,10 @@ describe("appcast.xml", () => {
     expect(items.length).toBeGreaterThan(0);
 
     for (const item of items) {
-      expect(item.shortVersion, item.raw).not.toBeNull();
-      expect(item.sparkleVersion, item.raw).not.toBeNull();
-      expect(item.sparkleVersion).toBe(canonicalSparkleBuildFromVersion(item.shortVersion!));
+      if (item.shortVersion === null || item.sparkleVersion === null) {
+        throw new Error(`Appcast entry missing version fields: ${item.raw}`);
+      }
+      expect(item.sparkleVersion).toBe(canonicalSparkleBuildFromVersion(item.shortVersion));
     }
   });
 

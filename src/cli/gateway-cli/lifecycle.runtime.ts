@@ -1,8 +1,12 @@
+// Lazy lifecycle runtime export hub used by gateway run-loop restart paths.
 export {
-  abortEmbeddedPiRun,
+  abortEmbeddedAgentRun,
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   waitForActiveEmbeddedRuns,
-} from "../../agents/pi-embedded-runner/runs.js";
+} from "../../agents/embedded-agent-runner/runs.js";
+export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export {
   respawnGatewayProcessForUpdate,
@@ -10,6 +14,8 @@ export {
 } from "../../infra/process-respawn.js";
 export {
   resolveGatewayRestartDeferralTimeoutMs,
+  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewaySigusr1RestartIntent,
   consumeGatewayRestartIntentSync,
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -18,17 +24,16 @@ export {
   resetGatewayRestartStateForInProcessRestart,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
+export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
-export {
-  getActiveBundledRuntimeDepsInstallCount,
-  waitForBundledRuntimeDepsInstallIdle,
-} from "../../plugins/bundled-runtime-deps-activity.js";
 export {
   getActiveTaskCount,
   markGatewayDraining,
   resetAllLanes,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
+export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";

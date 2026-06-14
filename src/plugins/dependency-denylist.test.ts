@@ -1,6 +1,8 @@
+// Verifies plugin dependency denylist enforcement.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 import {
   blockedInstallDependencyPackageNames,
   findBlockedPackageDirectoryInPath,
@@ -15,15 +17,22 @@ type RootPackageManifest = {
   optionalDependencies?: Record<string, string>;
   overrides?: Record<string, string | Record<string, string>>;
   peerDependencies?: Record<string, string>;
-  pnpm?: {
-    overrides?: Record<string, string>;
-  };
+};
+
+type PnpmWorkspaceConfig = {
+  overrides?: Record<string, string>;
 };
 
 function readRootManifest(): RootPackageManifest {
   return JSON.parse(
     fs.readFileSync(path.resolve(process.cwd(), "package.json"), "utf8"),
   ) as RootPackageManifest;
+}
+
+function readPnpmWorkspaceConfig(): PnpmWorkspaceConfig {
+  return YAML.parse(
+    fs.readFileSync(path.resolve(process.cwd(), "pnpm-workspace.yaml"), "utf8"),
+  ) as PnpmWorkspaceConfig;
 }
 
 function readRootLockfile(): string {
@@ -82,10 +91,9 @@ describe("dependency denylist guardrails", () => {
     ]);
   });
 
-  it("pins the axios override to an exact version", () => {
-    const manifest = readRootManifest();
-    expect(manifest.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(manifest.pnpm?.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
+  it("pins the active axios override to an exact version", () => {
+    const pnpmWorkspace = readPnpmWorkspaceConfig();
+    expect(pnpmWorkspace.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it("finds blocked package directories under node_modules regardless of node_modules casing", () => {
@@ -196,7 +204,7 @@ describe("dependency denylist guardrails", () => {
 
   it("keeps blocked packages out of the root manifest", () => {
     const manifest = readRootManifest();
-    expect(findBlockedManifestDependencies(manifest)).toEqual([]);
+    expect(findBlockedManifestDependencies(manifest)).toStrictEqual([]);
   });
 
   it("keeps blocked packages out of the lockfile graph", () => {

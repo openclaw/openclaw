@@ -1,4 +1,6 @@
+// Google Meet plugin module implements chrome create behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
@@ -25,7 +27,7 @@ type BrowserCreateStepResult = {
   retryAfterMs?: number;
 };
 
-export type GoogleMeetBrowserCreateResult = {
+type GoogleMeetBrowserCreateResult = {
   meetingUri: string;
   nodeId: string;
   targetId?: string;
@@ -35,7 +37,7 @@ export type GoogleMeetBrowserCreateResult = {
   source: "browser";
 };
 
-export type GoogleMeetBrowserManualAction = {
+type GoogleMeetBrowserManualAction = {
   source: "browser";
   error: string;
   manualActionRequired: true;
@@ -50,7 +52,7 @@ export type GoogleMeetBrowserManualAction = {
   };
 };
 
-export class GoogleMeetBrowserManualActionError extends Error {
+class GoogleMeetBrowserManualActionError extends Error {
   readonly payload: GoogleMeetBrowserManualAction;
 
   constructor(payload: Omit<GoogleMeetBrowserManualAction, "source" | "error">) {
@@ -69,10 +71,6 @@ export function isGoogleMeetBrowserManualActionError(
   error: unknown,
 ): error is GoogleMeetBrowserManualActionError {
   return error instanceof GoogleMeetBrowserManualActionError;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatBrowserAutomationError(error: unknown): string {

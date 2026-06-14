@@ -1,11 +1,12 @@
+// Discord plugin module implements native command.options behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveCommandArgChoices,
   type ChatCommandDefinition,
 } from "openclaw/plugin-sdk/native-command-registry";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AutocompleteInteraction, CommandOptions } from "../internal/discord.js";
 
 const log = createSubsystemLogger("discord/native-command");
@@ -26,6 +27,25 @@ export function truncateDiscordCommandDescription(params: {
     `discord: truncating native command description (${label}) from ${value.length} to ${DISCORD_COMMAND_DESCRIPTION_MAX}: ${JSON.stringify(value)}`,
   );
   return value.slice(0, DISCORD_COMMAND_DESCRIPTION_MAX);
+}
+
+export function truncateDiscordCommandDescriptionLocalizations(params: {
+  value?: Record<string, string>;
+  label: string;
+}): Record<string, string> | undefined {
+  const entries = Object.entries(params.value ?? {});
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    entries.map(([locale, description]) => [
+      locale,
+      truncateDiscordCommandDescription({
+        value: description,
+        label: `${params.label} locale:${locale}`,
+      }),
+    ]),
+  );
 }
 
 function resolveDiscordCommandLogLabel(command: ChatCommandDefinition): string {

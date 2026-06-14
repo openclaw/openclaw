@@ -1,9 +1,10 @@
+// Shared CLI execution wrappers and inherited Commander option lookup.
 import type { Command } from "commander";
 import { formatErrorMessage } from "../infra/errors.js";
 
 export { formatErrorMessage };
 
-export type ManagerLookupResult<T> = {
+type ManagerLookupResult<T> = {
   manager: T | null;
   error?: string;
 };
@@ -31,6 +32,13 @@ export async function withManager<T>(params: {
   }
 }
 
+function formatCommandRuntimeError(err: unknown): string {
+  if (err instanceof Error) {
+    return formatErrorMessage(new Error(String(err), { cause: err.cause }));
+  }
+  return formatErrorMessage(err);
+}
+
 export async function runCommandWithRuntime(
   runtime: { error: (message: string) => void; exit: (code: number) => void },
   action: () => Promise<void>,
@@ -43,7 +51,7 @@ export async function runCommandWithRuntime(
       onError(err);
       return;
     }
-    runtime.error(String(err));
+    runtime.error(formatCommandRuntimeError(err));
     runtime.exit(1);
   }
 }

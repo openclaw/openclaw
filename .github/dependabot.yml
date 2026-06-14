@@ -29,7 +29,7 @@ updates:
         update-types:
           - minor
           - patch
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 20
     registries:
       - npm-npmjs
 
@@ -83,7 +83,7 @@ updates:
 
   # Swift Package Manager - Swabble
   - package-ecosystem: swift
-    directory: /Swabble
+    directory: /apps/swabble
     schedule:
       interval: daily
     cooldown:

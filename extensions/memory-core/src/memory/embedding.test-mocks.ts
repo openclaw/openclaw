@@ -1,3 +1,4 @@
+// Memory Core plugin module implements embedding mocks behavior.
 import { vi, type Mock } from "vitest";
 import "./test-runtime-mocks.js";
 
@@ -26,6 +27,7 @@ export function resetEmbeddingMocks(): void {
 }
 
 vi.mock("./embeddings.js", () => ({
+  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
     provider: {

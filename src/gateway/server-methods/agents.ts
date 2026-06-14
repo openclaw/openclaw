@@ -1,5 +1,21 @@
+// Agents gateway methods expose agent listing, config mutation, workspace file
+// reads/writes, identity merging, and safe deletion for operator clients.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateAgentsCreateParams,
+  validateAgentsDeleteParams,
+  validateAgentsFilesGetParams,
+  validateAgentsFilesListParams,
+  validateAgentsFilesSetParams,
+  validateAgentsListParams,
+  validateAgentsUpdateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -18,41 +34,29 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
+  resolveWorkspaceAttestationPaths,
+  shouldRemoveWorkspaceAttestation,
 } from "../../agents/workspace.js";
-import { purgeAgentSessionStoreEntries } from "../../commands/agents.command-shared.js";
+import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
-  applyAgentConfig,
-  findAgentEntryIndex,
-  listAgentEntries,
-  pruneAgentConfig,
-} from "../../commands/agents.config.js";
-import { replaceConfigFile } from "../../config/config.js";
-import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+  purgeAgentSessionStoreEntries,
+  resolveSessionTranscriptsDirForAgent,
+} from "../../config/sessions.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sameFileIdentity } from "../../infra/file-identity.js";
-import {
-  openFileWithinRoot,
-  readFileWithinRoot,
-  SafeOpenError,
-  writeFileWithinRoot,
-} from "../../infra/fs-safe.js";
+import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateAgentsCreateParams,
-  validateAgentsDeleteParams,
-  validateAgentsFilesGetParams,
-  validateAgentsFilesListParams,
-  validateAgentsFilesSetParams,
-  validateAgentsListParams,
-  validateAgentsUpdateParams,
-} from "../protocol/index.js";
 import { listAgentsForGateway } from "../session-utils.js";
+import {
+  AgentConfigPreconditionError,
+  createAgentConfigEntry,
+  deleteAgentConfigEntry,
+  isConfiguredAgent,
+  updateAgentConfigEntry,
+} from "./agents-config-mutations.js";
+import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const BOOTSTRAP_FILE_NAMES = [
@@ -69,33 +73,33 @@ const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
 );
 
 const agentsHandlerDeps = {
+  root,
   isWorkspaceSetupCompleted,
-  openFileWithinRoot,
-  readFileWithinRoot,
-  writeFileWithinRoot,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTests(
     overrides: Partial<{
+      root: typeof root;
       isWorkspaceSetupCompleted: typeof isWorkspaceSetupCompleted;
-      openFileWithinRoot: typeof openFileWithinRoot;
-      readFileWithinRoot: typeof readFileWithinRoot;
-      writeFileWithinRoot: typeof writeFileWithinRoot;
     }>,
   ) {
-    Object.assign(agentsHandlerDeps, overrides);
+    if (overrides.isWorkspaceSetupCompleted) {
+      agentsHandlerDeps.isWorkspaceSetupCompleted = overrides.isWorkspaceSetupCompleted;
+    }
+    if (overrides.root) {
+      agentsHandlerDeps.root = overrides.root;
+    }
   },
   resetDepsForTests() {
+    agentsHandlerDeps.root = root;
     agentsHandlerDeps.isWorkspaceSetupCompleted = isWorkspaceSetupCompleted;
-    agentsHandlerDeps.openFileWithinRoot = openFileWithinRoot;
-    agentsHandlerDeps.readFileWithinRoot = readFileWithinRoot;
-    agentsHandlerDeps.writeFileWithinRoot = writeFileWithinRoot;
   },
 };
 
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME] as const;
 
+// Gateway file mutations are intentionally capped to the workspace files the UI owns.
 const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
 
 function resolveAgentWorkspaceFileOrRespondError(
@@ -134,41 +138,62 @@ type FileMeta = {
   updatedAtMs: number;
 };
 
-function isPathInsideDirectory(rootDir: string, candidatePath: string): boolean {
-  const relative = path.relative(rootDir, candidatePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+type WorkspaceRoot = Awaited<ReturnType<typeof root>>;
+
+function isRegularWorkspaceFileStat(stat: {
+  isFile: boolean | (() => boolean);
+  isSymbolicLink: boolean | (() => boolean);
+  nlink: number;
+}): boolean {
+  const isFile = typeof stat.isFile === "function" ? stat.isFile() : stat.isFile;
+  const isSymbolicLink =
+    typeof stat.isSymbolicLink === "function" ? stat.isSymbolicLink() : stat.isSymbolicLink;
+  // Reject links even after path-root containment so workspace reads cannot follow shared files.
+  return isFile && !isSymbolicLink && stat.nlink <= 1;
+}
+
+function toWorkspaceFileMeta(
+  stat: {
+    size: number;
+    mtimeMs: number;
+  } & Parameters<typeof isRegularWorkspaceFileStat>[0],
+): FileMeta | null {
+  if (!isRegularWorkspaceFileStat(stat)) {
+    return null;
+  }
+  return {
+    size: stat.size,
+    updatedAtMs: Math.floor(stat.mtimeMs),
+  };
 }
 
 async function statWorkspaceFileSafely(
+  workspaceRoot: WorkspaceRoot | null,
   workspaceDir: string,
   name: string,
 ): Promise<FileMeta | null> {
   try {
-    const workspaceReal = await fs.realpath(workspaceDir);
-    const candidatePath = path.resolve(workspaceReal, name);
-    if (!isPathInsideDirectory(workspaceReal, candidatePath)) {
+    const stat = workspaceRoot
+      ? await workspaceRoot.stat(name)
+      : await fs.lstat(path.join(workspaceDir, name));
+    return toWorkspaceFileMeta(stat);
+  } catch {
+    if (!workspaceRoot) {
       return null;
     }
-
-    const pathStat = await fs.lstat(candidatePath);
-    if (!pathStat.isFile() || pathStat.nlink > 1) {
+    try {
+      // fs-safe roots can reject fixtures that are still valid regular files for listing metadata.
+      const stat = await fs.lstat(path.join(workspaceDir, name));
+      return toWorkspaceFileMeta(stat);
+    } catch {
       return null;
     }
+  }
+}
 
-    const realPath = await fs.realpath(candidatePath);
-    if (!isPathInsideDirectory(workspaceReal, realPath)) {
-      return null;
-    }
-
-    const realStat = await fs.stat(realPath);
-    if (!realStat.isFile() || realStat.nlink > 1 || !sameFileIdentity(pathStat, realStat)) {
-      return null;
-    }
-
-    return {
-      size: realStat.size,
-      updatedAtMs: Math.floor(realStat.mtimeMs),
-    };
+async function openWorkspaceRootSafely(workspaceDir: string): Promise<WorkspaceRoot | null> {
+  try {
+    return await agentsHandlerDeps.root(workspaceDir);
   } catch {
     return null;
   }
@@ -183,12 +208,26 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     updatedAtMs?: number;
   }> = [];
 
+  const workspaceRoot = await openWorkspaceRootSafely(workspaceDir);
+  if (!workspaceRoot) {
+    // Keep the UI shape stable when the workspace path is missing or unsafe.
+    const missingNames = [
+      ...(options?.hideBootstrap ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING : BOOTSTRAP_FILE_NAMES),
+      DEFAULT_MEMORY_FILENAME,
+    ];
+    return missingNames.map((name) => ({
+      name,
+      path: path.join(workspaceDir, name),
+      missing: true,
+    }));
+  }
+
   const bootstrapFileNames = options?.hideBootstrap
     ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING
     : BOOTSTRAP_FILE_NAMES;
   for (const name of bootstrapFileNames) {
     const filePath = path.join(workspaceDir, name);
-    const meta = await statWorkspaceFileSafely(workspaceDir, name);
+    const meta = await statWorkspaceFileSafely(workspaceRoot, workspaceDir, name);
     if (meta) {
       files.push({
         name,
@@ -202,7 +241,11 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     }
   }
 
-  const primaryMeta = await statWorkspaceFileSafely(workspaceDir, DEFAULT_MEMORY_FILENAME);
+  const primaryMeta = await statWorkspaceFileSafely(
+    workspaceRoot,
+    workspaceDir,
+    DEFAULT_MEMORY_FILENAME,
+  );
   if (primaryMeta) {
     files.push({
       name: DEFAULT_MEMORY_FILENAME,
@@ -235,10 +278,6 @@ function sanitizeIdentityLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function resolveOptionalStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function respondInvalidMethodParams(
   respond: RespondFn,
   method: string,
@@ -254,12 +293,23 @@ function respondInvalidMethodParams(
   );
 }
 
-function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean {
-  return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
-}
-
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
+}
+
+function respondAgentConfigPreconditionError(
+  respond: RespondFn,
+  error: AgentConfigPreconditionError,
+): void {
+  if (error.kind === "not-found") {
+    respondAgentNotFound(respond, error.agentId);
+    return;
+  }
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, `agent "${error.agentId}" already exists`),
+  );
 }
 
 async function moveToTrashBestEffort(pathname: string): Promise<void> {
@@ -312,14 +362,10 @@ async function writeWorkspaceFileOrRespond(params: {
 }): Promise<boolean> {
   await fs.mkdir(params.workspaceDir, { recursive: true });
   try {
-    await agentsHandlerDeps.writeFileWithinRoot({
-      rootDir: params.workspaceDir,
-      relativePath: params.name,
-      data: params.content,
-      encoding: "utf8",
-    });
+    const workspaceRoot = await agentsHandlerDeps.root(params.workspaceDir);
+    await workspaceRoot.write(params.name, params.content, { encoding: "utf8" });
   } catch (err) {
-    if (err instanceof SafeOpenError) {
+    if (err instanceof FsSafeError) {
       respondWorkspaceFileUnsafe(params.respond, params.name);
       return false;
     }
@@ -346,20 +392,50 @@ function normalizeIdentityForFile(
   return resolved;
 }
 
+function createAgentIdentityConfig(params: {
+  safeName?: string;
+  emoji?: unknown;
+  avatar?: unknown;
+}): IdentityConfig | undefined {
+  const emoji = resolveOptionalStringParam(params.emoji);
+  const avatar = resolveOptionalStringParam(params.avatar);
+  const identity = {
+    ...(params.safeName ? { name: params.safeName } : {}),
+    ...(emoji ? { emoji: sanitizeIdentityLine(emoji) } : {}),
+    ...(avatar ? { avatar: sanitizeIdentityLine(avatar) } : {}),
+  } satisfies IdentityConfig;
+  return identity.name || identity.emoji || identity.avatar ? identity : undefined;
+}
+
+function buildAgentConfigUpdate(params: {
+  agentId: string;
+  safeName?: string;
+  workspaceDir?: string;
+  model?: string;
+  identity?: IdentityConfig;
+}): Parameters<typeof updateAgentConfigEntry>[0] {
+  return {
+    agentId: params.agentId,
+    ...(params.safeName ? { name: params.safeName } : {}),
+    ...(params.workspaceDir ? { workspace: params.workspaceDir } : {}),
+    ...(params.model ? { model: params.model } : {}),
+    ...(params.identity ? { identity: params.identity } : {}),
+  };
+}
+
 async function readWorkspaceFileContent(
   workspaceDir: string,
   name: string,
 ): Promise<string | undefined> {
   try {
-    const safeRead = await agentsHandlerDeps.readFileWithinRoot({
-      rootDir: workspaceDir,
-      relativePath: name,
-      rejectHardlinks: true,
+    const workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+    const safeRead = await workspaceRoot.read(name, {
+      hardlinks: "reject",
       nonBlockingRead: true,
     });
     return safeRead.buffer.toString("utf-8");
   } catch (err) {
-    if (err instanceof SafeOpenError && err.code === "not-found") {
+    if (err instanceof FsSafeError && err.code === "not-found") {
       return undefined;
     }
     throw err;
@@ -374,6 +450,7 @@ async function buildIdentityMarkdownForWrite(params: {
 }): Promise<string> {
   let baseContent: string | undefined;
   if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
+    // Workspace moves may create a blank identity file; merge into the previous user-edited file.
     baseContent = await readWorkspaceFileContent(
       params.fallbackWorkspaceDir,
       DEFAULT_IDENTITY_FILENAME,
@@ -404,7 +481,7 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
   try {
     return await buildIdentityMarkdownForWrite(params);
   } catch (err) {
-    if (err instanceof SafeOpenError) {
+    if (err instanceof FsSafeError) {
       respondWorkspaceFileUnsafe(params.respond, DEFAULT_IDENTITY_FILENAME);
       return null;
     }
@@ -413,35 +490,22 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
-  "agents.list": ({ params, respond, context }) => {
+  "agents.list": async ({ params, respond, context }) => {
     if (!validateAgentsListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agents.list params: ${formatValidationErrors(validateAgentsListParams.errors)}`,
-        ),
-      );
+      respondInvalidMethodParams(respond, "agents.list", validateAgentsListParams.errors);
       return;
     }
 
     const cfg = context.getRuntimeConfig();
-    const result = listAgentsForGateway(cfg);
+    const modelCatalog = await loadOptionalServerMethodModelCatalog(context, "agents.list", {
+      logOnceKey: "agents.list",
+    });
+    const result = listAgentsForGateway(cfg, modelCatalog);
     respond(true, result, undefined);
   },
   "agents.create": async ({ params, respond, context }) => {
     if (!validateAgentsCreateParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agents.create params: ${formatValidationErrors(
-            validateAgentsCreateParams.errors,
-          )}`,
-        ),
-      );
+      respondInvalidMethodParams(respond, "agents.create", validateAgentsCreateParams.errors);
       return;
     }
 
@@ -457,7 +521,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0) {
+    if (isConfiguredAgent(cfg, agentId)) {
       respond(
         false,
         undefined,
@@ -470,14 +534,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const safeName = sanitizeIdentityLine(rawName);
     const model = resolveOptionalStringParam(params.model);
-    const emoji = resolveOptionalStringParam(params.emoji);
-    const avatar = resolveOptionalStringParam(params.avatar);
-
-    const identity = {
-      name: safeName,
-      ...(emoji ? { emoji: sanitizeIdentityLine(emoji) } : {}),
-      ...(avatar ? { avatar: sanitizeIdentityLine(avatar) } : {}),
-    };
+    const identity = createAgentIdentityConfig({
+      safeName,
+      emoji: params.emoji,
+      avatar: params.avatar,
+    }) ?? { name: safeName };
 
     // Resolve agentDir against the config we're about to persist (vs the pre-write config),
     // so subsequent resolutions can't disagree about the agent's directory.
@@ -494,7 +555,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
     // Ensure workspace & transcripts exist BEFORE writing config so a failure
     // here does not leave a broken config entry behind.
     const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
-    await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
+    await ensureAgentWorkspace({
+      dir: workspaceDir,
+      ensureBootstrapFiles: !skipBootstrap,
+      skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+    });
     await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
 
     const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
@@ -518,10 +583,22 @@ export const agentsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    await replaceConfigFile({
-      nextConfig,
-      afterWrite: { mode: "auto" },
-    });
+    try {
+      await createAgentConfigEntry({
+        agentId,
+        name: safeName,
+        workspace: workspaceDir,
+        model,
+        identity,
+        agentDir,
+      });
+    } catch (error) {
+      if (error instanceof AgentConfigPreconditionError) {
+        respondAgentConfigPreconditionError(respond, error);
+        return;
+      }
+      throw error;
+    }
 
     respond(true, { ok: true, agentId, name: safeName, workspace: workspaceDir, model }, undefined);
   },
@@ -544,30 +621,27 @@ export const agentsHandlers: GatewayRequestHandlers = {
         : undefined;
 
     const model = resolveOptionalStringParam(params.model);
-    const emoji = resolveOptionalStringParam(params.emoji);
-    const avatar = resolveOptionalStringParam(params.avatar);
 
     const safeName =
       typeof params.name === "string" && params.name.trim()
         ? sanitizeIdentityLine(params.name.trim())
         : undefined;
 
-    const hasIdentityFields = Boolean(safeName || emoji || avatar);
-    const identity = hasIdentityFields
-      ? {
-          ...(safeName ? { name: safeName } : {}),
-          ...(emoji ? { emoji: sanitizeIdentityLine(emoji) } : {}),
-          ...(avatar ? { avatar: sanitizeIdentityLine(avatar) } : {}),
-        }
-      : undefined;
-
-    const nextConfig = applyAgentConfig(cfg, {
-      agentId,
-      ...(safeName ? { name: safeName } : {}),
-      ...(workspaceDir ? { workspace: workspaceDir } : {}),
-      ...(model ? { model } : {}),
-      ...(identity ? { identity } : {}),
+    const identity = createAgentIdentityConfig({
+      safeName,
+      emoji: params.emoji,
+      avatar: params.avatar,
     });
+    const hasIdentityFields = Boolean(identity);
+
+    const agentConfigUpdate = buildAgentConfigUpdate({
+      agentId,
+      safeName,
+      workspaceDir,
+      model,
+      identity,
+    });
+    const nextConfig = applyAgentConfig(cfg, agentConfigUpdate);
 
     let ensuredWorkspace: Awaited<ReturnType<typeof ensureAgentWorkspace>> | undefined;
     if (workspaceDir) {
@@ -575,6 +649,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       ensuredWorkspace = await ensureAgentWorkspace({
         dir: workspaceDir,
         ensureBootstrapFiles: !skipBootstrap,
+        skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
     }
 
@@ -609,10 +684,15 @@ export const agentsHandlers: GatewayRequestHandlers = {
       }
     }
 
-    await replaceConfigFile({
-      nextConfig,
-      afterWrite: { mode: "auto" },
-    });
+    try {
+      await updateAgentConfigEntry(agentConfigUpdate);
+    } catch (error) {
+      if (error instanceof AgentConfigPreconditionError) {
+        respondAgentConfigPreconditionError(respond, error);
+        return;
+      }
+      throw error;
+    }
 
     respond(true, { ok: true, agentId }, undefined);
   },
@@ -638,40 +718,56 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const deleteFiles = typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const agentDir = resolveAgentDir(cfg, agentId);
-    const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-
-    const result = pruneAgentConfig(cfg, agentId);
-    await replaceConfigFile({
-      nextConfig: result.config,
-      afterWrite: { mode: "auto" },
-    });
+    let committed: Awaited<ReturnType<typeof deleteAgentConfigEntry>>;
+    try {
+      committed = await deleteAgentConfigEntry({ agentId });
+    } catch (error) {
+      if (error instanceof AgentConfigPreconditionError) {
+        respondAgentConfigPreconditionError(respond, error);
+        return;
+      }
+      throw error;
+    }
+    const deleteResult = committed.result;
+    if (!deleteResult) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "agent delete did not commit"));
+      return;
+    }
 
     // Purge session store entries so orphaned sessions cannot be targeted (#65524).
     await purgeAgentSessionStoreEntries(cfg, agentId);
 
     if (deleteFiles) {
-      await Promise.all([
-        moveToTrashBestEffort(workspaceDir),
-        moveToTrashBestEffort(agentDir),
-        moveToTrashBestEffort(sessionsDir),
-      ]);
+      const workspaceSharedWith = findOverlappingWorkspaceAgentIds(
+        committed.nextConfig,
+        agentId,
+        deleteResult.workspaceDir,
+      );
+      const deleteWorkspace = workspaceSharedWith.length === 0;
+      const pathsToTrash = [deleteResult.agentDir, deleteResult.sessionsDir];
+      if (deleteWorkspace) {
+        pathsToTrash.unshift(deleteResult.workspaceDir);
+        for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+          deleteResult.workspaceDir,
+        ).entries()) {
+          if (
+            await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })
+          ) {
+            pathsToTrash.push(attestationPath);
+          }
+        }
+      }
+      await Promise.all(pathsToTrash.map((pathname) => moveToTrashBestEffort(pathname)));
     }
 
-    respond(true, { ok: true, agentId, removedBindings: result.removedBindings }, undefined);
+    respond(true, { ok: true, agentId, removedBindings: deleteResult.removedBindings }, undefined);
   },
   "agents.files.list": async ({ params, respond, context }) => {
     if (!validateAgentsFilesListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agents.files.list params: ${formatValidationErrors(
-            validateAgentsFilesListParams.errors,
-          )}`,
-        ),
+      respondInvalidMethodParams(
+        respond,
+        "agents.files.list",
+        validateAgentsFilesListParams.errors,
       );
       return;
     }
@@ -706,20 +802,19 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
     const { agentId, workspaceDir, name } = resolved;
     const filePath = path.join(workspaceDir, name);
-    let safeRead: Awaited<ReturnType<typeof readFileWithinRoot>>;
+    let safeRead: ReadResult;
     try {
-      safeRead = await agentsHandlerDeps.readFileWithinRoot({
-        rootDir: workspaceDir,
-        relativePath: name,
-        rejectHardlinks: true,
+      const workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+      safeRead = await workspaceRoot.read(name, {
+        hardlinks: "reject",
         nonBlockingRead: true,
       });
     } catch (err) {
-      if (err instanceof SafeOpenError && err.code === "not-found") {
+      if (err instanceof FsSafeError && err.code === "not-found") {
         respondWorkspaceFileMissing({ respond, agentId, workspaceDir, name, filePath });
         return;
       }
-      if (err instanceof SafeOpenError) {
+      if (err instanceof FsSafeError) {
         respondWorkspaceFileUnsafe(respond, name);
         return;
       }
@@ -759,21 +854,18 @@ export const agentsHandlers: GatewayRequestHandlers = {
     await fs.mkdir(workspaceDir, { recursive: true });
     const filePath = path.join(workspaceDir, name);
     const content = params.content;
+    let workspaceRoot: WorkspaceRoot;
     try {
-      await agentsHandlerDeps.writeFileWithinRoot({
-        rootDir: workspaceDir,
-        relativePath: name,
-        data: content,
-        encoding: "utf8",
-      });
+      workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+      await workspaceRoot.write(name, content, { encoding: "utf8" });
     } catch (err) {
-      if (!(err instanceof SafeOpenError)) {
+      if (!(err instanceof FsSafeError)) {
         throw err;
       }
       respondWorkspaceFileUnsafe(respond, name);
       return;
     }
-    const meta = await statWorkspaceFileSafely(workspaceDir, name);
+    const meta = await statWorkspaceFileSafely(workspaceRoot, workspaceDir, name);
     respond(
       true,
       {
@@ -793,3 +885,4 @@ export const agentsHandlers: GatewayRequestHandlers = {
     );
   },
 };
+export { testing as __testing };

@@ -1,5 +1,14 @@
+// Crestodian probes check local tools and Gateway health with bounded subprocess/network work.
 import { spawn } from "node:child_process";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
+/**
+ * Local environment probes used by Crestodian overview loading.
+ *
+ * Probes are bounded by output and timeout limits so setup/status commands do
+ * not hang or retain unbounded child output.
+ */
+/** Result from probing a local command binary. */
 export type LocalCommandProbe = {
   command: string;
   found: boolean;
@@ -7,18 +16,40 @@ export type LocalCommandProbe = {
   error?: string;
 };
 
+const LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS = 16 * 1024;
+const LOCAL_COMMAND_PROBE_KILL_GRACE_MS = 500;
+
+function appendBounded(previous: string, chunk: string, limit: number): string {
+  const next = previous + chunk;
+  return next.length > limit ? next.slice(-limit) : next;
+}
+
+/** Probe a command by running a small version command with bounded output and timeout. */
 export async function probeLocalCommand(
   command: string,
   args: string[] = ["--version"],
-  opts: { timeoutMs?: number } = {},
+  opts: { outputLimit?: number; timeoutKillGraceMs?: number; timeoutMs?: number } = {},
 ): Promise<LocalCommandProbe> {
-  const timeoutMs = opts.timeoutMs ?? 1_500;
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1_500);
+  const outputLimit = opts.outputLimit ?? LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS;
+  const timeoutKillGraceMs = resolveTimerTimeoutMs(
+    opts.timeoutKillGraceMs,
+    LOCAL_COMMAND_PROBE_KILL_GRACE_MS,
+    0,
+  );
   return await new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
+    });
+    const timeoutResult = (): LocalCommandProbe => ({
+      command,
+      found: true,
+      error: `timed out after ${timeoutMs}ms`,
     });
     const finish = (result: LocalCommandProbe) => {
       if (settled) {
@@ -26,19 +57,30 @@ export async function probeLocalCommand(
       }
       settled = true;
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
       resolve(result);
     };
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
-      finish({ command, found: true, error: `timed out after ${timeoutMs}ms` });
+      // Some CLIs ignore SIGTERM; destroy pipes after a short grace window to finish promptly.
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(timeoutResult());
+      }, timeoutKillGraceMs);
+      killTimer.unref?.();
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBounded(stdout, String(chunk), outputLimit);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendBounded(stderr, String(chunk), outputLimit);
     });
     child.on("error", (err: NodeJS.ErrnoException) => {
       finish({
@@ -48,6 +90,11 @@ export async function probeLocalCommand(
       });
     });
     child.on("close", (code) => {
+      if (timedOut) {
+        finish(timeoutResult());
+        return;
+      }
+      // Version output can arrive on stdout or stderr depending on the CLI.
       const text = `${stdout}\n${stderr}`.trim().split(/\r?\n/)[0]?.trim();
       finish({
         command,
@@ -59,14 +106,16 @@ export async function probeLocalCommand(
   });
 }
 
+/** Probe a Gateway URL by translating it to its HTTP /healthz endpoint. */
 export async function probeGatewayUrl(
   url: string,
   opts: { timeoutMs?: number } = {},
 ): Promise<{ reachable: boolean; url: string; error?: string }> {
   const httpUrl = url.replace(/^ws:/, "http:").replace(/^wss:/, "https:");
   const healthUrl = new URL("/healthz", httpUrl).toString();
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 900);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 900);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(healthUrl, {
       method: "GET",

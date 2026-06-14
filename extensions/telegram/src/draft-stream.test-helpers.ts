@@ -1,13 +1,11 @@
+// Telegram helper module supports draft stream helpers behavior.
 import { vi } from "vitest";
 
-type DraftPreviewMode = "message" | "draft";
-
-export type TestDraftStream = {
+type TestDraftStream = {
   update: ReturnType<typeof vi.fn<(text: string) => void>>;
   flush: ReturnType<typeof vi.fn<() => Promise<void>>>;
   messageId: ReturnType<typeof vi.fn<() => number | undefined>>;
   visibleSinceMs: ReturnType<typeof vi.fn<() => number | undefined>>;
-  previewMode: ReturnType<typeof vi.fn<() => DraftPreviewMode>>;
   previewRevision: ReturnType<typeof vi.fn<() => number>>;
   lastDeliveredText: ReturnType<typeof vi.fn<() => string>>;
   clear: ReturnType<typeof vi.fn<() => Promise<void>>>;
@@ -21,19 +19,23 @@ export type TestDraftStream = {
 
 export function createTestDraftStream(params?: {
   messageId?: number;
-  previewMode?: DraftPreviewMode;
   onUpdate?: (text: string) => void;
   onStop?: () => void | Promise<void>;
   onDiscard?: () => void | Promise<void>;
   clearMessageIdOnForceNew?: boolean;
+  stopUpdatesOnDiscard?: boolean;
   visibleSinceMs?: number;
 }): TestDraftStream {
   let messageId = params?.messageId;
   let visibleSinceMs = params?.visibleSinceMs;
   let previewRevision = 0;
   let lastDeliveredText = "";
+  let stopped = false;
   return {
     update: vi.fn().mockImplementation((text: string) => {
+      if (stopped) {
+        return;
+      }
       previewRevision += 1;
       lastDeliveredText = text.trimEnd();
       params?.onUpdate?.(text);
@@ -41,7 +43,6 @@ export function createTestDraftStream(params?: {
     flush: vi.fn().mockResolvedValue(undefined),
     messageId: vi.fn().mockImplementation(() => messageId),
     visibleSinceMs: vi.fn().mockImplementation(() => visibleSinceMs),
-    previewMode: vi.fn().mockReturnValue(params?.previewMode ?? "message"),
     previewRevision: vi.fn().mockImplementation(() => previewRevision),
     lastDeliveredText: vi.fn().mockImplementation(() => lastDeliveredText),
     clear: vi.fn().mockResolvedValue(undefined),
@@ -49,10 +50,14 @@ export function createTestDraftStream(params?: {
       await params?.onStop?.();
     }),
     discard: vi.fn().mockImplementation(async () => {
+      if (params?.stopUpdatesOnDiscard) {
+        stopped = true;
+      }
       await params?.onDiscard?.();
     }),
     materialize: vi.fn().mockImplementation(async () => messageId),
     forceNewMessage: vi.fn().mockImplementation(() => {
+      stopped = false;
       if (params?.clearMessageIdOnForceNew) {
         messageId = undefined;
       }
@@ -84,7 +89,6 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
     flush: vi.fn().mockResolvedValue(undefined),
     messageId: vi.fn().mockImplementation(() => activeMessageId),
     visibleSinceMs: vi.fn().mockImplementation(() => visibleSinceMs),
-    previewMode: vi.fn().mockReturnValue("message"),
     previewRevision: vi.fn().mockImplementation(() => previewRevision),
     lastDeliveredText: vi.fn().mockImplementation(() => lastDeliveredText),
     clear: vi.fn().mockResolvedValue(undefined),

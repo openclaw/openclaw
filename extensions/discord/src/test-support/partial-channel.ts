@@ -1,4 +1,5 @@
-export const DISCORD_PARTIAL_CHANNEL_RAW_DATA_ERROR =
+// Discord plugin module implements partial channel behavior.
+const DISCORD_PARTIAL_CHANNEL_RAW_DATA_ERROR =
   "Cannot access rawData on partial Channel. Use fetch() to populate data.";
 
 export function defineThrowingDiscordChannelGetter(

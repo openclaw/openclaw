@@ -1,7 +1,9 @@
-import {
-  registerStatefulBindingTargetDriver,
-  unregisterStatefulBindingTargetDriver,
-} from "./stateful-target-drivers.js";
+/**
+ * Built-in stateful binding target registration.
+ *
+ * Lazily registers ACP target drivers so non-ACP channel flows avoid ACP runtime imports.
+ */
+import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
 type AcpStatefulTargetDriverModule = typeof import("./acp-stateful-target-driver.js");
 
@@ -29,13 +31,9 @@ export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
   try {
     await builtinsRegisteredPromise;
   } catch (error) {
+    // Retry after failed dynamic import/registration; a rejected singleton would
+    // otherwise permanently disable later setup or binding attempts.
     builtinsRegisteredPromise = null;
     throw error;
   }
-}
-
-export async function resetStatefulTargetBuiltinsForTesting(): Promise<void> {
-  builtinsRegisteredPromise = null;
-  const { acpStatefulBindingTargetDriver } = await loadAcpStatefulTargetDriverModule();
-  unregisterStatefulBindingTargetDriver(acpStatefulBindingTargetDriver.id);
 }

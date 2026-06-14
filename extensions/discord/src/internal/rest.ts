@@ -1,4 +1,11 @@
+// Discord plugin module implements rest behavior.
+import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
+import {
+  clampTimerTimeoutMs,
+  parseFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
@@ -8,14 +15,21 @@ import {
   readRetryAfter,
 } from "./rest-errors.js";
 import { appendQuery, createRouteKey } from "./rest-routes.js";
-import { RestScheduler, type RequestQuery } from "./rest-scheduler.js";
+import {
+  RestScheduler,
+  type RequestPriority as RestRequestPriority,
+  type RequestQuery,
+} from "./rest-scheduler.js";
 import { isDiscordRateLimitBody } from "./schemas.js";
 
 export { DiscordError, RateLimitError } from "./rest-errors.js";
 
 export type RuntimeProfile = "serverless" | "persistent";
-export type RequestPriority = "critical" | "standard" | "background";
+export type RequestPriority = RestRequestPriority;
 export type RequestSchedulerOptions = {
+  lanes?: Partial<
+    Record<RequestPriority, { maxQueueSize?: number; staleAfterMs?: number; weight?: number }>
+  >;
   maxConcurrency?: number;
   maxRateLimitRetries?: number;
 };
@@ -31,6 +45,12 @@ export type RequestClientOptions = {
   runtimeProfile?: RuntimeProfile;
   scheduler?: RequestSchedulerOptions;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+};
+
+type NormalizedRequestClientOptions = RequestClientOptions & {
+  apiVersion: number;
+  maxQueueSize: number;
+  timeout: number;
 };
 
 export type RequestData = {
@@ -62,6 +82,11 @@ const defaultOptions = {
 };
 
 const DEFAULT_MAX_CONCURRENT_WORKERS = 4;
+const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; weight: number }> = {
+  critical: { weight: 6 },
+  standard: { weight: 3 },
+  background: { staleAfterMs: 20_000, weight: 1 },
+};
 
 function coerceResponseBody(raw: string): unknown {
   if (!raw) {
@@ -74,8 +99,54 @@ function coerceResponseBody(raw: string): unknown {
   }
 }
 
+function escapeMultipartQuotedValue(value: string): string {
+  return value.replace(/["\r\n]/g, (ch) => (ch === '"' ? "%22" : ch === "\r" ? "%0D" : "%0A"));
+}
+
+async function formDataToMultipartBody(body: FormData, headers: Headers): Promise<BodyInit> {
+  const boundary = `----openclaw-discord-${randomBytes(12).toString("hex")}`;
+  headers.set("Content-Type", `multipart/form-data; boundary=${boundary}`);
+  const chunks: Buffer[] = [];
+  const push = (value: string | Buffer) => {
+    chunks.push(typeof value === "string" ? Buffer.from(value) : value);
+  };
+  for (const [key, value] of body.entries()) {
+    push(`--${boundary}\r\n`);
+    const escapedKey = escapeMultipartQuotedValue(key);
+    if (typeof value === "string") {
+      push(`Content-Disposition: form-data; name="${escapedKey}"\r\n\r\n`);
+      push(value);
+      push("\r\n");
+      continue;
+    }
+    const filename = (value as Blob & { name?: unknown }).name;
+    const escapedFilename = escapeMultipartQuotedValue(
+      typeof filename === "string" && filename.length > 0 ? filename : "blob",
+    );
+    push(`Content-Disposition: form-data; name="${escapedKey}"; filename="${escapedFilename}"\r\n`);
+    if (value.type) {
+      push(`Content-Type: ${value.type}\r\n`);
+    }
+    push("\r\n");
+    push(Buffer.from(await value.arrayBuffer()));
+    push("\r\n");
+  }
+  push(`--${boundary}--\r\n`);
+  return Buffer.concat(chunks) as unknown as BodyInit;
+}
+
+async function normalizeFetchBody(
+  body: BodyInit | undefined,
+  headers: Headers,
+): Promise<BodyInit | undefined> {
+  if (body instanceof FormData) {
+    return await formDataToMultipartBody(body, headers);
+  }
+  return body;
+}
+
 export class RequestClient {
-  readonly options: RequestClientOptions;
+  readonly options: NormalizedRequestClientOptions;
   protected token: string;
   protected customFetch: RequestClientOptions["fetch"];
   protected requestControllers = new Set<AbortController>();
@@ -84,11 +155,23 @@ export class RequestClient {
   constructor(token: string, options?: RequestClientOptions) {
     this.token = token.replace(/^Bot\s+/i, "");
     this.customFetch = options?.fetch;
-    this.options = { ...defaultOptions, ...options };
+    this.options = normalizeRequestClientOptions(options);
     this.scheduler = new RestScheduler<RequestData>(
       {
-        maxConcurrency: this.options.scheduler?.maxConcurrency ?? DEFAULT_MAX_CONCURRENT_WORKERS,
-        maxQueueSize: this.options.maxQueueSize ?? defaultOptions.maxQueueSize,
+        lanes: normalizeSchedulerLanes(this.options.maxQueueSize, this.options.scheduler?.lanes),
+        maxConcurrency: normalizeIntegerOption(
+          this.options.scheduler?.maxConcurrency,
+          DEFAULT_MAX_CONCURRENT_WORKERS,
+          { min: 1 },
+        ),
+        maxQueueSize: this.options.maxQueueSize,
+        maxRateLimitRetries: normalizeIntegerOption(
+          this.options.scheduler?.maxRateLimitRetries,
+          3,
+          {
+            min: 0,
+          },
+        ),
       },
       async (request) =>
         await this.executeRequest(
@@ -129,7 +212,12 @@ export class RequestClient {
     if (!this.options.queueRequests) {
       return await this.executeRequest(method, path, params, routeKey);
     }
-    return await this.scheduler.enqueue({ method, path, ...params });
+    return await this.scheduler.enqueue({
+      method,
+      path,
+      priority: getRequestPriority(method, path),
+      ...params,
+    });
   }
 
   protected async executeRequest(
@@ -154,7 +242,7 @@ export class RequestClient {
       const response = await (this.customFetch ?? fetch)(url, {
         method,
         headers,
-        body,
+        body: await normalizeFetchBody(body, headers),
         signal: controller.signal,
       });
       const text = await response.text();
@@ -167,7 +255,7 @@ export class RequestClient {
         const rateLimitBody = isDiscordRateLimitBody(parsed) ? parsed : undefined;
         throw new RateLimitError(response, {
           message: readDiscordMessage(rateLimitBody, "Rate limited"),
-          retry_after: readRetryAfter(rateLimitBody, response),
+          retry_after: readRetryAfter(rateLimitBody, response, 1),
           code: readDiscordCode(rateLimitBody),
           global: Boolean(rateLimitBody?.global),
         });
@@ -209,4 +297,74 @@ export class RequestClient {
     }
     this.requestControllers.clear();
   }
+}
+
+function normalizeIntegerOption(
+  value: number | undefined,
+  fallback: number,
+  params: { min: number },
+): number {
+  const candidate = parseFiniteNumber(value) ?? fallback;
+  return Math.max(params.min, Math.floor(candidate));
+}
+
+function normalizeRequestClientOptions(
+  options?: RequestClientOptions,
+): NormalizedRequestClientOptions {
+  const merged = { ...defaultOptions, ...options };
+  return {
+    ...merged,
+    apiVersion: normalizeIntegerOption(merged.apiVersion, defaultOptions.apiVersion, { min: 1 }),
+    timeout:
+      clampTimerTimeoutMs(merged.timeout, 1) ?? resolveTimerTimeoutMs(defaultOptions.timeout, 1),
+    maxQueueSize: normalizeIntegerOption(merged.maxQueueSize, defaultOptions.maxQueueSize, {
+      min: 1,
+    }),
+  };
+}
+
+function normalizeSchedulerLanes(
+  maxQueueSize: number,
+  lanes?: RequestSchedulerOptions["lanes"],
+): Record<RestRequestPriority, { maxQueueSize: number; staleAfterMs?: number; weight: number }> {
+  const fallbackMaxQueueSize = normalizeIntegerOption(maxQueueSize, defaultOptions.maxQueueSize, {
+    min: 1,
+  });
+  return {
+    critical: normalizeSchedulerLane("critical", fallbackMaxQueueSize, lanes?.critical),
+    standard: normalizeSchedulerLane("standard", fallbackMaxQueueSize, lanes?.standard),
+    background: normalizeSchedulerLane("background", fallbackMaxQueueSize, lanes?.background),
+  };
+}
+
+function normalizeSchedulerLane(
+  lane: RestRequestPriority,
+  maxQueueSize: number,
+  options?: { maxQueueSize?: number; staleAfterMs?: number; weight?: number },
+): { maxQueueSize: number; staleAfterMs?: number; weight: number } {
+  const defaults = defaultLaneOptions[lane];
+  const staleAfterMs =
+    options?.staleAfterMs !== undefined
+      ? normalizeIntegerOption(options.staleAfterMs, defaults.staleAfterMs ?? 0, { min: 0 })
+      : defaults.staleAfterMs;
+  return {
+    maxQueueSize:
+      options?.maxQueueSize !== undefined
+        ? normalizeIntegerOption(options.maxQueueSize, maxQueueSize, { min: 1 })
+        : maxQueueSize,
+    ...(staleAfterMs !== undefined ? { staleAfterMs } : {}),
+    weight:
+      options?.weight !== undefined
+        ? normalizeIntegerOption(options.weight, defaults.weight, { min: 1 })
+        : defaults.weight,
+  };
+}
+
+function getRequestPriority(method: string, path: string): RestRequestPriority {
+  const normalizedMethod = method.toUpperCase();
+  const normalizedPath = path.toLowerCase();
+  if (/^\/interactions\/\d+\/[^/]+\/callback$/.test(normalizedPath)) {
+    return "critical";
+  }
+  return normalizedMethod === "GET" ? "background" : "standard";
 }

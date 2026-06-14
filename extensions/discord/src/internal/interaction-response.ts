@@ -1,3 +1,4 @@
+// Discord plugin module implements interaction response behavior.
 import { InteractionResponseType, MessageFlags } from "discord-api-types/v10";
 
 export type InteractionResponseState =
@@ -6,7 +7,7 @@ export type InteractionResponseState =
   | "deferred-update"
   | "replied";
 
-export type InteractionReplyAction = "initial" | "edit" | "follow-up";
+type InteractionReplyAction = "initial" | "edit" | "follow-up";
 
 export class InteractionResponseController {
   state: InteractionResponseState = "unacknowledged";

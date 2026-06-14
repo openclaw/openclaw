@@ -1,3 +1,6 @@
+/**
+ * Test SDK subpath for plugin package, registration, and public surface contracts.
+ */
 export {
   assertNoImportTimeSideEffects,
   createPluginRegistryFixture,
@@ -8,7 +11,6 @@ export {
   uniqueSortedStrings,
 } from "./test-helpers/contracts-testkit.js";
 export { runDirectImportSmoke } from "./test-helpers/direct-smoke.js";
-export { loadRuntimeApiExportTypesViaJiti } from "./test-helpers/jiti-runtime-api.js";
 export { describePackageManifestContract } from "./test-helpers/package-manifest-contract.js";
 export { pluginRegistrationContractCases } from "./test-helpers/plugin-registration-contract-cases.js";
 export { describePluginRegistrationContract } from "./test-helpers/plugin-registration-contract.js";

@@ -1,3 +1,4 @@
+// Status scan test helpers provide shared mocks and config fixtures for scan suites.
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
@@ -5,9 +6,10 @@ import type { OpenClawConfig } from "../config/types.js";
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type ResolveConfigPathMock = Mock<() => string>;
 
-export type StatusScanSharedMocks = {
+type StatusScanSharedMocks = {
   resolveConfigPath: ResolveConfigPathMock;
   hasPotentialConfiguredChannels: UnknownMock;
+  hasConfiguredChannelsForReadOnlyScope: UnknownMock;
   readBestEffortConfig: UnknownMock;
   resolveCommandSecretRefsViaGateway: UnknownMock;
   getUpdateCheckResult: UnknownMock;
@@ -26,6 +28,7 @@ export function createStatusScanSharedMocks(configPathLabel: string): StatusScan
   return {
     resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
     hasPotentialConfiguredChannels: vi.fn(),
+    hasConfiguredChannelsForReadOnlyScope: vi.fn(),
     readBestEffortConfig: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
     getUpdateCheckResult: vi.fn(),
@@ -49,7 +52,7 @@ type StatusOsSummaryModuleMock = {
   resolveOsSummary: Mock<() => { label: string }>;
 };
 
-export function createStatusOsSummaryModuleMock(): StatusOsSummaryModuleMock {
+function createStatusOsSummaryModuleMock(): StatusOsSummaryModuleMock {
   return {
     resolveOsSummary: vi.fn(() => ({ label: "test-os" })),
   };
@@ -60,7 +63,7 @@ type StatusScanDepsRuntimeModuleMock = {
   getMemorySearchManager: StatusScanSharedMocks["getMemorySearchManager"];
 };
 
-export function createStatusScanDepsRuntimeModuleMock(
+function createStatusScanDepsRuntimeModuleMock(
   mocks: Pick<StatusScanSharedMocks, "getMemorySearchManager">,
 ): StatusScanDepsRuntimeModuleMock {
   return {
@@ -74,7 +77,7 @@ type StatusGatewayProbeModuleMock = {
   resolveGatewayProbeAuthResolution: StatusScanSharedMocks["resolveGatewayProbeAuthResolution"];
 };
 
-export function createStatusGatewayProbeModuleMock(
+function createStatusGatewayProbeModuleMock(
   mocks: Pick<StatusScanSharedMocks, "resolveGatewayProbeAuthResolution">,
 ): StatusGatewayProbeModuleMock {
   return {
@@ -88,7 +91,7 @@ type StatusGatewayCallModuleMock = {
   callGateway?: unknown;
 };
 
-export function createStatusGatewayCallModuleMock(
+function createStatusGatewayCallModuleMock(
   mocks: Pick<StatusScanSharedMocks, "buildGatewayConnectionDetails"> & {
     callGateway?: unknown;
   },
@@ -99,7 +102,7 @@ export function createStatusGatewayCallModuleMock(
   };
 }
 
-export function createStatusPluginRegistryModuleMock(
+function createStatusPluginRegistryModuleMock(
   mocks: Pick<StatusScanSharedMocks, "ensurePluginRegistryLoaded">,
 ): { ensurePluginRegistryLoaded: StatusScanSharedMocks["ensurePluginRegistryLoaded"] } {
   return {
@@ -107,7 +110,7 @@ export function createStatusPluginRegistryModuleMock(
   };
 }
 
-export function createStatusPluginStatusModuleMock(
+function createStatusPluginStatusModuleMock(
   mocks: Pick<StatusScanSharedMocks, "buildPluginCompatibilityNotices">,
 ): {
   buildPluginCompatibilityNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"];
@@ -119,15 +122,15 @@ export function createStatusPluginStatusModuleMock(
   };
 }
 
-export function createStatusUpdateModuleMock(
-  mocks: Pick<StatusScanSharedMocks, "getUpdateCheckResult">,
-): { getUpdateCheckResult: StatusScanSharedMocks["getUpdateCheckResult"] } {
+function createStatusUpdateModuleMock(mocks: Pick<StatusScanSharedMocks, "getUpdateCheckResult">): {
+  getUpdateCheckResult: StatusScanSharedMocks["getUpdateCheckResult"];
+} {
   return {
     getUpdateCheckResult: mocks.getUpdateCheckResult,
   };
 }
 
-export function createStatusAgentLocalModuleMock(
+function createStatusAgentLocalModuleMock(
   mocks: Pick<StatusScanSharedMocks, "getAgentLocalStatuses">,
 ): { getAgentLocalStatuses: StatusScanSharedMocks["getAgentLocalStatuses"] } {
   return {
@@ -135,15 +138,15 @@ export function createStatusAgentLocalModuleMock(
   };
 }
 
-export function createStatusSummaryModuleMock(
-  mocks: Pick<StatusScanSharedMocks, "getStatusSummary">,
-): { getStatusSummary: StatusScanSharedMocks["getStatusSummary"] } {
+function createStatusSummaryModuleMock(mocks: Pick<StatusScanSharedMocks, "getStatusSummary">): {
+  getStatusSummary: StatusScanSharedMocks["getStatusSummary"];
+} {
   return {
     getStatusSummary: mocks.getStatusSummary,
   };
 }
 
-export function createStatusExecModuleMock(): { runExec: UnknownMock } {
+function createStatusExecModuleMock(): { runExec: UnknownMock } {
   return {
     runExec: vi.fn(),
   };
@@ -187,16 +190,7 @@ export async function loadStatusScanModuleForTest(
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
       includePersistedAuthState?: boolean;
-    }) =>
-      Boolean(
-        mocks.hasPotentialConfiguredChannels(
-          params.config,
-          params.env,
-          params.includePersistedAuthState === undefined
-            ? undefined
-            : { includePersistedAuthState: params.includePersistedAuthState },
-        ),
-      ),
+    }) => mocks.hasConfiguredChannelsForReadOnlyScope(params),
     listConfiguredChannelIdsForReadOnlyScope: (params: {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
@@ -326,14 +320,12 @@ export function createStatusSummary(
       paths: [],
       defaults: {},
       recent: [],
-      ...(Object.prototype.hasOwnProperty.call(options, "byAgent")
-        ? { byAgent: options.byAgent ?? [] }
-        : {}),
+      ...(Object.hasOwn(options, "byAgent") ? { byAgent: options.byAgent ?? [] } : {}),
     },
   };
 }
 
-export function createStatusUpdateResult() {
+function createStatusUpdateResult() {
   return {
     installKind: "git",
     git: null,
@@ -341,21 +333,21 @@ export function createStatusUpdateResult() {
   };
 }
 
-export function createStatusAgentLocalStatuses() {
+function createStatusAgentLocalStatuses() {
   return {
     defaultId: "main",
     agents: [],
   };
 }
 
-export function createStatusGatewayConnection() {
+function createStatusGatewayConnection() {
   return {
     url: "ws://127.0.0.1:18789",
     urlSource: "default",
   };
 }
 
-export function createStatusGatewayProbeFailure() {
+function createStatusGatewayProbeFailure() {
   return {
     ok: false,
     url: "ws://127.0.0.1:18789",
@@ -409,6 +401,22 @@ export function applyStatusScanDefaults(
   const resolvedConfig = options.resolvedConfig ?? sourceConfig;
 
   mocks.hasPotentialConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
+  mocks.hasConfiguredChannelsForReadOnlyScope.mockImplementation((rawParams: unknown) => {
+    const params = rawParams as {
+      config: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+      includePersistedAuthState?: boolean;
+    };
+    return Boolean(
+      mocks.hasPotentialConfiguredChannels(
+        params.config,
+        params.env,
+        params.includePersistedAuthState === undefined
+          ? undefined
+          : { includePersistedAuthState: params.includePersistedAuthState },
+      ),
+    );
+  });
   mocks.readBestEffortConfig.mockResolvedValue(sourceConfig);
   mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
     resolvedConfig,

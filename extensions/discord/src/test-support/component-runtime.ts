@@ -1,3 +1,4 @@
+// Discord plugin module implements component runtime behavior.
 import {
   parsePluginBindingApprovalCustomId,
   resolvePinnedMainDmOwnerFromAllowlist,
@@ -48,18 +49,22 @@ export const upsertPairingRequestMock: AsyncUnknownMock = runtimeMocks.upsertPai
 export const recordInboundSessionMock: AsyncUnknownMock = runtimeMocks.recordInboundSessionMock;
 export const readSessionUpdatedAtMock: UnknownMock = runtimeMocks.readSessionUpdatedAtMock;
 export const resolveStorePathMock: UnknownMock = runtimeMocks.resolveStorePathMock;
-export const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
+const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
   runtimeMocks.resolvePluginConversationBindingApprovalMock;
-export const buildPluginBindingResolvedTextMock: UnknownMock =
+const buildPluginBindingResolvedTextMock: UnknownMock =
   runtimeMocks.buildPluginBindingResolvedTextMock;
 
-async function readStoreAllowFromForDmPolicy(params: {
+async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   provider: string;
   accountId: string;
   dmPolicy?: string | null;
   shouldRead?: boolean | null;
 }) {
-  if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+  if (
+    params.shouldRead === false ||
+    params.dmPolicy === "allowlist" ||
+    params.dmPolicy === "open"
+  ) {
     return [];
   }
   return await readAllowFromStoreMock(params.provider, params.accountId);
@@ -67,7 +72,7 @@ async function readStoreAllowFromForDmPolicy(params: {
 
 vi.mock("../monitor/agent-components-helpers.runtime.js", () => {
   return {
-    readStoreAllowFromForDmPolicy,
+    readChannelIngressStoreAllowFromForDmPolicy,
     resolvePinnedMainDmOwnerFromAllowlist,
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };

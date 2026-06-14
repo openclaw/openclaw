@@ -1,0 +1,205 @@
+import OpenClawKit
+import OpenClawProtocol
+import SwiftUI
+
+struct AgentProTab: View {
+    @Environment(NodeAppModel.self) var appModel
+    @Environment(\.colorScheme) var colorScheme
+    @Environment(\.scenePhase) var scenePhase
+    let initialRoute: AgentRoute?
+    let directRoute: AgentRoute?
+    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerTitle: String
+    let openSettings: (() -> Void)?
+    @State var navigationPath: [AgentRoute] = []
+    @State var overview: AgentOverviewSnapshot?
+    @State var overviewErrorText: String?
+    @State var overviewLoading: Bool = false
+    @State var overviewRefreshNonce: Int = 0
+    @State var agentRosterFilter: AgentRosterFilter = .all
+    @State var agentSearchPresented = false
+    @State var agentSearchText = ""
+    @State var skillFilter: String = ""
+    @State var skillStatusFilter: SkillStatusFilter = .all
+    @State var skillMutationBusyKeys: Set<String> = []
+    @State var skillMutationErrorText: String?
+    @State var skillMutationStatusText: String?
+    @State var skillConfigBusyKeys: Set<String> = []
+    @State var skillConfigMessages: [String: SkillEditorMessage] = [:]
+    @State var skillAPIKeyDrafts: [String: String] = [:]
+    @State var skillEditorSelection: SkillEditorSelection?
+    @State var clawHubQuery: String = ""
+    @State var clawHubResults: [ClawHubSearchResultLite] = []
+    @State var clawHubLoading: Bool = false
+    @State var clawHubErrorText: String?
+    @State var clawHubInstallSlug: String?
+    @State var cronActionBusyIDs: Set<String> = []
+    @State var cronActionStatusText: String?
+
+    enum AgentRoute: Hashable {
+        case agents
+        case skills
+        case instances
+        case cron
+        case usage
+        case dreaming
+    }
+
+    enum SkillStatusFilter: String, CaseIterable, Identifiable {
+        case all
+        case enabled
+        case off
+        case setup
+        case blocked
+
+        var id: Self {
+            self
+        }
+
+        var title: String {
+            switch self {
+            case .all: "All"
+            case .enabled: "Enabled"
+            case .off: "Off"
+            case .setup: "Setup"
+            case .blocked: "Blocked"
+            }
+        }
+    }
+
+    enum AgentRosterFilter: String, CaseIterable, Identifiable {
+        case all
+        case online
+        case ready
+
+        var id: Self {
+            self
+        }
+
+        var title: String {
+            switch self {
+            case .all: "All"
+            case .online: "Online"
+            case .ready: "Ready"
+            }
+        }
+    }
+
+    enum AgentLayout {
+        static let cardRadius: CGFloat = 12
+        static let filterHeight: CGFloat = 34
+        static let rowMinHeight: CGFloat = 104
+        static let metricTileHeight: CGFloat = 94
+        static let actionButtonSize: CGFloat = 34
+    }
+
+    enum AgentRosterState: Equatable {
+        case online
+        case ready
+
+        var title: String {
+            switch self {
+            case .online: "Online"
+            case .ready: "Ready"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .online: OpenClawBrand.ok
+            case .ready: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0)
+            }
+        }
+    }
+
+    struct SkillEditorSelection: Identifiable {
+        let id: String
+    }
+
+    struct SkillEditorMessage {
+        let kind: Kind
+        let text: String
+
+        enum Kind {
+            case success
+            case error
+        }
+    }
+
+    init(
+        initialRoute: AgentRoute? = nil,
+        directRoute: AgentRoute? = nil,
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerTitle: String = "Agents",
+        openSettings: (() -> Void)? = nil)
+    {
+        self.initialRoute = initialRoute
+        self.directRoute = directRoute
+        self.headerLeadingAction = headerLeadingAction
+        self.headerTitle = headerTitle
+        self.openSettings = openSettings
+    }
+
+    var body: some View {
+        Group {
+            if let directRoute {
+                self.directDestination(for: directRoute)
+            } else {
+                self.overviewNavigation
+            }
+        }
+        .task(id: self.overviewTaskID) {
+            await self.refreshOverview(force: false)
+        }
+        .sheet(item: self.$skillEditorSelection) { selection in
+            if let skill = self.skillByKey(selection.id) {
+                self.skillEditorSheet(skill)
+            } else {
+                self.missingSkillEditorSheet
+            }
+        }
+    }
+
+    private var overviewNavigation: some View {
+        NavigationStack(path: self.$navigationPath) {
+            ZStack {
+                OpenClawProBackground()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        self.rosterHeader
+                        self.agentFilters
+                        self.agentsSection
+                        self.operationsSection
+                        self.dreamingSection
+                        self.cronSection
+                    }
+                    .padding(.vertical, 18)
+                }
+                .refreshable {
+                    await self.refreshOverview(force: true)
+                }
+            }
+            .navigationBarHidden(true)
+            .navigationDestination(for: AgentRoute.self) { route in
+                self.destination(for: route)
+            }
+        }
+        .onAppear {
+            self.applyInitialRouteIfNeeded()
+        }
+    }
+
+    private func directDestination(for route: AgentRoute) -> some View {
+        self.destination(for: route)
+            .toolbar(
+                self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden,
+                for: .navigationBar)
+    }
+
+    private func applyInitialRouteIfNeeded() {
+        guard self.directRoute == nil else { return }
+        guard let initialRoute else { return }
+        guard self.navigationPath != [initialRoute] else { return }
+        self.navigationPath = [initialRoute]
+    }
+}

@@ -1,8 +1,14 @@
-import { spawnSync } from "node:child_process";
+// Manages compile-cache respawn behavior for the CLI entrypoint.
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import {
+  runRespawnChildWithSignalBridge,
+  type RespawnChildRuntime,
+} from "./process/respawn-child-runner.js";
 
 export function resolveEntryInstallRoot(entryFile: string): string {
   const entryDir = path.dirname(entryFile);
@@ -90,6 +96,10 @@ export type OpenClawCompileCacheRespawnPlan = {
   env: NodeJS.ProcessEnv;
 };
 
+type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
+  writeError: (message: string) => void;
+};
+
 export function buildOpenClawCompileCacheRespawnPlan(params: {
   currentFile: string;
   env?: NodeJS.ProcessEnv;
@@ -138,15 +148,32 @@ export function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   if (!plan) {
     return false;
   }
-  const result = spawnSync(plan.command, plan.args, {
-    stdio: "inherit",
-    env: plan.env,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  process.exit(result.status ?? 1);
+  runOpenClawCompileCacheRespawnPlan(plan);
   return true;
+}
+
+export function runOpenClawCompileCacheRespawnPlan(
+  plan: OpenClawCompileCacheRespawnPlan,
+  runtime: OpenClawCompileCacheRespawnRuntime = {
+    spawn,
+    attachChildProcessBridge,
+    exit: process.exit.bind(process) as (code?: number) => never,
+    writeError: (message: string) => process.stderr.write(message),
+  },
+): ChildProcess {
+  return runRespawnChildWithSignalBridge({
+    command: plan.command,
+    args: plan.args,
+    env: plan.env,
+    runtime,
+    onError: (error) => {
+      runtime.writeError(
+        `[openclaw] Failed to respawn CLI without compile cache: ${
+          error instanceof Error ? (error.stack ?? error.message) : String(error)
+        }\n`,
+      );
+    },
+  });
 }
 
 export function enableOpenClawCompileCache(params: {

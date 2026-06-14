@@ -1,13 +1,15 @@
-import fs from "node:fs";
+// Implements trajectory export command packaging for the active session agent.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
+import { pathExists } from "../../infra/fs-safe.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
   resolveTrajectoryCommandOutputDir,
+  type TrajectoryCommandExportSummary,
 } from "../../trajectory/command-export.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -23,6 +25,7 @@ import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -52,7 +55,7 @@ type ExportTrajectoryCommandDeps = {
 const defaultExportTrajectoryCommandDeps: ExportTrajectoryCommandDeps = {
   createExecTool,
   resolvePrivateTrajectoryTargets: resolvePrivateTrajectoryTargetsForCommand,
-  deliverPrivateTrajectoryReply: deliverPrivateTrajectoryReply,
+  deliverPrivateTrajectoryReply,
 };
 
 export async function buildExportTrajectoryCommandReply(
@@ -136,13 +139,13 @@ export async function buildExportTrajectoryReply(
   }
   const { entry, sessionFile } = sessionTarget;
 
-  if (!fs.existsSync(sessionFile)) {
+  if (!(await pathExists(sessionFile))) {
     return { text: "❌ Session file not found." };
   }
 
   let outputDir: string;
   try {
-    outputDir = resolveTrajectoryCommandOutputDir({
+    outputDir = await resolveTrajectoryCommandOutputDir({
       outputPath: args.outputPath,
       workspaceDir: params.workspaceDir,
       sessionId: entry.sessionId,
@@ -153,9 +156,9 @@ export async function buildExportTrajectoryReply(
     };
   }
 
-  let summary: ReturnType<typeof exportTrajectoryForCommand>;
+  let summary: TrajectoryCommandExportSummary;
   try {
-    summary = exportTrajectoryForCommand({
+    summary = await exportTrajectoryForCommand({
       outputDir,
       sessionFile,
       sessionId: entry.sessionId,
@@ -215,7 +218,7 @@ function buildTrajectoryExportApprovalRequest(
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 
@@ -245,6 +248,8 @@ async function requestTrajectoryExportApproval(
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
+      mainKey: params.cfg.session?.mainKey,
+      sessionScope: params.cfg.session?.scope,
       messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
       currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
       currentThreadTs: options.privateApprovalTarget

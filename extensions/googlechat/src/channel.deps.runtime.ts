@@ -1,16 +1,16 @@
+// Googlechat plugin module implements channeleps behavior.
 export {
   buildChannelConfigSchema,
   chunkTextForOutbound,
-  createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
-  fetchRemoteMedia,
+  readRemoteMediaBuffer,
   GoogleChatConfigSchema,
   loadOutboundMediaFromUrl,
   missingTargetError,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
-  runPassiveAccountLifecycle,
   type ChannelMessageActionAdapter,
+  type ChannelMessageActionName,
   type ChannelStatusIssue,
   type OpenClawConfig,
 } from "../runtime-api.js";

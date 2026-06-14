@@ -12,7 +12,7 @@ coverage:
 objective: Verify the Codex app-server harness can plan and build a medium-complex self-contained browser game.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.5 with the Codex harness forced.
-  - The scenario forces the Codex embedded harness and disables PI fallback.
+  - The scenario forces the Codex embedded harness.
   - The prompt explicitly asks the agent to enter plan mode before editing.
   - The agent writes a self-contained HTML game with a canvas loop, controls, scoring, waves, pause, and restart.
 docsRefs:
@@ -30,7 +30,6 @@ execution:
     requiredProvider: codex
     requiredModel: gpt-5.5
     harnessRuntime: codex
-    harnessFallback: none
     artifactFile: star-garden-defenders-codex.html
     gameTitle: Star Garden Defenders
     minBytes: 5000
@@ -78,11 +77,8 @@ steps:
                   patch:
                     agents:
                       defaults:
-                        agentRuntime:
-                          id:
-                            expr: config.harnessRuntime
-                          fallback:
-                            expr: config.harnessFallback
+                        models:
+                          expr: "({ [env.primaryModel]: { agentRuntime: { id: config.harnessRuntime } } })"
             - call: waitForGatewayHealthy
               args:
                 - ref: env
@@ -96,14 +92,10 @@ steps:
               args:
                 - ref: env
             - assert:
-                expr: "snapshot.config.agents?.defaults?.agentRuntime?.id === config.harnessRuntime"
+                expr: "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id === config.harnessRuntime"
                 message:
-                  expr: "`expected agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.agentRuntime)}`"
-            - assert:
-                expr: "snapshot.config.agents?.defaults?.agentRuntime?.fallback === config.harnessFallback"
-                message:
-                  expr: "`expected agentRuntime.fallback=${config.harnessFallback}, got ${JSON.stringify(snapshot.config.agents?.defaults?.agentRuntime)}`"
-    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.agentRuntime?.id} fallback=${snapshot.config.agents?.defaults?.agentRuntime?.fallback}` : `mock mode: parsed ${scenario.id}`"
+                  expr: "`expected ${env.primaryModel} agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime)}`"
+    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id}` : `mock mode: parsed ${scenario.id}`"
   - name: builds the medium game artifact
     actions:
       - if:

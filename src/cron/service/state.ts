@@ -1,19 +1,26 @@
+/** Cron service dependency, event, state, and public result types. */
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
+  CronAgentExecutionPhaseUpdate,
+  CronAgentExecutionStarted,
+  CronFailureNotificationDelivery,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronRunDiagnostics,
   CronMessageChannel,
-  CronAgentExecutionStarted,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
   CronStoreFile,
 } from "../types.js";
 
+/** Event payload emitted for cron lifecycle changes and completed runs. */
 export type CronEvent = {
   jobId: string;
   action: "added" | "updated" | "removed" | "started" | "finished";
@@ -24,15 +31,19 @@ export type CronEvent = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
+  runId?: string;
   nextRunAtMs?: number;
 } & CronRunTelemetry;
 
+/** Logger contract consumed by cron service internals. */
 export type Logger = {
   debug: (obj: unknown, msg?: string) => void;
   info: (obj: unknown, msg?: string) => void;
@@ -40,6 +51,15 @@ export type Logger = {
   error: (obj: unknown, msg?: string) => void;
 };
 
+export type CronSystemEventEnqueueResult =
+  | boolean
+  | void
+  | {
+      accepted?: boolean;
+      remove?: () => boolean | void;
+    };
+
+/** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;
   log: Logger;
@@ -72,20 +92,38 @@ export type CronServiceDeps = {
   startupDeferredMissedAgentJobDelayMs?: number;
   enqueueSystemEvent: (
     text: string,
-    opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },
-  ) => void;
-  requestHeartbeatNow: (opts?: HeartbeatWakeRequest) => void;
+    opts?: {
+      agentId?: string;
+      sessionKey?: string;
+      contextKey?: string;
+      deliveryContext?: DeliveryContext;
+    },
+  ) => CronSystemEventEnqueueResult;
+  /**
+   * Resolve the channel-correct origin delivery context for a session key (the
+   * value the channel's send expects, e.g. Telegram message_thread_id), sourced
+   * from the session store entry the wake targets. Used to carry the bound
+   * thread/topic onto manual wake system events. Optional: when unset, wakes
+   * route as before. Returning `undefined` is also a no-op (default routing).
+   */
+  resolveOriginDeliveryContext?: (params: {
+    sessionKey?: string;
+    agentId?: string;
+  }) => DeliveryContext | undefined;
+  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
+    source?: HeartbeatWakeRequest["source"];
+    intent?: HeartbeatWakeRequest["intent"];
     reason?: string;
     agentId?: string;
     sessionKey?: string;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
-    heartbeat?: { target?: string };
+    heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
    * { status:"skipped", reason:"requests-in-flight" } before falling back to
-   * requestHeartbeatNow.
+   * requestHeartbeat.
    */
   wakeNowHeartbeatBusyMaxWaitMs?: number;
   /** WakeMode=now: delay between runHeartbeatOnce retries while busy. */
@@ -95,6 +133,7 @@ export type CronServiceDeps = {
     message: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   }) => Promise<
     {
       summary?: string;
@@ -115,6 +154,13 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  runCommandJob?: (params: { job: CronJob; abortSignal?: AbortSignal }) => Promise<
+    {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    } & CronRunOutcome
+  >;
   cleanupTimedOutAgentRun?: (params: {
     job: CronJob;
     timeoutMs: number;
@@ -131,27 +177,31 @@ export type CronServiceDeps = {
   onEvent?: (evt: CronEvent) => void;
 };
 
+/** Cron deps after optional defaults have been made concrete. */
 export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
   nowMs: () => number;
 };
 
+/** Mutable cron service state shared across store, job, timer, and ops helpers. */
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
   /**
-   * Job ids whose missing `sessionTarget` was defaulted at load and warned
-   * about. Used to suppress duplicate warns across forceReload ticks so a
-   * single broken job does not spam the log on every scheduler cycle.
+   * Persisted job rows with non-canonical storage shape are skipped in memory
+   * until the runtime can quarantine and sanitize the active store.
    */
-  warnedMissingSessionTargetJobIds: Set<string>;
+  warnedInvalidPersistedJobKeys: Set<string>;
+  pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
+  lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
-  storeFileMtimeMs: number | null;
 };
 
+/** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   return {
     deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
@@ -160,22 +210,33 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,
-    warnedMissingSessionTargetJobIds: new Set<string>(),
+    warnedInvalidPersistedJobKeys: new Set<string>(),
+    pendingQuarantineConfigJobs: [],
+    lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
-    storeFileMtimeMs: null,
   };
 }
 
+/** Direct-run mode: respect due time or force execution. */
 export type CronRunMode = "due" | "force";
+
+/** Main-session wake strategy used after enqueuing cron text. */
 export type CronWakeMode = "now" | "next-heartbeat";
 
+/** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
+  /** @deprecated Legacy partition key; actual storage is SQLite. Use `sqlitePath`. */
   storePath: string;
+  /** Storage backend identifier. */
+  storage: "sqlite";
+  /** Resolved path to the shared state SQLite database. */
+  sqlitePath: string;
   jobs: number;
   nextWakeAtMs: number | null;
 };
 
+/** Result shape for immediate or queued cron run requests. */
 export type CronRunResult =
   | { ok: true; ran: true }
   | { ok: true; enqueued: true; runId: string }
@@ -183,11 +244,17 @@ export type CronRunResult =
   | { ok: true; ran: false; reason: "already-running" }
   | { ok: false };
 
+/** Remove result that distinguishes missing jobs from failed removal. */
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
 
+/** Created cron job returned by service mutation calls. */
 export type CronAddResult = CronJob;
+/** Updated cron job returned by service mutation calls. */
 export type CronUpdateResult = CronJob;
 
+/** Chronological job list returned by service read calls. */
 export type CronListResult = CronJob[];
+/** Normalized create input accepted by the cron service. */
 export type CronAddInput = CronJobCreate;
+/** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;

@@ -1,3 +1,5 @@
+// Shared target resolution applies plugin defaults, allowlists, prefixes, and
+// fallback errors for direct and loaded-channel send paths.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
@@ -5,10 +7,17 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { validateTargetProviderPrefix } from "./channel-target-prefix.js";
 import { missingTargetError } from "./target-errors.js";
 
+/**
+ * Result of resolving a concrete outbound target for a channel send.
+ */
 export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
+/**
+ * Inputs shared by direct and heartbeat outbound target resolution.
+ */
 export type ResolveOutboundTargetParams = {
   channel: GatewayMessageChannel;
   to?: string;
@@ -24,6 +33,9 @@ function buildWebChatDeliveryError(): Error {
   );
 }
 
+/**
+ * Resolves a target through a channel plugin or the generic fallback path.
+ */
 export function resolveOutboundTargetWithPlugin(params: {
   plugin: ChannelPlugin | undefined;
   target: ResolveOutboundTargetParams;
@@ -41,6 +53,7 @@ export function resolveOutboundTargetWithPlugin(params: {
     return params.onMissingPlugin?.();
   }
 
+  // Plugin defaults and allowlists can be account-scoped; resolve them before target validation.
   const allowFromRaw =
     params.target.allowFrom ??
     (params.target.cfg && plugin.config.resolveAllowFrom
@@ -59,6 +72,13 @@ export function resolveOutboundTargetWithPlugin(params: {
           accountId: params.target.accountId ?? undefined,
         })
       : undefined);
+  const targetPrefixError = validateTargetProviderPrefix({
+    channel: params.target.channel,
+    to: effectiveTo,
+  });
+  if (targetPrefixError) {
+    return { ok: false, error: targetPrefixError };
+  }
 
   const resolveTarget = plugin.outbound?.resolveTarget;
   if (resolveTarget) {

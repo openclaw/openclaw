@@ -1,26 +1,18 @@
+// Whatsapp tests cover web auto reply monitor plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { WhatsAppSendResult } from "../inbound/send-result.js";
+import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
+import type { WebInboundMessage } from "../inbound/types.js";
 import { buildMentionConfig } from "./mentions.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
+import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { buildInboundLine, formatReplyContext } from "./monitor/message-line.js";
-import type { WebInboundMsg } from "./types.js";
 
 let sessionDir: string | undefined;
 let sessionStorePath: string;
-
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    messageIds: [id],
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
 
 beforeEach(async () => {
   sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-group-gating-"));
@@ -45,11 +37,11 @@ const makeConfig = (overrides: Record<string, unknown>) =>
     },
     session: { store: sessionStorePath },
     ...overrides,
-  }) as unknown as import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  }) as unknown as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
 
 async function runGroupGating(params: {
-  cfg: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
-  msg: WebInboundMsg;
+  cfg: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
+  msg: WebInboundMessage;
   conversationId?: string;
   agentId?: string;
   selfChatMode?: boolean;
@@ -60,6 +52,7 @@ async function runGroupGating(params: {
   const agentId = params.agentId ?? "main";
   const sessionKey = `agent:${agentId}:whatsapp:group:${conversationId}`;
   const baseMentionConfig = buildMentionConfig(params.cfg, undefined);
+  const verboseLogs: string[] = [];
   const result = await applyGroupGating({
     cfg: params.cfg,
     msg: params.msg,
@@ -73,29 +66,86 @@ async function runGroupGating(params: {
     groupHistories,
     groupHistoryLimit: 10,
     groupMemberNames: new Map(),
-    logVerbose: () => {},
-    replyLogger: { debug: () => {} },
+    logVerbose: (message) => verboseLogs.push(message),
+    replyLogger: { debug: () => {}, warn: () => {} },
   });
-  return { result, groupHistories };
+  return { result, groupHistories, verboseLogs };
 }
 
-function createGroupMessage(overrides: Partial<WebInboundMsg> = {}): WebInboundMsg {
-  return {
-    id: "g1",
-    from: "123@g.us",
-    conversationId: "123@g.us",
-    chatId: "123@g.us",
+type TestMessageOverrides = {
+  accountId?: string;
+  body?: string;
+  conversationId?: string;
+  from?: string;
+  id?: string;
+  mentionedJids?: string[];
+  replyToBody?: string;
+  replyToId?: string;
+  replyToSender?: string;
+  replyToSenderE164?: string;
+  replyToSenderJid?: string;
+  selfE164?: string;
+  selfJid?: string;
+  senderE164?: string;
+  senderJid?: string;
+  senderName?: string;
+  timestamp?: number;
+  to?: string;
+};
+
+function createGroupMessage(overrides: TestMessageOverrides = {}): WebInboundMessage {
+  return createTestWebInboundMessage({
+    event: {
+      id: overrides.id ?? "g1",
+      timestamp: overrides.timestamp,
+    },
+    payload: {
+      body: overrides.body ?? "hello group",
+    },
+    platform: {
+      chatJid: "123@g.us",
+      recipientJid: overrides.to ?? "+2",
+      senderE164: overrides.senderE164 ?? "+111",
+      senderJid: overrides.senderJid,
+      senderName: overrides.senderName ?? "Alice",
+      selfE164: overrides.selfE164 ?? "+999",
+      selfJid: overrides.selfJid,
+    },
+    from: overrides.from ?? "123@g.us",
+    conversationId: overrides.conversationId ?? overrides.from ?? "123@g.us",
     chatType: "group",
-    to: "+2",
-    accountId: "default",
-    body: "hello group",
-    senderE164: "+111",
-    senderName: "Alice",
-    selfE164: "+999",
-    sendComposing: async () => {},
-    reply: async (_text, _options) => acceptedSendResult("text", "r1"),
-    sendMedia: async (_payload, _options) => acceptedSendResult("media", "m1"),
-    ...overrides,
+    accountId: overrides.accountId ?? "default",
+    quote: overrides.replyToBody
+      ? {
+          id: overrides.replyToId,
+          body: overrides.replyToBody,
+          sender: {
+            displayName: overrides.replyToSender,
+            jid: overrides.replyToSenderJid,
+            e164: overrides.replyToSenderE164,
+          },
+        }
+      : undefined,
+    group: {
+      mentions: {
+        jids: overrides.mentionedJids,
+      },
+    },
+  });
+}
+
+function createDirectMessage(overrides: TestMessageOverrides = {}): WebInboundMessage {
+  const msg = createGroupMessage(overrides);
+  return {
+    ...msg,
+    from: overrides.from ?? "+1555",
+    conversationId: overrides.conversationId ?? overrides.from ?? "+1555",
+    chatType: "direct",
+    group: undefined,
+    platform: {
+      ...msg.platform,
+      chatJid: overrides.from ?? "+1555",
+    },
   };
 }
 
@@ -116,6 +166,55 @@ function makeInboundCfg(messagePrefix = "") {
     channels: { whatsapp: { messagePrefix } },
   } as never;
 }
+
+describe("WhatsApp listener diagnostics", () => {
+  it("describes WhatsApp inbound listener scope without implying DM-only routing", () => {
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groupPolicy: "open",
+        hasGroupAllowFrom: false,
+      }),
+    ).toBe(
+      "Listening for WhatsApp inbound messages (DM + all groups; no group allowlist configured).",
+    );
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groupPolicy: "disabled",
+        hasGroupAllowFrom: true,
+      }),
+    ).toBe("Listening for WhatsApp inbound messages (DM + groups disabled by groupPolicy).");
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groupPolicy: "allowlist",
+        hasGroupAllowFrom: false,
+      }),
+    ).toBe(
+      "Listening for WhatsApp inbound messages (DM + group inbound blocked by empty groupPolicy allowlist).",
+    );
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groupPolicy: "allowlist",
+        hasGroupAllowFrom: true,
+      }),
+    ).toBe(
+      "Listening for WhatsApp inbound messages (DM + all groups; sender allowlist configured).",
+    );
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groups: { "123@g.us": {}, "*": {} },
+        groupPolicy: "allowlist",
+        hasGroupAllowFrom: true,
+      }),
+    ).toBe("Listening for WhatsApp inbound messages (DM + all groups; wildcard configured).");
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groups: { "123@g.us": {}, "456@g.us": {} },
+        groupPolicy: "allowlist",
+        hasGroupAllowFrom: true,
+      }),
+    ).toBe("Listening for WhatsApp inbound messages (DM + 2 configured groups).");
+  });
+});
 
 describe("applyGroupGating", () => {
   it("treats reply-to-bot as implicit mention", async () => {
@@ -584,7 +683,7 @@ describe("applyGroupGating", () => {
       },
     });
 
-    const { result } = await runGroupGating({
+    const { result, verboseLogs } = await runGroupGating({
       cfg,
       msg: createGroupMessage({
         body: "@workbot ping",
@@ -594,6 +693,9 @@ describe("applyGroupGating", () => {
     });
 
     expect(result.shouldProcess).toBe(false);
+    expect(verboseLogs).toContain(
+      'Dropping message from unregistered WhatsApp group 123@g.us. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.',
+    );
   });
 });
 
@@ -603,7 +705,6 @@ describe("buildInboundLine", () => {
       cfg: makeInboundCfg(""),
       agentId: "main",
       msg: createGroupMessage({
-        to: "+15550009999",
         accountId: "default",
         body: "ping",
         timestamp: 1700000000000,
@@ -621,15 +722,13 @@ describe("buildInboundLine", () => {
     const line = buildInboundLine({
       cfg: makeInboundCfg(""),
       agentId: "main",
-      msg: {
+      msg: createDirectMessage({
         from: "+1555",
-        to: "+1555",
         body: "hello",
-        chatType: "direct",
         replyToId: "q1",
         replyToBody: "original",
         replyToSender: "+1999",
-      } as never,
+      }),
       envelope: { includeTimestamp: false },
     });
 
@@ -642,12 +741,11 @@ describe("buildInboundLine", () => {
     const line = buildInboundLine({
       cfg: makeInboundCfg("[PFX]"),
       agentId: "main",
-      msg: {
+      msg: createDirectMessage({
         from: "+1555",
-        to: "+2666",
         body: "ping",
-        chatType: "direct",
-      } as never,
+        to: "+2666",
+      }),
       envelope: { includeTimestamp: false },
     });
 
@@ -658,12 +756,11 @@ describe("buildInboundLine", () => {
     const line = buildInboundLine({
       cfg: makeInboundCfg(""),
       agentId: "main",
-      msg: {
+      msg: createDirectMessage({
         from: "whatsapp:+15550001111",
-        to: "+2666",
         body: "ping",
-        chatType: "direct",
-      } as never,
+        to: "+2666",
+      }),
       envelope: { includeTimestamp: false },
     });
 
@@ -679,9 +776,11 @@ describe("formatReplyContext", () => {
 
   it("uses unknown sender label when reply sender is absent", () => {
     expect(
-      formatReplyContext({
-        replyToBody: "original",
-      } as never),
+      formatReplyContext(
+        createDirectMessage({
+          replyToBody: "original",
+        }),
+      ),
     ).toBe("[Replying to unknown sender]\noriginal\n[/Replying]");
   });
 });

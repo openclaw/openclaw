@@ -1,3 +1,4 @@
+// OpenClaw runtime test setup installs runtime mocks and cleanup.
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import type {
   ChannelId,
@@ -25,7 +26,7 @@ type WorkerPluginRuntimeHelpers = {
 type WorkerCleanupHelpers = {
   clearSessionStoreCaches: typeof import("../src/config/sessions/store-cache.js").clearSessionStoreCaches;
   drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
-  drainSessionStoreLockQueuesForTest: typeof import("../src/config/sessions/store-lock-state.js").drainSessionStoreLockQueuesForTest;
+  drainSessionStoreWriterQueuesForTest: typeof import("../src/config/sessions/store-writer-state.js").drainSessionStoreWriterQueuesForTest;
   drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
   resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
@@ -80,8 +81,8 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
     vi.importActual<typeof import("../src/config/sessions/store-cache.js")>(
       "../src/config/sessions/store-cache.js",
     ),
-    vi.importActual<typeof import("../src/config/sessions/store-lock-state.js")>(
-      "../src/config/sessions/store-lock-state.js",
+    vi.importActual<typeof import("../src/config/sessions/store-writer-state.js")>(
+      "../src/config/sessions/store-writer-state.js",
     ),
     vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
   ]).then(
@@ -90,12 +91,13 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       modelsConfigState,
       sessionWriteLock,
       sessionStoreCache,
-      sessionStoreLockState,
+      sessionStoreWriterState,
       fileLock,
     ]) => ({
       clearSessionStoreCaches: sessionStoreCache.clearSessionStoreCaches,
       drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
-      drainSessionStoreLockQueuesForTest: sessionStoreLockState.drainSessionStoreLockQueuesForTest,
+      drainSessionStoreWriterQueuesForTest:
+        sessionStoreWriterState.drainSessionStoreWriterQueuesForTest,
       drainSessionWriteLockStateForTest: sessionWriteLock.drainSessionWriteLockStateForTest,
       resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
       resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
@@ -135,6 +137,7 @@ function createTestRegistryForSetup(
       enabled: true,
     })),
     providers: [],
+    embeddingProviders: [],
     speechProviders: [],
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],
@@ -146,7 +149,6 @@ function createTestRegistryForSetup(
     migrationProviders: [],
     memoryEmbeddingProviders: [],
     gatewayHandlers: {},
-    gatewayMethodScopes: {},
     httpRoutes: [],
     cliRegistrars: [],
     reloads: [],
@@ -203,8 +205,7 @@ const createStubOutbound = (
   sendText: async ({ deps, to, text }) => {
     const send = pickSendFn(id, deps);
     if (send) {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      const result = (await send(to, text, { verbose: false } as any)) as {
+      const result = (await send(to, text, { verbose: false })) as {
         messageId: string;
       };
       return { channel: id, ...result };
@@ -214,8 +215,7 @@ const createStubOutbound = (
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
     const send = pickSendFn(id, deps);
     if (send) {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      const result = (await send(to, text, { verbose: false, mediaUrl } as any)) as {
+      const result = (await send(to, text, { verbose: false, mediaUrl })) as {
         messageId: string;
       };
       return { channel: id, ...result };
@@ -393,14 +393,14 @@ afterEach(async () => {
   const {
     clearSessionStoreCaches,
     drainFileLockStateForTest,
-    drainSessionStoreLockQueuesForTest,
+    drainSessionStoreWriterQueuesForTest,
     drainSessionWriteLockStateForTest,
     resetContextWindowCacheForTest,
     resetFileLockStateForTest,
     resetModelsJsonReadyCacheForTest,
     resetSessionWriteLockStateForTest,
   } = await loadWorkerCleanupHelpers();
-  await drainSessionStoreLockQueuesForTest();
+  await drainSessionStoreWriterQueuesForTest();
   clearSessionStoreCaches();
   await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();

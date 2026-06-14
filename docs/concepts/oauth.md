@@ -8,7 +8,7 @@ read_when:
 title: "OAuth"
 ---
 
-OpenClaw supports “subscription auth” via OAuth for providers that offer it
+OpenClaw supports "subscription auth" via OAuth for providers that offer it
 (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic, the practical split
 is now:
 
@@ -17,15 +17,23 @@ is now:
   told us this usage is allowed again
 
 OpenAI Codex OAuth is explicitly supported for use in external tools like
-OpenClaw. This page explains:
+OpenClaw.
+
+OpenClaw stores both OpenAI API-key auth and ChatGPT/Codex OAuth under the
+canonical provider id `openai`. Older `openai-codex:*` profile ids and
+`auth.order.openai-codex` entries are legacy state repaired by
+`openclaw doctor --fix`; use `openai:*` profile ids and `auth.order.openai` for
+new config.
 
 For Anthropic in production, API key auth is the safer recommended path.
+
+This page explains:
 
 - how the OAuth **token exchange** works (PKCE)
 - where tokens are **stored** (and why)
 - how to handle **multiple accounts** (profiles + per-session overrides)
 
-OpenClaw also supports **provider plugins** that ship their own OAuth or API‑key
+OpenClaw also supports **provider plugins** that ship their own OAuth or API-key
 flows. Run them via:
 
 ```bash
@@ -38,16 +46,18 @@ OAuth providers commonly mint a **new refresh token** during login/refresh flows
 
 Practical symptom:
 
-- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets “logged out” later
+- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets "logged out" later
 
 To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
 - external CLI reuse is provider-specific: Codex CLI can bootstrap an empty
-  `openai-codex:default` profile, but once OpenClaw has a local OAuth profile,
-  the local refresh token is canonical; other integrations can remain
-  externally managed and re-read their CLI auth store
+  `openai:default` profile, but once OpenClaw has a local OAuth profile,
+  the local refresh token is canonical. If that local refresh token is rejected,
+  OpenClaw can use a usable same-account Codex CLI token as a runtime-only
+  fallback; other integrations can remain externally managed and re-read their
+  CLI auth store
 - status and startup paths that already know the configured provider set scope
   external CLI discovery to that set, so an unrelated CLI login store is not
   probed for a single-provider setup
@@ -93,7 +103,7 @@ plan](https://support.anthropic.com/en/articles/11845131-using-claude-code-with-
 If you want other subscription-style options in OpenClaw, see [OpenAI
 Codex](/providers/openai), [Qwen Cloud Coding
 Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
-and [Z.AI / GLM Coding Plan](/providers/glm).
+and [Z.AI / GLM Coding Plan](/providers/zai).
 </Warning>
 
 OpenClaw also exposes Anthropic setup-token as a supported token-auth path, but it now prefers Claude CLI reuse and `claude -p` when available.
@@ -105,7 +115,7 @@ Claude login on the host, onboarding/configure can reuse it directly.
 
 ## OAuth exchange (how login works)
 
-OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
+OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm` and wired into the wizards/commands.
 
 ### Anthropic setup-token
 
@@ -120,16 +130,28 @@ Flow shape:
 
 OpenAI Codex OAuth is explicitly supported for use outside the Codex CLI, including OpenClaw workflows.
 
+The login command still uses the canonical OpenAI provider id:
+
+```bash
+openclaw models auth login --provider openai
+```
+
+Use `--profile-id openai:<name>` for multiple ChatGPT/Codex OAuth accounts in
+one agent. Do not use `openai-codex:<name>` for new profiles. Doctor migrates
+that older prefix to a collision-free `openai:*` profile id; run
+`openclaw models auth list --provider openai` after repair before copying
+profile ids into `auth.order` or `/model ...@<profileId>`.
+
 Flow shape (PKCE):
 
 1. generate PKCE verifier/challenge + random `state`
 2. open `https://auth.openai.com/oauth/authorize?...`
 3. try to capture callback on `http://127.0.0.1:1455/auth/callback`
-4. if callback can’t bind (or you’re remote/headless), paste the redirect URL/code
+4. if callback can't bind (or you're remote/headless), paste the redirect URL/code
 5. exchange at `https://auth.openai.com/oauth/token`
 6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
-Wizard path is `openclaw onboard` → auth choice `openai-codex`.
+Wizard path is `openclaw onboard` → auth choice `openai`.
 
 ## Refresh + expiry
 
@@ -145,8 +167,10 @@ At runtime:
 - exception: some external CLI credentials stay externally managed; OpenClaw
   re-reads those CLI auth stores instead of spending copied refresh tokens.
   Codex CLI bootstrap is intentionally narrower: it seeds an empty
-  `openai-codex:default` profile, then OpenClaw-owned refreshes keep the local
-  profile canonical.
+  `openai:default` profile, then OpenClaw-owned refreshes keep the local
+  profile canonical. If the local Codex refresh fails and Codex CLI has a
+  usable token for the same account, OpenClaw may use that token for the current
+  runtime request without writing it back to `auth-profiles.json`.
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 
@@ -156,7 +180,7 @@ Two patterns:
 
 ### 1) Preferred: separate agents
 
-If you want “personal” and “work” to never interact, use isolated agents (separate sessions + credentials + workspace):
+If you want "personal" and "work" to never interact, use isolated agents (separate sessions + credentials + workspace):
 
 ```bash
 openclaw agents add work
@@ -189,6 +213,6 @@ Related docs:
 
 ## Related
 
-- [Authentication](/gateway/authentication) — model provider auth overview
-- [Secrets](/gateway/secrets) — credential storage and SecretRef
-- [Configuration Reference](/gateway/configuration-reference#auth-storage) — auth config keys
+- [Authentication](/gateway/authentication) - model provider auth overview
+- [Secrets](/gateway/secrets) - credential storage and SecretRef
+- [Configuration Reference](/gateway/configuration-reference#auth-storage) - auth config keys

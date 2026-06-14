@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler.preflight thread behavior.
 import type { ChannelType } from "../internal/discord.js";
 import {
   isPreflightAborted,
@@ -6,7 +7,7 @@ import {
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
 
-export type DiscordPreflightThreadContext = {
+type DiscordPreflightThreadContext = {
   earlyThreadChannel: DiscordMessagePreflightContext["threadChannel"];
   earlyThreadParentId?: string;
   earlyThreadParentName?: string;

@@ -1,8 +1,9 @@
+// Msteams plugin module implements resolve allowlist behavior.
 import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/allow-from";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { searchGraphUsers } from "./graph-users.js";
 import {
   listChannelsForTeam,
@@ -11,7 +12,7 @@ import {
   resolveGraphToken,
 } from "./graph.js";
 
-export type MSTeamsChannelResolution = {
+type MSTeamsChannelResolution = {
   input: string;
   resolved: boolean;
   teamId?: string;
@@ -21,7 +22,7 @@ export type MSTeamsChannelResolution = {
   note?: string;
 };
 
-export type MSTeamsUserResolution = {
+type MSTeamsUserResolution = {
   input: string;
   resolved: boolean;
   id?: string;

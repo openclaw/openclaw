@@ -1,15 +1,14 @@
+// Qqbot plugin module implements inbound attachments behavior.
 import type { AudioConvertPort } from "../adapter/audio.port.js";
 import { downloadFile } from "../utils/file-utils.js";
 import { getQQBotMediaDir } from "../utils/platform.js";
 import { normalizeOptionalString } from "../utils/string-normalize.js";
 import { transcribeAudio, resolveSTTConfig } from "../utils/stt.js";
-// Re-export formatVoiceText from core/.
-export { formatVoiceText } from "../utils/voice-text.js";
 
 // Re-export the port type for convenience.
 export type { AudioConvertPort } from "../adapter/audio.port.js";
 
-export interface RawAttachment {
+interface RawAttachment {
   content_type: string;
   url: string;
   filename?: string;
@@ -17,7 +16,7 @@ export interface RawAttachment {
   asr_refer_text?: string;
 }
 
-export type TranscriptSource = "stt" | "asr" | "fallback";
+type TranscriptSource = "stt" | "asr" | "fallback";
 
 /** Normalized attachment output consumed by the gateway. */
 export interface ProcessedAttachments {
@@ -251,7 +250,7 @@ type VoiceResult =
 
 async function processVoiceAttachment(
   localPath: string,
-  audioPath: string | null,
+  audioPathInput: string | null,
   att: RawAttachment,
   asrReferText: string,
   cfg: unknown,
@@ -259,6 +258,7 @@ async function processVoiceAttachment(
   audioConvert: AudioConvertPort,
   log: ProcessContext["log"],
 ): Promise<VoiceResult> {
+  let audioPath = audioPathInput;
   const wavUrl = att.voice_wav_url
     ? att.voice_wav_url.startsWith("//")
       ? `https:${att.voice_wav_url}`

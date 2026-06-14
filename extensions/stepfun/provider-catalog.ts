@@ -1,3 +1,4 @@
+// Stepfun provider module implements model/runtime integration.
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -10,8 +11,7 @@ export const STEPFUN_STANDARD_INTL_BASE_URL = "https://api.stepfun.ai/v1";
 export const STEPFUN_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1";
 export const STEPFUN_PLAN_INTL_BASE_URL = "https://api.stepfun.ai/step_plan/v1";
 
-export const STEPFUN_DEFAULT_MODEL_ID = "step-3.5-flash";
-export const STEPFUN_FLASH_2603_MODEL_ID = "step-3.5-flash-2603";
+const STEPFUN_DEFAULT_MODEL_ID = "step-3.5-flash";
 export const STEPFUN_DEFAULT_MODEL_REF = `${STEPFUN_PROVIDER_ID}/${STEPFUN_DEFAULT_MODEL_ID}`;
 export const STEPFUN_PLAN_DEFAULT_MODEL_REF = `${STEPFUN_PLAN_PROVIDER_ID}/${STEPFUN_DEFAULT_MODEL_ID}`;
 

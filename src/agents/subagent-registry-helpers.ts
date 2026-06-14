@@ -1,5 +1,12 @@
-import { promises as fs } from "node:fs";
+/**
+ * Subagent registry persistence and recovery helpers.
+ *
+ * Handles frozen result caps, orphan detection, timing persistence, and announce retry logging.
+ */
+import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -10,8 +17,8 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
+import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -29,18 +36,17 @@ export {
 } from "./subagent-session-metrics.js";
 
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
-export const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
+const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
 export const MAX_ANNOUNCE_RETRY_COUNT = 3;
 export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
 export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
-export type SubagentRunOrphanReason =
-  | "missing-session-entry"
-  | "missing-session-id"
-  | "stale-unended-run";
+/** Why a registry run can no longer be matched to a live child session. */
+type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id" | "stale-unended-run";
 
+/** Caps frozen completion text stored for later announce/recovery delivery. */
 export function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
   if (!trimmed) {
@@ -59,6 +65,7 @@ export function capFrozenResultText(resultText: string): string {
   return `${payload}${notice}`;
 }
 
+/** Computes bounded exponential backoff for subagent announce retries. */
 export function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
   // retryCount is "attempts already made", so retry #1 waits 1s, then 2s, 4s...
@@ -67,16 +74,28 @@ export function resolveAnnounceRetryDelayMs(retryCount: number) {
   return Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
 }
 
+function formatAnnounceGiveUpLogField(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return JSON.stringify(normalized.length > 2_000 ? `${normalized.slice(0, 2_000)}…` : normalized);
+}
+
+/** Logs a sanitized final give-up line for failed subagent announce delivery. */
 export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
-  const retryCount = entry.announceRetryCount ?? 0;
+  const retryCount = getDeliveryAttemptCount(entry);
   const endedAgoMs =
     typeof entry.endedAt === "number" ? Math.max(0, Date.now() - entry.endedAt) : undefined;
   const endedAgoLabel = endedAgoMs != null ? `${Math.round(endedAgoMs / 1000)}s` : "n/a";
+  const lastDeliveryError = getDeliveryLastError(entry);
+  const deliveryError = lastDeliveryError
+    ? ` deliveryError=${formatAnnounceGiveUpLogField(lastDeliveryError)}`
+    : "";
   defaultRuntime.log(
-    `[warn] Subagent announce give up (${reason}) run=${entry.runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} retries=${retryCount} endedAgo=${endedAgoLabel}`,
+    `[warn] Subagent announce give up (${reason}) run=${entry.runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} retries=${retryCount} endedAgo=${endedAgoLabel}${deliveryError}`,
   );
 }
 
+// Session keys may differ only by casing after legacy writes. Prefer exact
+// matches, then fall back to normalized lookup for recovery paths.
 function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
   const direct = store[sessionKey];
   if (direct) {
@@ -91,6 +110,7 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
   return undefined;
 }
 
+/** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
   const childSessionKey = entry.childSessionKey?.trim();
   if (!childSessionKey) {
@@ -141,6 +161,7 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
   });
 }
 
+/** Resolves whether a registry row is orphaned from its child session entry. */
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   storeCache?: Map<string, Record<string, SessionEntry>>;
@@ -181,6 +202,16 @@ export function resolveSubagentRunOrphanReason(params: {
   }
 }
 
+// Attachment cleanup must stay within the recorded root even if paths were
+// symlinks. Compare real paths before removing anything recursively.
+function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
+  const rootWithSep = params.rootPath.endsWith(path.sep)
+    ? params.rootPath
+    : `${params.rootPath}${path.sep}`;
+  return params.childPath.startsWith(rootWithSep);
+}
+
+/** Best-effort async removal for a subagent attachment directory. */
 export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return;
@@ -208,8 +239,7 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
 
     const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
     const dirBase = dirReal;
-    const rootWithSep = rootBase.endsWith(path.sep) ? rootBase : `${rootBase}${path.sep}`;
-    if (!dirBase.startsWith(rootWithSep)) {
+    if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
       return;
     }
     await fs.rm(dirBase, { recursive: true, force: true });
@@ -218,6 +248,40 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
   }
 }
 
+function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
+  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
+    return;
+  }
+
+  const resolveReal = (targetPath: string): string | null => {
+    try {
+      return fsSync.realpathSync.native(targetPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const rootReal = resolveReal(entry.attachmentsRootDir);
+    const dirReal = resolveReal(entry.attachmentsDir);
+    if (!dirReal) {
+      return;
+    }
+
+    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
+    if (!isResolvedChildPath({ childPath: dirReal, rootPath: rootBase })) {
+      return;
+    }
+    fsSync.rmSync(dirReal, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
+}
+
+/** Marks an orphaned registry run finished, cleans attachments, and removes it. */
 export function reconcileOrphanedRun(params: {
   runId: string;
   entry: SubagentRunRecord;
@@ -261,7 +325,7 @@ export function reconcileOrphanedRun(params: {
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
-    void safeRemoveAttachmentsDir(params.entry);
+    safeRemoveAttachmentsDirSync(params.entry);
   }
   const removed = params.runs.delete(params.runId);
   params.resumedRuns.delete(params.runId);
@@ -274,6 +338,7 @@ export function reconcileOrphanedRun(params: {
   return true;
 }
 
+/** Reconciles orphaned runs found when restoring persisted subagent registry state. */
 export function reconcileOrphanedRestoredRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
@@ -307,9 +372,12 @@ export function reconcileOrphanedRestoredRuns(params: {
   return changed;
 }
 
+/** Resolves the completed subagent archive delay from config. */
 export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
-  const minutes = config.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
+  const minutes =
+    config.agents?.defaults?.subagents?.archiveAfterMinutes ??
+    DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
   if (!Number.isFinite(minutes) || minutes < 0) {
     return undefined;
   }

@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context.session recreate support behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -113,7 +114,7 @@ describe("Telegram direct session recreation after delete", () => {
     expect(context).not.toBeNull();
     await context?.turn.recordInboundSession({
       storePath: context.turn.storePath,
-      sessionKey: String(context.ctxPayload.SessionKey),
+      sessionKey: context.ctxPayload.SessionKey,
       ctx: context.ctxPayload as never,
       updateLastRoute: context.turn.record.updateLastRoute,
       onRecordError: context.turn.record.onRecordError,

@@ -1,7 +1,9 @@
+// Qa Lab plugin module implements scenario catalog behavior.
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { isRepoRootRelativeRef } from "./cli-paths.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
 
@@ -17,7 +19,7 @@ Persona:
 Style:
 - read source and docs first
 - test systematically
-- record evidence
+- record what happened
 - end with a concise protocol report`;
 
 const qaScenarioConfigSchema = z.record(z.string(), z.unknown()).superRefine((config, ctx) => {
@@ -45,11 +47,38 @@ const qaScenarioConfigSchema = z.record(z.string(), z.unknown()).superRefine((co
   }
 });
 
-const qaScenarioExecutionSchema = z.object({
+const qaScenarioRepoRefSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .regex(/^[A-Za-z0-9._/-]+$/, {
+    message: "repo refs must be repo-root relative paths",
+  })
+  .refine(isRepoRootRelativeRef, {
+    message: "repo refs must not be absolute or contain parent-directory segments",
+  });
+
+const qaFlowScenarioExecutionSchema = z.object({
   kind: z.literal("flow").default("flow"),
   summary: z.string().trim().min(1).optional(),
   config: qaScenarioConfigSchema.optional(),
 });
+
+const qaTestFileScenarioExecutionBaseSchema = z.object({
+  summary: z.string().trim().min(1).optional(),
+  path: qaScenarioRepoRefSchema,
+  config: qaScenarioConfigSchema.optional(),
+});
+
+const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
+  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("vitest") }),
+  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("playwright") }),
+]);
+
+const qaScenarioExecutionSchema = z.union([
+  qaFlowScenarioExecutionSchema,
+  qaTestFileScenarioExecutionSchema,
+]);
 
 const qaCoverageIdSchema = z
   .string()
@@ -92,6 +121,9 @@ const qaScenarioCoverageSchema = z
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
 });
+
+export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;
+const qaRuntimeParityTierSchema = z.enum(QA_RUNTIME_PARITY_TIERS);
 
 const qaFlowCallActionSchema = z.object({
   call: z.string().trim().min(1),
@@ -176,6 +208,7 @@ const qaSeedScenarioSchema = z.object({
   title: z.string().trim().min(1),
   surface: z.string().trim().min(1),
   category: z.string().trim().min(1).optional(),
+  runtimeParityTier: qaRuntimeParityTierSchema.optional(),
   coverage: qaScenarioCoverageSchema.optional(),
   surfaces: z.array(z.string().trim().min(1)).min(1).optional(),
   risk: z.enum(["low", "medium", "high"]).optional(),
@@ -206,6 +239,7 @@ const qaScenarioPackSchema = z.object({
 
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
+export type QaRuntimeParityTier = z.infer<typeof qaRuntimeParityTierSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
 export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;
@@ -223,6 +257,14 @@ export type QaBootstrapScenarioCatalog = {
   kickoffTask: string;
   scenarios: QaSeedScenarioWithSource[];
 };
+
+export {
+  QA_OBSERVABILITY_SCENARIO_IDS,
+  QA_PERSONAL_AGENT_SCENARIO_IDS,
+  QA_SCENARIO_PACKS,
+  resolveQaScenarioPackScenarioIds,
+  type QaScenarioPackDefinition,
+} from "./scenario-packs.js";
 
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.md";
 const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";
@@ -305,8 +347,8 @@ function extractQaScenarioFlow(content: string, relativePath: string) {
   return parseQaYamlWithContext(qaFlowSchema, YAML.parse(match[1]) as unknown, relativePath);
 }
 
-function formatZodIssuePath(path: PropertyKey[]) {
-  return path.length ? path.map(String).join(".") : "<root>";
+function formatZodIssuePath(pathLocal: PropertyKey[]) {
+  return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
 }
 
 function parseQaYamlWithContext<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
@@ -363,13 +405,14 @@ export function readQaScenarioPack(): QaScenarioPack {
         parsedScenario.execution ?? {},
         relativePath,
       );
-      const flow = extractQaScenarioFlow(content, relativePath);
+      const flow =
+        execution.kind === "flow" ? extractQaScenarioFlow(content, relativePath) : undefined;
       return {
         ...parsedScenario,
         sourcePath: relativePath,
         execution: {
           ...execution,
-          flow,
+          ...(flow ? { flow } : {}),
         },
       } satisfies QaSeedScenarioWithSource;
     })(),

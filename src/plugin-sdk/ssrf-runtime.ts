@@ -6,9 +6,12 @@ export {
   createPinnedDispatcher,
   SsrFBlockedError,
   isBlockedHostnameOrIp,
+  isPrivateIpAddress,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";

@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime behavior.
 import {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_SECONDARY_ROOM_KEY,
@@ -61,6 +62,7 @@ import {
   runMatrixQaE2eeRecoveryKeyLifecycleScenario,
   runMatrixQaE2eeRecoveryOwnerVerificationRequiredScenario,
   runMatrixQaE2eeRestartResumeScenario,
+  runMatrixQaE2eeStateAfterMissingEncryptionScenario,
   runMatrixQaE2eeStaleDeviceHygieneScenario,
   runMatrixQaE2eeThreadFollowUpScenario,
   runMatrixQaE2eeVerificationNoticeNoTriggerScenario,
@@ -75,6 +77,7 @@ import {
   runImageUnderstandingAttachmentScenario,
   runMediaTypeCoverageScenario,
   runUnsupportedMediaSafeScenario,
+  runVoicePreflightMentionScenario,
 } from "./scenario-runtime-media.js";
 import {
   runReactionNotAReplyScenario,
@@ -123,7 +126,6 @@ import {
   runTopologyScopedTopLevelScenario,
   writeMatrixQaSyncCursor,
   type MatrixQaScenarioContext,
-  type MatrixQaSyncState,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
@@ -135,7 +137,7 @@ export {
   runMatrixQaCanary,
   writeMatrixQaSyncCursor,
 };
-export type { MatrixQaScenarioContext, MatrixQaSyncState };
+export type { MatrixQaScenarioContext };
 
 async function runDriverTopologyScopedScenario(params: {
   context: MatrixQaScenarioContext;
@@ -247,6 +249,8 @@ export async function runMatrixQaScenario(
       return await runGeneratedImageDeliveryScenario(context);
     case "matrix-media-type-coverage":
       return await runMediaTypeCoverageScenario(context);
+    case "matrix-voice-preflight-mention":
+      return await runVoicePreflightMentionScenario(context);
     case "matrix-attachment-only-ignored":
       return await runAttachmentOnlyIgnoredScenario(context);
     case "matrix-unsupported-media-safe":
@@ -388,6 +392,8 @@ export async function runMatrixQaScenario(
       return await runInboundEditNoDuplicateTriggerScenario(context);
     case "matrix-e2ee-basic-reply":
       return await runMatrixQaE2eeBasicReplyScenario(context);
+    case "matrix-e2ee-state-after-missing-encryption":
+      return await runMatrixQaE2eeStateAfterMissingEncryptionScenario(context);
     case "matrix-e2ee-thread-follow-up":
       return await runMatrixQaE2eeThreadFollowUpScenario(context);
     case "matrix-e2ee-bootstrap-success":

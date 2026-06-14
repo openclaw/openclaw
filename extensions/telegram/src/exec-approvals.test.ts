@@ -1,3 +1,4 @@
+// Telegram tests cover exec approvals plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,8 @@ import type {
   OpenClawConfig,
   TelegramAccountConfig,
   TelegramExecApprovalConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
@@ -193,7 +195,7 @@ describe("telegram exec approvals", () => {
       },
     );
 
-    expect(getTelegramExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getTelegramExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isTelegramExecApprovalClientEnabled({ cfg })).toBe(false);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "12345" })).toBe(false);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "67890" })).toBe(false);
@@ -228,12 +230,12 @@ describe("telegram exec approvals", () => {
     ).toBe(true);
   });
 
-  it("scopes non-telegram turn sources to the stored telegram account", () => {
+  it("scopes non-telegram turn sources to the stored telegram account", async () => {
     const tmpDir = createTempDir();
     const storePath = path.join(tmpDir, "sessions.json");
-    fs.writeFileSync(
+    await saveSessionStore(
       storePath,
-      JSON.stringify({
+      {
         "agent:ops:telegram:direct:123": {
           sessionId: "main",
           updatedAt: 1,
@@ -245,8 +247,8 @@ describe("telegram exec approvals", () => {
           lastTo: "channel:C999",
           lastAccountId: "work",
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     const cfg = buildMultiAccountTelegramConfig({ sessionStorePath: storePath });
     const request = makeForeignChannelApprovalRequest({
