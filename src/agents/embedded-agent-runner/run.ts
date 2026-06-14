@@ -421,10 +421,26 @@ function createScopedAuthProfileStore(
       return credential ? [[profileId, credential] as const] : [];
     }),
   );
+  const scopedRuntimeExternalProfileIds = (store.runtimeExternalProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
+  const scopedRuntimePersistedProfileIds = (store.runtimePersistedProfileIds ?? []).filter(
+    (profileId) => scopedProfiles[profileId],
+  );
   return Object.keys(scopedProfiles).length > 0
     ? {
         version: store.version,
         profiles: scopedProfiles,
+        ...(scopedRuntimePersistedProfileIds.length > 0
+          ? { runtimePersistedProfileIds: scopedRuntimePersistedProfileIds }
+          : {}),
+        ...(scopedRuntimeExternalProfileIds.length > 0 ||
+        store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIds: scopedRuntimeExternalProfileIds }
+          : {}),
+        ...(store.runtimeExternalProfileIdsAuthoritative === true
+          ? { runtimeExternalProfileIdsAuthoritative: true }
+          : {}),
       }
     : createEmptyAuthProfileStore();
 }
