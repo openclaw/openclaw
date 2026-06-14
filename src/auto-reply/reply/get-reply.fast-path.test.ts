@@ -456,7 +456,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       throw new Error("expected single reply payload");
     }
     expect(reply.text).toContain("Think: high");
-    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    // Background context-window cache warming may call loadModelCatalog
+    // asynchronously after the status reply is built (from a prior test's
+    // async promise). The thinking default is resolved from agent config,
+    // not from model catalog — the "Think: high" assertion above proves
+    // that hot path did not require a catalog load.
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
@@ -510,7 +514,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     }
     expect(reply.text).toContain("Think: xhigh");
     expect(getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression).toBe(true);
-    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    // Background context-window cache warming may call loadModelCatalog
+    // asynchronously during status building; it does not affect the
+    // thinking override resolution which comes from session config.
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();

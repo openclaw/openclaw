@@ -4,6 +4,7 @@ import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -124,7 +125,10 @@ export async function startGatewayEarlyRuntime(params: {
         ]),
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
-    void primeRemoteSkillsCache();
+    void Promise.allSettled([
+      primeRemoteSkillsCache(),
+      ensureContextWindowCacheLoaded(),
+    ]);
     // Task registry maintenance is authoritative in the Gateway process so
     // restart-blocker counts reflect the same cron store as runtime execution.
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
