@@ -24,8 +24,14 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   createLocalEmbeddingProvider: async () => {
     throw new Error("local embedding provider is not used by these tests");
   },
-  getMemoryEmbeddingProvider: (id: string) =>
-    mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id),
+  getMemoryEmbeddingProvider: (id: string) => {
+    const direct = mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id);
+    if (direct) return direct;
+    // Centralized authProviderId fallback (mirrors runtime resolver)
+    return mockEmbeddingRegistry.adapters.find(
+      (adapter) => adapter.authProviderId === id,
+    );
+  },
   listMemoryEmbeddingProviders: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviderAdapters: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviders: () =>
@@ -267,5 +273,29 @@ describe("createEmbeddingProvider", () => {
 
     expect(model).toBe("generic-default");
     expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
+  });
+
+  it("resolves provider by authProviderId when direct id lookup misses", async () => {
+    registerMemoryEmbeddingProvider({
+      id: "gemini",
+      transport: "remote",
+      authProviderId: "google",
+      autoSelectPriority: 30,
+      create: async () => ({
+        provider: {
+          id: "gemini",
+          model: "gemini-embedding-001",
+          embedQuery: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }),
+    });
+
+    const options = createOptions("google");
+    const result = await createEmbeddingProvider(options);
+
+    expect(result.requestedProvider).toBe("google");
+    expect(result.provider?.id).toBe("gemini");
+    expect(result.fallbackFrom).toBeUndefined();
   });
 });
