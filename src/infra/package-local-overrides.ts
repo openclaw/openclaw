@@ -281,6 +281,13 @@ function normalizeFileMode(mode: number): number {
   return mode & 0o777;
 }
 
+function fileModesHaveSameExecutableSemantics(left: number, right: number): boolean {
+  return (
+    process.platform === "win32" ||
+    Boolean(normalizeFileMode(left) & 0o111) === Boolean(normalizeFileMode(right) & 0o111)
+  );
+}
+
 async function writeFileWithMode(
   content: Buffer,
   destination: string,
@@ -443,7 +450,7 @@ async function moveExpectedLocalOverrideTarget(params: {
     const sha256 = createHash("sha256").update(moved.buffer).digest("hex");
     if (
       sha256 !== params.expected.sha256 ||
-      (process.platform !== "win32" && mode !== normalizeFileMode(params.expected.mode))
+      !fileModesHaveSameExecutableSemantics(mode, params.expected.mode)
     ) {
       throw new Error(`local override target changed during mutation: ${params.relativePath}`);
     }
@@ -797,7 +804,7 @@ export async function captureLocalPackageOverrides(params: {
       const currentSha = createHash("sha256").update(current.buffer).digest("hex");
       if (
         currentSha === entry.sha256 &&
-        (process.platform === "win32" || currentMode === normalizeFileMode(entry.mode))
+        fileModesHaveSameExecutableSemantics(currentMode, entry.mode)
       ) {
         continue;
       }
@@ -942,8 +949,8 @@ async function preflightLocalOverrides(params: {
     if (
       nextEntry.sha256 !== change.baseline.sha256 ||
       targetSha !== nextEntry.sha256 ||
-      nextEntry.mode !== normalizeFileMode(change.baseline.mode) ||
-      (process.platform !== "win32" && targetProbe.mode !== normalizeFileMode(nextEntry.mode))
+      !fileModesHaveSameExecutableSemantics(nextEntry.mode, change.baseline.mode) ||
+      !fileModesHaveSameExecutableSemantics(targetProbe.mode, nextEntry.mode)
     ) {
       conflicts.push({ path: change.path, reason: "target-changed" });
     }
@@ -1051,7 +1058,7 @@ async function preflightLocalOverrides(params: {
   return conflicts;
 }
 
-function localOverridePackageRootConflict(
+function localOverrideInspectionConflict(
   plan: LocalPackageOverridesPlan,
 ): LocalPackageOverridesResult {
   return {
@@ -1063,7 +1070,7 @@ function localOverridePackageRootConflict(
       reason: "target-inspection-failed" as const,
     })),
     warnings: [
-      "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
+      "Local OpenClaw changes were preserved but not reapplied because the updated package could not be safely inspected.",
     ],
   };
 }
@@ -1092,13 +1099,16 @@ export async function applyLocalPackageOverrides(params: {
     () => null,
   );
   if (!packageRootIdentity) {
-    return localOverridePackageRootConflict(params.plan);
+    return localOverrideInspectionConflict(params.plan);
   }
   const conflicts = await preflightLocalOverrides({
     packageRoot: params.packageRoot,
     realPackageRoot: packageRootIdentity.realPath,
     plan: params.plan,
-  });
+  }).catch(() => null);
+  if (!conflicts) {
+    return localOverrideInspectionConflict(params.plan);
+  }
   const conflictPaths = new Set(conflicts.map((conflict) => conflict.path));
   const changesToApply: LocalPackageOverrideChange[] = [];
   for (const change of params.plan.changes) {
@@ -1153,7 +1163,7 @@ export async function applyLocalPackageOverrides(params: {
       !openedPackageRootIdentity ||
       !isSameLocalOverridePackageRoot(packageRootIdentity, openedPackageRootIdentity)
     ) {
-      return localOverridePackageRootConflict(params.plan);
+      return localOverrideInspectionConflict(params.plan);
     }
     rollbackDir = await fs.mkdtemp(path.join(params.plan.recoveryDir, "rollback-"));
     for (const change of changesToApply) {

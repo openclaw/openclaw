@@ -588,6 +588,57 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "ignores non-executable mode normalization during capture",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-package-update-local-mode-normalized-" },
+        async (base) => {
+          const packageRoot = path.join(base, "package");
+          const indexPath = path.join(packageRoot, "dist", "index.js");
+          await writePackageRoot(packageRoot, "1.0.0");
+          await fs.chmod(indexPath, 0o644);
+          await writePackageDistInventory(packageRoot);
+          await fs.chmod(indexPath, 0o600);
+
+          await expect(captureLocalPackageOverrides({ packageRoot })).resolves.toBeNull();
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reapplies byte overrides over non-executable mode normalization",
+    async () => {
+      await withTempDir({ prefix: "openclaw-package-update-local-mode-reapply-" }, async (base) => {
+        const packageRoot = path.join(base, "package");
+        const indexPath = path.join(packageRoot, "dist", "index.js");
+        await writePackageRoot(packageRoot, "1.0.0");
+        await fs.chmod(indexPath, 0o644);
+        await writePackageDistInventory(packageRoot);
+        await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+        const plan = await captureLocalPackageOverrides({ packageRoot });
+        expect(plan).not.toBeNull();
+        await writePackageRoot(packageRoot, "2.0.0");
+        await fs.chmod(indexPath, 0o644);
+        await writePackageDistInventory(packageRoot);
+        await fs.chmod(indexPath, 0o600);
+
+        const result = await applyLocalPackageOverrides({
+          packageRoot,
+          plan,
+          reapply: true,
+        });
+
+        expect(result.status).toBe("applied");
+        expect(result.applied).toBe(1);
+        expect(result.conflicts).toEqual([]);
+        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export const local = true;\n");
+      });
+    },
+  );
+
   it("captures and reapplies locally added source maps excluded from package files", async () => {
     await withTempDir({ prefix: "openclaw-package-update-local-source-map-" }, async (base) => {
       const packageRoot = path.join(base, "package");
@@ -2090,6 +2141,39 @@ describe("runGlobalPackageUpdateSteps", () => {
         }
       },
     );
+  });
+
+  it("returns a structured conflict when replay preflight fails", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-preflight-fail-" }, async (base) => {
+      const packageRoot = path.join(base, "package");
+      const indexPath = path.join(packageRoot, "dist", "index.js");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(indexPath, "export const local = true;\n", "utf8");
+
+      const plan = await captureLocalPackageOverrides({ packageRoot });
+      expect(plan).not.toBeNull();
+      await writePackageRoot(packageRoot, "2.0.0");
+      await fs.writeFile(
+        path.join(packageRoot, "dist", "postinstall-content-inventory.json"),
+        "{ invalid json\n",
+        "utf8",
+      );
+
+      const result = await applyLocalPackageOverrides({
+        packageRoot,
+        plan,
+        reapply: true,
+      });
+
+      expect(result.status).toBe("conflict");
+      expect(result.applied).toBe(0);
+      expect(result.recoveryDir).toBe(plan?.recoveryDir);
+      expect(result.conflicts).toEqual([
+        { path: "dist/index.js", reason: "target-inspection-failed" },
+      ]);
+      expect(result.warnings.join("\n")).toContain("could not be safely inspected");
+      await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
+    });
   });
 
   it("aborts before package-manager work for unsafe inventory paths", async () => {
