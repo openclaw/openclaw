@@ -174,4 +174,50 @@ describe("browser.request profile selection", () => {
     expect(invoke.params?.path).toBe("/profiles");
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
+
+  it("blocks Browser Steward node proxy mutation before forwarding", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest({
+      method: "POST",
+      path: "/tabs/open",
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+      body: {
+        url: "https://example.com",
+        browserStewardRuntimeDelegated: true,
+      },
+    });
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringMatching(
+          /Browser Steward runtime guard blocked open: approval_required/,
+        ),
+      }),
+    );
+  });
+
+  it("allows Browser Steward read-only node proxy status and forwards identity", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest({
+      method: "GET",
+      path: "/",
+      query: { profile: "openclaw" },
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+    });
+
+    expect(nodeRegistry.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+          method: "GET",
+          path: "/",
+          profile: "openclaw",
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+  });
 });

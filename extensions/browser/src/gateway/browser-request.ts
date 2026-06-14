@@ -9,6 +9,11 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  assertBrowserStewardRuntimeAllowed,
+  isBrowserStewardSession,
+  resolveBrowserStewardProxyAction,
+} from "../browser/browser-steward-runtime-guard.js";
+import {
   ErrorCodes,
   applyBrowserProxyPaths,
   createBrowserControlContext,
@@ -35,6 +40,7 @@ type BrowserRequestParams = {
   query?: Record<string, unknown>;
   body?: unknown;
   timeoutMs?: number;
+  agentSessionKey?: string;
 };
 
 type BrowserProxyFile = {
@@ -134,6 +140,39 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
   applyBrowserProxyPaths(result, mapping);
 }
 
+function enforceBrowserStewardGatewayRequest(params: {
+  agentSessionKey?: string;
+  method: string;
+  path: string;
+  query?: Record<string, unknown>;
+  body?: unknown;
+  profile?: string;
+}): string | null {
+  if (!isBrowserStewardSession(params.agentSessionKey)) {
+    return null;
+  }
+  try {
+    assertBrowserStewardRuntimeAllowed({
+      action: resolveBrowserStewardProxyAction({
+        method: params.method,
+        path: params.path,
+        body: params.body,
+      }),
+      profile: params.profile,
+      agentSessionKey: params.agentSessionKey,
+      request: {
+        method: params.method,
+        path: params.path,
+        query: params.query,
+        body: params.body,
+      },
+    });
+    return null;
+  } catch (err) {
+    return String(err instanceof Error ? err.message : err);
+  }
+}
+
 /** Handles one browser.request gateway call and streams a success/error response. */
 export async function handleBrowserGatewayRequest({
   params,
@@ -161,6 +200,19 @@ export async function handleBrowserGatewayRequest({
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, "method must be GET, POST, or DELETE"),
     );
+    return;
+  }
+  const requestedProfile = resolveRequestedBrowserProfile({ query, body });
+  const browserStewardBlock = enforceBrowserStewardGatewayRequest({
+    agentSessionKey: normalizeOptionalString(typed.agentSessionKey),
+    method: methodRaw,
+    path,
+    query,
+    body,
+    profile: requestedProfile,
+  });
+  if (browserStewardBlock) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, browserStewardBlock));
     return;
   }
   if (isPersistentBrowserProfileMutation(methodRaw, path)) {
@@ -213,7 +265,8 @@ export async function handleBrowserGatewayRequest({
       query,
       body,
       timeoutMs,
-      profile: resolveRequestedBrowserProfile({ query, body }),
+      profile: requestedProfile,
+      agentSessionKey: normalizeOptionalString(typed.agentSessionKey),
     };
     const res = await context.nodeRegistry.invoke({
       nodeId: nodeTarget.nodeId,

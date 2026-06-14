@@ -5,6 +5,11 @@
 import fsPromises from "node:fs/promises";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  assertBrowserStewardRuntimeAllowed,
+  isBrowserStewardSession,
+  resolveBrowserStewardProxyAction,
+} from "../browser/browser-steward-runtime-guard.js";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "../browser/config.js";
@@ -28,6 +33,9 @@ type BrowserProxyParams = {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  agentSessionKey?: string;
+  browserStewardRuntimeApproved?: boolean;
+  browserStewardRuntimeDelegated?: boolean;
 };
 
 type BrowserProxyFile = {
@@ -248,6 +256,21 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
       body,
       profile: params.profile,
     }) ?? "";
+  if (isBrowserStewardSession(params.agentSessionKey)) {
+    assertBrowserStewardRuntimeAllowed({
+      action: resolveBrowserStewardProxyAction({ method, path, body }),
+      profile: requestedProfile,
+      agentSessionKey: params.agentSessionKey,
+      approved: params.browserStewardRuntimeApproved === true,
+      delegated: params.browserStewardRuntimeDelegated === true,
+      request: {
+        method,
+        path,
+        query: params.query,
+        body,
+      },
+    });
+  }
   const allowedProfiles = proxyConfig.allowProfiles;
   if (isPersistentBrowserProfileMutation(method, path)) {
     throw new Error("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");

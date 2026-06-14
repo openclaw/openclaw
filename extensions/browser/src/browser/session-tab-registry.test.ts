@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   countTrackedSessionBrowserTabsForTests,
+  getTrackedSessionBrowserTabsForTests,
   resetTrackedSessionBrowserTabsForTests,
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
@@ -193,5 +194,56 @@ describe("session tab registry", () => {
       profile: undefined,
     });
     expect(countTrackedSessionBrowserTabsForTests()).toBe(1);
+  });
+
+  it("does not persist Browser Steward tab metadata without an allowed runtime decision", () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:browser-session-credential-steward:runtime-check",
+      targetId: "tab-denied",
+      profile: "user",
+    });
+
+    expect(
+      countTrackedSessionBrowserTabsForTests(
+        "agent:browser-session-credential-steward:runtime-check",
+      ),
+    ).toBe(0);
+  });
+
+  it("persists only redacted Browser Steward runtime guard metadata", () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:browser-session-credential-steward:runtime-check",
+      targetId: "tab-approved",
+      profile: "user",
+      browserStewardRuntimeDecision: {
+        boundaryDecision: "allow",
+        requestedAction: "open",
+        affectedBrowserProfile: "user",
+        affectedSession: "UNKNOWN",
+        credentialClassesInvolved: ["browser session"],
+        dataSensitivity: "high",
+        approvalRequired: false,
+        safeNextAction: "proceed with redacted Browser Steward runtime guard metadata",
+        telemetryEvent: "browser_steward.boundary_decision",
+      },
+    });
+
+    const tracked = getTrackedSessionBrowserTabsForTests(
+      "agent:browser-session-credential-steward:runtime-check",
+    );
+    expect(tracked).toHaveLength(1);
+    expect(tracked[0]).toMatchObject({
+      targetId: "tab-approved",
+      profile: "user",
+      browserStewardRuntimeGuard: {
+        boundaryDecision: "allow",
+        requestedAction: "open",
+        affectedBrowserProfile: "user",
+        affectedSession: "UNKNOWN",
+        approvalSource: "runtime",
+        telemetryEvent: "browser_steward.boundary_decision",
+      },
+    });
+    expect(JSON.stringify(tracked)).not.toMatch(/password|token|cookie|secret|privateKey|apiKey/i);
   });
 });

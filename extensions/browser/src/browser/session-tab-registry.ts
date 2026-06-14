@@ -6,13 +6,25 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserStewardRuntimeDecision } from "./browser-steward-runtime-guard.js";
+import { isBrowserStewardSession } from "./browser-steward-runtime-guard.js";
 import { browserCloseTab } from "./client.js";
+
+type BrowserStewardTrackedGuard = {
+  boundaryDecision: "allow";
+  requestedAction: string;
+  affectedBrowserProfile: string;
+  affectedSession: string;
+  approvalSource: "runtime";
+  telemetryEvent: string;
+};
 
 type TrackedSessionBrowserTab = {
   sessionKey: string;
   targetId: string;
   baseUrl?: string;
   profile?: string;
+  browserStewardRuntimeGuard?: BrowserStewardTrackedGuard;
   trackedAt: number;
   lastUsedAt: number;
 };
@@ -50,6 +62,32 @@ function normalizeBaseUrl(raw?: string): string | undefined {
 
 function toTrackedTabId(params: { targetId: string; baseUrl?: string; profile?: string }): string {
   return `${params.targetId}\u0000${params.baseUrl ?? ""}\u0000${params.profile ?? ""}`;
+}
+
+function toBrowserStewardTrackedGuard(
+  decision: BrowserStewardRuntimeDecision | undefined,
+): BrowserStewardTrackedGuard | undefined {
+  if (!decision || decision.approvalRequired || decision.boundaryDecision !== "allow") {
+    return undefined;
+  }
+  return {
+    boundaryDecision: "allow",
+    requestedAction: decision.requestedAction,
+    affectedBrowserProfile: decision.affectedBrowserProfile,
+    affectedSession: decision.affectedSession,
+    approvalSource: "runtime",
+    telemetryEvent: decision.telemetryEvent,
+  };
+}
+
+function shouldAllowBrowserStewardMetadata(params: {
+  sessionKey: string;
+  browserStewardRuntimeDecision?: BrowserStewardRuntimeDecision;
+}): boolean {
+  return (
+    !isBrowserStewardSession(params.sessionKey) ||
+    Boolean(toBrowserStewardTrackedGuard(params.browserStewardRuntimeDecision))
+  );
 }
 
 function resolveTrackedTabIdentity(
@@ -96,14 +134,25 @@ function isIgnorableCloseError(err: unknown): boolean {
 }
 
 /** Starts tracking a browser tab for later session cleanup. */
-export function trackSessionBrowserTab(params: SessionBrowserTabIdentityParams): void {
+export function trackSessionBrowserTab(
+  params: SessionBrowserTabIdentityParams & {
+    browserStewardRuntimeDecision?: BrowserStewardRuntimeDecision;
+  },
+): void {
   const identity = resolveTrackedTabIdentity(params);
   if (!identity) {
     return;
   }
+  if (!shouldAllowBrowserStewardMetadata({ ...params, ...identity })) {
+    return;
+  }
+  const browserStewardRuntimeGuard = toBrowserStewardTrackedGuard(
+    params.browserStewardRuntimeDecision,
+  );
   const now = Date.now();
   const tracked: TrackedSessionBrowserTab = {
     ...identity,
+    ...(browserStewardRuntimeGuard ? { browserStewardRuntimeGuard } : {}),
     trackedAt: now,
     lastUsedAt: now,
   };
@@ -122,10 +171,16 @@ export function trackSessionBrowserTab(params: SessionBrowserTabIdentityParams):
 
 /** Updates last-used time for a tracked browser tab. */
 export function touchSessionBrowserTab(
-  params: SessionBrowserTabIdentityParams & { now?: number },
+  params: SessionBrowserTabIdentityParams & {
+    now?: number;
+    browserStewardRuntimeDecision?: BrowserStewardRuntimeDecision;
+  },
 ): void {
   const identity = resolveTrackedTabIdentity(params);
   if (!identity) {
+    return;
+  }
+  if (!shouldAllowBrowserStewardMetadata({ ...params, ...identity })) {
     return;
   }
   const trackedForSession = trackedTabsForIdentity(identity);
@@ -137,8 +192,12 @@ export function touchSessionBrowserTab(
   if (!tracked) {
     return;
   }
+  const browserStewardRuntimeGuard =
+    toBrowserStewardTrackedGuard(params.browserStewardRuntimeDecision) ??
+    tracked.browserStewardRuntimeGuard;
   trackedForSession.set(trackedId, {
     ...tracked,
+    ...(browserStewardRuntimeGuard ? { browserStewardRuntimeGuard } : {}),
     lastUsedAt: params.now ?? Date.now(),
   });
 }
@@ -333,4 +392,25 @@ export function countTrackedSessionBrowserTabsForTests(sessionKey?: string): num
     count += tracked.size;
   }
   return count;
+}
+
+export function getTrackedSessionBrowserTabsForTests(
+  sessionKey?: string,
+): TrackedSessionBrowserTab[] {
+  const normalized = typeof sessionKey === "string" ? normalizeSessionKey(sessionKey) : undefined;
+  const tabs: TrackedSessionBrowserTab[] = [];
+  for (const [key, trackedForSession] of trackedTabsBySession) {
+    if (normalized && key !== normalized) {
+      continue;
+    }
+    for (const tracked of trackedForSession.values()) {
+      tabs.push({
+        ...tracked,
+        ...(tracked.browserStewardRuntimeGuard
+          ? { browserStewardRuntimeGuard: { ...tracked.browserStewardRuntimeGuard } }
+          : {}),
+      });
+    }
+  }
+  return tabs;
 }
