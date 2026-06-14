@@ -261,6 +261,8 @@ import { createCodexUserInputBridge } from "./user-input-bridge.js";
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
 const CODEX_APP_SERVER_ACTIVE_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
+const CODEX_APP_SERVER_TERMINAL_NOTIFICATION_DRAIN_TIMEOUT_MS = 250;
+const CODEX_APP_SERVER_TERMINAL_NOTIFICATION_DRAIN_INTERVAL_MS = 10;
 const ensuredCodexWorkspaceDirs = new Set<string>();
 
 function estimateCodexAppServerProjectedTurnTokens(params: {
@@ -1265,6 +1267,7 @@ export async function runCodexAppServerAttempt(
     resolveCompletion = resolve;
   });
   let notificationQueue: Promise<void> = Promise.resolve();
+  let notificationSequence = 0;
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );
@@ -1681,6 +1684,7 @@ export async function runCodexAppServerAttempt(
           : undefined,
       );
     }
+    notificationSequence += 1;
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
       () => handleNotification(notification),
@@ -2371,6 +2375,27 @@ export async function runCodexAppServerAttempt(
   if (!activeProjector) {
     throw new Error("codex app-server projector was not initialized");
   }
+  const waitForTerminalNotificationDrain = async (): Promise<void> => {
+    if (!activeProjector.hasUnresolvedNativeToolResults()) {
+      return;
+    }
+    const deadline = Date.now() + CODEX_APP_SERVER_TERMINAL_NOTIFICATION_DRAIN_TIMEOUT_MS;
+    while (
+      activeProjector.hasUnresolvedNativeToolResults() &&
+      !runAbortController.signal.aborted &&
+      Date.now() < deadline
+    ) {
+      const observedSequence = notificationSequence;
+      await notificationQueue;
+      await new Promise((resolve) => {
+        setTimeout(resolve, CODEX_APP_SERVER_TERMINAL_NOTIFICATION_DRAIN_INTERVAL_MS);
+      });
+      if (notificationSequence === observedSequence && Date.now() >= deadline) {
+        break;
+      }
+    }
+    await notificationQueue;
+  };
   turnWatches.armTerminalIdleWatch();
   turnWatches.touchActivity("turn:start", { arm: true });
   turnWatches.armAttemptIdleWatch();
@@ -2454,6 +2479,10 @@ export async function runCodexAppServerAttempt(
     // for already-queued projection work so the final result includes artifacts
     // from the notification that triggered the idle watchdog.
     await notificationQueue;
+    // A terminal turn notification can arrive just before the matching native
+    // tool item completion/result notification. Give the app-server stream a
+    // short bounded drain window before fail-closed missing-result synthesis.
+    await waitForTerminalNotificationDrain();
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
     const finalAborted =
       result.aborted || (runAbortController.signal.aborted && !clientClosedAbort);

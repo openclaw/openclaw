@@ -1507,6 +1507,157 @@ describe("runCodexAppServerAttempt", () => {
     expect(snapshotJson).toContain("without a matching tool.result");
   });
 
+  it("drains delayed terminal native tool results before building the attempt result", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-terminal-drain-result.jsonl"),
+      path.join(tempDir, "workspace-terminal-drain-result"),
+    );
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "cmd-drained",
+          command: "printf ok",
+          cwd: "/workspace",
+          processId: 123,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      },
+    });
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "agentMessage",
+              id: "msg-final",
+              text: "Done after tool.",
+            },
+          ],
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          durationMs: null,
+        },
+      },
+    });
+    setTimeout(() => {
+      void harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id: "cmd-drained",
+            command: "printf ok",
+            cwd: "/workspace",
+            processId: 123,
+            source: "agent",
+            status: "completed",
+            commandActions: [],
+            aggregatedOutput: "ok",
+            exitCode: 0,
+            durationMs: 12,
+          },
+        },
+      });
+    }, 20);
+
+    const result = await run;
+
+    expect(result.promptError).toBeNull();
+    expect(result.lastToolError).toBeUndefined();
+    expect(result.assistantTexts).toEqual(["Done after tool."]);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    expect(snapshotJson).toContain('"toolCallId":"cmd-drained"');
+    expect(snapshotJson).toContain("ok");
+    expect(snapshotJson).not.toContain("without a matching tool.result");
+    expect(snapshotJson).not.toContain("missing_tool_result");
+  });
+
+  it("synthesizes missing terminal native tool results after the drain deadline", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-terminal-drain-deadline.jsonl"),
+      path.join(tempDir, "workspace-terminal-drain-deadline"),
+    );
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "cmd-deadline",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      },
+    });
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "agentMessage",
+              id: "msg-final",
+              text: "Done but tool result never arrived.",
+            },
+          ],
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          durationMs: null,
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.promptError).toBeNull();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: expect.stringContaining("without a matching tool.result"),
+      mutatingAction: true,
+    });
+    expect(result.assistantTexts).toEqual(["Done but tool result never arrived."]);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    expect(snapshotJson).toContain('"toolCallId":"cmd-deadline"');
+    expect(snapshotJson).toContain('"isError":true');
+    expect(snapshotJson).toContain("without a matching tool.result");
+  });
+
   it("keeps forced message dynamic tool when toolsAllow omits it", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
