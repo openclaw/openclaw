@@ -6,6 +6,21 @@ import { describe, expect, it } from "vitest";
 import { resolveZaloToken } from "./token.js";
 import type { ZaloConfig } from "./types.js";
 
+const canCreateFileSymlinks = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-zalo-token-probe-"));
+  const targetFile = path.join(probeDir, "target.txt");
+  const linkFile = path.join(probeDir, "link.txt");
+  try {
+    fs.writeFileSync(targetFile, "target", "utf8");
+    fs.symlinkSync(targetFile, linkFile, "file");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
 describe("resolveZaloToken", () => {
   it("falls back to top-level token for non-default accounts without overrides", () => {
     const cfg = {
@@ -75,7 +90,7 @@ describe("resolveZaloToken", () => {
     expect(res.source).toBe("config");
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinked token files", () => {
+  it.skipIf(!canCreateFileSymlinks)("rejects symlinked token files", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-zalo-token-"));
     const tokenFile = path.join(dir, "token.txt");
     const tokenLink = path.join(dir, "token-link.txt");
