@@ -1179,6 +1179,7 @@ function handleSessionMessageGatewayEvent(
     // Gateway confirms the run is still active (plugin hook window, etc.).
     // Skip reload — the pending chat terminal owns history reconciliation.
     if ((payload as Record<string, unknown> | null)?.hasActiveRun === true) {
+      deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
       return;
     }
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;

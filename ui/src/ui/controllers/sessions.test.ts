@@ -655,7 +655,7 @@ describe("loadSessions", () => {
     expect(state.sessionsResult?.count).toBe(2);
   });
 
-  it("uses session list terminal state to clear stale local run tracking", async () => {
+  it("keeps local run tracking while the session list reports an active terminal snapshot", async () => {
     vi.useFakeTimers();
     try {
       const request = vi.fn(async (method: string) => {
@@ -710,18 +710,17 @@ describe("loadSessions", () => {
 
       await loadSessions(state);
 
-      expect(state.chatRunId).toBeNull();
-      expect(state.chatStream).toBeNull();
-      expect(state.chatStreamStartedAt).toBeNull();
-      expect(state.compactionStatus).toBeNull();
-      expect(state.compactionClearTimer).toBeNull();
-      expect(state.fallbackStatus).toBeNull();
-      expect(state.fallbackClearTimer).toBeNull();
-      expect(state.chatRunStatus).toMatchObject({
-        phase: "done",
-        runId: "run-1",
-        sessionKey: "main",
+      expect(state.chatRunId).toBe("run-1");
+      expect(state.chatStream).toBe("Visible answer");
+      expect(state.chatStreamStartedAt).toBe(123);
+      expect(state.compactionStatus).toMatchObject({ phase: "active", runId: "run-1" });
+      expect(state.compactionClearTimer).not.toBeNull();
+      expect(state.fallbackStatus).toMatchObject({
+        selected: "openai/gpt-5.5",
+        active: "anthropic/claude-sonnet-4-6",
       });
+      expect(state.fallbackClearTimer).not.toBeNull();
+      expect(state.chatRunStatus).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
