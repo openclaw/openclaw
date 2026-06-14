@@ -492,7 +492,7 @@ extension SettingsProTab {
                 title: "Notifications",
                 detail: "Approvals and event alerts from OpenClaw.",
                 value: self.notificationStatusText,
-                color: self.notificationStatusText == "Allowed" ? OpenClawBrand.ok : .secondary)
+                color: self.notificationStatus.color)
 
             ProCard(radius: SettingsLayout.cardRadius) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -501,7 +501,7 @@ extension SettingsProTab {
                     } label: {
                         Label(
                             self.notificationActionText,
-                            systemImage: self.notificationStatusText == "Allowed" ? "gear" : "bell.badge")
+                            systemImage: self.notificationStatus.actionIcon)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
