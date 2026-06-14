@@ -71,22 +71,38 @@ export function normalizeProviderToolSchemas<
  */
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
   const provider = params.provider.trim();
-  const diagnostics = inspectProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
-  if (!Array.isArray(diagnostics)) {
+  let providerDiagnostics: ProviderToolSchemaDiagnostic[] | null | undefined;
+  try {
+    providerDiagnostics = inspectProviderToolSchemasWithPlugin({
+      provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      runtimeHandle: params.runtimeHandle,
+      allowRuntimePluginLoad: params.allowRuntimePluginLoad,
+      context: buildProviderToolSchemaContext(params, provider),
+    });
+  } catch (error) {
+    log.warn(
+      `provider tool schema diagnostics failed for ${params.provider}: ${formatError(error)}`,
+      {
+        provider: params.provider,
+        toolCount: params.tools.length,
+        tools: formatProviderToolDiagnosticNames(params.tools),
+      },
+    );
     return;
   }
-  if (diagnostics.length === 0) {
+  if (!Array.isArray(providerDiagnostics)) {
+    return;
+  }
+  if (providerDiagnostics.length === 0) {
     return;
   }
 
+  const diagnostics = providerDiagnostics.map((diagnostic) =>
+    normalizeProviderToolSchemaDiagnostic(diagnostic),
+  );
   const summary = summarizeProviderToolSchemaDiagnostics(diagnostics);
   log.warn(
     `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
@@ -94,7 +110,7 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       provider: params.provider,
       toolCount: params.tools.length,
       diagnosticCount: diagnostics.length,
-      tools: params.tools.map((tool, index) => `${index}:${tool.name}`),
+      tools: formatProviderToolDiagnosticNames(params.tools),
       diagnostics: diagnostics.map((diagnostic) => ({
         index: diagnostic.toolIndex,
         tool: diagnostic.toolName,
@@ -103,6 +119,73 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       })),
     },
   );
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatProviderToolDiagnosticName(tool: AgentTool, index: number): string {
+  try {
+    const name = tool.name;
+    return `${index}:${typeof name === "string" && name ? name : `tool[${index}]`}`;
+  } catch {
+    return `${index}:tool[${index}]`;
+  }
+}
+
+function formatProviderToolDiagnosticNames(tools: readonly AgentTool[]): string[] {
+  return tools.map((tool, index) => formatProviderToolDiagnosticName(tool, index));
+}
+
+function readProviderDiagnosticToolIndex(
+  diagnostic: ProviderToolSchemaDiagnostic,
+): number | undefined {
+  try {
+    const index = diagnostic.toolIndex;
+    return typeof index === "number" && Number.isFinite(index) ? index : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readProviderDiagnosticToolName(
+  diagnostic: ProviderToolSchemaDiagnostic,
+  toolIndex: number | undefined,
+): string {
+  try {
+    const name = diagnostic.toolName;
+    if (typeof name === "string" && name) {
+      return name;
+    }
+  } catch {
+    // Fall through to the stable index-based fallback below.
+  }
+  return toolIndex === undefined ? "unknown" : `tool[${toolIndex}]`;
+}
+
+function readProviderDiagnosticViolations(diagnostic: ProviderToolSchemaDiagnostic): string[] {
+  try {
+    const violations = diagnostic.violations;
+    return Array.isArray(violations) && violations.length > 0
+      ? violations.map((violation) =>
+          typeof violation === "string" && violation ? violation : "unknown violation",
+        )
+      : ["diagnostic violations unavailable"];
+  } catch {
+    return ["diagnostic violations unreadable"];
+  }
+}
+
+function normalizeProviderToolSchemaDiagnostic(
+  diagnostic: ProviderToolSchemaDiagnostic,
+): ProviderToolSchemaDiagnostic {
+  const toolIndex = readProviderDiagnosticToolIndex(diagnostic);
+  return {
+    toolName: readProviderDiagnosticToolName(diagnostic, toolIndex),
+    ...(toolIndex !== undefined ? { toolIndex } : {}),
+    violations: readProviderDiagnosticViolations(diagnostic),
+  };
 }
 
 function summarizeProviderToolSchemaDiagnostics(
