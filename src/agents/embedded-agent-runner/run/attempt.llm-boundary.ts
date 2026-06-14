@@ -7,6 +7,7 @@ import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-proven
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
+import { extractToolResultId } from "../../tool-call-id.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
@@ -36,6 +37,7 @@ const BOUNDARY_CRON_TIME_MARKER = "Current time: ";
  * space(s). Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts.
  */
 const BOUNDARY_LEADING_ENVELOPE_CAPTURE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+const LLM_BOUNDARY_MAX_TOOL_RESULT_MESSAGES = 24;
 
 export function normalizeMessagesForLlmBoundary(
   messages: AgentMessage[],
@@ -48,7 +50,184 @@ export function normalizeMessagesForLlmBoundary(
     normalized,
     options,
   );
-  return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
+  return pruneExcessToolResultsForProviderBoundary(
+    stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata),
+  );
+}
+
+function pruneExcessToolResultsForProviderBoundary(messages: AgentMessage[]): AgentMessage[] {
+  const toolResultIndexes: number[] = [];
+  const toolCallAssistantIndexes = new Map<string, number>();
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (isBoundaryToolResultMessage(message)) {
+      toolResultIndexes.push(index);
+    }
+    if (message?.role === "assistant") {
+      for (const toolCallId of extractAssistantToolCallIds(message)) {
+        toolCallAssistantIndexes.set(toolCallId, index);
+      }
+    }
+  }
+
+  if (toolResultIndexes.length <= LLM_BOUNDARY_MAX_TOOL_RESULT_MESSAGES) {
+    return messages;
+  }
+
+  let latestToolResultAssistantIndex = -1;
+  for (const index of toolResultIndexes) {
+    const id = extractBoundaryToolResultId(messages[index]);
+    if (!id) {
+      continue;
+    }
+    const assistantIndex = toolCallAssistantIndexes.get(id);
+    if (assistantIndex !== undefined && assistantIndex > latestToolResultAssistantIndex) {
+      latestToolResultAssistantIndex = assistantIndex;
+    }
+  }
+
+  const currentBatchToolResultIndexes =
+    latestToolResultAssistantIndex >= 0
+      ? toolResultIndexes.filter((index) => {
+          const id = extractBoundaryToolResultId(messages[index]);
+          return id ? toolCallAssistantIndexes.get(id) === latestToolResultAssistantIndex : false;
+        })
+      : [];
+  const olderToolResultIndexes = toolResultIndexes.filter(
+    (index) => !currentBatchToolResultIndexes.includes(index),
+  );
+  const olderToolResultBudget = Math.max(
+    0,
+    LLM_BOUNDARY_MAX_TOOL_RESULT_MESSAGES - currentBatchToolResultIndexes.length,
+  );
+  const keptToolResultIndexes = new Set([
+    ...(olderToolResultBudget > 0 ? olderToolResultIndexes.slice(-olderToolResultBudget) : []),
+    ...currentBatchToolResultIndexes,
+  ]);
+  const droppedToolResultIndexes = new Set(
+    toolResultIndexes.filter((index) => !keptToolResultIndexes.has(index)),
+  );
+  const keptToolResultIds = new Set<string>();
+  const droppedToolResultIds = new Set<string>();
+
+  for (const index of keptToolResultIndexes) {
+    const id = extractBoundaryToolResultId(messages[index]);
+    if (id) {
+      keptToolResultIds.add(id);
+    }
+  }
+  for (const index of droppedToolResultIndexes) {
+    const id = extractBoundaryToolResultId(messages[index]);
+    if (id && !keptToolResultIds.has(id)) {
+      droppedToolResultIds.add(id);
+    }
+  }
+
+  const next: AgentMessage[] = [];
+  let touched = false;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (droppedToolResultIndexes.has(index)) {
+      touched = true;
+      continue;
+    }
+    if (message?.role === "assistant" && droppedToolResultIds.size > 0) {
+      const pruned = pruneAssistantToolCalls(message, droppedToolResultIds);
+      if (!pruned) {
+        touched = true;
+        continue;
+      }
+      if (pruned !== message) {
+        touched = true;
+      }
+      next.push(pruned);
+      continue;
+    }
+    next.push(message);
+  }
+
+  return touched ? next : messages;
+}
+
+function isBoundaryToolResultMessage(message: AgentMessage | undefined): boolean {
+  return Boolean(message && typeof message === "object" && message.role === "toolResult");
+}
+
+function extractBoundaryToolResultId(message: AgentMessage | undefined): string | null {
+  if (!message || typeof message !== "object" || message.role !== "toolResult") {
+    return null;
+  }
+  return extractToolResultId(message);
+}
+
+function pruneAssistantToolCalls(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+  droppedToolResultIds: Set<string>,
+): AgentMessage | null {
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return message;
+  }
+  if (
+    !content.some((block) => {
+      const id = extractAssistantToolCallBlockId(block);
+      return id ? droppedToolResultIds.has(id) : false;
+    })
+  ) {
+    return message;
+  }
+  const filteredContent = content.filter((block) => {
+    const id = extractAssistantToolCallBlockId(block);
+    if (!id) {
+      return true;
+    }
+    return !droppedToolResultIds.has(id);
+  });
+  if (filteredContent.length === content.length) {
+    return message;
+  }
+  if (filteredContent.length === 0) {
+    return null;
+  }
+  return {
+    ...message,
+    content: filteredContent,
+  } as AgentMessage;
+}
+
+function isAssistantToolCallType(type: unknown): boolean {
+  return (
+    type === "toolCall" ||
+    type === "toolUse" ||
+    type === "functionCall" ||
+    type === "tool_call" ||
+    type === "tool_use" ||
+    type === "function_call"
+  );
+}
+
+function extractAssistantToolCallIds(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+): string[] {
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.flatMap((block) => {
+    const id = extractAssistantToolCallBlockId(block);
+    return id ? [id] : [];
+  });
+}
+
+function extractAssistantToolCallBlockId(block: unknown): string | null {
+  if (!block || typeof block !== "object") {
+    return null;
+  }
+  const record = block as { type?: unknown; id?: unknown };
+  if (!isAssistantToolCallType(record.type) || typeof record.id !== "string") {
+    return null;
+  }
+  return record.id;
 }
 
 /** Normalizes existing transcript messages as if the current prompt were appended last. */
