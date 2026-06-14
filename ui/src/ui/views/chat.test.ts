@@ -22,6 +22,7 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderChat, resetChatViewState } from "./chat.ts";
+import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   vi.fn(async (state: AppViewState) => {
@@ -2110,6 +2111,29 @@ describe("chat sidebar raw content", () => {
       content: "```\nRaw\n```",
       rawText: "Raw",
     });
+  });
+
+  it("renders image sidebar content as an image instead of markdown text", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMarkdownSidebar({
+        content: {
+          kind: "image",
+          title: "artifact-preview.png",
+          src: "data:image/png;base64,aW1hZ2U=",
+          mimeType: "image/png",
+        },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>("img.chat-tool-card__preview-image");
+    expect(image?.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2U=");
+    expect(container.textContent).not.toContain("data:image/png;base64");
   });
 });
 

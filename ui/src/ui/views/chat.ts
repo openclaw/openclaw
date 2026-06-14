@@ -1078,20 +1078,29 @@ function renderSessionWorkspaceRail(
   const hasSessionItems = files.length > 0 || artifacts.length > 0;
   const hasBrowserItems = (browser?.entries.length ?? 0) > 0;
   const hasItems = hasSessionItems || hasBrowserItems;
-  const renderPathActions = (path: string): TemplateResult => html`
-    <span class="chat-workspace-rail__row-actions" aria-label=${t("chat.workspaceFiles.actions")}>
-      <button
-        class="chat-workspace-rail__row-action"
-        type="button"
-        title=${t("chat.workspaceFiles.preview")}
-        aria-label=${t("chat.workspaceFiles.preview")}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          sessionWorkspace.onOpenFile(path);
-        }}
-      >
-        ${icons.eye}
-      </button>
+  const renderPathActions = (
+    path: string,
+    options: { preview?: boolean } = {},
+  ): TemplateResult => html`
+    <span
+      class="chat-workspace-rail__row-actions"
+      role="group"
+      aria-label=${t("chat.workspaceFiles.actions")}
+    >
+      ${options.preview === false
+        ? nothing
+        : html`<button
+            class="chat-workspace-rail__row-action"
+            type="button"
+            title=${t("chat.workspaceFiles.preview")}
+            aria-label=${t("chat.workspaceFiles.preview")}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              sessionWorkspace.onOpenFile(path);
+            }}
+          >
+            ${icons.eye}
+          </button>`}
       <button
         class="chat-workspace-rail__row-action"
         type="button"
@@ -1268,6 +1277,7 @@ function renderSessionWorkspaceRail(
                 const size = entry.kind === "file" ? formatWorkspaceFileSize(entry) : "";
                 const itemId = `file:${entry.path}`;
                 const isActive = itemId === sessionWorkspace.activeId;
+                const canPreview = entry.kind === "file" && Boolean(entry.sessionKind);
                 return html`
                   <div
                     class="chat-workspace-rail__file ${entry.kind === "directory"
@@ -1279,10 +1289,13 @@ function renderSessionWorkspaceRail(
                     <button
                       class="chat-workspace-rail__file-open"
                       type="button"
+                      ?disabled=${entry.kind === "file" && !canPreview}
                       @click=${() =>
                         entry.kind === "directory"
                           ? sessionWorkspace.onBrowsePath(entry.path)
-                          : sessionWorkspace.onOpenFile(entry.path)}
+                          : canPreview
+                            ? sessionWorkspace.onOpenFile(entry.path)
+                            : undefined}
                     >
                       <span class="chat-workspace-rail__file-icon"
                         >${entry.kind === "directory" ? icons.folder : icons.fileText}</span
@@ -1297,7 +1310,9 @@ function renderSessionWorkspaceRail(
                       </span>
                     </button>
                     ${renderBrowserBadge(entry.sessionKind)}
-                    ${entry.kind === "file" ? renderPathActions(entry.path) : nothing}
+                    ${entry.kind === "file"
+                      ? renderPathActions(entry.path, { preview: canPreview })
+                      : nothing}
                   </div>
                 `;
               })}

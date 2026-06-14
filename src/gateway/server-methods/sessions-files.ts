@@ -1,5 +1,4 @@
 // Gateway methods expose files referenced by one session transcript.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -14,11 +13,9 @@ import {
   validateSessionsFilesGetParams,
   validateSessionsFilesListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -148,7 +145,7 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
       continue;
     }
     const toolName = normalizeOptionalString(block.name)?.toLowerCase();
-    const args = asRecord(block.arguments) ?? asRecord(block.input);
+    const args = asRecord(block.arguments) ?? asRecord(block.input) ?? asRecord(block.args);
     if (!toolName || !args) {
       continue;
     }
@@ -159,29 +156,6 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
     } else if (toolName === "apply_patch") {
       addPatchFiles(files, args);
     }
-  }
-}
-
-async function readTranscriptRoot(sessionFile: string | undefined): Promise<string | undefined> {
-  if (!sessionFile) {
-    return undefined;
-  }
-  try {
-    const handle = await fs.open(sessionFile, "r");
-    try {
-      const buffer = Buffer.alloc(8192);
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split(/\r?\n/, 1)[0];
-      if (!firstLine) {
-        return undefined;
-      }
-      const parsed = JSON.parse(firstLine) as { cwd?: unknown };
-      return normalizePathValue(parsed.cwd);
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    return undefined;
   }
 }
 
@@ -562,22 +536,22 @@ async function loadSessionFiles(params: {
   sessionKey: string;
   agentId?: string;
 }): Promise<{ root?: string; files: TouchedFile[] }> {
-  const { storePath, entry } = loadSessionEntry(params.sessionKey, { agentId: params.agentId });
+  const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(params.sessionKey, {
+    agentId: params.agentId,
+  });
   if (!entry?.sessionId || !storePath) {
     return { files: [] };
   }
-  const sessionFile = resolveSessionFilePath(
-    entry.sessionId,
-    entry,
-    resolveSessionFilePathOptions({
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      storePath,
-    }),
+  const agentId = normalizeAgentId(
+    parseAgentSessionKey(canonicalKey)?.agentId ??
+      params.agentId ??
+      parseAgentSessionKey(params.sessionKey)?.agentId ??
+      resolveDefaultAgentId(cfg),
   );
   const root =
     normalizePathValue(entry.spawnedWorkspaceDir) ??
     normalizePathValue(entry.spawnedCwd) ??
-    (await readTranscriptRoot(sessionFile));
+    normalizePathValue(resolveAgentWorkspaceDir(cfg, agentId));
   const files = new Map<string, TouchedFile>();
   await visitSessionMessagesAsync(
     entry.sessionId,
@@ -641,7 +615,10 @@ async function findSessionFile(
           path: browserPath,
           kind: relevance.get(browserPath) === "modified" ? "modified" : "read",
         }
-      : { path: browserPath, kind: "read" as const });
+      : undefined);
+  if (!touched) {
+    return { ...(loaded.root ? { root: loaded.root } : {}) };
+  }
   return {
     ...(loaded.root ? { root: loaded.root } : {}),
     file: await toSessionFileEntry(touched, loaded.root, { includeContent: true }),

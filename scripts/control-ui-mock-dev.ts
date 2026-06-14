@@ -298,6 +298,7 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
       updatedAtMs: baseTime - 420_000,
     },
   ];
+  const sessionWorkspaceRoot = repoRoot;
   const browserFiles = [
     {
       kind: "read",
@@ -392,19 +393,19 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
           path: "",
         },
         files: sessionFiles,
-        root: "/Users/solvely/Projects/ai-agents/openclaw",
+        root: sessionWorkspaceRoot,
         sessionKey: "agent:alpha",
       },
     },
   ];
-  const sessionFileGetCases = [...sessionFiles, ...browserFiles].map((file) => ({
+  const sessionFileGetCases = sessionFiles.map((file) => ({
     match: { sessionKey: "agent:alpha", path: file.path },
     response: {
       file: {
         ...file,
         content: sessionFileContentByPath.get(file.path) ?? "",
       },
-      root: "/Users/solvely/Projects/ai-agents/openclaw",
+      root: sessionWorkspaceRoot,
       sessionKey: "agent:alpha",
     },
   }));
@@ -493,7 +494,7 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
                 path: "ui",
               },
               files: sessionFiles,
-              root: "/Users/solvely/Projects/ai-agents/openclaw",
+              root: sessionWorkspaceRoot,
               sessionKey: "agent:alpha",
             },
           },
@@ -522,7 +523,7 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
                 search: "chat",
               },
               files: sessionFiles,
-              root: "/Users/solvely/Projects/ai-agents/openclaw",
+              root: sessionWorkspaceRoot,
               sessionKey: "agent:alpha",
             },
           },

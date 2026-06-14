@@ -169,7 +169,6 @@ import {
 } from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
-import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
   isSessionKeyTiedToAgent,
@@ -178,6 +177,8 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import "./components/dashboard-header.ts";
+import type { SidebarContent } from "./sidebar-content.ts";
 import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeStringEntries } from "./string-coerce.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
@@ -1335,32 +1336,39 @@ function buildArtifactSidebarContent(params: {
   mimeType: string;
   title: string;
   url?: string;
-}): { body: string; rawText: string } {
+}): SidebarContent {
   const { data, encoding, mimeType, title, url } = params;
   if (encoding === "base64" && data && mimeType.startsWith("image/")) {
-    const body = `# ${title}\n\n![${title}](data:${mimeType};base64,${data})`;
-    return { body, rawText: body };
+    return {
+      kind: "image",
+      title,
+      src: `data:${mimeType};base64,${data}`,
+      mimeType,
+      rawText: url ?? null,
+    };
   }
   if (encoding === "base64" && data && mimeType === "application/json") {
     const decoded = globalThis.atob(data);
     return {
-      body: `# ${title}\n\n\`\`\`json\n${decoded}\n\`\`\``,
+      kind: "markdown",
+      content: `# ${title}\n\n\`\`\`json\n${decoded}\n\`\`\``,
       rawText: decoded,
     };
   }
   if (encoding === "base64" && data && mimeType.startsWith("text/")) {
     const decoded = globalThis.atob(data);
     return {
-      body: `# ${title}\n\n\`\`\`\n${decoded}\n\`\`\``,
+      kind: "markdown",
+      content: `# ${title}\n\n\`\`\`\n${decoded}\n\`\`\``,
       rawText: decoded,
     };
   }
   if (url) {
-    const body = `# ${title}\n\n[Open artifact](${url})`;
-    return { body, rawText: body };
+    const content = `# ${title}\n\n[Open artifact](${url})`;
+    return { kind: "markdown", content, rawText: content };
   }
-  const body = `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
-  return { body, rawText: body };
+  const content = `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
+  return { kind: "markdown", content, rawText: content };
 }
 
 export function renderApp(state: AppViewState) {
@@ -2418,11 +2426,7 @@ export function renderApp(state: AppViewState) {
           title,
           url: res.url,
         });
-        state.handleOpenSidebar({
-          kind: "markdown",
-          content: preview.body,
-          rawText: preview.rawText,
-        });
+        state.handleOpenSidebar(preview);
       } catch (err) {
         if (isCurrentOpenRequest()) {
           chatWorkspaceFiles.error = String(err);

@@ -7,7 +7,14 @@ import { sessionsFilesHandlers } from "./sessions-files.js";
 
 const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
+  resolveAgentWorkspaceDir: vi.fn(),
+  resolveDefaultAgentId: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
+}));
+
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -84,12 +91,16 @@ describe("sessions.files RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-files-test-"));
+    hoisted.resolveDefaultAgentId.mockReturnValue("main");
+    hoisted.resolveAgentWorkspaceDir.mockReturnValue(workspaceRoot);
     writeWorkspaceFile(workspaceRoot, "package.json", '{"name":"openclaw-test"}\n');
     writeWorkspaceFile(workspaceRoot, "src/readme.md", "# Read me\n");
     writeWorkspaceFile(workspaceRoot, "ui/chat.ts", "export const chat = true;\n");
     writeWorkspaceFile(workspaceRoot, "ui/vite.config.ts", "export default {};\n");
 
     hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
       storePath: path.join(workspaceRoot, ".sessions.json"),
       entry: {
         sessionId: "sess-main",
@@ -151,6 +162,7 @@ describe("sessions.files RPC handlers", () => {
             content: [
               { type: "tool_use", name: "read", input: { path: "src/readme.md" } },
               { type: "toolcall", name: "edit", arguments: { path: "ui/vite.config.ts" } },
+              { type: "tool_use", name: "read", args: { path: "ui/chat.ts" } },
               {
                 type: "tool_call",
                 name: "apply_patch",
@@ -176,6 +188,7 @@ describe("sessions.files RPC handlers", () => {
       ["package.json", "modified"],
       ["ui/vite.config.ts", "modified"],
       ["src/readme.md", "read"],
+      ["ui/chat.ts", "read"],
     ]);
   });
 
@@ -214,6 +227,8 @@ describe("sessions.files RPC handlers", () => {
     const nestedCwd = path.join(workspaceRoot, "packages/app");
     fs.mkdirSync(nestedCwd, { recursive: true });
     hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
       storePath: path.join(workspaceRoot, ".sessions.json"),
       entry: {
         sessionId: "sess-main",
@@ -244,7 +259,74 @@ describe("sessions.files RPC handlers", () => {
     ]);
   });
 
-  it("browses folders, searches files, and reads browser-only files inside the workspace", async () => {
+  it("falls back to the configured agent workspace for sessions without spawned metadata", async () => {
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
+      storePath: path.join(workspaceRoot, ".sessions.json"),
+      entry: {
+        sessionId: "sess-main",
+        sessionFile: "sess-main.jsonl",
+      },
+    });
+    hoisted.visitSessionMessagesAsync.mockImplementation(
+      async (_sessionId, _storePath, _sessionFile, visit) => {
+        visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
+        return 1;
+      },
+    );
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(hoisted.resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.any(Object), "main");
+    expect(payload.root).toBe(workspaceRoot);
+    expect(payload.files).toEqual([
+      expect.objectContaining({
+        missing: false,
+        path: "src/readme.md",
+      }),
+    ]);
+    expect(payload.browser).toBeDefined();
+  });
+
+  it("uses the canonical session owner for configured workspace fallback", async () => {
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:aiden:main",
+      cfg: {},
+      storePath: path.join(workspaceRoot, ".sessions.json"),
+      entry: {
+        sessionId: "sess-main",
+        sessionFile: "sess-main.jsonl",
+      },
+    });
+    hoisted.visitSessionMessagesAsync.mockImplementation(
+      async (_sessionId, _storePath, _sessionFile, visit) => {
+        visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
+        return 1;
+      },
+    );
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    expect(hoisted.resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.any(Object), "aiden");
+    expect(payload.root).toBe(workspaceRoot);
+    expect(payload.files).toEqual([
+      expect.objectContaining({
+        missing: false,
+        path: "src/readme.md",
+      }),
+    ]);
+  });
+
+  it("browses and searches workspace files without previewing browser-only files", async () => {
     const folderPayload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
         sessionKey: "agent:main:main",
@@ -276,19 +358,16 @@ describe("sessions.files RPC handlers", () => {
       searchPayload.browser.entries.map((entry: Record<string, unknown>) => entry.path),
     ).toEqual(["ui/vite.config.ts"]);
 
-    const filePayload = expectOkPayload(
+    const error = expectError(
       await invokeSessionFilesHandler("sessions.files.get", {
         sessionKey: "agent:main:main",
         path: "ui/vite.config.ts",
       }),
     );
 
-    expect(filePayload.file).toMatchObject({
-      content: "export default {};\n",
-      kind: "read",
-      missing: false,
-      name: "vite.config.ts",
+    expect(error.details).toMatchObject({
       path: "ui/vite.config.ts",
+      type: "session_file_not_found",
     });
   });
 
@@ -312,10 +391,12 @@ describe("sessions.files RPC handlers", () => {
     expect(payload.browser.entries).toEqual([]);
   });
 
-  it("does not read absolute paths when the session has no workspace root", async () => {
+  it("does not read absolute paths outside the configured workspace", async () => {
     const outsidePath = path.join(os.tmpdir(), `openclaw-outside-${Date.now()}.txt`);
     fs.writeFileSync(outsidePath, "outside\n", "utf8");
     hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
       storePath: path.join(workspaceRoot, ".sessions.json"),
       entry: {
         sessionId: "sess-main",
@@ -419,15 +500,19 @@ describe("sessions.files RPC handlers", () => {
     expect(payload.browser).toBeUndefined();
   });
 
-  it("reads transcript cwd from custom session store directories", async () => {
+  it("does not derive a workspace root from transcript cwd", async () => {
     const sessionsDir = path.join(workspaceRoot, "custom-sessions");
+    const transcriptCwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-cwd-"));
+    writeWorkspaceFile(transcriptCwd, "secret.txt", "transcript cwd secret\n");
     fs.mkdirSync(sessionsDir, { recursive: true });
     fs.writeFileSync(
       path.join(sessionsDir, "sess-main.jsonl"),
-      `${JSON.stringify({ cwd: workspaceRoot })}\n`,
+      `${JSON.stringify({ cwd: transcriptCwd })}\n`,
       "utf8",
     );
     hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
       storePath: path.join(sessionsDir, "sessions.json"),
       entry: {
         sessionId: "sess-main",
@@ -436,28 +521,49 @@ describe("sessions.files RPC handlers", () => {
     });
     hoisted.visitSessionMessagesAsync.mockImplementation(
       async (_sessionId, _storePath, _sessionFile, visit) => {
-        visit(assistantToolCall("read", { path: "ui/chat.ts" }), 1);
+        visit(assistantToolCall("read", { path: "secret.txt" }), 1);
         return 1;
       },
     );
+    try {
+      const listPayload = expectOkPayload(
+        await invokeSessionFilesHandler("sessions.files.list", {
+          sessionKey: "agent:main:main",
+        }),
+      );
 
-    const payload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.files.list", {
-        sessionKey: "agent:main:main",
-      }),
-    );
+      expect(listPayload.root).toBe(workspaceRoot);
+      expect(listPayload.browser).toBeDefined();
+      expect(listPayload.files).toMatchObject([
+        {
+          missing: true,
+          path: "secret.txt",
+        },
+      ]);
 
-    expect(payload.root).toBe(workspaceRoot);
-    expect(payload.files).toMatchObject([
-      {
-        missing: false,
-        path: "ui/chat.ts",
-      },
-    ]);
+      const error = expectError(
+        await invokeSessionFilesHandler("sessions.files.get", {
+          sessionKey: "agent:main:main",
+          path: "secret.txt",
+        }),
+      );
+      expect(error.details).toMatchObject({
+        path: "secret.txt",
+        type: "session_file_not_found",
+      });
+    } finally {
+      fs.rmSync(transcriptCwd, { recursive: true, force: true });
+    }
   });
 
   it("reports oversized existing files without marking them missing", async () => {
     writeWorkspaceFile(workspaceRoot, "large.log", "x".repeat(260 * 1024));
+    hoisted.visitSessionMessagesAsync.mockImplementation(
+      async (_sessionId, _storePath, _sessionFile, visit) => {
+        visit(assistantToolCall("read", { path: "large.log" }), 1);
+        return 1;
+      },
+    );
 
     const error = expectError(
       await invokeSessionFilesHandler("sessions.files.get", {
