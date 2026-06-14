@@ -288,6 +288,7 @@ export type ClawHubSkillDetail = {
     displayName: string;
     summary?: string;
     tags?: Record<string, string>;
+    sourceUrl?: string;
     createdAt: number;
     updatedAt: number;
   } | null;

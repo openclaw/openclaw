@@ -435,6 +435,7 @@ export const SkillsDetailResultSchema = Type.Object(
           displayName: NonEmptyString,
           summary: Type.Optional(Type.String()),
           tags: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+          sourceUrl: Type.Optional(Type.String()),
           createdAt: Type.Integer(),
           updatedAt: Type.Integer(),
         },

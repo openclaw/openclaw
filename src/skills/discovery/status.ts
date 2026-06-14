@@ -55,6 +55,8 @@ export type SkillStatusEntry = {
   primaryEnv?: string;
   emoji?: string;
   homepage?: string;
+  /** URL to the skill's source code repository. */
+  sourceUrl?: string;
   always: boolean;
   disabled: boolean;
   blockedByAllowlist: boolean;
@@ -305,6 +307,7 @@ function buildSkillStatus(
     primaryEnv: entry.metadata?.primaryEnv,
     emoji,
     homepage,
+    sourceUrl: entry.metadata?.sourceUrl,
     always,
     disabled,
     blockedByAllowlist,

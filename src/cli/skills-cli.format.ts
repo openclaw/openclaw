@@ -139,6 +139,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         bundled: s.bundled,
         primaryEnv: s.primaryEnv,
         homepage: s.homepage,
+        sourceUrl: s.sourceUrl,
         missing: s.missing,
       })),
     });
@@ -232,6 +233,7 @@ export function formatSkillInfo(
 
   const safeName = sanitizeForLog(skill.name);
   const safeHomepage = skill.homepage ? sanitizeForLog(skill.homepage) : undefined;
+  const safeSourceUrl = skill.sourceUrl ? sanitizeForLog(skill.sourceUrl) : undefined;
   const safeSkillKey = sanitizeForLog(skill.skillKey);
 
   lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(safeName)} ${status}`);
@@ -244,6 +246,9 @@ export function formatSkillInfo(
   lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
   if (safeHomepage) {
     lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);
+  }
+  if (safeSourceUrl) {
+    lines.push(`${theme.muted("  Source:")} ${safeSourceUrl}`);
   }
   lines.push(
     `${theme.muted("  Visible to model:")} ${skill.modelVisible ? theme.success("yes") : theme.warn("no")}`,
