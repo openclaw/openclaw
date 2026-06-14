@@ -2897,6 +2897,145 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.BodyForAgent).toContain("[Merged and Forwarded Message - could not fetch]");
   });
 
+  it("formats interactive card sub-messages with header title in merge_forward", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const mockGetMerged = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "container",
+            msg_type: "merge_forward",
+            body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+          },
+          {
+            message_id: "sub-interactive",
+            upper_message_id: "container",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                header: { title: { content: "Approval Request", tag: "plain_text" } },
+                elements: [{ tag: "div", text: { content: "Please approve" } }],
+              }),
+            },
+            create_time: "1000",
+          },
+        ],
+      },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+      im: {
+        message: {
+          get: mockGetMerged,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-interactive",
+        },
+      },
+      message: {
+        message_id: "msg-interactive-forward",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "merge_forward",
+        content: JSON.stringify({ text: "Merged and Forwarded Message" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.BodyForAgent).toContain(
+      "[Merged and Forwarded Messages]\n- [Card: Approval Request]",
+    );
+  });
+
+  it("formats interactive card sub-messages without header as [Interactive Card]", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const mockGetMerged = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "container",
+            msg_type: "merge_forward",
+            body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+          },
+          {
+            message_id: "sub-interactive-no-header",
+            upper_message_id: "container",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                elements: [{ tag: "div", text: { content: "Some content" } }],
+              }),
+            },
+            create_time: "1000",
+          },
+        ],
+      },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+      im: {
+        message: {
+          get: mockGetMerged,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-interactive-no-header",
+        },
+      },
+      message: {
+        message_id: "msg-interactive-no-header",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "merge_forward",
+        content: JSON.stringify({ text: "Merged and Forwarded Message" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.BodyForAgent).toContain(
+      "[Merged and Forwarded Messages]\n- [Interactive Card]",
+    );
+  });
+
   it("dispatches once and appends permission notice to the main agent body", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockCreateFeishuClient.mockReturnValue({

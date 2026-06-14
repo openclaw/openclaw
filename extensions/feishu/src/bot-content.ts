@@ -197,6 +197,25 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Sticker]";
       case "merge_forward":
         return "[Nested Merged Forward]";
+      case "interactive": {
+        if (typeof parsed === "object" && parsed !== null) {
+          const obj = parsed as Record<string, unknown>;
+          const header =
+            typeof obj.header === "object" && obj.header !== null
+              ? (obj.header as Record<string, unknown>)
+              : undefined;
+          const title =
+            header &&
+            typeof header.title === "object" &&
+            header.title !== null
+              ? (header.title as Record<string, unknown>)
+              : undefined;
+          if (title && typeof title.content === "string" && title.content.trim()) {
+            return `[Card: ${title.content.trim()}]`;
+          }
+        }
+        return "[Interactive Card]";
+      }
       default:
         return `[${contentType}]`;
     }
