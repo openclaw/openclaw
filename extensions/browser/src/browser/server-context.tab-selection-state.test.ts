@@ -8,6 +8,10 @@ import * as cdpHelpersModule from "./cdp.helpers.js";
 import * as cdpModule from "./cdp.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
+  OPEN_TAB_DISCOVERY_POLL_MS,
+  OPEN_TAB_DISCOVERY_WINDOW_MS,
+} from "./server-context.constants.js";
+import {
   createTestBrowserRouteContext,
   makeManagedTabsWithNew,
   makeState,
@@ -181,6 +185,126 @@ describe("browser server-context tab selection state", () => {
       url: "about:blank",
       ssrfPolicy: undefined,
     });
+  });
+
+  it("uses the just-opened tab when /json/list has not discovered it yet", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockRejectedValue(new Error("cdp unavailable"));
+
+    let listCount = 0;
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const value = String(url);
+      if (value.includes("/json/list")) {
+        listCount += 1;
+        return { ok: true, json: async () => [] } as unknown as Response;
+      }
+      if (value.includes("/json/new")) {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "CREATED",
+            title: "New Tab",
+            url: "about:blank",
+            webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
+            type: "page",
+          }),
+        } as unknown as Response;
+      }
+      throw new Error(`unexpected fetch: ${value}`);
+    });
+
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const selected = await openclaw.ensureTabAvailable();
+    expect(selected).toEqual(
+      expect.objectContaining({
+        targetId: "CREATED",
+        wsUrl: "ws://127.0.0.1/devtools/page/CREATED",
+      }),
+    );
+    expect(state.profiles.get("openclaw")?.lastTargetId).toBe("CREATED");
+    expect(listCount).toBe(2);
+  });
+
+  it("waits for delayed local tab wsUrl discovery before filtering candidates", async () => {
+    let listCount = 0;
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const value = String(url);
+      if (!value.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${value}`);
+      }
+      listCount += 1;
+      return {
+        ok: true,
+        json: async () => [
+          {
+            id: "LAGGING_WS",
+            title: "Lagging WS",
+            url: "https://example.com",
+            ...(listCount >= 3
+              ? { webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/LAGGING_WS" }
+              : {}),
+            type: "page",
+          },
+        ],
+      } as unknown as Response;
+    });
+
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const selected = await openclaw.ensureTabAvailable();
+    expect(selected).toEqual(
+      expect.objectContaining({
+        targetId: "LAGGING_WS",
+        wsUrl: "ws://127.0.0.1/devtools/page/LAGGING_WS",
+      }),
+    );
+    expect(listCount).toBe(3);
+  });
+
+  it("falls back to an unfiltered local tab when wsUrl discovery stays behind", async () => {
+    vi.useFakeTimers();
+    try {
+      let listCount = 0;
+      const fetchMock = vi.fn(async (url: unknown) => {
+        const value = String(url);
+        if (!value.includes("/json/list")) {
+          throw new Error(`unexpected fetch: ${value}`);
+        }
+        listCount += 1;
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "NO_WS_YET",
+              title: "No WS Yet",
+              url: "https://example.com",
+              type: "page",
+            },
+          ],
+        } as unknown as Response;
+      });
+
+      global.fetch = withBrowserFetchPreconnect(fetchMock);
+      const state = makeState("openclaw");
+      const ctx = createTestBrowserRouteContext({ getState: () => state });
+      const openclaw = ctx.forProfile("openclaw");
+
+      const selectedPromise = openclaw.ensureTabAvailable();
+      await vi.advanceTimersByTimeAsync(OPEN_TAB_DISCOVERY_WINDOW_MS + OPEN_TAB_DISCOVERY_POLL_MS);
+      await expect(selectedPromise).resolves.toEqual(
+        expect.objectContaining({ targetId: "NO_WS_YET" }),
+      );
+      expect(state.profiles.get("openclaw")?.lastTargetId).toBe("NO_WS_YET");
+      expect(listCount).toBeGreaterThan(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("opens a real tab when only browser-internal CDP targets are listed", async () => {

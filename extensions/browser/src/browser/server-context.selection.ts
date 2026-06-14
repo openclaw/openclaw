@@ -11,6 +11,10 @@ import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.j
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
+import {
+  OPEN_TAB_DISCOVERY_POLL_MS,
+  OPEN_TAB_DISCOVERY_WINDOW_MS,
+} from "./server-context.constants.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
@@ -29,6 +33,29 @@ type SelectionOps = {
   closeTab: (targetId: string) => Promise<void>;
 };
 
+function mergeOpenedTabSnapshot(tabs: BrowserTab[], openedTab: BrowserTab | null): BrowserTab[] {
+  if (!openedTab) {
+    return tabs;
+  }
+  const index = tabs.findIndex((tab) => tab.targetId === openedTab.targetId);
+  if (index < 0) {
+    return [...tabs, openedTab];
+  }
+  const tab = tabs[index];
+  if (tab && !tab.wsUrl && openedTab.wsUrl) {
+    const merged = tabs.slice();
+    merged[index] = { ...tab, wsUrl: openedTab.wsUrl };
+    return merged;
+  }
+  return tabs;
+}
+
+function waitForTabDiscoveryPoll(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, OPEN_TAB_DISCOVERY_POLL_MS);
+  });
+}
+
 /** Builds tab selection/focus/close operations for one resolved browser profile. */
 export function createProfileSelectionOps({
   profile,
@@ -45,12 +72,30 @@ export function createProfileSelectionOps({
     await ensureBrowserAvailable();
     const profileState = getProfileState();
     const tabs1 = await listTabs();
+    let openedTab: BrowserTab | null = null;
     if (tabs1.length === 0) {
-      await openTab("about:blank");
+      openedTab = await openTab("about:blank");
     }
 
-    const tabs = await listTabs();
-    const candidates = capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
+    const candidateTabs = (tabs: BrowserTab[]) =>
+      capabilities.supportsPerTabWs ? tabs.filter((t) => Boolean(t.wsUrl)) : tabs;
+    let tabs = mergeOpenedTabSnapshot(await listTabs(), openedTab);
+    let candidates = candidateTabs(tabs);
+
+    if (capabilities.supportsPerTabWs && candidates.length === 0 && tabs.length > 0) {
+      const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+      while (Date.now() < deadline) {
+        await waitForTabDiscoveryPoll();
+        tabs = mergeOpenedTabSnapshot(await listTabs(), openedTab);
+        candidates = candidateTabs(tabs);
+        if (candidates.length > 0) {
+          break;
+        }
+      }
+      if (candidates.length === 0) {
+        candidates = tabs;
+      }
+    }
 
     const resolveById = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
