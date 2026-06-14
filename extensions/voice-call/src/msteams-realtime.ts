@@ -122,6 +122,13 @@ export function pcm16Rms(pcm: Buffer): number {
  * audible on the call (until `playbackActiveUntil` + the playout window), caller input below the
  * barge-in RMS is treated as our voice echoing back and dropped, so the agent never answers itself —
  * while a genuinely loud interruption still passes through as a barge-in.
+ *
+ * `allowBargeIn: false` drops the loudness exception and suppresses ALL in-window input. This is used
+ * for the opening greeting (before the caller's first real turn): on a speakerphone the bot's own
+ * greeting echoes back loud enough to clear the barge-in RMS, so the model's server-VAD hears it,
+ * interrupts itself, and re-greets — an echo loop with the caller silent. Until the caller has
+ * actually spoken once, any in-window input is echo, so no barge-in is allowed; normal RMS barge-in
+ * resumes for the rest of the call.
  */
 export function shouldSuppressEcho(
   pcm16k: Buffer,
@@ -130,14 +137,23 @@ export function shouldSuppressEcho(
     suppressInputDuringPlayback?: boolean;
     echoSuppressionWindowMs?: number;
     echoBargeInRms?: number;
+    allowBargeIn?: boolean;
   },
 ): boolean {
-  return (
-    opts?.suppressInputDuringPlayback !== false &&
+  if (opts?.suppressInputDuringPlayback === false) {
+    return false;
+  }
+  const inPlaybackWindow =
     Date.now() <
-      playbackActiveUntil + (opts?.echoSuppressionWindowMs ?? ECHO_SUPPRESSION_WINDOW_MS) &&
-    pcm16Rms(pcm16k) < (opts?.echoBargeInRms ?? ECHO_BARGE_IN_RMS)
-  );
+    playbackActiveUntil + (opts?.echoSuppressionWindowMs ?? ECHO_SUPPRESSION_WINDOW_MS);
+  if (!inPlaybackWindow) {
+    return false;
+  }
+  // Before the caller's first real turn, treat every in-window frame as echo (no loudness exception).
+  if (opts?.allowBargeIn === false) {
+    return true;
+  }
+  return pcm16Rms(pcm16k) < (opts?.echoBargeInRms ?? ECHO_BARGE_IN_RMS);
 }
 
 /** A short, single-line tile caption from the agent's image summary (empty → undefined). */
@@ -432,6 +448,12 @@ export function createMsteamsRealtimeCall(params: {
   let currentSpeakerName: string | undefined;
   /** Outbound greeting fires once, on answer (setRecordingActive); guards against a re-trigger. */
   let greetingTriggered = false;
+  /**
+   * True once the caller has actually spoken (first non-empty "user" transcript). Until then the echo
+   * guard allows no barge-in, so the bot's own opening greeting echoing back on a speakerphone can't
+   * trigger the model into a re-greeting loop while the caller is silent.
+   */
+  let callerTurnStarted = false;
 
   /** Speaker of the most recent "user" transcript entry, so coalescing never crosses speakers. */
   let lastUserEntrySpeaker: string | undefined;
@@ -613,6 +635,10 @@ export function createMsteamsRealtimeCall(params: {
       },
     },
     onTranscript: (role, text, isFinal) => {
+      // First real caller speech ends the opening echo-only window — restore normal RMS barge-in.
+      if (role === "user" && text.trim().length > 0) {
+        callerTurnStarted = true;
+      }
       // CVI Phase 6b: cue emotion as EARLY as possible — on the FIRST assistant transcript chunk of a
       // turn (partial or final), not only the final — so the face isn't neutral while a happy/sad reply
       // is already being spoken. De-duped on the inferred emotion so unchanged cues aren't spammed, and
@@ -1392,7 +1418,7 @@ export function createMsteamsRealtimeCall(params: {
       // Half-duplex echo guard (on by default): while our own audio is playing OUT on the call (the
       // playout estimate, not last-send — the model streams faster than realtime), the caller leg can
       // carry it back as acoustic echo; feeding that to the model's server-VAD makes it answer itself.
-      if (shouldSuppressEcho(pcm16k, playbackEndAt, deps)) {
+      if (shouldSuppressEcho(pcm16k, playbackEndAt, { ...deps, allowBargeIn: callerTurnStarted })) {
         return;
       }
       const pcm24k = resamplePcm(pcm16k, MSTEAMS_SAMPLE_RATE_HZ, REALTIME_SAMPLE_RATE_HZ);
