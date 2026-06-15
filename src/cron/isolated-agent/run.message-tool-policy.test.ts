@@ -9,6 +9,7 @@ import {
   cleanupDirectCronSessionMock,
   dispatchCronDeliveryMock,
   getChannelPluginMock,
+  isCliProviderMock,
   isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
@@ -20,6 +21,7 @@ import {
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
   restoreFastTestEnv,
+  runCliAgentMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
@@ -347,6 +349,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         },
         messageToolEnabled: true,
         messageToolForced: false,
+        requireExplicitMessageTarget: true,
         requireExplicitMessageTargetEvidence: true,
         directFallback: true,
       }),
@@ -705,10 +708,37 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expectEmbeddedRunFields({
       sourceReplyDeliveryMode: undefined,
       forceMessageTool: false,
+      requireExplicitMessageTarget: true,
       messageChannel: "messagechat",
       messageTo: "123",
       currentChannelId: "123",
     });
+    expect(expectEmbeddedRunPrompt()).toContain("with an explicit target");
+  });
+
+  it("requires explicit message targets for CLI-backed announce delivery", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob(),
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      {
+        messageChannel: "messagechat",
+        requireExplicitMessageTarget: true,
+      },
+      "CLI run params",
+    );
   });
 
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {

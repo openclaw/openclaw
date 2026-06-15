@@ -385,6 +385,8 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
           OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
           OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
+          OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET:
+            params.requireExplicitMessageTarget === true ? "true" : "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),

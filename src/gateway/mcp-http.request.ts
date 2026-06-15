@@ -58,6 +58,7 @@ type McpRequestContext = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  requireExplicitMessageTarget: boolean | undefined;
   senderIsOwner: boolean | undefined;
 };
 
@@ -78,7 +79,7 @@ function normalizeMcpSourceReplyDeliveryMode(
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
 }
 
-function normalizeMcpCurrentInboundAudio(value: string | undefined): boolean | undefined {
+function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed ? isTruthyEnvValue(trimmed) : undefined;
 }
@@ -365,13 +366,16 @@ export function resolveMcpRequestContext(
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
-    currentInboundAudio: normalizeMcpCurrentInboundAudio(
+    currentInboundAudio: normalizeMcpBooleanHeader(
       getHeader(req, "x-openclaw-current-inbound-audio"),
     ),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
       getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+    ),
+    requireExplicitMessageTarget: normalizeMcpBooleanHeader(
+      getHeader(req, "x-openclaw-require-explicit-message-target"),
     ),
     senderIsOwner: auth.senderIsOwner,
   };

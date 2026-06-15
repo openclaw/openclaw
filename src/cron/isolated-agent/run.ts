@@ -46,6 +46,7 @@ import {
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
+import { resolveCronAbortReasonText } from "../service/execution-errors.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -341,6 +342,7 @@ function resolveCronSourceDeliveryPlan(params: {
     target,
     messageToolEnabled: true,
     messageToolForced: false,
+    requireExplicitMessageTarget: true,
     requireExplicitMessageTargetEvidence: true,
     directFallback: true,
     skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok,
@@ -425,14 +427,16 @@ function appendCronDeliveryInstruction(params: {
   deliveryRequested: boolean;
   messageToolEnabled: boolean;
   resolvedDeliveryOk: boolean;
+  requireExplicitMessageTarget: boolean;
 }) {
   if (!params.deliveryRequested) {
     return params.commandBody;
   }
   if (params.messageToolEnabled) {
-    const targetHint = params.resolvedDeliveryOk
-      ? "for the current chat"
-      : "with an explicit target";
+    const targetHint =
+      params.requireExplicitMessageTarget || !params.resolvedDeliveryOk
+        ? "with an explicit target"
+        : "for the current chat";
     return `${params.commandBody}\n\nUse the message tool if you need to notify the user directly ${targetHint}. If you do not send directly, your final plain-text reply will be delivered automatically.`.trim();
   }
   return `${params.commandBody}\n\nReturn your response as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
@@ -833,6 +837,7 @@ async function prepareCronRunContext(params: {
       toolsAllow: agentPayload?.toolsAllow,
     }),
     resolvedDeliveryOk: resolvedDelivery.ok,
+    requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
   });
 
   const skillsSnapshot = await resolveCronSkillsSnapshot({
@@ -1271,12 +1276,8 @@ export async function runCronIsolatedAgentTurn(params: {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
-  const abortReason = () => {
-    const reason = abortSignal?.reason;
-    return typeof reason === "string" && reason.trim()
-      ? reason.trim()
-      : "cron: job execution timed out";
-  };
+  const abortReason = () =>
+    resolveCronAbortReasonText(abortSignal?.reason) ?? "cron: job execution timed out";
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const prepared = await prepareCronRunContext({ input: params, isFastTestEnv });
   if (!prepared.ok) {

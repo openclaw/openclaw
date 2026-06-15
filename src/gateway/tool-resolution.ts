@@ -48,6 +48,7 @@ export function resolveGatewayScopedTools(params: {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   agentTo?: string;
   agentThreadId?: string;
   senderIsOwner?: boolean;
@@ -168,6 +169,7 @@ export function resolveGatewayScopedTools(params: {
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,
+    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
