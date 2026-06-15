@@ -118,6 +118,45 @@ export interface Settings {
   warnings?: WarningSettings;
   sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
   httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
+  /**
+   * Per-deployment app-attribution overrides sent to provider request headers.
+   *
+   * When set, the gateway substitutes these values into the vendor-documented
+   * attribution headers (currently `X-OpenRouter-Title`, `HTTP-Referer`) instead
+   * of the OpenClaw defaults. Use this to attribute per-agent spend in the
+   * OpenRouter dashboard without provisioning per-agent API keys — all agents
+   * still share one key, but the per-request `X-OpenRouter-Title` groups spend
+   * on the dashboard.
+   *
+   * @example
+   * ```json
+   * { "appAttribution": { "openrouterTitle": "darojaai-architect" } }
+   * ```
+   */
+  appAttribution?: AppAttributionSettings;
+}
+
+/**
+ * App-attribution header overrides.
+ *
+ * Each field is a per-deployment value sent to the named provider's
+ * vendor-documented attribution header. When omitted, the OpenClaw
+ * defaults apply (see `provider-attribution.ts`).
+ */
+export interface AppAttributionSettings {
+  /**
+   * Value for the `X-OpenRouter-Title` request header.
+   * Defaults to `"OpenClaw"` when unset. Must be a non-empty string
+   * of 1-50 characters. Used by the OpenRouter dashboard to group
+   * spend by application.
+   */
+  openrouterTitle?: string;
+  /**
+   * Value for the `HTTP-Referer` request header.
+   * Defaults to `"https://openclaw.ai"` when unset. Must be a valid
+   * URL or URL-prefixed identifier (e.g. `"https://github.com/<org>/<repo>"`).
+   */
+  httpReferer?: string;
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -792,6 +831,23 @@ export class SettingsManager {
       maxRetries: this.settings.retry?.provider?.maxRetries,
       maxRetryDelayMs: this.settings.retry?.provider?.maxRetryDelayMs ?? 60000,
     };
+  }
+
+  /**
+   * Per-deployment app-attribution header overrides.
+   *
+   * Returns the user-configured `appAttribution` block from settings, or
+   * an empty object if no overrides are set. The OpenClaw defaults
+   * (`X-OpenRouter-Title: OpenClaw`, `HTTP-Referer: https://openclaw.ai`)
+   * are applied by the attribution layer when these are unset, so a
+   * returned empty object means "use the OpenClaw defaults".
+   *
+   * Use this from the SDK seam (`getAttributionHeaders` in `sdk.ts`) to
+   * parameterize the attribution headers per agent or per deployment
+   * without provisioning per-agent API keys.
+   */
+  getAppAttribution(): AppAttributionSettings {
+    return this.settings.appAttribution ?? {};
   }
 
   getHideThinkingBlock(): boolean {

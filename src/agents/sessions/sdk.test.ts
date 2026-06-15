@@ -26,7 +26,7 @@ import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
+import { SettingsManager, type Settings } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
 
 const testModel: Model = {
@@ -87,13 +87,16 @@ function createResourceLoaderWithHandlers(
   };
 }
 
-async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOptions> {
+async function createSessionAndStreamModel(
+  model: Model,
+  settingsOverride: Partial<Settings> = {},
+): Promise<SimpleStreamOptions> {
   streamMocks.streamSimple.mockClear();
   const { session } = await createAgentSession({
     model,
     resourceLoader: createEmptyResourceLoader(),
     sessionManager: SessionManager.inMemory(),
-    settingsManager: SettingsManager.inMemory(),
+    settingsManager: SettingsManager.inMemory(settingsOverride),
     modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
   });
 
@@ -145,6 +148,72 @@ describe("createAgentSession attribution headers", () => {
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
       "X-OpenRouter-Categories": "cli-agent",
+    });
+  });
+
+  it("honors settings.appAttribution.openrouterTitle when set on OpenRouter", async () => {
+    // Per-agent attribution: an operator can group spend in the OpenRouter
+    // dashboard by setting `appAttribution.openrouterTitle` in agent settings,
+    // without provisioning per-agent API keys. See issue #92672.
+    const providerOptions = await createSessionAndStreamModel(
+      {
+        ...testModel,
+        provider: "openrouter",
+        baseUrl: "https://example.test",
+      },
+      {
+        appAttribution: { openrouterTitle: "darojaai-architect" },
+      },
+    );
+
+    expect(providerOptions.headers).toMatchObject({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "darojaai-architect",
+      "X-OpenRouter-Categories": "cli-agent",
+    });
+  });
+
+  it("honors settings.appAttribution.httpReferer when set on OpenRouter", async () => {
+    const providerOptions = await createSessionAndStreamModel(
+      {
+        ...testModel,
+        provider: "openrouter",
+        baseUrl: "https://example.test",
+      },
+      {
+        appAttribution: {
+          openrouterTitle: "rag-research-tool",
+          httpReferer: "https://github.com/DarojaAI/linux-desktop-seed",
+        },
+      },
+    );
+
+    expect(providerOptions.headers).toMatchObject({
+      "HTTP-Referer": "https://github.com/DarojaAI/linux-desktop-seed",
+      "X-OpenRouter-Title": "rag-research-tool",
+    });
+  });
+
+  it("falls back to OpenClaw defaults when appAttribution values are invalid", async () => {
+    // Empty string, oversize, and control-character values must not break
+    // attribution; we fall back to the OpenClaw defaults.
+    const providerOptions = await createSessionAndStreamModel(
+      {
+        ...testModel,
+        provider: "openrouter",
+        baseUrl: "https://example.test",
+      },
+      {
+        appAttribution: {
+          openrouterTitle: "<script>alert(1)</script>",
+          httpReferer: "not-a-url",
+        },
+      },
+    );
+
+    expect(providerOptions.headers).toMatchObject({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
     });
   });
 

@@ -181,9 +181,17 @@ function getAttributionHeaders(
   const baseUrl = (model as { baseUrl?: string }).baseUrl ?? "";
 
   if (model.provider === "openrouter" || baseUrl.includes("openrouter.ai")) {
+    // Per-deployment overrides from `settings.appAttribution.*` allow operators
+    // to attribute spend in the OpenRouter dashboard without provisioning
+    // per-agent API keys. The OpenClaw defaults remain the fallback so this
+    // change is fully backward-compatible: existing deployments continue to
+    // send `X-OpenRouter-Title: OpenClaw` and `HTTP-Referer: https://openclaw.ai`.
+    const overrides = settingsManager.getAppAttribution();
+    const openrouterTitle = sanitizeOpenRouterTitle(overrides.openrouterTitle);
+    const httpReferer = sanitizeHttpReferer(overrides.httpReferer);
     return {
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
+      "HTTP-Referer": httpReferer,
+      "X-OpenRouter-Title": openrouterTitle,
       "X-OpenRouter-Categories": "cli-agent",
     };
   }
@@ -200,6 +208,39 @@ function getAttributionHeaders(
   }
 
   return undefined;
+}
+
+/**
+ * Validates and sanitizes a user-supplied `X-OpenRouter-Title` value.
+ *
+ * OpenRouter's app-attribution dashboard groups spend by the `X-OpenRouter-Title`
+ * header. We accept any non-empty 1-50 character printable string. Invalid input
+ * falls back to the OpenClaw default so a misconfiguration cannot break
+ * downstream attribution.
+ */
+function sanitizeOpenRouterTitle(value: string | undefined): string {
+  if (typeof value !== "string") return "OpenClaw";
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 50) return "OpenClaw";
+  // Reject control characters and HTML/script-injection vectors
+  if (/[\u0000-\u001f\u007f<>"'`\\]/.test(trimmed)) return "OpenClaw";
+  return trimmed;
+}
+
+/**
+ * Validates and sanitizes a user-supplied `HTTP-Referer` value.
+ *
+ * Must be either a valid http(s) URL or a URL-prefixed identifier
+ * (e.g. `"https://github.com/<org>/<repo>"`). Falls back to the
+ * OpenClaw default if invalid.
+ */
+function sanitizeHttpReferer(value: string | undefined): string {
+  if (typeof value !== "string") return "https://openclaw.ai";
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 200) return "https://openclaw.ai";
+  // Must start with http:// or https://
+  if (!/^https?:\/\//.test(trimmed)) return "https://openclaw.ai";
+  return trimmed;
 }
 
 /**
