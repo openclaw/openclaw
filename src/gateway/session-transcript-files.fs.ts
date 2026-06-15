@@ -474,17 +474,21 @@ export function archiveSessionTranscriptsDetailed(opts: {
     }
     // Archive the primary transcript file first.
     archiveIfExists(candidatePath);
-    // Also archive the trajectory sidecar files so tool-call forensics survive
-    // session reset (#90707). The trajectory runtime file holds assistant tool
-    // calls and results; the pointer sidecar records the runtime file location.
-    const trajectoryRuntimePath = resolveTrajectoryFilePath({
-      env: {},
-      sessionFile: candidate,
-      sessionId: opts.sessionId,
-    });
-    archiveIfExists(trajectoryRuntimePath);
-    const trajectoryPointerPath = resolveTrajectoryPointerFilePath(candidate);
-    archiveIfExists(trajectoryPointerPath);
+    // On session reset, also archive the trajectory sidecar files so tool-call
+    // forensics survive (#90707). The trajectory runtime file holds assistant
+    // tool calls and results; the pointer sidecar records the runtime file
+    // location. Only reset preserves sidecars — deletion must keep removing
+    // them so sensitive tool-call data is not retained after explicit delete.
+    if (opts.reason === "reset") {
+      const trajectoryRuntimePath = resolveTrajectoryFilePath({
+        env: {},
+        sessionFile: candidate,
+        sessionId: opts.sessionId,
+      });
+      archiveIfExists(trajectoryRuntimePath);
+      const trajectoryPointerPath = resolveTrajectoryPointerFilePath(candidate);
+      archiveIfExists(trajectoryPointerPath);
+    }
   }
   return archived;
 }
