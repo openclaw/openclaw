@@ -164,6 +164,42 @@ describe("read tool", () => {
     expect(result).toBe("你好，世界");
   });
 
+  it("decodes GBK bytes to Chinese through the full read tool path on simulated Windows", async () => {
+    // Proves that createReadToolDefinition routes text buffers through
+    // decodeReadBuffer → decodeWindowsOutputBuffer, not bypassing it.
+    const gbkBytes = Buffer.from([
+      0xc4,
+      0xe3, // 你
+      0xba,
+      0xc3, // 好
+      0xa3,
+      0xac, // ，
+      0xca,
+      0xc0, // 世
+      0xbd,
+      0xe7, // 界
+    ]);
+    const tool = createReadToolDefinition("/workspace", {
+      platform: "win32",
+      windowsEncoding: "gbk",
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => gbkBytes,
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "note.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toContain("你好，世界");
+  });
+
   it("preserves valid UTF-8 on simulated Windows GBK path", () => {
     const utf8Bytes = Buffer.from("Hello World — 正常文本", "utf-8");
 
