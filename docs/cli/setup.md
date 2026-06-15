@@ -18,6 +18,12 @@ the same flags and runs the same minimal-first onboarding flow.
 `--wizard` remains accepted for compatibility and selects the advanced flow.
 See [`openclaw onboard`](/cli/onboard) for the full option reference.
 
+`--skip-ui` by itself, optionally with `--workspace`, preserves the baseline
+setup path for source checkouts and scripts. It prepares config, workspace,
+sessions, and `gateway.mode` without writing quickstart Gateway defaults. Add
+another explicit onboarding flag to run onboarding without opening the final
+local agent.
+
 ## Examples
 
 ```bash

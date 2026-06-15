@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSetupCommand } from "./register.setup.js";
 
 const mocks = vi.hoisted(() => ({
+  setupCommandMock: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+const setupCommandMock = mocks.setupCommandMock;
 const setupWizardCommandMock = mocks.setupWizardCommandMock;
 const runtime = mocks.runtime;
 
@@ -22,6 +24,10 @@ function lastWizardOptions(): Record<string, unknown> | undefined {
 
 vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
+}));
+
+vi.mock("../../commands/setup.js", () => ({
+  setupCommand: mocks.setupCommandMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -37,6 +43,7 @@ describe("registerSetupCommand", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    setupCommandMock.mockResolvedValue(undefined);
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
@@ -46,6 +53,13 @@ describe("registerSetupCommand", () => {
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
     expect(lastWizardOptions()?.installDaemon).toBeUndefined();
+  });
+
+  it("preserves baseline setup for a bare --skip-ui invocation", async () => {
+    await runCli(["setup", "--workspace", "/tmp/ws", "--skip-ui"]);
+
+    expect(setupCommandMock).toHaveBeenCalledWith({ workspace: "/tmp/ws" }, runtime);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("keeps --wizard as a compatibility flag", async () => {

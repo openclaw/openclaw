@@ -22,6 +22,12 @@ want the full infrastructure wizard.
 The temporary Gateway stops when the assisted TUI exits. To install a persistent
 background service, exit the TUI and run `openclaw onboard --install-daemon`.
 
+For source-checkout and scripting compatibility, `openclaw onboard --skip-ui`
+by itself uses the baseline setup path: it prepares config, workspace, sessions,
+and `gateway.mode` without writing quickstart Gateway defaults. Add another
+explicit onboarding flag, such as `--flow quickstart` or `--install-daemon`, to
+run onboarding without opening the final local agent.
+
 ## Related guides
 
 <CardGroup cols={2}>

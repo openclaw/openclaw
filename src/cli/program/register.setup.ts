@@ -4,7 +4,7 @@ import { registerOnboardCommand } from "./register.onboard.js";
 
 /**
  * Product contract: `setup` is the documented alias for canonical onboarding.
- * The old baseline-only initializer is intentionally retired.
+ * Bare `--skip-ui` preserves the baseline initializer for scripting compatibility.
  */
 export function registerSetupCommand(program: Command): void {
   registerOnboardCommand(program, {
