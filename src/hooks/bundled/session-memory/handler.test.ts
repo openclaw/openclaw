@@ -812,4 +812,86 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
   });
+
+  it("skips delivery-mirror assistant messages (#92563)", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Hello" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hi there" }],
+        },
+      }),
+      // delivery-mirror duplicates the visible text and should be skipped
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hi there" }],
+          provider: "openclaw",
+          model: "delivery-mirror",
+        },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).toContain("user: Hello");
+    expect(memoryContent).toContain("assistant: Hi there");
+    // Should appear exactly once
+    const matches = (memoryContent?.match(/assistant: Hi there/g) ?? []).length;
+    expect(matches).toBe(1);
+  });
+
+  it("dedupes consecutive identical assistant messages (#92563)", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "question" },
+      }),
+      // Raw thinking message
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Let me think..." },
+            { type: "text", text: "Here is the answer" },
+          ],
+        },
+      }),
+      // Cleaned copy (same visible text)
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Here is the answer" }],
+        },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).toContain("user: question");
+    expect(memoryContent).toContain("assistant: Here is the answer");
+    const matches = (memoryContent?.match(/assistant: Here is the answer/g) ?? []).length;
+    expect(matches).toBe(1);
+  });
+
+  it("keeps consecutive assistant messages with different text", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "first" },
+      { role: "assistant", content: "Reply A" },
+      { role: "user", content: "second" },
+      { role: "assistant", content: "Reply B" },
+    ]);
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).toContain("assistant: Reply A");
+    expect(memoryContent).toContain("assistant: Reply B");
+    const assistantLines = (memoryContent?.match(/^assistant:/gm) ?? []).length;
+    expect(assistantLines).toBe(2);
+  });
 });
