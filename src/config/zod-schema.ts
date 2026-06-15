@@ -1078,7 +1078,7 @@ export const OpenClawSchema = z
           .object({
             deny: z.array(z.string()).optional(),
             allow: z.array(z.string()).optional(),
-            byClientId: z
+            byNode: z
               .record(
                 z.string(),
                 z

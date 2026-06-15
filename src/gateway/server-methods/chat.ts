@@ -148,7 +148,6 @@ import {
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import { setSessionOperatorClientId } from "../session-client-id-registry.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
@@ -3225,11 +3224,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const clientInfo = client?.connect?.client;
-    // Record the connecting client's id against this session so the loopback
-    // MCP tool resolver (which only sees the session key) can apply
-    // gateway.tools.byClientId restrictions for this turn. Restriction-only:
-    // a client can at most narrow its own toolset, so the value is untrusted.
-    setSessionOperatorClientId(sessionKey, clientInfo?.id);
     const chatSendTraceAttributes = {
       runId: clientRunId,
       sessionKey,
