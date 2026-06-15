@@ -518,6 +518,53 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expect(fs.existsSync(authPath)).toBe(false);
     expect(fs.existsSync(`${authPath}.sqlite-import.465.bak`)).toBe(false);
   });
+
+  it("preserves default-agent JSON auth profiles over config fallback", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-json",
+        },
+      },
+    });
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+            key: "sk-config",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      prompter: makePrompter(true),
+      now: () => 466,
+    });
+
+    expect(result.detected).toEqual([authPath]);
+    expect(result.configChanged).toBeUndefined();
+    expect(result.warnings).toStrictEqual([]);
+    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles["openai:default"]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: "sk-json",
+    });
+    expect(cfg.auth?.profiles?.["openai:default"]).toEqual({
+      provider: "openai",
+      mode: "api_key",
+      key: "sk-config",
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(fs.existsSync(`${authPath}.sqlite-import.466.bak`)).toBe(true);
+  });
 });
 
 describe("maybeRepairLegacyFlatAuthProfileStores", () => {

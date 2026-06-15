@@ -598,6 +598,14 @@ function hasImportableAuthProfileStore(store: AuthProfileStore | null): store is
   return Boolean(store && (Object.keys(store.profiles).length > 0 || hasAuthProfileState(store)));
 }
 
+function hasLegacyAuthProfileSource(candidate: AuthProfileSqliteMigrationCandidate): boolean {
+  return (
+    fs.existsSync(candidate.authPath) ||
+    fs.existsSync(candidate.statePath) ||
+    fs.existsSync(candidate.legacyPath)
+  );
+}
+
 function backupAuthProfileJson(pathname: string, suffix: string, now: () => number): string {
   const backupPath = `${pathname}.${suffix}.${now()}.bak`;
   fs.copyFileSync(pathname, backupPath);
@@ -641,9 +649,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   const configStore = coerceLegacyConfigAuthProfileStore(params.cfg);
   const detected = candidates.filter(
     (candidate) =>
-      fs.existsSync(candidate.authPath) ||
-      fs.existsSync(candidate.statePath) ||
-      fs.existsSync(candidate.legacyPath) ||
+      hasLegacyAuthProfileSource(candidate) ||
       (configStore && isDefaultAgentCandidate(candidate, params.cfg, env)),
   );
   const result: LegacyFlatAuthProfileRepairResult = {
@@ -737,7 +743,11 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         ? maybeCanonicalStore
         : null;
       const configCanonicalStore =
-        configStore && isDefaultAgentCandidate(candidate, params.cfg, env) ? configStore : null;
+        configStore &&
+        isDefaultAgentCandidate(candidate, params.cfg, env) &&
+        !hasLegacyAuthProfileSource(candidate)
+          ? configStore
+          : null;
       const legacyStore = loadLegacyAuthProfileStore(candidate.agentDir);
       const rawState = fs.existsSync(candidate.statePath)
         ? loadJsonFile(candidate.statePath)
