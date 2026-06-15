@@ -462,6 +462,9 @@ describe("agentCliCommand", () => {
           message: "hi",
           to: "+1555",
           local: true,
+          bootstrapContextMode: "lightweight",
+          disableTools: true,
+          streamMaxTokens: "192",
         },
         runtime,
       );
@@ -474,6 +477,9 @@ describe("agentCliCommand", () => {
       );
       expect(localOpts.cleanupBundleMcpOnRunEnd).toBe(true);
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
+      expect(localOpts.bootstrapContextMode).toBe("lightweight");
+      expect(localOpts.disableTools).toBe(true);
+      expect(localOpts.streamParams).toEqual({ maxTokens: 192 });
       expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
     });

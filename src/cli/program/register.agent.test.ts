@@ -123,6 +123,65 @@ describe("registerAgentCommands", () => {
     );
   });
 
+  it("accepts hidden bootstrap context mode for embedded local agent runs", async () => {
+    await runCli([
+      "agent",
+      "--message",
+      "hi",
+      "--local",
+      "--bootstrap-context-mode",
+      "lightweight",
+    ]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "hi",
+        local: true,
+        bootstrapContextMode: "lightweight",
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
+  it("accepts hidden tool disable switch for embedded local agent runs", async () => {
+    await runCli(["agent", "--message", "hi", "--local", "--disable-tools"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "hi",
+        local: true,
+        disableTools: true,
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
+  it("accepts hidden stream max-token override for embedded local agent runs", async () => {
+    await runCli(["agent", "--message", "hi", "--local", "--stream-max-tokens", "192"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "hi",
+        local: true,
+        streamMaxTokens: "192",
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
+  it("keeps internal eval options hidden from public agent help", () => {
+    const program = new Command();
+    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    const agentCommand = program.commands.find((candidate) => candidate.name() === "agent");
+
+    expect(agentCommand?.helpInformation()).not.toContain("bootstrap-context-mode");
+    expect(agentCommand?.helpInformation()).not.toContain("disable-tools");
+    expect(agentCommand?.helpInformation()).not.toContain("stream-max-tokens");
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     expect(agentsAddCommandMock).toHaveBeenNthCalledWith(

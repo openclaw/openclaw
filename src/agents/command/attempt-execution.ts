@@ -640,7 +640,7 @@ export function runAgentAttempt(params: {
     cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
-    disableTools: params.opts.modelRun === true,
+    disableTools: params.opts.disableTools === true || params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     onUserMessagePersisted: params.onUserMessagePersisted,

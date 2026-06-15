@@ -57,6 +57,9 @@ type AgentCliOpts = {
   lane?: string;
   runId?: string;
   extraSystemPrompt?: string;
+  bootstrapContextMode?: "full" | "lightweight";
+  disableTools?: boolean;
+  streamMaxTokens?: string;
   local?: boolean;
 };
 
@@ -77,6 +80,17 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
     );
   }
   return raw;
+}
+
+function parsePositiveIntegerOption(name: string, value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}. Use a positive integer.`);
+  }
+  return parsed;
 }
 
 function resolveAgentSelectorOrThrow(cfg: OpenClawConfig, selector: string): string {
@@ -235,12 +249,14 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
   protectJsonStdout(opts);
+  const streamMaxTokens = parsePositiveIntegerOption("--stream-max-tokens", opts.streamMaxTokens);
   const localOpts = {
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
     cleanupBundleMcpOnRunEnd: true,
     cleanupCliLiveSessionOnRunEnd: true,
+    ...(streamMaxTokens !== undefined ? { streamParams: { maxTokens: streamMaxTokens } } : {}),
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

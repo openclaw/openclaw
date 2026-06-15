@@ -3,6 +3,7 @@ import process from "node:process";
 import {
   AGENT_ROLE_CONTRACTS,
   AGENT_ROLE_CONTRACT_BY_ID,
+  DEFAULT_AGENT_ROLE_EVAL_BOOTSTRAP_CONTEXT_MODE,
   DEFAULT_SELF_CONTAINED_LIVE_MODEL,
   createSelfContainedLiveEvalEnvironment,
   defaultConfigPath,
@@ -17,7 +18,7 @@ function usage() {
     "Usage:",
     "  node scripts/agent-role-eval.mjs [--config <path>] [--json]",
     "  node scripts/agent-role-eval.mjs --contracts-only [--json]",
-    "  node scripts/agent-role-eval.mjs --live [--agent <id>] [--model <id>] [--timeout <seconds>] [--self-contained] [--json]",
+    "  node scripts/agent-role-eval.mjs --live [--agent <id>] [--model <id>] [--timeout <seconds>] [--bootstrap-context-mode full|lightweight] [--self-contained] [--json]",
     "",
     "Default mode runs deterministic static contract checks.",
     "--contracts-only validates the checked-in role contract catalog without private local agent state.",
@@ -35,6 +36,7 @@ function parseArgs(argv) {
     selfContained: false,
     keepSelfContainedState: false,
     timeoutSeconds: 180,
+    bootstrapContextMode: DEFAULT_AGENT_ROLE_EVAL_BOOTSTRAP_CONTEXT_MODE,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -48,6 +50,8 @@ function parseArgs(argv) {
       args.model = argv[++index];
     } else if (arg === "--timeout") {
       args.timeoutSeconds = Number(argv[++index]);
+    } else if (arg === "--bootstrap-context-mode") {
+      args.bootstrapContextMode = argv[++index];
     } else if (arg === "--live") {
       args.live = true;
     } else if (arg === "--self-contained") {
@@ -66,6 +70,9 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(args.timeoutSeconds) || args.timeoutSeconds <= 0) {
     throw new Error("--timeout must be a positive number of seconds");
+  }
+  if (!["full", "lightweight"].includes(args.bootstrapContextMode)) {
+    throw new Error("--bootstrap-context-mode must be full or lightweight");
   }
   if (args.selfContained && !args.live) {
     throw new Error("--self-contained is only supported with --live");
@@ -189,6 +196,7 @@ function runLive(args) {
       runLiveAgentEval(contract, {
         model,
         timeoutSeconds: args.timeoutSeconds,
+        bootstrapContextMode: args.bootstrapContextMode,
         env: fixture?.env,
       }),
     );
