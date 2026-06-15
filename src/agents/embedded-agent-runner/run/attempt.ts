@@ -4210,14 +4210,8 @@ export async function runEmbeddedAttempt(
               ? "model-prompt"
               : "runtime-event",
           });
-          const promptForSession = buildCurrentInboundPrompt({
-            context: params.currentInboundContext,
-            prompt: promptSubmission.prompt,
-          });
-          const promptForModel = buildCurrentInboundPrompt({
-            context: params.currentInboundContext,
-            prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
-          });
+          const promptForSession = promptSubmission.prompt;
+          const promptForModel = promptSubmission.modelPrompt ?? promptSubmission.prompt;
           currentUserTimestampOverride =
             !isRawModelRun && typeof preparedUserTurnMessage?.timestamp === "number"
               ? {
