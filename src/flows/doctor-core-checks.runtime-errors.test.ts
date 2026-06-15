@@ -142,6 +142,35 @@ describe("doctor runtime tool schema error handling", () => {
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
   });
 
+  it("reports oversized agent runtime tool lists without blaming the first plugin", async () => {
+    const firstTool = tool("fuzzplugin_first", { type: "object", properties: {} });
+    setPluginToolMeta(firstTool, { pluginId: "fuzzplugin", optional: false });
+    const tools = new Proxy([firstTool] as AnyAgentTool[], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          return 10_001;
+        }
+        if (property === "0") {
+          throw new Error("oversized sparse doctor entry should not be read");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    mocks.createOpenClawCodingTools.mockReturnValueOnce(tools);
+
+    await expect(collectRuntimeToolSchemaFindings({})).resolves.toContainEqual({
+      checkId: "core/doctor/runtime-tool-schemas",
+      severity: "error",
+      message: "Agent main runtime tool list has an unsupported shape for runtime projection.",
+      path: "agents.main.tools",
+      target: "tool-list",
+      requirement: "runtime tool list length 10001 exceeds maximum 10000",
+      fixHint:
+        "Reduce active tools or disable/update the plugin/provider returning a malformed tool list, then rerun doctor.",
+    });
+    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
   it("reports bundle MCP runtime tool normalization failures without aborting doctor", async () => {
     mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
       tools: [bundleMcpTool("fuzzplugin__move_angles", { type: "object", properties: {} })],

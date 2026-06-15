@@ -7,7 +7,10 @@
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
+import {
+  isRuntimeToolListDiagnostic,
+  type RuntimeToolSchemaDiagnostic,
+} from "./tool-schema-projection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const log = createSubsystemLogger("agents/tools");
@@ -16,6 +19,9 @@ function readDiagnosticPluginId(params: {
   tools: readonly AnyAgentTool[];
   diagnostic: RuntimeToolSchemaDiagnostic;
 }): string | undefined {
+  if (isRuntimeToolListDiagnostic(params.diagnostic)) {
+    return undefined;
+  }
   try {
     const tool = params.tools[params.diagnostic.toolIndex];
     return tool ? getPluginToolMeta(tool)?.pluginId : undefined;

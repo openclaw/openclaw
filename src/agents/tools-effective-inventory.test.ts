@@ -412,6 +412,39 @@ describe("resolveEffectiveToolInventory", () => {
     ]);
   });
 
+  it("reports oversized inventory tool lists without walking sparse entries", async () => {
+    const healthy = mockTool({ name: "exec", label: "Exec", description: "Run shell commands" });
+    const readSparseEntry = vi.fn(() => {
+      throw new Error("oversized sparse inventory entry should not be read");
+    });
+    const tools = new Proxy([healthy] as AnyAgentTool[], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          return 10_001;
+        }
+        if (property === "0") {
+          readSparseEntry();
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal14 } =
+      await loadHarness({ tools });
+
+    const result = resolveEffectiveToolInventoryLocal14({ cfg: {} });
+
+    expect(result.groups).toEqual([]);
+    expect(result.notices).toEqual([
+      {
+        id: "unsupported-tool-schema:tool-list",
+        severity: "warning",
+        message:
+          "Runtime tool list has an unsupported shape (runtime tool list length 10001 exceeds maximum 10000) and was quarantined before model projection. Reduce active tools, or disable/update the plugin/provider returning a malformed tool list.",
+      },
+    ]);
+    expect(readSparseEntry).not.toHaveBeenCalled();
+  });
+
   it("validates normalized runtime schemas before quarantining effective tools", async () => {
     const normalizeToolsMock = vi.fn((options: { tools: AnyAgentTool[] }) =>
       options.tools.map((entry) =>

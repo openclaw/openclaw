@@ -18,6 +18,8 @@ import { resolveToolDisplay } from "./tool-display.js";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
+  isRuntimeToolListDiagnostic,
+  MAX_RUNTIME_TOOL_SCHEMA_ENTRIES,
   type RuntimeToolSchemaDiagnostic,
 } from "./tool-schema-projection.js";
 import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
@@ -84,6 +86,13 @@ function buildUnsupportedToolSchemaNotice(params: {
   tool: AnyAgentTool | undefined;
   fallbackTool: AnyAgentTool | undefined;
 }): EffectiveToolInventoryNotice {
+  if (isRuntimeToolListDiagnostic(params.diagnostic)) {
+    return {
+      id: `unsupported-tool-schema:${params.diagnostic.toolName}`,
+      severity: "warning",
+      message: `Runtime tool list has an unsupported shape (${params.diagnostic.violations.join(", ")}) and was quarantined before model projection. Reduce active tools, or disable/update the plugin/provider returning a malformed tool list.`,
+    };
+  }
   const sourceTool = params.tool ?? params.fallbackTool;
   const source = sourceTool
     ? resolveEffectiveToolSource(sourceTool, params.fallbackTool)
@@ -119,6 +128,9 @@ function readMatchingTool(
   tools: readonly AnyAgentTool[],
   diagnostic: RuntimeToolSchemaDiagnostic,
 ): AnyAgentTool | undefined {
+  if (isRuntimeToolListDiagnostic(diagnostic)) {
+    return undefined;
+  }
   try {
     const tool = tools[diagnostic.toolIndex];
     return tool?.name === diagnostic.toolName ? tool : undefined;
@@ -133,10 +145,16 @@ function buildReadableRawToolsByName(
   tools: readonly AnyAgentTool[],
 ): ReadonlyMap<string, AnyAgentTool> {
   const toolsByName = new Map<string, AnyAgentTool>();
-  let toolCount: number;
+  let toolCount: unknown;
   try {
     toolCount = tools.length;
   } catch {
+    return toolsByName;
+  }
+  if (typeof toolCount !== "number" || !Number.isSafeInteger(toolCount) || toolCount < 0) {
+    return toolsByName;
+  }
+  if (toolCount > MAX_RUNTIME_TOOL_SCHEMA_ENTRIES) {
     return toolsByName;
   }
   for (let index = 0; index < toolCount; index += 1) {
