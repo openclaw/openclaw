@@ -48,7 +48,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type { MsgContext, OriginatingChannelType, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
   formatThinkingLevels,
@@ -66,9 +66,10 @@ import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { InlineDirectives } from "./directive-handling.js";
-import { isSystemEventProvider } from "./effective-reply-route.js";
+import { isSystemEventProvider, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
+import type { ReplySessionBinding } from "./get-reply.types.js";
 import {
   buildDirectChatContext,
   buildGroupChatContext,
@@ -96,6 +97,7 @@ import {
   waitForReplyRunEndBySessionId,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
@@ -119,6 +121,7 @@ type InternalGetReplyOptions = GetReplyOptions & {
    * can differ from abortSignal when dispatch temporarily borrows an active lane.
    */
   queuedFollowupAbortSignal?: AbortSignal;
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -811,6 +814,7 @@ export async function runPreparedReply(
         sessionKey,
         isMainSession,
         isNewSession,
+        suppressHeartbeatOwnedEvents: isHeartbeat,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
@@ -940,6 +944,11 @@ export async function runPreparedReply(
           }).existing ?? sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
+    internalOpts?.onSessionPrepared?.({
+      sessionKey,
+      sessionId: latestSessionId,
+      storePath,
+    });
     return {
       sessionEntry: latestSessionEntry,
       sessionId: latestSessionId,
@@ -1242,6 +1251,27 @@ export async function runPreparedReply(
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
         })
       : undefined);
+  const replyRoute = resolveEffectiveReplyRoute({
+    ctx: {
+      Provider: ctx.Provider ?? sessionCtx.Provider,
+      Surface: ctx.Surface ?? sessionCtx.Surface,
+      OriginatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+      OriginatingTo: ctx.OriginatingTo ?? sessionCtx.OriginatingTo,
+      AccountId: ctx.AccountId ?? sessionCtx.AccountId,
+      InputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+      ChatType: ctx.ChatType ?? sessionCtx.ChatType,
+    },
+    entry: preparedSessionState.sessionEntry,
+  });
+  const messageProvider = resolveOriginMessageProvider({
+    originatingChannel: replyRoute.channel,
+    // Prefer Provider over Surface for fallback channel identity.
+    // Surface can carry relayed metadata while Provider owns reply routing.
+    provider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
+  });
+  const replyPolicyChannel =
+    (replyRoute.channel as OriginatingChannelType | undefined) ??
+    (messageProvider as OriginatingChannelType | undefined);
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -1258,26 +1288,27 @@ export async function runPreparedReply(
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
     // Originating channel for reply routing.
-    originatingChannel: ctx.OriginatingChannel,
-    originatingTo: ctx.OriginatingTo,
-    originatingAccountId: sessionCtx.AccountId,
-    originatingThreadId,
-    originatingReplyToId: sessionCtx.ReplyToId,
-    originatingChatType: ctx.ChatType,
+    originatingChannel: replyRoute.channel,
+    originatingTo: replyRoute.to,
+    originatingAccountId: replyRoute.accountId,
+    originatingThreadId: replyRoute.threadId ?? originatingThreadId,
+    originatingReplyToId: promptSessionCtx.ReplyToId,
+    originatingReplyToMode: resolveReplyToMode(
+      cfg,
+      replyPolicyChannel,
+      replyRoute.accountId,
+      replyRoute.chatType,
+    ),
+    originatingChatType: replyRoute.chatType,
     run: {
       agentId,
       agentDir,
       sessionId: preparedSessionState.sessionId,
       sessionKey,
       runtimePolicySessionKey,
-      messageProvider: resolveOriginMessageProvider({
-        originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
-        // Prefer Provider over Surface for fallback channel identity.
-        // Surface can carry relayed metadata (for example "webchat") while Provider
-        // still reflects the active channel that should own tool routing.
-        provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
-      }),
-      agentAccountId: sessionCtx.AccountId,
+      messageProvider,
+      chatType: replyRoute.chatType,
+      agentAccountId: replyRoute.accountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:
         normalizeOptionalString(sessionCtx.GroupChannel) ??
@@ -1329,6 +1360,7 @@ export async function runPreparedReply(
           : {}),
       },
       timeoutMs,
+      runTimeoutOverrideMs: opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance,

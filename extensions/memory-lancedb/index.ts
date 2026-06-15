@@ -20,6 +20,7 @@ import { BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES } from "openclaw/plugin-sdk/chat
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
@@ -832,10 +833,6 @@ const INBOUND_META_SENTINEL_LINE_RE = new RegExp(
   "m",
 );
 
-const MESSAGE_TOOL_DELIVERY_HINTS = [
-  "Delivery: to send a message, use the `message` tool.",
-  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-] as const;
 const MESSAGE_TOOL_DELIVERY_HINT_RE = new RegExp(
   `^\\s*(?:${MESSAGE_TOOL_DELIVERY_HINTS.map((hint) =>
     hint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),

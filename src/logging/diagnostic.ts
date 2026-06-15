@@ -38,6 +38,7 @@ import {
 } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
+  requestStuckSessionRecoveryOutcome,
   resetDiagnosticSessionRecoveryCoordinatorForTest,
   type RecoverStuckSession,
 } from "./diagnostic-session-recovery-coordinator.js";
@@ -174,6 +175,26 @@ async function recoverStuckSession(
         error: String(err),
       };
     });
+}
+
+export function isStuckSessionRecoveryEnabled(config?: OpenClawConfig): boolean {
+  return areDiagnosticsEnabledForProcess() && isDiagnosticsEnabled(config);
+}
+
+export async function requestStuckDiagnosticSessionRecovery(
+  params: StuckSessionRecoveryRequest,
+): Promise<StuckSessionRecoveryOutcome | undefined> {
+  return requestStuckSessionRecoveryOutcome({
+    recover: recoverStuckSession,
+    classification: {
+      eventType: "session.stalled",
+      reason: "visible_reply_wait_timeout",
+      classification: "stalled_agent_run",
+      activeWorkKind: "embedded_run",
+      recoveryEligible: false,
+    },
+    request: params,
+  });
 }
 
 function formatDiagnosticWorkLabel(
@@ -1001,15 +1022,23 @@ export function logSessionAttention(
       stuckSessionAbortMs:
         params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs),
     });
+  // The warning backoff throttles repeated log lines/events only. It must never
+  // gate recovery: a recovery-eligible session has to return its classification
+  // so the heartbeat can still schedule recovery on every tick.
+  let suppressWarning = false;
   if (classification.eventType === "session.stuck") {
     const nextWarnAgeMs =
       state.lastStuckWarnAgeMs === undefined
         ? params.thresholdMs
         : Math.max(state.lastStuckWarnAgeMs + params.thresholdMs, state.lastStuckWarnAgeMs * 2);
     if (params.ageMs < nextWarnAgeMs) {
-      return undefined;
+      if (!recoveryEligible) {
+        return undefined;
+      }
+      suppressWarning = true;
+    } else {
+      state.lastStuckWarnAgeMs = params.ageMs;
     }
-    state.lastStuckWarnAgeMs = params.ageMs;
   }
   if (classification.eventType === "session.long_running") {
     const nextWarnAgeMs =
@@ -1020,9 +1049,18 @@ export function logSessionAttention(
             state.lastLongRunningWarnAgeMs * 2,
           );
     if (params.ageMs < nextWarnAgeMs) {
-      return undefined;
+      if (!recoveryEligible) {
+        return undefined;
+      }
+      suppressWarning = true;
+    } else {
+      state.lastLongRunningWarnAgeMs = params.ageMs;
     }
-    state.lastLongRunningWarnAgeMs = params.ageMs;
+  }
+  if (suppressWarning) {
+    // Throttled warning, but recovery-eligible: skip the log/event and return
+    // the classification so the heartbeat can drive recovery.
+    return classification;
   }
   const label =
     classification.eventType === "session.stuck"

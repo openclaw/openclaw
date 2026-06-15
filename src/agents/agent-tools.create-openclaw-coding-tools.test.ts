@@ -7,7 +7,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
@@ -21,6 +20,7 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
@@ -72,7 +72,11 @@ async function writeSessionStore(
   agentId: string,
   entries: Record<string, unknown>,
 ) {
-  await writeSessionStoreForTestAsync(storeTemplate.replaceAll("{agentId}", agentId), entries);
+  await fs.writeFile(
+    storeTemplate.replaceAll("{agentId}", agentId),
+    JSON.stringify(entries, null, 2),
+    "utf-8",
+  );
 }
 
 function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
@@ -208,6 +212,36 @@ describe("createOpenClawCodingTools", () => {
     expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({ channelId: "-100123" }),
     );
+  });
+
+  it("re-wraps existing before_tool_call hooks once with the current context", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const wrapped = wrapToolWithBeforeToolCallHook(
+      {
+        name: "already_wrapped",
+        label: "Already wrapped",
+        description: "Already wrapped tool",
+        parameters: {},
+        execute,
+      },
+      { agentId: "main", sessionId: "session-original" },
+    );
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([wrapped as never]);
+
+    const tools = createOpenClawCodingTools({ agentId: "main", sessionId: "session-new" });
+    const tool = requireTool(tools, "already_wrapped");
+    await requireToolExecute(tool)("call-wrapped", {});
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ agentId: "main", sessionId: "session-new" }),
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(tool.parameters).toEqual({ type: "object", properties: {} });
   });
 
   it("adds Tool Search control tools when explicitly requested", () => {
@@ -861,6 +895,28 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("slack")).toBe(false);
     expect(names.has("telegram")).toBe(false);
     expect(names.has("whatsapp")).toBe(false);
+  });
+
+  it("separates the canonical message provider from transport tool policy", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:speaker-1": { deny: ["exec"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      toolPolicyMessageProvider: "discord-voice",
+      senderId: "speaker-1",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("tts")).toBe(false);
+    expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
   it("filters session tools for sub-agent sessions by default", () => {
