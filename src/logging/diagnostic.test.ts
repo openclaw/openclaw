@@ -604,6 +604,96 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("surfaces a distinct terminal_progress_orphan classification when last progress was terminal", () => {
+    // Observability-only check: when the last codex app-server progress event
+    // was itself terminal-looking (rawResponseItem/completed and friends) and
+    // no further progress arrives within staleMs, the stalled event must carry
+    // the `terminal_progress_orphan` classification (not the generic
+    // `stalled_agent_run`). Recovery timing/action is unchanged —
+    // recoveryEligible is still false, recoverStuckSession is NOT called
+    // earlier than the general stuckSessionAbortMs window.
+    // See https://github.com/openclaw/openclaw/issues/85532.
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const stuckSessionWarnMs = 30_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticRunProgressForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        reason: "codex_app_server:notification:rawResponseItem/completed",
+      });
+
+      // Advance well past staleMs but well under stuckSessionAbortMs (~6 min default).
+      vi.advanceTimersByTime(120_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expectLoggerMessageContaining(warnSpy, "terminalProgressStale=true");
+    expectLoggerMessageContaining(warnSpy, "classification=terminal_progress_orphan");
+    const stalledEvents = events.filter((event) => event.type === "session.stalled");
+    expect(stalledEvents.length).toBeGreaterThan(0);
+    expectRecordFields(requireRecord(stalledEvents.at(-1), "stalled event"), {
+      classification: "terminal_progress_orphan",
+      reason: "terminal_progress_orphan",
+      activeWorkKind: "embedded_run",
+      terminalProgressStale: true,
+      lastProgressReason: "codex_app_server:notification:rawResponseItem/completed",
+    });
+    // No behavior change: recovery is NOT called early.
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the generic stalled_agent_run classification when last progress is non-terminal", () => {
+    // Regression: stale-but-non-terminal lastProgress (e.g. `embedded_run:started`)
+    // must keep the existing `stalled_agent_run` classification, not get
+    // re-labeled as `terminal_progress_orphan`.
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      vi.advanceTimersByTime(120_000);
+    } finally {
+      unsubscribe();
+    }
+
+    const stalledEvents = events.filter((event) => event.type === "session.stalled");
+    expect(stalledEvents.length).toBeGreaterThan(0);
+    expectRecordFields(requireRecord(stalledEvents.at(-1), "stalled event"), {
+      classification: "stalled_agent_run",
+      reason: "active_work_without_progress",
+    });
+  });
+
   it("aborts and drains embedded runs after an extended no-progress stall", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
