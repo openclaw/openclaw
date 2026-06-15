@@ -23,6 +23,7 @@ import {
   resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth as resolveProviderAuthDirect,
+  resolveMacosVmName,
   resolveSnapshot,
   ensureVmRunning,
   shouldSkipSnapshotRestore,
@@ -231,6 +232,8 @@ describe("Parallels smoke model selection", () => {
     expect(parseLinuxSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
     expect(parseMacosSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
     expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
+    expect(parseMacosSmokeArgs([]).vmNameExplicit).toBe(false);
+    expect(parseMacosSmokeArgs(["--vm", "macOS"]).vmNameExplicit).toBe(true);
     expect(parseNpmUpdateSmokeArgs(["--", "--package-spec", "openclaw@2026.5.1"]).packageSpec).toBe(
       "openclaw@2026.5.1",
     );
@@ -243,6 +246,7 @@ describe("Parallels smoke model selection", () => {
         "openclaw@latest",
       ]).packageSpec,
     ).toBe("openclaw@2026.5.1");
+    expect(parseNpmUpdateSmokeArgs(["--macos-vm", "macOS"]).macosVm).toBe("macOS");
     expect(parseWindowsSmokeArgs(["--", "--upgrade-from-packed-main"]).upgradeFromPackedMain).toBe(
       true,
     );
@@ -303,6 +307,7 @@ describe("Parallels smoke model selection", () => {
     expect(packageArtifact).toContain("export async function packageVersionFromTgz");
     expect(packageArtifact).toContain("export async function packOpenClaw");
     expect(parallelsVm).toContain("export function resolveUbuntuVmName");
+    expect(parallelsVm).toContain("export function resolveMacosVmName");
     expect(parallelsVm).toContain("export function waitForVmStatus");
     expect(hostServer).toContain("export async function startHostServer");
     expect(hostServer).toContain("http.server");
@@ -602,6 +607,80 @@ if (isPrlctl) {
       const output = withEnv(fakePrlctlEnv(tempDir), () => resolveUbuntuVmName("Ubuntu missing"));
 
       expect(output).toBe("Ubuntu 26.04");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the only macOS VM when the default name is unavailable", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-macos-vm-helper-"));
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "list" ]]; then
+  printf '[{"name":"Windows 11"},{"name":"macOS"}]\n'
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("list"))) {
+    console.log(JSON.stringify([{ name: "Windows 11" }, { name: "macOS" }]));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      const output = withEnv(fakePrlctlEnv(tempDir), () => resolveMacosVmName("macOS Tahoe"));
+
+      expect(output).toBe("macOS");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("does not infer destructive macOS smoke targets from arbitrary names", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-macos-vm-guard-"));
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "list" ]]; then
+  printf '[{"name":"macOS Work"}]\n'
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("list"))) {
+    console.log(JSON.stringify([{ name: "macOS Work" }]));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      const result = spawnNodeEvalSync(
+        `const { resolveMacosVmName } = await import("./${TS_PATHS.parallelsVm}"); resolveMacosVmName("macOS Tahoe");`,
+        { env: { ...process.env, ...fakePrlctlEnv(tempDir) }, imports: ["tsx"] },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("select a macOS VM explicitly");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }

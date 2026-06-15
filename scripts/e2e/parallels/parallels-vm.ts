@@ -105,6 +105,22 @@ export function resolveUbuntuVmName(requested: string, explicit = false): string
   return fallback;
 }
 
+export function resolveMacosVmName(requested: string, explicit = false): string {
+  const names = listVmNames();
+  if (names.includes(requested)) {
+    return requested;
+  }
+  if (explicit) {
+    die(`VM not found: ${requested}`);
+  }
+  const fallback = names.find((name) => name === "macOS");
+  if (!fallback) {
+    die(`VM not found: ${requested}; select a macOS VM explicitly`);
+  }
+  warn(`requested VM ${requested} not found; using ${fallback}`);
+  return fallback;
+}
+
 function listVms(timeoutMs = PRLCTL_STATUS_TIMEOUT_MS): PrlctlVmListItem[] {
   return JSON.parse(
     run("prlctl", ["list", "--all", "--json"], {

@@ -45,11 +45,12 @@ import {
 import { MacosGuest } from "./guest-transports.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { MacosDiscordSmoke } from "./macos-discord.ts";
-import { waitForVmStatus } from "./parallels-vm.ts";
+import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 
 interface MacosOptions {
   vmName: string;
+  vmNameExplicit: boolean;
   snapshotHint: string;
   mode: Mode;
   provider: Provider;
@@ -129,6 +130,7 @@ const defaultOptions = (): MacosOptions => ({
   snapshotHint: "macOS 26.5 latest",
   targetPackageSpec: "",
   vmName: "macOS Tahoe",
+  vmNameExplicit: false,
 });
 
 function usage(): string {
@@ -170,6 +172,7 @@ export function parseArgs(argv: string[]): MacosOptions {
         break parseArgv;
       case "--vm":
         options.vmName = ensureValue(args, i, arg);
+        options.vmNameExplicit = true;
         i++;
         break;
       case "--snapshot-hint":
@@ -309,6 +312,7 @@ class MacosSmoke {
   }
 
   async run(): Promise<void> {
+    this.options.vmName = resolveMacosVmName(this.options.vmName, this.options.vmNameExplicit);
     this.runDir = await makeTempDir("openclaw-parallels-macos.");
     this.phases = new PhaseRunner(this.runDir);
     this.guest = new MacosGuest(
