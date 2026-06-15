@@ -28,6 +28,24 @@ describe("resolveReplyRoutingDecision", () => {
     });
   });
 
+  it("routes webchat provider replies when the surface carries external origin metadata", () => {
+    expect(
+      resolveReplyRoutingDecision({
+        provider: "webchat",
+        surface: "telegram",
+        originatingChannel: "telegram",
+        originatingTo: "telegram:123",
+        isRoutableChannel,
+      }),
+    ).toEqual({
+      originatingChannel: "telegram",
+      currentSurface: "webchat",
+      isInternalWebchatTurn: false,
+      shouldRouteToOriginating: true,
+      shouldSuppressTyping: true,
+    });
+  });
+
   it("does not route external replies from internal webchat without explicit delivery", () => {
     expect(
       resolveReplyRoutingDecision({
@@ -42,6 +60,43 @@ describe("resolveReplyRoutingDecision", () => {
       originatingChannel: "telegram",
       currentSurface: "webchat",
       isInternalWebchatTurn: true,
+      shouldRouteToOriginating: false,
+      shouldSuppressTyping: false,
+    });
+  });
+
+  it("routes external replies from internal webchat when explicit delivery is set", () => {
+    expect(
+      resolveReplyRoutingDecision({
+        provider: "webchat",
+        surface: "webchat",
+        explicitDeliverRoute: true,
+        originatingChannel: "imessage",
+        originatingTo: "imessage:+15550001111",
+        isRoutableChannel,
+      }),
+    ).toEqual({
+      originatingChannel: "imessage",
+      currentSurface: "webchat",
+      isInternalWebchatTurn: false,
+      shouldRouteToOriginating: true,
+      shouldSuppressTyping: true,
+    });
+  });
+
+  it("does not route when the current provider already matches the origin", () => {
+    expect(
+      resolveReplyRoutingDecision({
+        provider: "telegram",
+        surface: "webchat",
+        originatingChannel: "telegram",
+        originatingTo: "telegram:123",
+        isRoutableChannel,
+      }),
+    ).toEqual({
+      originatingChannel: "telegram",
+      currentSurface: "telegram",
+      isInternalWebchatTurn: false,
       shouldRouteToOriginating: false,
       shouldSuppressTyping: false,
     });

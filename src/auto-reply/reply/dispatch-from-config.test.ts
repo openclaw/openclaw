@@ -1960,25 +1960,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(routeCall?.threadId).toBeUndefined();
   });
 
-  it("forces suppressTyping when routing to a different originating channel", async () => {
-    setNoAbort();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-    });
-
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.suppressTyping).toBe(true);
-      expect(opts?.typingPolicy).toBe("system_event");
-      return { text: "hi" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-  });
-
   it("forces suppressTyping for internal webchat turns", async () => {
     setNoAbort();
     const cfg = emptyConfig;
@@ -1997,27 +1978,6 @@ describe("dispatchReplyFromConfig", () => {
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-  });
-
-  it("routes when provider is webchat but surface carries originating channel metadata", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-    });
-
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as { channel?: unknown; to?: unknown } | undefined;
-    expect(routeCall?.channel).toBe("telegram");
-    expect(routeCall?.to).toBe("telegram:999");
   });
 
   it("routes Feishu replies when provider is webchat and origin metadata points to Feishu", async () => {
@@ -2039,117 +1999,6 @@ describe("dispatchReplyFromConfig", () => {
     const routeCall = firstRouteReplyCall() as { channel?: unknown; to?: unknown } | undefined;
     expect(routeCall?.channel).toBe("feishu");
     expect(routeCall?.to).toBe("ou_feishu_direct_123");
-  });
-
-  it("does not route when provider already matches originating channel", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "webchat",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-    });
-
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not route external origin replies when current surface is internal webchat without explicit delivery", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:+15550001111",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      _opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("routes external origin replies for internal webchat turns when explicit delivery is set", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:+15550001111",
-      ExplicitDeliverRoute: true,
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      _opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | { channel?: unknown; policyConversationType?: unknown; to?: unknown }
-      | undefined;
-    expect(routeCall?.channel).toBe("imessage");
-    expect(routeCall?.policyConversationType).toBe("direct");
-    expect(routeCall?.to).toBe("imessage:+15550001111");
-  });
-
-  it("routes media-only tool results when summaries are suppressed", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      ChatType: "group",
-      AccountId: "acc-1",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      const onToolResult = requireToolResultHandler(opts?.onToolResult);
-      await onToolResult({
-        text: "NO_REPLY",
-        mediaUrls: ["https://example.com/tts-routed.opus"],
-      });
-      return undefined;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
-      .calls[0]?.[0] as { cfg?: unknown; messageProvider?: unknown } | undefined;
-    expect(normalizerOptions?.cfg).toBe(cfg);
-    expect(normalizerOptions?.messageProvider).toBe("telegram");
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
-    const routed = firstRouteReplyCall() as { payload?: ReplyPayload } | undefined;
-    expect(routed?.payload?.mediaUrls).toEqual(["https://example.com/tts-routed.opus"]);
-    expect(routed?.payload?.text).toBeUndefined();
   });
 
   it("provides onToolResult in DM sessions", async () => {
@@ -5435,38 +5284,6 @@ describe("dispatchReplyFromConfig", () => {
     } finally {
       await reporter.stop();
     }
-  });
-
-  it("deduplicates same-agent inbound replies across main and direct session keys", async () => {
-    setNoAbort();
-    const cfg = emptyConfig;
-    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
-    const baseCtx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:7463849194",
-      MessageSid: "msg-1",
-      SessionKey: "agent:main:main",
-    });
-
-    await dispatchReplyFromConfig({
-      ctx: baseCtx,
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-    await dispatchReplyFromConfig({
-      ctx: {
-        ...baseCtx,
-        SessionKey: "agent:main:telegram:direct:7463849194",
-      },
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-
-    expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
   it("emits message_received hook with originating channel metadata", async () => {

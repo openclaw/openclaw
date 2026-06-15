@@ -68,6 +68,30 @@ describe("inbound dedupe", () => {
     );
   });
 
+  it("deduplicates same-agent inbound replies across main and direct session keys", () => {
+    expect(
+      buildInboundDedupeKey({
+        ...sharedInboundContext,
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:7463849194",
+        MessageSid: "msg-1",
+        SessionKey: "agent:main:main",
+      }),
+    ).toBe(
+      buildInboundDedupeKey({
+        ...sharedInboundContext,
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:7463849194",
+        MessageSid: "msg-1",
+        SessionKey: "agent:main:telegram:direct:7463849194",
+      }),
+    );
+  });
+
   it("shares claim/release state across distinct module instances", async () => {
     const expectedKey = buildInboundDedupeKey(sharedInboundContext);
     if (!expectedKey) {
