@@ -208,7 +208,7 @@ export function registerOnboardCommand(
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
-        installDaemon: Boolean(opts.installDaemon),
+        installDaemon: opts.installDaemon as boolean | undefined,
       });
       const gatewayPort = parsePort(opts.gatewayPort);
       const flow = (opts.flow ??

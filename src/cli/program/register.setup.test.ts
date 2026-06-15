@@ -45,6 +45,7 @@ describe("registerSetupCommand", () => {
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastWizardOptions()?.installDaemon).toBeUndefined();
   });
 
   it("keeps --wizard as a compatibility flag", async () => {
