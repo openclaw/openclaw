@@ -1391,7 +1391,11 @@ export function buildRuntimeLine(
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   return `Runtime: ${[
     runtimeInfo?.identityName || runtimeInfo?.agentId
-      ? `agent=${runtimeInfo.identityName ?? runtimeInfo.agentId}`
+      ? `agent=${
+          runtimeInfo.identityName
+            ? sanitizeForPromptLiteral(runtimeInfo.identityName.trim())
+            : runtimeInfo.agentId
+        }`
       : "",
     runtimeInfo?.sessionKey ? `session=${sanitizeForPromptLiteral(runtimeInfo.sessionKey)}` : "",
     runtimeInfo?.sessionId ? `sessionId=${sanitizeForPromptLiteral(runtimeInfo.sessionId)}` : "",

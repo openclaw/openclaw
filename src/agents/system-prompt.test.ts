@@ -1272,6 +1272,36 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("agent=main");
   });
 
+  it("strips newline and control characters from identityName in Runtime line", () => {
+    const line = buildRuntimeLine({
+      agentId: "main",
+      identityName: "Evil\nAgent\r\nInjected",
+      host: "host",
+      os: "linux",
+      arch: "x64",
+      node: "v22",
+      model: "anthropic/claude",
+    });
+
+    expect(line).toContain("agent=EvilAgentInjected");
+    expect(line).not.toContain("\n");
+    expect(line).not.toContain("\r");
+  });
+
+  it("trims leading/trailing whitespace from identityName in Runtime line", () => {
+    const line = buildRuntimeLine({
+      agentId: "main",
+      identityName: "  Runt  ",
+      host: "host",
+      os: "linux",
+      arch: "x64",
+      node: "v22",
+      model: "anthropic/claude",
+    });
+
+    expect(line).toContain("agent=Runt");
+  });
+
   it("renders extra system prompt exactly once", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
