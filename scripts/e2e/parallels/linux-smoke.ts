@@ -36,7 +36,7 @@ import {
   type SnapshotInfo,
 } from "./common.ts";
 import { LinuxGuest } from "./guest-transports.ts";
-import { resolveUbuntuVmName, waitForVmStatus } from "./parallels-vm.ts";
+import { ensureVmRunning, resolveUbuntuVmName } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
   buildCommonSmokeSummary,
@@ -423,16 +423,10 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
       quiet: true,
       timeoutMs: this.remainingPhaseTimeoutMs(),
     });
-    if (this.snapshot.state === "poweroff") {
-      waitForVmStatus(this.options.vmName, "stopped", 180, {
-        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
-      });
-      say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
-      });
-    }
+    ensureVmRunning(this.options.vmName, 180, {
+      probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      transitionTimeoutMs: () => this.remainingPhaseTimeoutMs(120_000),
+    });
     this.waitForGuestReady();
   }
 

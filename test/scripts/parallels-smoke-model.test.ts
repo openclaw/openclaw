@@ -24,6 +24,7 @@ import {
   resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth as resolveProviderAuthDirect,
   resolveSnapshot,
+  ensureVmRunning,
   shouldSkipSnapshotRestore,
   resolveUbuntuVmName,
   resolveWindowsProviderAuth,
@@ -601,6 +602,56 @@ if (isPrlctl) {
       const output = withEnv(fakePrlctlEnv(tempDir), () => resolveUbuntuVmName("Ubuntu missing"));
 
       expect(output).toBe("Ubuntu 26.04");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("resumes suspended Parallels VMs", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-resume-"));
+    const statePath = join(tempDir, "state");
+    writeFileSync(statePath, "suspended");
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+state_path="${statePath}"
+if [[ "$1" == "list" ]]; then
+  printf '[{"name":"Suspended VM","status":"%s"}]\n' "$(cat "$state_path")"
+  exit 0
+fi
+if [[ "$1" == "resume" && "$2" == "Suspended VM" ]]; then
+  printf 'running' >"$state_path"
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  const args = process.argv.slice(1);
+  if (args.includes("list")) {
+    console.log(JSON.stringify([{ name: "Suspended VM", status: readFileSync(${JSON.stringify(statePath)}, "utf8") }]));
+    process.exit(0);
+  }
+  if (args.includes("resume")) {
+    writeFileSync(${JSON.stringify(statePath)}, "running");
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+    const sleepPath = join(tempDir, "sleep");
+    writeFileSync(sleepPath, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(sleepPath, 0o755);
+
+    try {
+      withEnv(fakePrlctlEnv(tempDir), () => ensureVmRunning("Suspended VM"));
+      expect(readFileSync(statePath, "utf8")).toBe("running");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
