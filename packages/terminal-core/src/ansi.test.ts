@@ -60,4 +60,13 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("[31m表文[0m", 1)).toBe("[31m[0m");
     expect(visibleWidth(truncateToVisibleWidth("[31m表文[0m", 1))).toBe(0);
   });
+
+  it("reuses the ANSI scanner across truncation calls", () => {
+    expect(truncateToVisibleWidth("\u001B[31mabc\u001B[0m", 2)).toBe("\u001B[31mab\u001B[0m");
+    expect(truncateToVisibleWidth("plain", 3)).toBe("pla");
+    expect(
+      truncateToVisibleWidth("\u001B]8;;https://openclaw.ai\u001B\\link\u001B]8;;\u001B\\", 2),
+    ).toBe("\u001B]8;;https://openclaw.ai\u001B\\li\u001B]8;;\u001B\\");
+    expect(truncateToVisibleWidth("\u001B[32mxy\u001B[0m", 1)).toBe("\u001B[32mx\u001B[0m");
+  });
 });

@@ -2,6 +2,11 @@
 import type { Command } from "commander";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { collectString } from "./cli-options.js";
+import type {
+  QaLabSelfCheckCommandOptions,
+  QaProfileCommandOptions,
+  QaSuiteCommandOptions,
+} from "./cli.runtime.js";
 import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
 import { registerMantisCli } from "./mantis/cli.js";
 import {
@@ -17,6 +22,57 @@ import type { QaProviderMode, QaProviderModeInput } from "./run-config.js";
 import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
+
+type QaScenarioRunCliOptions = {
+  repoRoot?: QaSuiteCommandOptions["repoRoot"];
+  outputDir?: QaSuiteCommandOptions["outputDir"];
+  transport?: QaSuiteCommandOptions["transportId"];
+  providerMode?: QaSuiteCommandOptions["providerMode"];
+  model?: QaSuiteCommandOptions["primaryModel"];
+  altModel?: QaSuiteCommandOptions["alternateModel"];
+  concurrency?: QaSuiteCommandOptions["concurrency"];
+  allowFailures?: QaSuiteCommandOptions["allowFailures"];
+  fast?: QaSuiteCommandOptions["fastMode"];
+};
+
+type QaRunCliOptions = QaLabSelfCheckCommandOptions &
+  QaScenarioRunCliOptions & {
+    qaProfile?: QaProfileCommandOptions["profile"];
+    surface?: QaProfileCommandOptions["surface"];
+    category?: QaProfileCommandOptions["category"];
+  };
+
+const QA_RUN_PROFILE_ONLY_OPTIONS = [
+  { optionName: "outputDir", flag: "--output-dir" },
+  { optionName: "surface", flag: "--surface" },
+  { optionName: "category", flag: "--category" },
+  { optionName: "transport", flag: "--transport" },
+  { optionName: "providerMode", flag: "--provider-mode" },
+  { optionName: "model", flag: "--model" },
+  { optionName: "altModel", flag: "--alt-model" },
+  { optionName: "concurrency", flag: "--concurrency" },
+  { optionName: "allowFailures", flag: "--allow-failures" },
+  { optionName: "fast", flag: "--fast" },
+] as const;
+
+const QA_RUN_SELF_CHECK_ONLY_OPTIONS = [{ optionName: "output", flag: "--output" }] as const;
+
+type QaSuiteCliOptions = QaScenarioRunCliOptions & {
+  runner?: QaSuiteCommandOptions["runner"];
+  thinking?: QaSuiteCommandOptions["thinking"];
+  cliAuthMode?: QaSuiteCommandOptions["cliAuthMode"];
+  parityPack?: QaSuiteCommandOptions["parityPack"];
+  pack?: QaSuiteCommandOptions["pack"];
+  scenario?: QaSuiteCommandOptions["scenarioIds"];
+  enablePlugin?: QaSuiteCommandOptions["enabledPluginIds"];
+  image?: QaSuiteCommandOptions["image"];
+  cpus?: QaSuiteCommandOptions["cpus"];
+  memory?: QaSuiteCommandOptions["memory"];
+  disk?: QaSuiteCommandOptions["disk"];
+  preflight?: QaSuiteCommandOptions["preflight"];
+  runtimePair?: QaSuiteCommandOptions["runtimePair"];
+  runtimeParityTier?: QaSuiteCommandOptions["runtimeParityTier"];
+};
 
 let qaLabCliRuntimePromise: Promise<QaLabCliRuntime> | null = null;
 
@@ -41,36 +97,54 @@ function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
   return parsed;
 }
 
-async function runQaSelfCheck(opts: { repoRoot?: string; output?: string }) {
+function collectCliSuppliedQaRunFlags(
+  command: Command,
+  options: readonly { optionName: string; flag: string }[],
+): string[] {
+  return options
+    .filter((option) => command.getOptionValueSource(option.optionName) === "cli")
+    .map((option) => option.flag);
+}
+
+function formatFlagList(flags: readonly string[]): string {
+  return flags.length === 1 ? flags[0] : flags.join(", ");
+}
+
+function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
+  const hasQaProfile = Boolean(opts.qaProfile?.trim());
+  if (command.getOptionValueSource("qaProfile") === "cli" && !hasQaProfile) {
+    throw new Error("--qa-profile must not be empty.");
+  }
+
+  if (hasQaProfile) {
+    const selfCheckFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_SELF_CHECK_ONLY_OPTIONS);
+    if (selfCheckFlags.length > 0) {
+      throw new Error(
+        `qa run ${formatFlagList(selfCheckFlags)} is only valid for the self-check mode without --qa-profile.`,
+      );
+    }
+    return;
+  }
+
+  const profileFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_PROFILE_ONLY_OPTIONS);
+  if (profileFlags.length > 0) {
+    throw new Error(
+      `qa run ${formatFlagList(profileFlags)} requires --qa-profile; without --qa-profile, qa run only executes the self-check.`,
+    );
+  }
+}
+
+async function runQaSelfCheck(opts: QaLabSelfCheckCommandOptions) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaLabSelfCheckCommand(opts);
 }
 
-async function runQaSuite(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  transportId?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  thinking?: string;
-  allowFailures?: boolean;
-  enabledPluginIds?: string[];
-  cliAuthMode?: string;
-  parityPack?: string;
-  pack?: string;
-  scenarioIds?: string[];
-  concurrency?: number;
-  runner?: string;
-  image?: string;
-  cpus?: number;
-  memory?: string;
-  disk?: string;
-  preflight?: boolean;
-  runtimePair?: string;
-  runtimeParityTier?: string[];
-}) {
+async function runQaProfile(opts: QaProfileCommandOptions) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaProfileCommand(opts);
+}
+
+async function runQaSuiteCliCommand(opts: QaSuiteCommandOptions) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
 }
@@ -290,8 +364,46 @@ export function registerQaLabCli(program: Command) {
     .description("Run the bundled QA self-check and write a Markdown report")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output <path>", "Report output path")
-    .action(async (opts: { repoRoot?: string; output?: string }) => {
-      await runQaSelfCheck(opts);
+    .option("--output-dir <path>", "Profile run artifact directory")
+    .option("--qa-profile <id>", "Run the QA profile from taxonomy.yaml")
+    .option("--surface <id>", "Limit --qa-profile to a taxonomy surface id")
+    .option("--category <id>", "Limit --qa-profile to a taxonomy category id")
+    .option("--transport <id>", "QA transport id", "qa-channel")
+    .option("--provider-mode <mode>", formatQaProviderModeHelp())
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--concurrency"),
+    )
+    .option(
+      "--allow-failures",
+      "Write artifacts without setting a failing exit code when scenarios fail",
+      false,
+    )
+    .option("--fast", "Enable provider fast mode where supported", false)
+    .action(async (opts: QaRunCliOptions, command: Command) => {
+      validateQaRunMode(opts, command);
+      if (opts.qaProfile?.trim()) {
+        await runQaProfile({
+          repoRoot: opts.repoRoot,
+          outputDir: opts.outputDir,
+          profile: opts.qaProfile,
+          surface: opts.surface,
+          category: opts.category,
+          transportId: opts.transport,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          concurrency: opts.concurrency,
+          allowFailures: opts.allowFailures,
+          fastMode: opts.fast,
+        });
+        return;
+      }
+      await runQaSelfCheck({
+        repoRoot: opts.repoRoot,
+        output: opts.output,
+      });
     });
 
   qa.command("suite")
@@ -300,7 +412,7 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
-    .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
+    .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option(
@@ -346,59 +458,33 @@ export function registerQaLabCli(program: Command) {
       collectString,
       [],
     )
-    .action(
-      async (opts: {
-        repoRoot?: string;
-        outputDir?: string;
-        transport?: string;
-        runner?: string;
-        providerMode?: QaProviderModeInput;
-        model?: string;
-        altModel?: string;
-        cliAuthMode?: string;
-        parityPack?: string;
-        pack?: string;
-        scenario?: string[];
-        enablePlugin?: string[];
-        concurrency?: number;
-        allowFailures?: boolean;
-        fast?: boolean;
-        thinking?: string;
-        image?: string;
-        cpus?: number;
-        memory?: string;
-        disk?: string;
-        preflight?: boolean;
-        runtimePair?: string;
-        runtimeParityTier?: string[];
-      }) => {
-        await runQaSuite({
-          repoRoot: opts.repoRoot,
-          outputDir: opts.outputDir,
-          transportId: opts.transport,
-          runner: opts.runner,
-          providerMode: opts.providerMode,
-          primaryModel: opts.model,
-          alternateModel: opts.altModel,
-          fastMode: opts.fast,
-          thinking: opts.thinking,
-          cliAuthMode: opts.cliAuthMode,
-          parityPack: opts.parityPack,
-          pack: opts.pack,
-          scenarioIds: opts.scenario,
-          enabledPluginIds: opts.enablePlugin,
-          concurrency: opts.concurrency,
-          allowFailures: opts.allowFailures,
-          image: opts.image,
-          cpus: opts.cpus,
-          memory: opts.memory,
-          disk: opts.disk,
-          preflight: opts.preflight,
-          runtimePair: opts.runtimePair,
-          runtimeParityTier: opts.runtimeParityTier,
-        });
-      },
-    );
+    .action(async (opts: QaSuiteCliOptions) => {
+      await runQaSuiteCliCommand({
+        repoRoot: opts.repoRoot,
+        outputDir: opts.outputDir,
+        transportId: opts.transport,
+        runner: opts.runner,
+        providerMode: opts.providerMode,
+        primaryModel: opts.model,
+        alternateModel: opts.altModel,
+        fastMode: opts.fast,
+        thinking: opts.thinking,
+        cliAuthMode: opts.cliAuthMode,
+        parityPack: opts.parityPack,
+        pack: opts.pack,
+        scenarioIds: opts.scenario,
+        enabledPluginIds: opts.enablePlugin,
+        concurrency: opts.concurrency,
+        allowFailures: opts.allowFailures,
+        image: opts.image,
+        cpus: opts.cpus,
+        memory: opts.memory,
+        disk: opts.disk,
+        preflight: opts.preflight,
+        runtimePair: opts.runtimePair,
+        runtimeParityTier: opts.runtimeParityTier,
+      });
+    });
 
   qa.command("parity-report")
     .description("Write either a model-axis parity gate report or a runtime-axis parity report")
@@ -436,7 +522,7 @@ export function registerQaLabCli(program: Command) {
     );
 
   qa.command("coverage")
-    .description("Print the markdown QA coverage inventory")
+    .description("Print the YAML QA coverage inventory")
     .option("--repo-root <path>", "Repository root to target when writing --output")
     .option("--output <path>", "Write the coverage inventory to this path")
     .option("--json", "Print JSON instead of Markdown", false)
@@ -444,7 +530,7 @@ export function registerQaLabCli(program: Command) {
     .option("--summary <path>", "Runtime qa-suite-summary.json to overlay on --tools coverage")
     .option(
       "--match <query>",
-      "Search scenario metadata and print matching qa suite targets (repeatable)",
+      "Search scenario metadata and print matching scenario refs (repeatable)",
       collectString,
       [],
     )

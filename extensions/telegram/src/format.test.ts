@@ -55,6 +55,13 @@ describe("markdownToTelegramHtml", () => {
     ).toBe(input);
   });
 
+  it("preserves Telegram expandable blockquote HTML", () => {
+    const input = "<blockquote expandable>hidden details</blockquote>";
+
+    expect(markdownToTelegramHtml(input)).toBe(input);
+    expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
+  });
+
   it("does not promote Telegram HTML tags inside code", () => {
     expect(markdownToTelegramHtml("`<b>literal</b>`")).toBe(
       "<code>&lt;b&gt;literal&lt;/b&gt;</code>",
@@ -66,6 +73,9 @@ describe("markdownToTelegramHtml", () => {
 
   it("keeps unsupported Telegram HTML variants escaped", () => {
     expect(markdownToTelegramHtml('<b class="x">bad</b>')).toBe('&lt;b class="x"&gt;bad&lt;/b&gt;');
+    expect(markdownToTelegramHtml('<blockquote cite="x">bad</blockquote>')).toBe(
+      '&lt;blockquote cite="x"&gt;bad&lt;/blockquote&gt;',
+    );
     expect(renderTelegramHtmlText('<b class="x">bad</b>', { textMode: "html" })).toBe(
       '&lt;b class="x"&gt;bad&lt;/b&gt;',
     );

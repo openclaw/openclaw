@@ -592,6 +592,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       /** When set, only these chunk sources are considered (must be enabled for this manager). */
       sources?: MemorySource[];
+      /** Caller-owned cancellation; aborts in-flight embedding work when the caller stops waiting. */
+      signal?: AbortSignal;
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
@@ -758,8 +760,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     let queryVec: number[];
     try {
-      queryVec = await this.embedQueryWithRetry(cleaned);
+      queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal);
     } catch (err) {
+      // An aborted caller already stopped waiting; skip fallback-provider
+      // activation so the abandoned search stops instead of re-embedding.
+      if (opts?.signal?.aborted) {
+        throw err;
+      }
       const message = formatErrorMessage(err);
       const activatedFallback = this.shouldFallbackOnError(err)
         ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
@@ -778,7 +785,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           return [];
         }
         keywordResults = await loadKeywordResults();
-        queryVec = await this.embedQueryWithRetry(cleaned);
+        queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal);
       } else if (!this.provider && this.fts.enabled && this.fts.available) {
         log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
         return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
@@ -876,6 +883,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       db: this.db,
       vectorTable: VECTOR_TABLE,
       providerModel: this.provider.model,
+      providerModelAliases: this.resolveProviderIndexIdentities()
+        .slice(1)
+        .map((identity) => identity.model),
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
@@ -900,12 +910,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return [];
     }
     const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
-    // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
-    const providerModel = this.provider?.model;
     const results = await searchKeyword({
       db: this.db,
       ftsTable: FTS_TABLE,
-      providerModel,
       query,
       ftsTokenizer: this.settings.store.fts.tokenizer,
       limit,

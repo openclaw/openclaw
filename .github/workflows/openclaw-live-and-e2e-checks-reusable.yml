@@ -420,6 +420,7 @@ jobs:
               add_suite live-cache
 
               add_profile_suite native-live-src-agents "stable full"
+              add_profile_suite native-live-src-agents-zai-coding "stable full"
               add_profile_suite native-live-src-gateway-core "beta minimum stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic "stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic-smoke "stable"
@@ -1497,37 +1498,72 @@ jobs:
 
       - name: Setup Docker builder
         if: steps.image_exists.outputs.needs_build == '1'
-        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
       - name: Build and push bare Docker E2E image
         if: steps.plan.outputs.needs_bare_image == '1' && steps.image_exists.outputs.bare_exists != '1'
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
-        with:
-          context: .
-          file: ./scripts/e2e/Dockerfile
-          target: bare
-          platforms: linux/amd64
-          tags: ${{ steps.image.outputs.bare_image }}
-          sbom: true
-          provenance: mode=max
-          push: true
+        shell: bash
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.bare_image }}
+        run: |
+          set -euo pipefail
+          build_cmd=(
+            docker buildx build
+            --file ./scripts/e2e/Dockerfile
+            --target bare
+            --platform linux/amd64
+            --tag "$IMAGE_REF"
+            --sbom=true
+            --provenance=mode=max
+            --push
+            .
+          )
+          for attempt in 1 2 3 4; do
+            if "${build_cmd[@]}"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "4" ]]; then
+              echo "::error::Failed to build Docker E2E bare image after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 20))
+            echo "Docker E2E bare image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "$sleep_seconds"
+          done
 
       - name: Build and push functional Docker E2E image
         if: steps.plan.outputs.needs_functional_image == '1' && steps.image_exists.outputs.functional_exists != '1'
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
-        with:
-          context: .
-          file: ./scripts/e2e/Dockerfile
-          target: functional
-          build-contexts: |
-            openclaw_package=.artifacts/docker-e2e-package
-          platforms: linux/amd64
-          tags: ${{ steps.image.outputs.functional_image }}
-          sbom: true
-          provenance: mode=max
-          push: true
+        shell: bash
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.functional_image }}
+        run: |
+          set -euo pipefail
+          build_cmd=(
+            docker buildx build
+            --file ./scripts/e2e/Dockerfile
+            --target functional
+            --build-context openclaw_package=.artifacts/docker-e2e-package
+            --platform linux/amd64
+            --tag "$IMAGE_REF"
+            --sbom=true
+            --provenance=mode=max
+            --push
+            .
+          )
+          for attempt in 1 2 3 4; do
+            if "${build_cmd[@]}"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "4" ]]; then
+              echo "::error::Failed to build Docker E2E functional image after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 20))
+            echo "Docker E2E functional image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "$sleep_seconds"
+          done
 
   prepare_live_test_image:
     needs: validate_selected_ref
@@ -1558,8 +1594,11 @@ jobs:
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}"
+          live_image_extensions="matrix,acpx"
+          live_image_tag_suffix="${live_image_extensions//,/-}"
+          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
           echo "live_image=${live_image}" >> "$GITHUB_OUTPUT"
+          echo "live_image_extensions=${live_image_extensions}" >> "$GITHUB_OUTPUT"
           echo "Shared live-test image: \`${live_image}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
@@ -1582,7 +1621,7 @@ jobs:
 
       - name: Setup Docker builder
         if: steps.image_exists.outputs.exists != '1'
-        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
@@ -1594,7 +1633,7 @@ jobs:
           file: ./Dockerfile
           target: build
           build-args: |
-            OPENCLAW_EXTENSIONS=matrix
+            OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}
           platforms: linux/amd64
           tags: ${{ steps.image.outputs.live_image }}
           sbom: true
@@ -1710,6 +1749,7 @@ jobs:
             anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
             google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
             minimax) require_any MiniMax MINIMAX_API_KEY ;;
+            moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
             openai) require_any OpenAI OPENAI_API_KEY ;;
             opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
             openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
@@ -1798,7 +1838,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          all_providers=(anthropic google minimax openai opencode-go openrouter xai zai fireworks)
+          all_providers=(anthropic google minimax moonshot openai opencode-go openrouter xai zai fireworks)
 
           normalize_provider() {
             local value="${1,,}"
@@ -1884,6 +1924,7 @@ jobs:
               anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
               google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
               minimax) require_any MiniMax MINIMAX_API_KEY ;;
+              moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
               openai) require_any OpenAI OPENAI_API_KEY ;;
               opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
               openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
@@ -1914,6 +1955,12 @@ jobs:
             label: Native live agents
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 60
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: native-live-src-agents-zai-coding
+            label: Native live Z.AI Coding Plan
+            command: ZAI_CODING_LIVE_TEST=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents-zai-coding
+            timeout_minutes: 15
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-core

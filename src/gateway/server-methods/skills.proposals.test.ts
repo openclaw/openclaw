@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
+  resetConfigRuntimeState: () => undefined,
   writeConfigFile: vi.fn(),
 }));
 

@@ -93,6 +93,7 @@ export async function tryDispatchAcpReplyHook(
     originatingTo: event.originatingTo,
     originatingAccountId: event.originatingAccountId,
     originatingThreadId: event.originatingThreadId,
+    originatingChatType: event.originatingChatType,
     shouldSendToolSummaries: event.shouldSendToolSummaries,
     shouldSendToolSummariesNow: () => event.shouldSendToolSummaries,
     bypassForCommand,

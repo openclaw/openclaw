@@ -411,6 +411,41 @@ describe("script-specific dev tooling hardening", () => {
     expect(destroy).toHaveBeenCalled();
   });
 
+  it("reads only the bounded Anthropic prompt probe gateway log tail", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-log-"));
+    tempDirs.push(tempRoot);
+    const logPath = path.join(tempRoot, "gateway.log");
+    const token = "sk-test1234567890abcdefghijklmnop"; // pragma: allowlist secret
+    await fs.writeFile(
+      logPath,
+      [
+        `DO_NOT_PRINT_OLD_GATEWAY_LOG OPENAI_API_KEY=${token}`,
+        "x".repeat(256),
+        `recent gateway tail Authorization: Bearer ${token}`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const tail = await promptProbeTesting.readLogTail(logPath, 128);
+
+    expect(tail).toContain("recent gateway tail");
+    expect(tail).not.toContain("DO_NOT_PRINT_OLD_GATEWAY_LOG");
+    expect(tail).not.toContain(token);
+  });
+
+  it("drops partial Anthropic prompt probe log lines before redaction", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-log-"));
+    tempDirs.push(tempRoot);
+    const logPath = path.join(tempRoot, "gateway.log");
+    const token = `sk-test${"a".repeat(80)}`; // pragma: allowlist secret
+    await fs.writeFile(logPath, `Authorization: Bearer ${token}\nrecent gateway tail`, "utf8");
+
+    const tail = await promptProbeTesting.readLogTail(logPath, "recent gateway tail".length + 24);
+
+    expect(tail).toBe("recent gateway tail");
+    expect(tail).not.toContain(token.slice(-16));
+  });
+
   it("cleans Anthropic prompt probe temp dirs unless explicitly kept", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));
     const keepRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));

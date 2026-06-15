@@ -174,6 +174,14 @@ NODE
     "$timeout_bin" "$timeout_value" "$@"
   fi
 }
+openclaw_e2e_print_log() {
+  local path="$1"
+  local max_bytes="${OPENCLAW_E2E_LOG_TAIL_BYTES:-262144}"
+  local max_lines="${OPENCLAW_E2E_LOG_TAIL_LINES:-120}"
+  [ -f "$path" ] || return 0
+  echo "--- $path ---"
+  tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true
+}
 openclaw_e2e_install_package() {
   local log_file="$1"
   local label="${2:-mounted OpenClaw package}"
@@ -203,9 +211,7 @@ openclaw_e2e_install_package() {
     fi
     echo "npm install failed for $label" >&2
     if [ -f "$log_file" ]; then
-      while IFS= read -r line || [ -n "$line" ]; do
-        printf '%s\n' "$line" >&2
-      done <"$log_file"
+      openclaw_e2e_print_log "$log_file" >&2
     fi
     exit 1
   fi
@@ -470,7 +476,7 @@ openclaw_e2e_run_logged() {
   log_path="$(mktemp "$log_root/openclaw-${safe_label}.XXXXXX.log")"
   OPENCLAW_E2E_LAST_LOG_PATH="$log_path"
   export OPENCLAW_E2E_LAST_LOG_PATH
-  openclaw_e2e_run_command "$@" >"$log_path" 2>&1 || { cat "$log_path"; exit 1; }
+  openclaw_e2e_run_command "$@" >"$log_path" 2>&1 || { openclaw_e2e_print_log "$log_path"; exit 1; }
 }
 openclaw_e2e_run_command() {
   local timeout_value="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
@@ -490,7 +496,6 @@ openclaw_e2e_enable_openclaw_cli_timeout() {
 openclaw_e2e_dump_logs() {
   local path
   for path in "$@"; do
-    [ -f "$path" ] || continue
-    echo "--- $path ---"; tail -n "${OPENCLAW_E2E_LOG_TAIL_LINES:-120}" "$path" || true
+    openclaw_e2e_print_log "$path"
   done
 }

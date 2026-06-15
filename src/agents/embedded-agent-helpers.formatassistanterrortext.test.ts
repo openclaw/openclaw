@@ -245,6 +245,16 @@ describe("formatAssistantErrorText", () => {
     });
     expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
   });
+  it("returns billing guidance for Volcengine Coding Plan subscription failures", () => {
+    const msg = makeAssistantError(
+      'HTTP 400 Bad Request: {"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "volcengine-plan",
+      model: "ark-code-latest",
+    });
+    expect(result).toBe(formatBillingErrorMessage("volcengine-plan", "ark-code-latest"));
+  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
@@ -559,6 +569,23 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
       "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+  });
+
+  it("uses structured error body detail for model-not-found copy", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "400 Param Incorrect",
+      errorCode: "400",
+      errorBody:
+        '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+      content: [],
+    });
+
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "The selected model was not found by the provider. Check the model id or choose a different model.",
     );
   });
 });

@@ -7,6 +7,7 @@ import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   installVitestNoOutputWatchdog,
   resolveDefaultVitestNoOutputTimeoutMs,
@@ -177,6 +178,15 @@ describe("scripts/run-vitest", () => {
       "--config",
       "test/vitest/vitest.tooling.config.ts",
       "test/scripts/run-vitest.test.ts",
+    ]);
+  });
+
+  it("routes explicit Docker helper tests through the Docker tooling config", () => {
+    expect(resolveImplicitVitestArgs(["run", "test/scripts/docker-build-helper.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.tooling-docker.config.ts",
+      "test/scripts/docker-build-helper.test.ts",
     ]);
   });
 
@@ -464,6 +474,7 @@ describe("scripts/run-vitest", () => {
 
   it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {
     const timeout = String(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    const extraLongTimeout = String(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
 
     for (const configArg of [
       "--config=test/vitest/vitest.e2e.config.ts",
@@ -476,6 +487,17 @@ describe("scripts/run-vitest", () => {
         PATH: "/usr/bin",
         OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+      });
+    }
+    for (const configArg of [
+      "--config=test/vitest/vitest.contracts-plugin.config.ts",
+      "--config=test/vitest/vitest.infra.config.ts",
+      "--config=test/vitest/vitest.gateway-core.config.ts",
+    ]) {
+      expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", configArg])).toEqual({
+        PATH: "/usr/bin",
+        OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: extraLongTimeout,
       });
     }
     expect(
@@ -506,6 +528,27 @@ describe("scripts/run-vitest", () => {
         "/repo/test/vitest/vitest.full-core-contracts.config.ts",
       ]),
     ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.contracts-plugin.config.ts",
+      ]),
+    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.infra.config.ts",
+      ]),
+    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.gateway-core.config.ts",
+      ]),
+    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
   });
 
   it("does not default implicit interactive runs to the stall watchdog", () => {

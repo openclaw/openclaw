@@ -5,10 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveRestartSentinelPath } from "./restart-sentinel.js";
-import {
-  SUPERVISOR_HINT_ENV_VARS,
-  type RespawnSupervisor,
-} from "./supervisor-markers.js";
+import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
@@ -498,7 +495,7 @@ export async function startManagedServiceUpdateHandoff(params: {
 
 export function buildManagedServiceHandoffUnavailableMessage(command: string): string {
   return [
-    "Package updates cannot safely run inside the live gateway process.",
-    `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host control plane.`,
+    "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
+    `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host UI.`,
   ].join("\n");
 }

@@ -26,7 +26,9 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
+import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import { attachWebInboxToSocket, type WhatsAppGroupMetadataCache } from "../inbound/monitor.js";
+import type { WebInboundMessageInput } from "../inbound/types.js";
 import {
   newConnectionId,
   resolveHeartbeatSeconds,
@@ -42,7 +44,7 @@ import { createWebChannelStatusController } from "./monitor-state.js";
 import { createEchoTracker } from "./monitor/echo.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
-import type { WebInboundMsg, WebMonitorTuning } from "./types.js";
+import type { WebMonitorTuning } from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
 
 function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
@@ -286,17 +288,18 @@ export async function monitorWebChannel(
           accountId: account.accountId,
         }),
       });
-      const shouldDebounce = (msg: WebInboundMsg) => {
-        if (msg.mediaPath || msg.mediaType) {
+      const shouldDebounce = (msg: WebInboundMessageInput) => {
+        const normalized = normalizeWebInboundMessage(msg);
+        if (normalized.payload.media?.path || normalized.payload.media?.type) {
           return false;
         }
-        if (msg.location) {
+        if (normalized.payload.location) {
           return false;
         }
-        if (msg.replyToId || msg.replyToBody) {
+        if (normalized.quote?.id || normalized.quote?.body) {
           return false;
         }
-        return !isControlCommandMessage(msg.body, cfg);
+        return !isControlCommandMessage(normalized.payload.body, cfg);
       };
 
       let connection;
@@ -330,6 +333,7 @@ export async function monitorWebChannel(
               mediaMaxMb: account.mediaMaxMb,
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
+              socketTiming,
               debounceMs: inboundDebounceMs,
               shouldDebounce,
               socketRef: controller.socketRef,
@@ -337,11 +341,12 @@ export async function monitorWebChannel(
               disconnectRetryPolicy: reconnectPolicy,
               disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
               groupMetadataCache,
-              onMessage: async (msg: WebInboundMsg) => {
+              onMessage: async (msg: WebInboundMessageInput) => {
+                const normalized = normalizeWebInboundMessage(msg);
                 const inboundAt = Date.now();
                 controller.noteInbound(inboundAt);
                 statusController.noteInbound(inboundAt);
-                await onMessage(msg);
+                await onMessage(normalized);
               },
               sock,
             })) as ManagedWhatsAppListener;
