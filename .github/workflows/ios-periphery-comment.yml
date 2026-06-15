@@ -73,185 +73,209 @@ jobs:
               return;
             }
 
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner,
               repo,
               run_id: run.id,
+              filter: "latest",
               per_page: 100,
             });
-
-            const artifactName = `ios-periphery-dead-code-${run.id}-${run.run_attempt}`;
-            const artifact = artifacts.find((item) => item.name === artifactName);
-            if (!artifact) {
-              core.warning(`No ${artifactName} artifact found.`);
-              return;
-            }
-            if (artifact.expired) {
-              core.warning(`${artifactName} artifact expired.`);
-              return;
+            const scanJob = jobs.find((job) => job.name === "Scan iOS dead code");
+            const scanSkipped = scanJob?.conclusion === "skipped";
+            if (scanSkipped) {
+              core.info(`Skipping intentionally omitted Periphery scan for PR #${pr.number}.`);
             }
 
-            const maxArchiveBytes = 1024 * 1024;
-            const archiveSize = Number(artifact.size_in_bytes);
-            if (!Number.isSafeInteger(archiveSize) || archiveSize < 0 || archiveSize > maxArchiveBytes) {
-              core.warning(`Skipping ${artifactName}; compressed artifact size ${artifact.size_in_bytes ?? "unknown"} exceeds the ${maxArchiveBytes} byte limit.`);
-              return;
-            }
+            const artifacts = scanSkipped
+              ? []
+              : await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                  owner,
+                  repo,
+                  run_id: run.id,
+                  per_page: 100,
+                });
 
-            const archive = await github.rest.actions.downloadArtifact({
-              owner,
-              repo,
-              artifact_id: artifact.id,
-              archive_format: "zip",
-            });
-
-            const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ios-periphery-"));
-            const archivePath = path.join(dir, "artifact.zip");
-            const archiveBuffer = Buffer.from(archive.data);
-            fs.writeFileSync(archivePath, archiveBuffer);
-
-            const allowedArtifactFiles = new Set([
-              "periphery.json",
-              "periphery.status",
-              "periphery.stderr.log",
-              "periphery.stdout.json",
-              "should-fail.txt",
-            ]);
-            const maxEntries = allowedArtifactFiles.size;
-            const maxEntryBytes = 2 * 1024 * 1024;
-            const maxTotalBytes = 4 * 1024 * 1024;
-
-            const readUInt16 = (offset) => archiveBuffer.readUInt16LE(offset);
-            const readUInt32 = (offset) => archiveBuffer.readUInt32LE(offset);
-            const findEndOfCentralDirectoryOffset = () => {
-              const minimumOffset = Math.max(0, archiveBuffer.length - 0xffff - 22);
-              for (let offset = archiveBuffer.length - 22; offset >= minimumOffset; offset -= 1) {
-                if (readUInt32(offset) === 0x06054b50) {
-                  return offset;
-                }
+            const readReport = async () => {
+              if (scanSkipped) {
+                return;
               }
-              return -1;
-            };
-
-            const endOfCentralDirectoryOffset = findEndOfCentralDirectoryOffset();
-            if (endOfCentralDirectoryOffset < 0) {
-              core.warning(`Skipping ${artifactName}; ZIP end-of-central-directory record was not found.`);
-              return;
-            }
-            const entryCount = readUInt16(endOfCentralDirectoryOffset + 10);
-            const centralDirectorySize = readUInt32(endOfCentralDirectoryOffset + 12);
-            const centralDirectoryOffset = readUInt32(endOfCentralDirectoryOffset + 16);
-            if (entryCount < 1 || entryCount > maxEntries) {
-              core.warning(`Skipping ${artifactName}; artifact has ${entryCount} entries.`);
-              return;
-            }
-            if (
-              centralDirectoryOffset + centralDirectorySize > archiveBuffer.length ||
-              readUInt32(centralDirectoryOffset) !== 0x02014b50
-            ) {
-              core.warning(`Skipping ${artifactName}; invalid ZIP central directory.`);
-              return;
-            }
-
-            const entries = new Map();
-            let totalUncompressedSize = 0;
-            let offset = centralDirectoryOffset;
-            for (let index = 0; index < entryCount; index += 1) {
-              if (offset + 46 > archiveBuffer.length || readUInt32(offset) !== 0x02014b50) {
-                core.warning(`Skipping ${artifactName}; invalid central directory entry.`);
+              const artifactName = `ios-periphery-dead-code-${run.id}-${run.run_attempt}`;
+              const artifact = artifacts.find((item) => item.name === artifactName);
+              if (!artifact) {
+                core.warning(`No ${artifactName} artifact found.`);
+                return;
+              }
+              if (artifact.expired) {
+                core.warning(`${artifactName} artifact expired.`);
                 return;
               }
 
-              const compressionMethod = readUInt16(offset + 10);
-              const generalPurposeBitFlag = readUInt16(offset + 8);
-              const compressedSize = readUInt32(offset + 20);
-              const uncompressedSize = readUInt32(offset + 24);
-              const fileNameLength = readUInt16(offset + 28);
-              const extraLength = readUInt16(offset + 30);
-              const commentLength = readUInt16(offset + 32);
-              const externalAttributes = readUInt32(offset + 38);
-              const nameStart = offset + 46;
-              const nameEnd = nameStart + fileNameLength;
-              const nextOffset = nameEnd + extraLength + commentLength;
-              if (nextOffset > archiveBuffer.length) {
-                core.warning(`Skipping ${artifactName}; central directory entry exceeds archive bounds.`);
+              const maxArchiveBytes = 1024 * 1024;
+              const archiveSize = Number(artifact.size_in_bytes);
+              if (!Number.isSafeInteger(archiveSize) || archiveSize < 0 || archiveSize > maxArchiveBytes) {
+                core.warning(`Skipping ${artifactName}; compressed artifact size ${artifact.size_in_bytes ?? "unknown"} exceeds the ${maxArchiveBytes} byte limit.`);
                 return;
               }
 
-              const name = archiveBuffer.toString("utf8", nameStart, nameEnd);
-              const mode = externalAttributes >>> 16;
-              const fileType = mode & 0o170000;
-              const isRegularFile = fileType === 0 || fileType === 0o100000;
-              const invalidName =
-                !allowedArtifactFiles.has(name) ||
-                name.includes("/") ||
-                name.includes("\\") ||
-                name.includes("..") ||
-                path.isAbsolute(name);
-              if (invalidName) {
-                core.warning(`Skipping ${artifactName}; unexpected artifact entry ${name}.`);
-                return;
-              }
-              if (!isRegularFile || name.endsWith("/")) {
-                core.warning(`Skipping ${artifactName}; ${name} is not a regular file.`);
-                return;
-              }
-              if (entries.has(name)) {
-                core.warning(`Skipping ${artifactName}; duplicate artifact entry ${name}.`);
-                return;
-              }
-              if (![0, 8].includes(compressionMethod)) {
-                core.warning(`Skipping ${artifactName}; ${name} uses unsupported ZIP compression method ${compressionMethod}.`);
-                return;
-              }
-              if ((generalPurposeBitFlag & 0x1) !== 0) {
-                core.warning(`Skipping ${artifactName}; ${name} is encrypted.`);
-                return;
-              }
-              if (compressedSize > maxEntryBytes || uncompressedSize > maxEntryBytes) {
-                core.warning(`Skipping ${artifactName}; ${name} exceeds the per-file size limit.`);
-                return;
-              }
-
-              totalUncompressedSize += uncompressedSize;
-              if (totalUncompressedSize > maxTotalBytes) {
-                core.warning(`Skipping ${artifactName}; artifact exceeds the aggregate size limit.`);
-                return;
-              }
-
-              entries.set(name, { uncompressedSize });
-              offset = nextOffset;
-            }
-
-            const files = new Map();
-            for (const [name, entry] of entries) {
-              const contents = childProcess.execFileSync("unzip", ["-p", archivePath, name], {
-                encoding: "utf8",
-                maxBuffer: Math.max(1, entry.uncompressedSize + 1024),
-                timeout: 5000,
+              const archive = await github.rest.actions.downloadArtifact({
+                owner,
+                repo,
+                artifact_id: artifact.id,
+                archive_format: "zip",
               });
-              if (Buffer.byteLength(contents, "utf8") > maxEntryBytes) {
-                core.warning(`Skipping ${artifactName}; ${name} exceeded the per-file size limit while reading.`);
+
+              const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ios-periphery-"));
+              const archivePath = path.join(dir, "artifact.zip");
+              const archiveBuffer = Buffer.from(archive.data);
+              fs.writeFileSync(archivePath, archiveBuffer);
+
+              const allowedArtifactFiles = new Set([
+                "periphery.json",
+                "periphery.status",
+                "periphery.stderr.log",
+                "periphery.stdout.json",
+                "should-fail.txt",
+              ]);
+              const maxEntries = allowedArtifactFiles.size;
+              const maxEntryBytes = 2 * 1024 * 1024;
+              const maxTotalBytes = 4 * 1024 * 1024;
+
+              const readUInt16 = (offset) => archiveBuffer.readUInt16LE(offset);
+              const readUInt32 = (offset) => archiveBuffer.readUInt32LE(offset);
+              const findEndOfCentralDirectoryOffset = () => {
+                const minimumOffset = Math.max(0, archiveBuffer.length - 0xffff - 22);
+                for (let offset = archiveBuffer.length - 22; offset >= minimumOffset; offset -= 1) {
+                  if (readUInt32(offset) === 0x06054b50) {
+                    return offset;
+                  }
+                }
+                return -1;
+              };
+
+              const endOfCentralDirectoryOffset = findEndOfCentralDirectoryOffset();
+              if (endOfCentralDirectoryOffset < 0) {
+                core.warning(`Skipping ${artifactName}; ZIP end-of-central-directory record was not found.`);
                 return;
               }
-              files.set(name, contents);
-            }
+              const entryCount = readUInt16(endOfCentralDirectoryOffset + 10);
+              const centralDirectorySize = readUInt32(endOfCentralDirectoryOffset + 12);
+              const centralDirectoryOffset = readUInt32(endOfCentralDirectoryOffset + 16);
+              if (entryCount < 1 || entryCount > maxEntries) {
+                core.warning(`Skipping ${artifactName}; artifact has ${entryCount} entries.`);
+                return;
+              }
+              if (
+                centralDirectoryOffset + centralDirectorySize > archiveBuffer.length ||
+                readUInt32(centralDirectoryOffset) !== 0x02014b50
+              ) {
+                core.warning(`Skipping ${artifactName}; invalid ZIP central directory.`);
+                return;
+              }
 
-            const read = (name) => {
-              return files.get(name) ?? "";
-            };
-
-            const status = Number(read("periphery.status").trim() || "1");
-            let findings = null;
-            for (const name of ["periphery.json", "periphery.stdout.json"]) {
-              try {
-                const parsed = JSON.parse(read(name));
-                if (Array.isArray(parsed)) {
-                  findings = parsed;
-                  break;
+              const entries = new Map();
+              let totalUncompressedSize = 0;
+              let offset = centralDirectoryOffset;
+              for (let index = 0; index < entryCount; index += 1) {
+                if (offset + 46 > archiveBuffer.length || readUInt32(offset) !== 0x02014b50) {
+                  core.warning(`Skipping ${artifactName}; invalid central directory entry.`);
+                  return;
                 }
-              } catch {}
-            }
+
+                const compressionMethod = readUInt16(offset + 10);
+                const generalPurposeBitFlag = readUInt16(offset + 8);
+                const compressedSize = readUInt32(offset + 20);
+                const uncompressedSize = readUInt32(offset + 24);
+                const fileNameLength = readUInt16(offset + 28);
+                const extraLength = readUInt16(offset + 30);
+                const commentLength = readUInt16(offset + 32);
+                const externalAttributes = readUInt32(offset + 38);
+                const nameStart = offset + 46;
+                const nameEnd = nameStart + fileNameLength;
+                const nextOffset = nameEnd + extraLength + commentLength;
+                if (nextOffset > archiveBuffer.length) {
+                  core.warning(`Skipping ${artifactName}; central directory entry exceeds archive bounds.`);
+                  return;
+                }
+
+                const name = archiveBuffer.toString("utf8", nameStart, nameEnd);
+                const mode = externalAttributes >>> 16;
+                const fileType = mode & 0o170000;
+                const isRegularFile = fileType === 0 || fileType === 0o100000;
+                const invalidName =
+                  !allowedArtifactFiles.has(name) ||
+                  name.includes("/") ||
+                  name.includes("\\") ||
+                  name.includes("..") ||
+                  path.isAbsolute(name);
+                if (invalidName) {
+                  core.warning(`Skipping ${artifactName}; unexpected artifact entry ${name}.`);
+                  return;
+                }
+                if (!isRegularFile || name.endsWith("/")) {
+                  core.warning(`Skipping ${artifactName}; ${name} is not a regular file.`);
+                  return;
+                }
+                if (entries.has(name)) {
+                  core.warning(`Skipping ${artifactName}; duplicate artifact entry ${name}.`);
+                  return;
+                }
+                if (![0, 8].includes(compressionMethod)) {
+                  core.warning(`Skipping ${artifactName}; ${name} uses unsupported ZIP compression method ${compressionMethod}.`);
+                  return;
+                }
+                if ((generalPurposeBitFlag & 0x1) !== 0) {
+                  core.warning(`Skipping ${artifactName}; ${name} is encrypted.`);
+                  return;
+                }
+                if (compressedSize > maxEntryBytes || uncompressedSize > maxEntryBytes) {
+                  core.warning(`Skipping ${artifactName}; ${name} exceeds the per-file size limit.`);
+                  return;
+                }
+
+                totalUncompressedSize += uncompressedSize;
+                if (totalUncompressedSize > maxTotalBytes) {
+                  core.warning(`Skipping ${artifactName}; artifact exceeds the aggregate size limit.`);
+                  return;
+                }
+
+                entries.set(name, { uncompressedSize });
+                offset = nextOffset;
+              }
+
+              const files = new Map();
+              for (const [name, entry] of entries) {
+                const contents = childProcess.execFileSync("unzip", ["-p", archivePath, name], {
+                  encoding: "utf8",
+                  maxBuffer: Math.max(1, entry.uncompressedSize + 1024),
+                  timeout: 5000,
+                });
+                if (Buffer.byteLength(contents, "utf8") > maxEntryBytes) {
+                  core.warning(`Skipping ${artifactName}; ${name} exceeded the per-file size limit while reading.`);
+                  return;
+                }
+                files.set(name, contents);
+              }
+
+              const read = (name) => {
+                return files.get(name) ?? "";
+              };
+
+              const status = Number(read("periphery.status").trim() || "1");
+              let findings = null;
+              for (const name of ["periphery.json", "periphery.stdout.json"]) {
+                try {
+                  const parsed = JSON.parse(read(name));
+                  if (Array.isArray(parsed)) {
+                    findings = parsed;
+                    break;
+                  }
+                } catch {}
+              }
+              return { findings, status };
+            };
+            const report = await readReport();
+            const status = report?.status ?? 1;
+            const findings = report?.findings ?? null;
 
             const sanitizeCell = (value) => {
               const normalized = String(value ?? "")
@@ -289,11 +313,18 @@ jobs:
 
             let mode = "failure";
             let body = `${marker}\n`;
-            if (findings === null) {
+            if (scanSkipped) {
+              mode = "skipped";
               body += [
                 "### iOS Periphery",
                 "",
-                "Periphery did not complete. Check the workflow artifact for stdout/stderr.",
+                "Periphery scan skipped while the pull request is a draft.",
+              ].join("\n");
+            } else if (findings === null) {
+              body += [
+                "### iOS Periphery",
+                "",
+                "Periphery did not complete or its report could not be safely read. Check the workflow run for details.",
               ].join("\n");
             } else if (rows.length === 0 && status === 0) {
               mode = "success";
@@ -346,8 +377,8 @@ jobs:
                 comment.body?.includes(marker),
             );
 
-            if (!existing && mode === "success") {
-              core.info("No existing Periphery comment and scan passed; skipping comment.");
+            if (!existing && ["skipped", "success"].includes(mode)) {
+              core.info(`No existing Periphery comment and scan ${mode}; skipping comment.`);
               return;
             }
 

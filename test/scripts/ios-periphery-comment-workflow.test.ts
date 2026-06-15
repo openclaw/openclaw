@@ -80,6 +80,7 @@ async function runCommenter(
     liveHeadShaAfter?: string;
     runHeadSha?: string;
     runAttempt?: number;
+    scanJobConclusion?: string;
     workflowRuns?: WorkflowRun[];
   } = {},
 ) {
@@ -96,12 +97,14 @@ async function runCommenter(
   };
   let downloadCount = 0;
   let artifactListCount = 0;
+  let jobListCount = 0;
   let pullGetCount = 0;
   const createdBodies: string[] = [];
   const updatedBodies: string[] = [];
   const github = {
     rest: {
       actions: {
+        listJobsForWorkflowRun() {},
         listWorkflowRunArtifacts() {},
         listWorkflowRuns() {},
         async downloadArtifact() {
@@ -138,6 +141,15 @@ async function runCommenter(
       },
     },
     async paginate(_request: unknown, params: Record<string, unknown>) {
+      if (params.run_id === 12345 && params.filter === "latest") {
+        jobListCount += 1;
+        return [
+          {
+            conclusion: options.scanJobConclusion ?? "success",
+            name: "Scan iOS dead code",
+          },
+        ];
+      }
       if (params.run_id === 12345) {
         artifactListCount += 1;
         return [{ ...artifact, name: artifact.name || ARTIFACT_NAME }];
@@ -199,9 +211,15 @@ async function runCommenter(
     core,
     createdBodies,
     downloadCount,
+    jobListCount,
     pullGetCount,
     updatedBodies,
   };
+}
+
+function expectUnavailableComment(bodies: string[]): void {
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]).toContain("Periphery did not complete or its report could not be safely read.");
 }
 
 function crc32(input: Buffer): number {
@@ -357,6 +375,7 @@ describe("iOS Periphery comment workflow", () => {
     );
 
     expect(result.downloadCount).toBe(0);
+    expectUnavailableComment(result.createdBodies);
     expect(result.core.warnings).toEqual([
       `Skipping ${ARTIFACT_NAME}; compressed artifact size 1048577 exceeds the 1048576 byte limit.`,
     ]);
@@ -377,7 +396,7 @@ describe("iOS Periphery comment workflow", () => {
       archive,
     );
 
-    expect(result.createdBodies).toEqual([]);
+    expectUnavailableComment(result.createdBodies);
     expect(result.core.warnings).toEqual([
       `Skipping ${ARTIFACT_NAME}; unexpected artifact entry ../periphery.json.`,
     ]);
@@ -400,7 +419,7 @@ describe("iOS Periphery comment workflow", () => {
       archive,
     );
 
-    expect(result.createdBodies).toEqual([]);
+    expectUnavailableComment(result.createdBodies);
     expect(result.core.warnings).toEqual([
       `Skipping ${ARTIFACT_NAME}; periphery.json is encrypted.`,
     ]);
@@ -425,6 +444,36 @@ describe("iOS Periphery comment workflow", () => {
     expect(result.downloadCount).toBe(0);
   });
 
+  it("does not comment when the producer intentionally skips a draft scan", async () => {
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: "ios-periphery-dead-code-12345-1",
+        size_in_bytes: 1,
+      },
+      Buffer.alloc(0),
+      {
+        existingComments: [
+          {
+            body: "<!-- openclaw-ios-periphery-dead-code -->\nprevious findings",
+            id: 99,
+            user: { login: "github-actions[bot]", type: "Bot" },
+          },
+        ],
+        scanJobConclusion: "skipped",
+      },
+    );
+
+    expect(result.jobListCount).toBe(1);
+    expect(result.artifactListCount).toBe(0);
+    expect(result.createdBodies).toEqual([]);
+    expect(result.updatedBodies).toHaveLength(1);
+    expect(result.updatedBodies[0]).toContain(
+      "Periphery scan skipped while the pull request is a draft.",
+    );
+  });
+
   it("does not reuse an artifact from an earlier workflow attempt", async () => {
     const result = await runCommenter(
       {
@@ -434,10 +483,23 @@ describe("iOS Periphery comment workflow", () => {
         size_in_bytes: 1,
       },
       Buffer.alloc(0),
+      {
+        existingComments: [
+          {
+            body: "<!-- openclaw-ios-periphery-dead-code -->\nold findings",
+            id: 99,
+            user: { login: "github-actions[bot]", type: "Bot" },
+          },
+        ],
+      },
     );
 
     expect(result.downloadCount).toBe(0);
     expect(result.core.warnings).toEqual([`No ${ARTIFACT_NAME} artifact found.`]);
+    expect(result.updatedBodies).toHaveLength(1);
+    expect(result.updatedBodies[0]).toContain(
+      "Periphery did not complete or its report could not be safely read.",
+    );
   });
 
   it("revalidates the PR head before creating a comment", async () => {
