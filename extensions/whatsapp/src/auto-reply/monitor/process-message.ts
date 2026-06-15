@@ -437,6 +437,7 @@ export async function processMessage(params: {
         cfg: params.cfg,
         msg: params.msg,
         policy: inboundPolicy,
+        authDir: account.authDir,
       })
     : undefined;
   const commandTurn: CommandTurnContext = isTextCommand
