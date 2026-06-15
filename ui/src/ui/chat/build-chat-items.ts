@@ -241,16 +241,16 @@ function sourceMessageId(message: unknown): string | null {
   if (!record) {
     return null;
   }
-  const id = typeof record.id === "string" ? record.id.trim() : "";
-  if (id) {
-    return id;
+  const openclawId = asRecord(record["__openclaw"])?.id;
+  if (typeof openclawId === "string" && openclawId.trim()) {
+    return openclawId.trim();
   }
   const messageId = typeof record.messageId === "string" ? record.messageId.trim() : "";
   if (messageId) {
     return messageId;
   }
-  const openclawId = asRecord(record["__openclaw"])?.id;
-  return typeof openclawId === "string" && openclawId.trim() ? openclawId.trim() : null;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  return id || null;
 }
 
 function collapseDuplicateSourceKey(message: unknown): string | null {
@@ -276,6 +276,73 @@ function prefersNativeChatSurface(message: unknown): boolean {
   }
   const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
   return (role === "user" || role === "assistant") && !(normalized.senderLabel ?? "").trim();
+}
+
+function normalizeDuplicateText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripSenderLabelPrefix(text: string, senderLabel: string): string {
+  const normalizedText = normalizeDuplicateText(text);
+  const label = normalizeDuplicateText(senderLabel);
+  if (!label) {
+    return normalizedText;
+  }
+  return normalizedText
+    .replace(new RegExp(`^${escapeRegExp(label)}(?::|：|-|—)?\\s+`, "i"), "")
+    .trim();
+}
+
+function sourceDuplicateDisplayParts(message: unknown): {
+  role: string;
+  senderLabel: string;
+  text: string;
+} | null {
+  const normalized = safeNormalizeMessage(message);
+  if (!normalized) {
+    return null;
+  }
+  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+  if (role !== "user" && role !== "assistant") {
+    return null;
+  }
+  const textParts: string[] = [];
+  for (const block of normalized.content) {
+    if (block.type !== "text" || typeof block.text !== "string") {
+      return null;
+    }
+    textParts.push(block.text);
+  }
+  const text = normalizeDuplicateText(textParts.join("\n"));
+  if (!text) {
+    return null;
+  }
+  return {
+    role,
+    senderLabel: (normalized.senderLabel ?? "").trim(),
+    text,
+  };
+}
+
+function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage: unknown): boolean {
+  const previous = sourceDuplicateDisplayParts(previousMessage);
+  const next = sourceDuplicateDisplayParts(nextMessage);
+  if (!previous || !next || previous.role !== next.role) {
+    return false;
+  }
+  if (Boolean(previous.senderLabel) === Boolean(next.senderLabel)) {
+    return false;
+  }
+  const labeled = previous.senderLabel ? previous : next;
+  const native = previous.senderLabel ? next : previous;
+  return (
+    labeled.text === native.text ||
+    stripSenderLabelPrefix(labeled.text, labeled.senderLabel) === native.text
+  );
 }
 
 function collapseDuplicateDisplaySignature(message: unknown): string | null {
@@ -324,7 +391,12 @@ function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
     const signature = collapseDuplicateDisplaySignature(item.message);
     const sourceKey = collapseDuplicateSourceKey(item.message);
     const previous = collapsed[collapsed.length - 1];
-    if (sourceKey && previousSourceKey === sourceKey && previous?.kind === "message") {
+    if (
+      sourceKey &&
+      previousSourceKey === sourceKey &&
+      previous?.kind === "message" &&
+      isSameSourceRelayNativeDuplicate(previous.message, item.message)
+    ) {
       if (!prefersNativeChatSurface(previous.message) && prefersNativeChatSurface(item.message)) {
         collapsed[collapsed.length - 1] = item;
         previousSignature = signature;

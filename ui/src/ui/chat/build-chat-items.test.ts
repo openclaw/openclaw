@@ -219,18 +219,104 @@ describe("buildChatItems", () => {
     expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "On it." }]);
   });
 
+  it("deduplicates relay-labeled assistant copies by OpenClaw metadata before surface ids", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "relay-surface-copy",
+          __openclaw: { id: "reply-4" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival Ship it." }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          id: "native-surface-copy",
+          __openclaw: { id: "reply-4" },
+          role: "assistant",
+          content: [{ type: "text", text: "Ship it." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "Ship it." }]);
+  });
+
+  it("keeps native assistant updates separate when source message id repeats with new text", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-5" },
+          role: "assistant",
+          content: [{ type: "text", text: "Draft one" }],
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-5" },
+          role: "assistant",
+          content: [{ type: "text", text: "Draft two" }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(2);
+    expect(messageRecord(groups[0], 0).content).toStrictEqual([
+      { type: "text", text: "Draft one" },
+    ]);
+    expect(messageRecord(groups[0], 1).content).toStrictEqual([
+      { type: "text", text: "Draft two" },
+    ]);
+  });
+
+  it("keeps relay-labeled assistant updates separate when source message id repeats with new text", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-6" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival Draft one" }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-6" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival Draft two" }],
+          senderLabel: "Parzival",
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBe("Parzival");
+    expect(groups[0].messages).toHaveLength(2);
+    expect(messageRecord(groups[0], 0).content).toStrictEqual([
+      { type: "text", text: "Parzival Draft one" },
+    ]);
+    expect(messageRecord(groups[0], 1).content).toStrictEqual([
+      { type: "text", text: "Parzival Draft two" },
+    ]);
+  });
+
   it("keeps identical assistant text separate when source message ids differ", () => {
     const groups = messageGroups({
       messages: [
         {
-          id: "reply-4",
+          id: "reply-7",
           role: "assistant",
           content: [{ type: "text", text: "Same update" }],
           senderLabel: "Parzival",
           timestamp: 1,
         },
         {
-          id: "reply-5",
+          id: "reply-8",
           role: "assistant",
           content: [{ type: "text", text: "Same update" }],
           senderLabel: "Parzival",
