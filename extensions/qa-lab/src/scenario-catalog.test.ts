@@ -1,4 +1,5 @@
 // Qa Lab tests cover scenario catalog plugin behavior.
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
 import {
@@ -10,7 +11,24 @@ import {
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
+function listScenarioMarkdownPaths(dir = "qa/scenarios"): string[] {
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const entryPath = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        return listScenarioMarkdownPaths(entryPath);
+      }
+      return entry.isFile() && entry.name.endsWith(".md") ? [entryPath] : [];
+    })
+    .toSorted();
+}
+
 describe("qa scenario catalog", () => {
+  it("keeps repo-backed scenarios YAML-only", () => {
+    expect(listScenarioMarkdownPaths()).toStrictEqual([]);
+  });
+
   it("loads the YAML pack as the canonical source of truth", () => {
     const pack = readQaScenarioPack();
 
@@ -105,13 +123,13 @@ describe("qa scenario catalog", () => {
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
   });
 
-  it("loads scenario-declared gateway runtime options from markdown", () => {
+  it("loads scenario-declared gateway runtime options from YAML", () => {
     const scenario = readQaScenarioById("control-ui-qa-channel-image-roundtrip");
 
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
   });
 
-  it("loads native test execution scenarios from markdown", () => {
+  it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
 
     expect(scenario.execution.kind).toBe("playwright");

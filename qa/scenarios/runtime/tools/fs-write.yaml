@@ -1,4 +1,4 @@
-title: File write runtime tool fixture
+title: "Runtime tool fixture — fs.write"
 
 scenario:
   id: runtime-tool-fs-write

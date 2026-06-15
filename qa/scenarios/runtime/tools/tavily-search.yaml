@@ -1,4 +1,4 @@
-title: Tavily search runtime tool fixture
+title: "Runtime tool fixture — tavily_search"
 
 scenario:
   id: runtime-tool-tavily-search

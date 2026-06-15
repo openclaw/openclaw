@@ -1,4 +1,4 @@
-title: Tavily extract runtime tool fixture
+title: "Runtime tool fixture — tavily_extract"
 
 scenario:
   id: runtime-tool-tavily-extract

@@ -1,4 +1,4 @@
-title: File list runtime tool fixture
+title: "Runtime tool fixture — fs.list"
 
 scenario:
   id: runtime-tool-fs-list

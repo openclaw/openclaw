@@ -1,4 +1,4 @@
-title: Apply patch runtime tool fixture
+title: "Runtime tool fixture — apply-patch"
 
 scenario:
   id: runtime-tool-apply-patch

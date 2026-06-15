@@ -1,4 +1,4 @@
-title: Session status runtime tool fixture
+title: "Runtime tool fixture — session_status"
 
 scenario:
   id: runtime-tool-session-status

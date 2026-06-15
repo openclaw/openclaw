@@ -1,4 +1,4 @@
-title: Web search runtime tool fixture
+title: "Runtime tool fixture — web_search"
 
 scenario:
   id: runtime-tool-web-search

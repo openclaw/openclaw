@@ -1,4 +1,4 @@
-title: Exec runtime tool fixture
+title: "Runtime tool fixture — exec"
 
 scenario:
   id: runtime-tool-exec

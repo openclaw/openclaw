@@ -1,4 +1,4 @@
-title: Direct message runtime tool fixture
+title: "Runtime tool fixture — direct message tool"
 
 scenario:
   id: runtime-tool-message-tool

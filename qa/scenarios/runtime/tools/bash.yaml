@@ -1,4 +1,4 @@
-title: Bash runtime tool fixture
+title: "Runtime tool fixture — bash"
 
 scenario:
   id: runtime-tool-bash

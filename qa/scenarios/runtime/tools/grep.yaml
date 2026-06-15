@@ -1,4 +1,4 @@
-title: Grep runtime tool fixture
+title: "Runtime tool fixture — grep"
 
 scenario:
   id: runtime-tool-grep

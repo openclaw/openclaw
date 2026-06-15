@@ -1,4 +1,4 @@
-title: Web fetch runtime tool fixture
+title: "Runtime tool fixture — web_fetch"
 
 scenario:
   id: runtime-tool-web-fetch

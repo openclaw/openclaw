@@ -1,4 +1,4 @@
-title: Memory recall runtime tool fixture
+title: "Runtime tool fixture — memory.recall"
 
 scenario:
   id: runtime-tool-memory-recall
