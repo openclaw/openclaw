@@ -106,6 +106,8 @@ export type AgentConfig = {
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   /** Optional per-agent default reasoning visibility. */
   reasoningDefault?: "on" | "off" | "stream";
+  /** Optional per-agent default elevated-output level. */
+  elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Optional per-agent default for fast mode. */
   fastModeDefault?: FastMode;
   /** Optional per-agent bootstrap/context injection mode override. */

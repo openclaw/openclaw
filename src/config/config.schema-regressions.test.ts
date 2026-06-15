@@ -15,6 +15,17 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts a per-agent elevatedDefault override (#73680)", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: { elevatedDefault: "off" },
+        list: [{ id: "main", elevatedDefault: "ask" }],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {

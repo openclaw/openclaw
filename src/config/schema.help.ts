@@ -331,6 +331,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
   "agents.list[].reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+  "agents.list[].elevatedDefault":
+    "Optional per-agent default elevated-output level (off|on|ask|full). Overrides agents.defaults.elevatedDefault for this agent when no per-message or session elevated override is set, and only applies when elevated mode is allowed.",
   "agents.list[].fastModeDefault":
     'Optional per-agent default for fast mode ("auto", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.list[].runtime":

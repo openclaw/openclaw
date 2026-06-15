@@ -94,6 +94,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].runtime.acp.cwd": "Agent ACP Working Directory",
   "agents.list[].thinkingDefault": "Agent Thinking Default",
   "agents.list[].reasoningDefault": "Agent Reasoning Default",
+  "agents.list[].elevatedDefault": "Agent Elevated Default",
   "agents.list[].fastModeDefault": "Agent Fast Mode Default",
   "agents.list[].contextInjection": "Agent Context Injection",
   "agents.list[].bootstrapMaxChars": "Agent Bootstrap Max Chars",
