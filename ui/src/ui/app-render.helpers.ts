@@ -16,6 +16,7 @@ import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   renderChatSessionSelect as renderChatSessionSelectBase,
   renderChatModelSelect,
+  renderChatQuotaPill,
   resetChatSessionPickerState,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
@@ -390,7 +391,7 @@ export function renderChatControls(state: AppViewState) {
         }
       }}
     >
-      ${renderChatModelSelect(state)}
+      ${renderChatModelSelect(state)} ${renderChatQuotaPill(state)}
     </div>
     <div class="chat-settings-popover-wrapper">
       <button
