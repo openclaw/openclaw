@@ -499,6 +499,7 @@ extension SettingsProTab {
         case .voice: "Voice & Talk"
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
+        case .health: "Health Export"
         case .notifications: "Notifications"
         case .about: "About"
         }
@@ -513,6 +514,7 @@ extension SettingsProTab {
         case .voice: "Talk mode and wake phrase settings."
         case .diagnostics: "Run local health checks."
         case .privacy: "Data and device privacy controls."
+        case .health: "Apple Health to your webhook."
         case .notifications: "Alert permissions and delivery."
         case .about: "Version and support details."
         }

@@ -162,6 +162,11 @@ extension SettingsProTab {
                 detail: self.privacyDetail,
                 route: .privacy)
             self.settingsListRow(
+                icon: "heart.text.square",
+                title: "Health Export",
+                detail: "Send Apple Health data to your webhook.",
+                route: .health)
+            self.settingsListRow(
                 icon: "bell",
                 title: "Notifications",
                 detail: self.notificationStatusText,
@@ -232,6 +237,8 @@ extension SettingsProTab {
                         self.diagnosticsDestination
                     case .privacy:
                         self.privacyDestination
+                    case .health:
+                        self.healthDestination
                     case .notifications:
                         self.notificationsDestination
                     case .about:
@@ -483,6 +490,10 @@ extension SettingsProTab {
 
             self.privacyAccessCard
         }
+    }
+
+    var healthDestination: some View {
+        HealthExportSettingsView()
     }
 
     var notificationsDestination: some View {

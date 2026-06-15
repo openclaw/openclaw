@@ -5,6 +5,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>ai.openclaw.ios.bgrefresh</string>
+		<string>ai.openclaw.ios.healthexport</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -60,6 +61,10 @@
 	<string>OpenClaw can capture photos or short video clips when requested via the gateway.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>OpenClaw uses your contacts so you can search and reference people while using the assistant.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>OpenClaw reads your Apple Health data (steps, heart rate, HRV, energy, distance, sleep, and workouts) read-only so it can forward it to the personal webhook you configure. OpenClaw never writes to Apple Health and never reads workout GPS routes.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>OpenClaw does not write to Apple Health. This app only reads your health data (read-only) to forward it to the personal webhook you configure; it never creates or modifies Apple Health records.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenClaw discovers and connects to your OpenClaw gateway on the local network.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -97,6 +102,7 @@
 	<array>
 		<string>audio</string>
 		<string>remote-notification</string>
+		<string>processing</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

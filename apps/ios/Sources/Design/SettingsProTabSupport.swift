@@ -10,6 +10,7 @@ enum SettingsRoute: Hashable {
     case voice
     case diagnostics
     case privacy
+    case health
     case notifications
     case about
 }

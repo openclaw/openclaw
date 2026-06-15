@@ -103,6 +103,9 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             self.appModel = OpenClawAppModelRegistry.appModel
         }
         self.registerBackgroundWakeRefreshTask()
+        HealthExportBackgroundTask.register()
+        HealthExportBackgroundTask.startObserving()
+        HealthExportBackgroundTask.schedule()
         let notificationCenter = UNUserNotificationCenter.current()
         notificationCenter.delegate = self
         ExecApprovalNotificationBridge.registerCategory(center: notificationCenter)
@@ -172,6 +175,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         GatewayDiagnostics.log("app delegate: scene phase changed=\(String(describing: phase))")
         if phase == .background {
             self.scheduleBackgroundWakeRefresh(afterSeconds: 120, reason: "scene_background")
+            HealthExportBackgroundTask.schedule()
         }
     }
 
@@ -639,6 +643,10 @@ struct OpenClawApp: App {
                     self.gatewayController.setScenePhase(newValue)
                     self.appDelegate.scenePhaseChanged(newValue)
                     self.applyAppearancePreference()
+                    if newValue == .active {
+                        // Reconciliation on app open: re-run the anchored read (respects backoff).
+                        Task { await HealthExportService.shared.reconcile(trigger: "app_active") }
+                    }
                 }
         }
     }

@@ -62,6 +62,7 @@ targets:
         product: SwabbleKit
       - package: WebRTC
       - sdk: AppIntents.framework
+      - sdk: HealthKit.framework
     preBuildScripts:
       - name: SwiftFormat (lint)
         basedOnDependencyAnalysis: false
@@ -132,8 +133,10 @@ targets:
         UIBackgroundModes:
           - audio
           - remote-notification
+          - processing
         BGTaskSchedulerPermittedIdentifiers:
           - ai.openclaw.ios.bgrefresh
+          - ai.openclaw.ios.healthexport
         NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
@@ -145,6 +148,8 @@ targets:
         NSCalendarsFullAccessUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsWriteOnlyAccessUsageDescription: OpenClaw uses your calendars to add events when you enable calendar access.
         NSContactsUsageDescription: OpenClaw uses your contacts so you can search and reference people while using the assistant.
+        NSHealthShareUsageDescription: OpenClaw reads your Apple Health data (steps, heart rate, HRV, energy, distance, sleep, and workouts) read-only so it can forward it to the personal webhook you configure. OpenClaw never writes to Apple Health and never reads workout GPS routes.
+        NSHealthUpdateUsageDescription: OpenClaw does not write to Apple Health. This app only reads your health data (read-only) to forward it to the personal webhook you configure; it never creates or modifies Apple Health records.
         NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, and push-to-talk.
