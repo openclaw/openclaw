@@ -2790,8 +2790,6 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
-    const firstCall = firstMockCall(sendMessage, "first sendMessage call");
-    const firstParams = requireRecord(firstCall[2], "first sendMessage params");
     const lastCall = sendMessage.mock.calls.at(-1);
     const lastParams = requireRecord(lastCall?.[2], "last sendMessage params");
     expect(lastParams.reply_markup).toEqual({

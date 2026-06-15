@@ -77,7 +77,9 @@ function requireSendMessageCallText(
   const calls = api.sendMessage.mock.calls as unknown[][];
   const call = calls[callIndex];
   expect(call, `sendMessage call ${callIndex}`).toBeDefined();
-  return String(call?.[1] ?? "");
+  const text = call?.[1];
+  expect(typeof text).toBe("string");
+  return typeof text === "string" ? text : "";
 }
 
 function expectPreviewEdit(
