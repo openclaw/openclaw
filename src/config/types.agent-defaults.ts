@@ -541,6 +541,23 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /**
+   * Ordered fallback models for compaction summarization. Each entry is a
+   * `provider/model` reference (e.g. `openai/gpt-5.4`). When the primary
+   * compaction model fails with a quota, rate-limit, or transient provider
+   * error, compaction advances to the next entry. When all entries fail,
+   * compaction falls through to the existing truncate-only behavior.
+   *
+   * Resolution order at runtime:
+   *   1. `compaction.fallbacks` (this field), if non-empty
+   *   2. `agents.defaults.model.fallbacks` (the chat model's fallback chain)
+   *   3. the chat model's primary model itself
+   *
+   * Per-candidate provider-specific sanitization (transcript policy, tool-use
+   * pairing) is re-applied for each fallback. Duplicate entries are
+   * deduplicated; entries equal to the current compaction model are skipped.
+   */
+  fallbacks?: string[];
   /** Maximum time in seconds for a single compaction operation (default: 900). */
   timeoutSeconds?: number;
   /**

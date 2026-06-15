@@ -371,6 +371,14 @@ function hasExplicitCompactionModel(params: CompactEmbeddedAgentSessionParams): 
 function resolveCompactionFallbacksOverride(
   params: CompactEmbeddedAgentSessionParams,
 ): string[] | undefined {
+  // 1. Explicit `compaction.fallbacks` config wins when non-empty.
+  //    This is the user-facing knob for hardening summarization against a
+  //    single model or provider going down. See AgentCompactionConfig.fallbacks.
+  const explicit = params.config?.agents?.defaults?.compaction?.fallbacks;
+  if (Array.isArray(explicit) && explicit.length > 0) {
+    return explicit;
+  }
+  // 2. Run-time model override (e.g. /model slash command at the chat level).
   return (
     params.modelFallbacksOverride ??
     resolveRunModelFallbacksOverride({

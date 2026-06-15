@@ -573,6 +573,141 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     }
   });
 
+  it("uses agents.defaults.compaction.fallbacks when primary compaction fails", async () => {
+    // Negative-control setup: the chat model has a different fallback list
+    // (`model.fallbacks: ["chat-fallback"]`). The test passes when
+    // `compaction.fallbacks: ["compaction-fallback-a", "compaction-fallback-b"]`
+    // wins and the chat fallback is never tried. If the resolver regresses and
+    // starts preferring the chat fallback chain, this test fails because the
+    // resolveModelMock call will be for `chat-fallback`, not
+    // `compaction-fallback-a`.
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(new Error("primary compaction rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      )
+      .mockResolvedValueOnce({
+        summary: "compaction-fallback summary",
+        firstKeptEntryId: "entry-fb",
+        tokensBefore: 80,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      trigger: "overflow",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              // Chat model has a fallback the resolver must NOT pick.
+              fallbacks: ["openai/chat-fallback"],
+            },
+            compaction: {
+              // Explicit compaction fallback chain. The first entry must
+              // be tried first; the second is the safety net.
+              fallbacks: ["openai/compaction-fallback-a", "openai/compaction-fallback-b"],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("compaction-fallback summary");
+
+    // The chat fallback must NOT be tried. If resolveModelMock is called
+    // with provider=openai and modelId=chat-fallback, the resolver picked
+    // the wrong list.
+    const allCalls = resolveModelMock.mock.calls;
+    const chatFallbackWasTried = allCalls.some(
+      ([provider, modelId]) => provider === "openai" && modelId === "chat-fallback",
+    );
+    expect(chatFallbackWasTried).toBe(false);
+
+    // The first explicit compaction-fallback must be tried.
+    const firstCompactionFallbackCall = findMockCall(
+      resolveModelMock,
+      ([provider, modelId]) => provider === "openai" && modelId === "compaction-fallback-a",
+    );
+    expect(firstCompactionFallbackCall[2]).toBeTypeOf("string");
+    if (firstCompactionFallbackCall[3] === undefined) {
+      throw new Error("Expected first compaction-fallback resolve-model options");
+    }
+  });
+
+  it("ignores an empty compaction.fallbacks array and falls through to chat fallbacks", async () => {
+    // Negative-control: an empty array is treated the same as unset, so the
+    // chat model's fallback chain is used. This guards against the resolver
+    // treating an empty array as "no fallbacks ever" and skipping retries.
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(new Error("primary compaction rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      )
+      .mockResolvedValueOnce({
+        summary: "chat-fallback summary",
+        firstKeptEntryId: "entry-chat-fb",
+        tokensBefore: 90,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      trigger: "overflow",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: ["openai/chat-fallback"],
+            },
+            compaction: {
+              // Explicitly empty — must not block the chat fallback chain.
+              fallbacks: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("chat-fallback summary");
+
+    const chatFallbackCall = findMockCall(
+      resolveModelMock,
+      ([provider, modelId]) => provider === "openai" && modelId === "chat-fallback",
+    );
+    expect(chatFallbackCall[2]).toBeTypeOf("string");
+  });
+
   it("preserves Codex OAuth across same-provider OpenAI compaction fallbacks", async () => {
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },

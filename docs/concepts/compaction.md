@@ -90,7 +90,32 @@ This works with local models too, for example a second Ollama model dedicated to
 }
 ```
 
-When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
+When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain unless `agents.defaults.compaction.fallbacks` is also set.
+
+### Compaction fallback chain
+
+When the compaction summarization call fails with a model-fallback-eligible error (quota, rate limit, transient provider error), OpenClaw walks an ordered fallback list. The list is resolved at runtime in this order:
+
+1. `agents.defaults.compaction.fallbacks` (this field), if set and non-empty.
+2. `agents.defaults.model.fallbacks` (the chat model's fallback chain).
+3. The active session model.
+
+Each entry is a `provider/model-id` string. Entries equal to `compaction.model` are skipped and duplicates are removed. When every entry fails, compaction falls through to the existing truncate-only path so the session does not grow unbounded.
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "minimax/MiniMax-M3",
+        "fallbacks": ["openai/gpt-5.4", "deepseek/deepseek-v4-flash"]
+      }
+    }
+  }
+}
+```
+
+Leave `compaction.fallbacks` unset to inherit the chat model's `agents.defaults.model.fallbacks`. Set it explicitly when the summarization budget should stay decoupled from the chat budget (for example, a flat-rate summarization model with a metered safety net).
 
 ### Identifier preservation
 
