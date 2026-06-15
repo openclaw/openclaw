@@ -117,6 +117,11 @@ type RetiredSystemdGatewayConflict = InstalledSystemdGatewayConflict & {
   enabled: boolean;
 };
 
+type RetiredUserSystemdGatewayConflict = InstalledSystemdGatewayConflict & {
+  active: boolean;
+  enabled: boolean;
+};
+
 type SystemdUserInstallArtifactSnapshot = {
   path: string;
   content: string | null;
@@ -1396,16 +1401,23 @@ function isRunningAsRoot(): boolean {
 async function retireConflictingUserScopeUnitForSystemUnit(
   env: GatewayServiceEnv,
   unit: InstalledSystemdGatewayConflict | undefined,
-): Promise<InstalledSystemdGatewayConflict | null> {
+): Promise<RetiredUserSystemdGatewayConflict | null> {
   if (unit?.scope !== "user") {
     return null;
   }
+  const state = await readSystemdUnitLiveState(env, unit.unitName, "user");
   const res = await execSystemctlUser(env, ["disable", "--now", unit.unitName]);
   if (res.code !== 0) {
     throw new Error(
       `systemctl --user disable --now ${unit.unitName} failed: ${readSystemctlDetail(res) || "unknown error"}`,
     );
   }
+  return { ...unit, ...state };
+}
+
+async function removeRetiredUserSystemdGatewayConflict(
+  unit: RetiredUserSystemdGatewayConflict,
+): Promise<void> {
   try {
     await fs.unlink(unit.unitPath);
   } catch (error) {
@@ -1413,7 +1425,26 @@ async function retireConflictingUserScopeUnitForSystemUnit(
       throw error;
     }
   }
-  return unit;
+}
+
+async function restoreRetiredUserSystemdGatewayConflict(
+  env: GatewayServiceEnv,
+  unit: RetiredUserSystemdGatewayConflict,
+): Promise<void> {
+  if (!unit.enabled && !unit.active) {
+    return;
+  }
+  const restoreArgs = unit.enabled
+    ? unit.active
+      ? ["enable", "--now", unit.unitName]
+      : ["enable", unit.unitName]
+    : ["start", unit.unitName];
+  const restore = await execSystemctlUser(env, restoreArgs);
+  if (restore.code !== 0) {
+    throw new Error(
+      `systemctl --user ${restoreArgs.join(" ")} failed: ${readSystemctlDetail(restore) || "unknown error"}`,
+    );
+  }
 }
 
 async function runSystemdServiceAction(params: {
@@ -1431,20 +1462,12 @@ async function runSystemdServiceAction(params: {
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
       );
     }
-    const res = await execSystemctl([params.action, unitName], env);
-    if (res.code !== 0) {
-      throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
-    }
+    let retiredUserUnit: RetiredUserSystemdGatewayConflict | null = null;
     try {
-      const retiredUserUnit = await retireConflictingUserScopeUnitForSystemUnit(
+      retiredUserUnit = await retireConflictingUserScopeUnitForSystemUnit(
         env,
         installed.conflictingUnit,
       );
-      if (retiredUserUnit) {
-        params.stdout.write(
-          `${formatLine("Retired conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath})`)}\n`,
-        );
-      }
     } catch (error) {
       const conflictingUnit = installed.conflictingUnit;
       const cleanupTarget = conflictingUnit
@@ -1452,6 +1475,19 @@ async function runSystemdServiceAction(params: {
         : unitName;
       params.stdout.write(
         `${formatLine("Could not retire conflicting systemd service", `${cleanupTarget}: ${formatErrorMessage(error)}`)}\n`,
+      );
+    }
+    const res = await execSystemctl([params.action, unitName], env);
+    if (res.code !== 0) {
+      if (retiredUserUnit) {
+        await restoreRetiredUserSystemdGatewayConflict(env, retiredUserUnit);
+      }
+      throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
+    }
+    if (retiredUserUnit) {
+      await removeRetiredUserSystemdGatewayConflict(retiredUserUnit);
+      params.stdout.write(
+        `${formatLine("Retired conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath})`)}\n`,
       );
     }
     params.stdout.write(`${formatLine(params.label, unitName)}\n`);

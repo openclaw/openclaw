@@ -2811,7 +2811,7 @@ describe("systemd service control", () => {
     await assertRestartSuccess({ OPENCLAW_PROFILE: "work" });
   });
 
-  it("retires a conflicting user unit after restarting the active system unit", async () => {
+  it("retires a conflicting user unit before restarting the active system unit", async () => {
     const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-control-"));
     const home = path.join(tempHomeRoot, "home");
     const userUnitPath = path.join(home, ".config", "systemd", "user", GATEWAY_SERVICE);
@@ -2833,11 +2833,19 @@ describe("systemd service control", () => {
           cb(null, "", "");
         })
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
-          expect(args).toEqual(["restart", GATEWAY_SERVICE]);
+          assertMachineUserSystemctlArgs(args, "debian", "is-active", "--quiet", GATEWAY_SERVICE);
           cb(null, "", "");
         })
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "debian", "is-enabled", GATEWAY_SERVICE);
+          cb(null, "enabled\n", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
           assertMachineUserSystemctlArgs(args, "debian", "disable", "--now", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["restart", GATEWAY_SERVICE]);
           cb(null, "", "");
         });
 
@@ -2849,6 +2857,7 @@ describe("systemd service control", () => {
       expect(write.mock.calls.map(([value]) => String(value)).join("\n")).toContain(
         "Restarted systemd service",
       );
+      expect(execFileMock).toHaveBeenCalledTimes(5);
     } finally {
       vi.restoreAllMocks();
       await fs.rm(tempHomeRoot, { recursive: true, force: true });
@@ -2894,7 +2903,7 @@ describe("systemd service control", () => {
     }
   });
 
-  it("does not fail a system restart when post-action user-unit cleanup fails", async () => {
+  it("does not fail a system restart when pre-action user-unit retirement fails", async () => {
     const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-control-"));
     const home = path.join(tempHomeRoot, "home");
     const userUnitPath = path.join(home, ".config", "systemd", "user", GATEWAY_SERVICE);
@@ -2916,8 +2925,12 @@ describe("systemd service control", () => {
           cb(null, "", "");
         })
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
-          expect(args).toEqual(["restart", GATEWAY_SERVICE]);
+          assertMachineUserSystemctlArgs(args, "debian", "is-active", "--quiet", GATEWAY_SERVICE);
           cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertMachineUserSystemctlArgs(args, "debian", "is-enabled", GATEWAY_SERVICE);
+          cb(null, "enabled\n", "");
         })
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
           assertMachineUserSystemctlArgs(args, "debian", "disable", "--now", GATEWAY_SERVICE);
@@ -2928,6 +2941,10 @@ describe("systemd service control", () => {
             "",
             "Failed to connect to bus",
           );
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["restart", GATEWAY_SERVICE]);
+          cb(null, "", "");
         });
 
       const { write, stdout } = createWritableStreamMock();
@@ -2938,14 +2955,14 @@ describe("systemd service control", () => {
       expect(output).toContain("Could not retire conflicting systemd service");
       expect(output).toContain("Failed to connect to bus");
       expect(output).toContain("Restarted systemd service");
-      expect(execFileMock).toHaveBeenCalledTimes(3);
+      expect(execFileMock).toHaveBeenCalledTimes(5);
     } finally {
       vi.restoreAllMocks();
       await fs.rm(tempHomeRoot, { recursive: true, force: true });
     }
   });
 
-  it("keeps a conflicting user unit when root restart of the system unit fails", async () => {
+  it("restores a retired user unit when root restart of the system unit fails", async () => {
     const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-control-"));
     const home = path.join(tempHomeRoot, "home");
     const userUnitPath = path.join(home, ".config", "systemd", "user", GATEWAY_SERVICE);
@@ -2967,8 +2984,24 @@ describe("systemd service control", () => {
           cb(null, "", "");
         })
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "is-active", "--quiet", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "is-enabled", GATEWAY_SERVICE);
+          cb(null, "enabled\n", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
           expect(args).toEqual(["restart", GATEWAY_SERVICE]);
           cb(createExecFileError("restart failed"), "", "permission denied");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", "--now", GATEWAY_SERVICE);
+          cb(null, "", "");
         });
 
       const { stdout } = createWritableStreamMock();
@@ -2977,7 +3010,7 @@ describe("systemd service control", () => {
       );
 
       await expect(fs.access(userUnitPath)).resolves.toBeUndefined();
-      expect(execFileMock).toHaveBeenCalledTimes(2);
+      expect(execFileMock).toHaveBeenCalledTimes(6);
     } finally {
       vi.restoreAllMocks();
       await fs.rm(tempHomeRoot, { recursive: true, force: true });
