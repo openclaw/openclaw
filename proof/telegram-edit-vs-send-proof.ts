@@ -13,7 +13,9 @@
 //
 // Usage:
 //   TG_BOT_TOKEN=... TG_CHAT_ID=... node --import tsx proof/telegram-edit-vs-send-proof.ts <label>
-// If TG_CHAT_ID is unset, it is discovered via getUpdates after you message the bot.
+// TG_CHAT_ID is MANDATORY for live runs (TG_BOT_TOKEN set): the harness fails fast
+// if it is unset and sends nothing. There is no getUpdates auto-discovery — that
+// could target the wrong chat on a reused bot with stale updates.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -40,9 +42,14 @@ const live = Boolean(token);
 // preamble send acks first). Default fast, since that is the failing case.
 const toolDelayMs = Number(process.env.TOOL_DELAY_MS ?? 0);
 
-// Never let the token reach stdout/stderr (fetch errors can embed the URL).
+// Never let the token or chat id reach stdout/stderr (fetch errors can embed the
+// URL; the chat id is private).
 function scrub(s: string): string {
-  return token ? s.split(token).join("<redacted-token>") : s;
+  let out = token ? s.split(token).join("<redacted-token>") : s;
+  if (chatIdEnv) {
+    out = out.split(chatIdEnv).join("<redacted-chat>");
+  }
+  return out;
 }
 
 type ApiCall = { method: string; message_id?: number; text?: string };
@@ -214,19 +221,20 @@ function createContext(chatId: number) {
   return base;
 }
 
-async function discoverChatId(): Promise<string> {
-  if (chatIdEnv) return chatIdEnv;
-  if (!live) return "999999";
-  const r = await tg("getUpdates", {});
-  const updates: any[] = r.result ?? [];
-  const chat = updates
-    .map((u) => u.message?.chat?.id)
-    .filter(Boolean)
-    .pop();
-  if (!chat) {
-    throw new Error("TG_CHAT_ID unset and no chat found in getUpdates — message the bot first.");
+function resolveChatId(): string {
+  // Offline/no-op (no token): dummy id; nothing is ever sent.
+  if (!live) {
+    return "999999";
   }
-  return String(chat);
+  // Live: require an explicit chat id. No getUpdates auto-discovery — a reused bot
+  // with stale updates could otherwise send proof text to the wrong private chat.
+  if (!chatIdEnv) {
+    console.error(
+      "[proof] FATAL: TG_CHAT_ID is required for live sends. Refusing to send (no getUpdates auto-discovery). Set TG_CHAT_ID and retry.",
+    );
+    process.exit(2);
+  }
+  return chatIdEnv;
 }
 
 async function main() {
@@ -262,12 +270,14 @@ async function main() {
     channel: {},
   } as any);
 
-  const chatId = await discoverChatId();
+  const chatId = resolveChatId();
   const numericChatId = Number(chatId) || 999999;
   const api = createLoggingApi(chatId);
   const bot = { api } as unknown as Bot;
 
-  console.log(`[proof] label=${label} live=${live} chatId=${chatId} toolDelayMs=${toolDelayMs}`);
+  console.log(
+    `[proof] label=${label} live=${live} chatId=<redacted-chat> toolDelayMs=${toolDelayMs}`,
+  );
   console.log(`[proof] preamble=${JSON.stringify(PREAMBLE)}`);
   console.log(`[proof] postTool=${JSON.stringify(POST_TOOL)}`);
 
