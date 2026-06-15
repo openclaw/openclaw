@@ -33,6 +33,7 @@ import {
   createWhatsAppSocketOperationTimeoutAdapter,
   isWhatsAppSocketOperationTimeoutError,
   resolveWhatsAppSocketTiming,
+  type WhatsAppSocketTimingOptions,
   withWhatsAppSocketOperationTimeout,
 } from "../socket-timing.js";
 import { resolveJidToE164 } from "../text-runtime.js";
@@ -193,6 +194,7 @@ function isNonEmptyString(value: string | undefined): value is string {
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
+  socketTiming?: Required<WhatsAppSocketTimingOptions>;
   verbose: boolean;
   accountId: string;
   authDir: string;
@@ -226,8 +228,9 @@ type MonitorWebInboxOptions = {
 
 type AttachWebInboxToSocketOptions = Omit<
   MonitorWebInboxOptions,
-  "onMessage" | "shouldDebounce"
+  "onMessage" | "shouldDebounce" | "socketTiming"
 > & {
+  socketTiming: Required<WhatsAppSocketTimingOptions>;
   onMessage: (msg: WebInboundMessageInput) => Promise<void>;
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
 };
@@ -250,7 +253,7 @@ export async function attachWebInboxToSocket(
     disconnectRetryPolicy.maxAttempts > 0
       ? disconnectRetryPolicy.maxAttempts
       : DEFAULT_RECONNECT_POLICY.maxAttempts;
-  const sendOperationTimeoutMs = resolveWhatsAppSocketTiming(options.cfg).defaultQueryTimeoutMs;
+  const sendOperationTimeoutMs = options.socketTiming.defaultQueryTimeoutMs;
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -1417,7 +1420,7 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
-  const socketTiming = resolveWhatsAppSocketTiming(options.cfg);
+  const socketTiming = options.socketTiming ?? resolveWhatsAppSocketTiming(options.cfg);
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
     ...socketTiming,
@@ -1437,6 +1440,7 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     shouldDebounce: shouldDebounce
       ? (msg) => shouldDebounce(normalizeWebInboundMessage(msg))
       : undefined,
+    socketTiming,
     sock,
   });
 }

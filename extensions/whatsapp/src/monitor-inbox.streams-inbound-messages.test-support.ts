@@ -814,20 +814,53 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("lets configured slow socket sends complete beyond thirty seconds", async () => {
-    const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-      cfg: {
-        ...DEFAULT_WEB_INBOX_CONFIG,
-        web: { whatsapp: { defaultQueryTimeoutMs: 45_000 } },
+  it.each([
+    {
+      label: "configured socket timing",
+      extraOptions: {
+        cfg: {
+          ...DEFAULT_WEB_INBOX_CONFIG,
+          web: { whatsapp: { defaultQueryTimeoutMs: 45_000 } },
+        },
       },
-    });
+      firstWaitMs: 30_000,
+      remainingWaitMs: 10_000,
+      messageId: "slow-success",
+    },
+    {
+      label: "resolved socket timing override",
+      extraOptions: {
+        cfg: {
+          ...DEFAULT_WEB_INBOX_CONFIG,
+          web: { whatsapp: { defaultQueryTimeoutMs: 5_000 } },
+        },
+        socketTiming: {
+          ...DEFAULT_WHATSAPP_SOCKET_TIMING,
+          defaultQueryTimeoutMs: 45_000,
+        },
+      },
+      firstWaitMs: 5_000,
+      remainingWaitMs: 35_000,
+      messageId: "override-slow-success",
+    },
+  ] satisfies Array<{
+    label: string;
+    extraOptions: Partial<InboxMonitorOptions>;
+    firstWaitMs: number;
+    remainingWaitMs: number;
+    messageId: string;
+  }>)("lets slow socket sends complete with $label", async (scenario) => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(
+      onMessage as InboxOnMessage,
+      scenario.extraOptions,
+    );
     vi.useFakeTimers();
     try {
       sock.sendMessage.mockImplementationOnce(
         async () =>
           await new Promise((resolve) => {
-            setTimeout(() => resolve({ key: { id: "slow-success" } }), 40_000);
+            setTimeout(() => resolve({ key: { id: scenario.messageId } }), 40_000);
           }),
       );
 
@@ -836,11 +869,11 @@ describe("web monitor inbox", () => {
         settled = true;
       });
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(scenario.firstWaitMs);
       expect(settled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(10_000);
-      await expect(sendPromise).resolves.toMatchObject({ messageId: "slow-success" });
+      await vi.advanceTimersByTimeAsync(scenario.remainingWaitMs);
+      await expect(sendPromise).resolves.toMatchObject({ messageId: scenario.messageId });
       expect(vi.getTimerCount()).toBe(0);
       expect(sock.sendMessage).toHaveBeenCalledTimes(1);
     } finally {
