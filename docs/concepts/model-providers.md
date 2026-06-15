@@ -264,7 +264,7 @@ Gemini CLI JSON replies are parsed from `response`; usage falls back to `stats`,
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-5.1`
+- Example model: `zai/glm-5.2`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Model refs use the canonical `zai/*` provider ID.
   - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface
@@ -309,7 +309,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | NVIDIA                                  | `nvidia`                         | `NVIDIA_API_KEY`                                             | `nvidia/nvidia/nemotron-3-ultra-550b-a55b`                 |
 | NovitaAI                                | `novita`                         | `NOVITA_API_KEY`                                             | `novita/deepseek/deepseek-v3-0324`                         |
 | [Ollama Cloud](/providers/ollama-cloud) | `ollama-cloud`                   | `OLLAMA_API_KEY`                                             | `ollama-cloud/kimi-k2.6`                                   |
-| OpenRouter                              | `openrouter`                     | `OPENROUTER_API_KEY`                                         | `openrouter/auto`                                          |
+| OpenRouter                              | `openrouter`                     | OpenRouter OAuth or `OPENROUTER_API_KEY`                     | `openrouter/auto`                                          |
 | Qianfan                                 | `qianfan`                        | `QIANFAN_API_KEY`                                            | `qianfan/deepseek-v3.2`                                    |
 | Qwen Cloud                              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                                        |
 | [Qwen OAuth](/providers/qwen-oauth)     | `qwen-oauth`                     | `QWEN_API_KEY`                                               | `qwen-oauth/qwen3.5-plus`                                  |
@@ -368,6 +368,7 @@ Kimi K2 model IDs:
 [//]: # "moonshot-kimi-k2-model-refs:start"
 
 - `moonshot/kimi-k2.6`
+- `moonshot/kimi-k2.7-code`
 - `moonshot/kimi-k2.5`
 - `moonshot/kimi-k2-thinking`
 - `moonshot/kimi-k2-thinking-turbo`
@@ -532,7 +533,7 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
 
 <Note>
-On MiniMax's Anthropic-compatible streaming path, OpenClaw disables thinking by default unless you explicitly set it, and `/fast on` rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
+On MiniMax's Anthropic-compatible streaming path, OpenClaw disables thinking by default for the M2.x family unless you explicitly set it; MiniMax-M3 (and M3.x) stays on the provider's omitted/adaptive thinking path by default. `/fast on` rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 </Note>
 
 Plugin-owned capability split:

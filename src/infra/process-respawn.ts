@@ -104,7 +104,9 @@ export function respawnGatewayProcessForUpdate(
   if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
-  const supervisor = detectRespawnSupervisor(process.env);
+  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
+    includeLinuxOpenClawGatewayServiceMarker: true,
+  });
   if (supervisor) {
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();

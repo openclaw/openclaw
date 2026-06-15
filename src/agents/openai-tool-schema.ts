@@ -6,6 +6,7 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { shouldOmitEmptyArrayItems } from "../plugins/provider-model-compat.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import { projectOpenAITools, type OpenAIToolProjection } from "./openai-tool-projection.js";
 
 /**
  * OpenAI strict-tool-schema normalization and diagnostics.
@@ -20,6 +21,7 @@ type ToolSchemaCompatInput = {
 
 type ToolWithParameters = {
   name?: unknown;
+  description?: unknown;
   parameters: unknown;
 };
 
@@ -183,22 +185,29 @@ type OpenAIStrictToolSchemaDiagnostic = {
 export function findOpenAIStrictToolSchemaDiagnostics(
   tools: readonly ToolWithParameters[],
 ): OpenAIStrictToolSchemaDiagnostic[] {
-  return tools.flatMap((tool, toolIndex) => {
-    const violations = findStrictOpenAIJsonSchemaViolations(
-      normalizeStrictOpenAIJsonSchema(tool.parameters),
-      `${typeof tool.name === "string" && tool.name ? tool.name : `tool[${toolIndex}]`}.parameters`,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [
-      {
-        toolIndex,
-        ...(typeof tool.name === "string" && tool.name ? { toolName: tool.name } : {}),
-        violations,
-      },
-    ];
-  });
+  return findOpenAIStrictToolProjectionDiagnostics(projectOpenAITools(tools));
+}
+
+/** Returns strict-schema diagnostics for an already materialized OpenAI tool projection. */
+export function findOpenAIStrictToolProjectionDiagnostics(
+  projection: OpenAIToolProjection,
+): OpenAIStrictToolSchemaDiagnostic[] {
+  return [
+    ...projection.diagnostics.map((diagnostic) => ({
+      toolIndex: diagnostic.toolIndex,
+      ...(diagnostic.toolName ? { toolName: diagnostic.toolName } : {}),
+      violations: [...diagnostic.violations],
+    })),
+    ...projection.tools.flatMap((tool) => {
+      const violations = findStrictOpenAIJsonSchemaViolations(
+        normalizeStrictOpenAIJsonSchema(tool.parameters),
+        `${tool.name}.parameters`,
+      );
+      return violations.length > 0
+        ? [{ toolIndex: tool.toolIndex, toolName: tool.name, violations }]
+        : [];
+    }),
+  ];
 }
 
 function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
@@ -319,8 +328,20 @@ export function resolveOpenAIStrictToolFlagForInventory(
   tools: readonly ToolWithParameters[],
   strict: boolean | null | undefined,
 ): boolean | undefined {
+  const projection = projectOpenAITools(tools);
+  if (strict === true && projection.diagnostics.length > 0) {
+    return false;
+  }
+  return resolveOpenAIStrictToolFlagForProjection(projection, strict);
+}
+
+/** Resolves the strict flag without reserializing an existing OpenAI tool projection. */
+export function resolveOpenAIStrictToolFlagForProjection(
+  projection: OpenAIToolProjection,
+  strict: boolean | null | undefined,
+): boolean | undefined {
   if (strict !== true) {
     return strict === false ? false : undefined;
   }
-  return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
+  return projection.tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
 }

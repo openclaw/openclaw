@@ -186,6 +186,13 @@
     display: none;
   }
 
+  .shell--nav-drawer-open .sidebar-shell__header .nav-collapse-toggle {
+    display: flex;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
   .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-shell__header {
     justify-content: center;
     align-items: center;
@@ -295,7 +302,7 @@
 }
 
 /* Mobile-specific styles */
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell {
     --shell-pad: 8px;
     --shell-gap: 8px;
@@ -356,7 +363,7 @@
 
   .topbar-status .pill {
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
     gap: 4px;
   }
 
@@ -374,7 +381,10 @@
   }
 
   .shell--nav-collapsed:not(.shell--nav-drawer-open) .shell-nav {
-    width: 78px;
+    width: min(92vw, 320px);
+    transform: translateX(-100%);
+    opacity: 0;
+    pointer-events: none;
   }
 
   .sidebar-shell,
@@ -610,7 +620,7 @@
   }
 
   .stat-label {
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
   }
 
   .stat-value {
@@ -766,15 +776,15 @@
   }
 
   .log-time {
-    font-size: 10px;
+    font-size: 12px; /* was 10px */
   }
 
   .log-level {
-    font-size: 9px;
+    font-size: 12px; /* was 9px */
   }
 
   .log-subsystem {
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
   }
 
   .log-message {
@@ -792,14 +802,14 @@
   }
 
   .list-sub {
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
   }
 
   /* Code blocks */
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
   }
 
   .theme-orb__trigger {
@@ -825,7 +835,7 @@
 
   .nav-item {
     padding: 6px 8px;
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
   }
 
   .content {
@@ -857,12 +867,12 @@
 
   .btn {
     padding: 6px 10px;
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
   }
 
   .topbar-status .pill {
     padding: 3px 6px;
-    font-size: 10px;
+    font-size: 12px; /* was 10px */
   }
 
   .theme-orb__trigger {
@@ -1061,7 +1071,7 @@
   .data-table th,
   .data-table td {
     padding: 6px 4px;
-    font-size: 11px;
+    font-size: 12px; /* was 11px */
   }
 
   .session-key-cell {

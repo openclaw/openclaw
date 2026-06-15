@@ -32,7 +32,12 @@ type IMessageApprovalReactionResolution = {
 };
 export type IMessageApprovalReactionHandleResult =
   | { handled: false; stopPolling: false }
-  | { handled: true; stopPolling: boolean };
+  | { handled: true; stopPolling: false }
+  | {
+      handled: true;
+      stopPolling: true;
+      stopPollingReason: "resolved" | "not-found" | "resolver-error";
+    };
 
 type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord;
 
@@ -585,7 +590,7 @@ export async function handleIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction resolved id=${target.approvalId} sender=${event.actorHandle} decision=${target.decision} via messageId=${matchedMessageId ?? event.messageId}`,
     );
-    return { handled: true, stopPolling: true };
+    return { handled: true, stopPolling: true, stopPollingReason: "resolved" };
   } catch (error) {
     if (isApprovalNotFoundError(error)) {
       for (const candidate of event.messageIdCandidates) {
@@ -598,7 +603,7 @@ export async function handleIMessageApprovalReaction(params: {
       params.logVerboseMessage?.(
         `imessage: approval reaction ignored for expired approval id=${target.approvalId} sender=${event.actorHandle}`,
       );
-      return { handled: true, stopPolling: true };
+      return { handled: true, stopPolling: true, stopPollingReason: "not-found" };
     }
     // Surface non-NotFound errors at warn level so a gateway 5xx / network
     // outage / auth failure is visible without OPENCLAW_LOG_LEVEL=debug.
@@ -616,7 +621,7 @@ export async function handleIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction failed id=${target.approvalId} sender=${event.actorHandle}: ${String(error)}`,
     );
-    return { handled: true, stopPolling: true };
+    return { handled: true, stopPolling: true, stopPollingReason: "resolver-error" };
   }
 }
 

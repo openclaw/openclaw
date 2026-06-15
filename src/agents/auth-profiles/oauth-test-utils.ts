@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { setTestEnvValue } from "../../test-utils/env.js";
 import type { resolveApiKeyForProfile } from "./oauth.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { saveAuthProfileStore } from "./store.js";
@@ -73,8 +74,8 @@ export async function createOAuthTestTempRoot(prefix: string): Promise<string> {
 /** Create and export the main agent dir for OAuth tests. */
 export async function createOAuthMainAgentDir(stateDir: string): Promise<string> {
   const agentDir = path.join(stateDir, "agents", "main", "agent");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  process.env.OPENCLAW_AGENT_DIR = agentDir;
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
   await fs.mkdir(agentDir, { recursive: true });
   return agentDir;
 }

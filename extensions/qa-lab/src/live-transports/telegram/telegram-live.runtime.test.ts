@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { summarizeLiveTransportRttSamples } from "../shared/live-transport-rtt.js";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
@@ -159,6 +160,78 @@ describe("telegram live qa runtime", () => {
     }
   });
 
+  it("normalizes Telegram RTT options", () => {
+    expect(testing.normalizeTelegramQaRttOptions({})).toBeUndefined();
+    expect(
+      testing.normalizeTelegramQaRttOptions({
+        count: 3,
+        timeoutMs: 45_000,
+      }),
+    ).toEqual({
+      count: 3,
+      maxFailures: 3,
+      checkIds: new Set(["telegram-mentioned-message-reply"]),
+      timeoutMs: 45_000,
+    });
+    expect(
+      testing.normalizeTelegramQaRttOptions({
+        checkIds: ["telegram-mentioned-message-reply"],
+        count: 3,
+        maxFailures: 1,
+      }),
+    ).toEqual({
+      count: 3,
+      maxFailures: 1,
+      checkIds: new Set(["telegram-mentioned-message-reply"]),
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("rejects unknown Telegram RTT checks", () => {
+    expect(() =>
+      testing.normalizeTelegramQaRttOptions({
+        checkIds: ["telegram-rtt-only"],
+        count: 1,
+      }),
+    ).toThrow("unknown Telegram QA RTT check: telegram-rtt-only");
+  });
+
+  it("summarizes live transport RTT timing", () => {
+    expect(
+      summarizeLiveTransportRttSamples([
+        { status: "pass", rttMs: 1000 },
+        { status: "pass", rttMs: 2000 },
+        { status: "pass", rttMs: 4000 },
+        { status: "fail" },
+      ]),
+    ).toEqual({
+      passed: 3,
+      failed: 1,
+      timing: {
+        rttMs: 2000,
+        avgMs: 2333,
+        p50Ms: 2000,
+        p95Ms: 4000,
+        maxMs: 4000,
+        samples: 4,
+        failedSamples: 1,
+      },
+    });
+    expect(summarizeLiveTransportRttSamples([{ status: "fail" }, { status: "fail" }])).toEqual({
+      passed: 0,
+      failed: 2,
+      timing: {
+        rttMs: undefined,
+        avgMs: undefined,
+        p50Ms: undefined,
+        p95Ms: undefined,
+        maxMs: undefined,
+        samples: 2,
+        failedSamples: 2,
+      },
+    });
+  });
+
   it("sanitizes and truncates Telegram live progress details", () => {
     expect(testing.sanitizeTelegramQaProgressValue("scenario\nid\tvalue")).toBe(
       "scenario id value",
@@ -286,6 +359,95 @@ describe("telegram live qa runtime", () => {
     });
   });
 
+  it("normalizes Telegram rich messages as observed text", () => {
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 8,
+        message: {
+          message_id: 10,
+          date: 1_700_000_001,
+          rich_message: { markdown: "**hello** rich" },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+          reply_to_message: { message_id: 9 },
+        },
+      })?.text,
+    ).toBe("**hello** rich");
+
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 9,
+        message: {
+          message_id: 11,
+          date: 1_700_000_002,
+          rich_message: { html: "<b>hello</b> rich" },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+        },
+      })?.text,
+    ).toBe("<b>hello</b> rich");
+
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 10,
+        message: {
+          message_id: 12,
+          date: 1_700_000_003,
+          rich_message: {
+            blocks: [
+              {
+                type: "paragraph",
+                text: ["hello ", { type: "bold", text: "rich" }],
+              },
+              {
+                type: "footer",
+                text: { type: "italic", text: "footer" },
+              },
+            ],
+          },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+        },
+      })?.text,
+    ).toBe("hello rich\nfooter");
+
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 11,
+        message: {
+          message_id: 13,
+          date: 1_700_000_004,
+          rich_message: {
+            blocks: [
+              {
+                type: "table",
+                cells: [[{ text: "Open" }, { text: "Claw" }], [{ text: "release" }]],
+              },
+            ],
+          },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+        },
+      })?.text,
+    ).toBe("Open\tClaw\nrelease");
+  });
+
   it("ignores unrelated sut replies when matching the canary response", () => {
     expect(
       testing.classifyCanaryReply({
@@ -350,6 +512,27 @@ describe("telegram live qa runtime", () => {
         },
       }),
     ).toBe("match");
+  });
+
+  it("keeps scenario text checks strict while allowing canary presence replies", () => {
+    const message = {
+      updateId: 3,
+      messageId: 11,
+      chatId: -100123,
+      senderId: 88,
+      senderIsBot: true,
+      senderUsername: "sut_bot",
+      text: "",
+      replyToMessageId: 55,
+      timestamp: 1_700_000_002_000,
+      inlineButtons: [],
+      mediaKinds: [],
+    };
+
+    expect(() => testing.assertTelegramScenarioReply({ message })).toThrow(
+      "reply message 11 was empty",
+    );
+    expect(() => testing.assertTelegramCanaryPresenceReply(message)).not.toThrow();
   });
 
   it("fails when any requested Telegram scenario id is unknown", () => {
@@ -470,6 +653,10 @@ describe("telegram live qa runtime", () => {
         .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
         ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
     ).toBe(true);
+    expect(
+      scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply")
+        ?.evidenceCoverageIds,
+    ).toEqual(["channels.telegram.mention-gating"]);
     const replyChainStep = requireScenario(scenarios, "telegram-reply-chain-exact-marker").buildRun(
       "sut_bot",
     ).steps[0];
@@ -1030,157 +1217,6 @@ describe("telegram live qa runtime", () => {
     expect(observedMessages[0]?.scenarioId).toBe("telegram-whoami-command");
   });
 
-  it("redacts observed message content by default in artifacts", () => {
-    expect(
-      testing.buildObservedMessagesArtifact({
-        includeContent: false,
-        redactMetadata: false,
-        observedMessages: [
-          {
-            updateId: 1,
-            messageId: 9,
-            chatId: -100123,
-            senderId: 42,
-            senderIsBot: true,
-            senderUsername: "driver_bot",
-            text: "secret text",
-            caption: "secret caption",
-            replyToMessageId: 8,
-            timestamp: 1_700_000_000_000,
-            inlineButtons: ["Approve"],
-            mediaKinds: ["photo"],
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        updateId: 1,
-        messageId: 9,
-        chatId: -100123,
-        senderId: 42,
-        senderIsBot: true,
-        senderUsername: "driver_bot",
-        replyToMessageId: 8,
-        timestamp: 1_700_000_000_000,
-        inlineButtons: ["Approve"],
-        mediaKinds: ["photo"],
-      },
-    ]);
-  });
-
-  it("keeps observed message content in public mode when capture is requested", () => {
-    const redacted = testing.buildObservedMessagesArtifact({
-      includeContent: true,
-      redactMetadata: true,
-      observedMessages: [
-        {
-          updateId: 1,
-          messageId: 9,
-          chatId: -100123,
-          senderId: 42,
-          senderIsBot: true,
-          senderUsername: "driver_bot",
-          text: "secret text",
-          caption: "secret caption",
-          replyToMessageId: 8,
-          timestamp: 1_700_000_000_000,
-          inlineButtons: ["Approve"],
-          mediaKinds: ["photo"],
-        },
-      ],
-    });
-
-    expect(redacted).toEqual([
-      {
-        senderIsBot: true,
-        inlineButtonCount: 1,
-        mediaKinds: ["photo"],
-        text: "secret text",
-        caption: "secret caption",
-      },
-    ]);
-    expect(redacted[0]).not.toHaveProperty("timestamp");
-    expect(redacted[0]).not.toHaveProperty("inlineButtons");
-    expect(redacted[0]).not.toHaveProperty("senderId");
-    expect(redacted[0]).not.toHaveProperty("senderUsername");
-  });
-
-  it("keeps raw timestamp and inline button text when metadata redaction is disabled", () => {
-    expect(
-      testing.buildObservedMessagesArtifact({
-        includeContent: true,
-        redactMetadata: false,
-        observedMessages: [
-          {
-            updateId: 1,
-            messageId: 9,
-            chatId: -100123,
-            senderId: 42,
-            senderIsBot: true,
-            senderUsername: "driver_bot",
-            text: "secret text",
-            caption: "secret caption",
-            replyToMessageId: 8,
-            timestamp: 1_700_000_000_000,
-            inlineButtons: ["Approve"],
-            mediaKinds: ["photo"],
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        updateId: 1,
-        messageId: 9,
-        chatId: -100123,
-        senderId: 42,
-        senderIsBot: true,
-        timestamp: 1_700_000_000_000,
-        inlineButtons: ["Approve"],
-        senderUsername: "driver_bot",
-        replyToMessageId: 8,
-        text: "secret text",
-        caption: "secret caption",
-        mediaKinds: ["photo"],
-      },
-    ]);
-  });
-
-  it("adds scenario context to observed message artifacts", () => {
-    expect(
-      testing.buildObservedMessagesArtifact({
-        includeContent: false,
-        redactMetadata: true,
-        observedMessages: [
-          {
-            updateId: 11,
-            messageId: 21,
-            chatId: -100123,
-            senderId: 88,
-            senderIsBot: true,
-            senderUsername: "sut_bot",
-            scenarioId: "telegram-commands-command",
-            scenarioTitle: "Telegram commands list reply",
-            matchedScenario: false,
-            text: "noise from previous turn",
-            replyToMessageId: 19,
-            timestamp: 1_700_000_003_000,
-            inlineButtons: [],
-            mediaKinds: [],
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        scenarioId: "telegram-commands-command",
-        scenarioTitle: "Telegram commands list reply",
-        matchedScenario: false,
-        senderIsBot: true,
-        inlineButtonCount: 0,
-        mediaKinds: [],
-      },
-    ]);
-  });
-
   it("prints Telegram scenario RTT in the Markdown report", () => {
     expect(
       testing.renderTelegramQaMarkdown({
@@ -1201,6 +1237,38 @@ describe("telegram live qa runtime", () => {
         ],
       }),
     ).toContain("- RTT: 4321ms");
+  });
+
+  it("prints Telegram repeated RTT timing in the Markdown report", () => {
+    const report = testing.renderTelegramQaMarkdown({
+      cleanupIssues: [],
+      credentialSource: "env",
+      groupId: "-100123",
+      redactMetadata: false,
+      startedAt: "2026-04-23T00:00:00.000Z",
+      finishedAt: "2026-04-23T00:00:10.000Z",
+      scenarios: [
+        {
+          id: "telegram-mentioned-message-reply",
+          title: "Telegram mentioned message gets a reply",
+          status: "pass",
+          details: "reply matched; 3/4 RTT checks passed",
+          rttMs: 2000,
+          timing: {
+            avgMs: 2333,
+            p50Ms: 2000,
+            p95Ms: 4000,
+            maxMs: 4000,
+            samples: 4,
+            failedSamples: 1,
+          },
+        },
+      ],
+    });
+
+    expect(report).toContain("- Samples: 3/4");
+    expect(report).toContain("- P50: 2000ms");
+    expect(report).toContain("- P95: 4000ms");
   });
 
   it("formats phase-specific canary diagnostics with context", () => {

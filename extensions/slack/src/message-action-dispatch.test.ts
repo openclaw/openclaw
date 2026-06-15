@@ -1,6 +1,7 @@
 // Slack tests cover message action dispatch plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
+import { extractSlackToolSend } from "./message-actions.js";
 
 function createInvokeSpy() {
   return vi.fn(async (action: Record<string, unknown>, _cfg?: unknown, _toolContext?: unknown) => ({
@@ -546,5 +547,83 @@ describe("handleSlackMessageAction", () => {
         invoke: createInvokeSpy() as never,
       }),
     ).rejects.toThrow(/fileId/i);
+  });
+});
+
+describe("extractSlackToolSend", () => {
+  it("maps native thread and top-level fields into send telemetry", () => {
+    expect(
+      extractSlackToolSend({
+        action: "sendMessage",
+        to: "channel:C1",
+        threadTs: "171.222",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "171.222",
+    });
+    expect(
+      extractSlackToolSend({
+        action: "sendMessage",
+        to: "channel:C1",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadImplicit: true,
+    });
+    expect(
+      extractSlackToolSend({
+        action: "uploadFile",
+        to: "channel:C1",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadImplicit: true,
+    });
+    expect(
+      extractSlackToolSend({
+        action: "sendMessage",
+        to: "channel:C1",
+        threadTs: null,
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadSuppressed: true,
+    });
+  });
+
+  it("maps generic send and upload thread precedence into telemetry", () => {
+    expect(
+      extractSlackToolSend({
+        action: "send",
+        to: "channel:C1",
+        threadId: "111.000",
+        replyTo: "999.000",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "999.000",
+    });
+    expect(
+      extractSlackToolSend({
+        action: "upload-file",
+        to: "channel:C1",
+        threadId: "111.000",
+        replyTo: "999.000",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "111.000",
+    });
+    expect(
+      extractSlackToolSend({
+        action: "upload-file",
+        to: "channel:C1",
+        replyTo: "999.000",
+      }),
+    ).toMatchObject({
+      to: "channel:C1",
+      threadId: "999.000",
+    });
   });
 });

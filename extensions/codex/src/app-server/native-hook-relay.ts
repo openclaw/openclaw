@@ -29,6 +29,8 @@ const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 /** Extra relay lifetime after the expected turn budget, preventing late hook drops. */
 export const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
+const CODEX_NATIVE_HOOK_RELAY_COMMAND_MIN_PARENT_MARGIN_MS = 250;
+const CODEX_NATIVE_HOOK_RELAY_COMMAND_MAX_PARENT_MARGIN_MS = 1_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 
@@ -263,8 +265,10 @@ export function buildCodexNativeHookRelayConfig(params: {
       }
       continue;
     }
-    const command = params.relay.commandForEvent(event);
     const timeout = normalizeHookTimeoutSec(params.hookTimeoutSec);
+    const command = params.relay.commandForEvent(event, {
+      timeoutMs: resolveCodexNativeHookRelayCommandTimeoutMs(timeout),
+    });
     config[`hooks.${codexEvent}`] = [
       {
         hooks: [
@@ -309,6 +313,18 @@ export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
 
 function normalizeHookTimeoutSec(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.ceil(value) : 5;
+}
+
+export function resolveCodexNativeHookRelayCommandTimeoutMs(
+  hookTimeoutSec: number | undefined,
+): number {
+  const parentTimeoutMs =
+    finiteSecondsToTimerSafeMilliseconds(normalizeHookTimeoutSec(hookTimeoutSec)) ?? 5_000;
+  const parentMarginMs = Math.min(
+    CODEX_NATIVE_HOOK_RELAY_COMMAND_MAX_PARENT_MARGIN_MS,
+    Math.max(CODEX_NATIVE_HOOK_RELAY_COMMAND_MIN_PARENT_MARGIN_MS, Math.floor(parentTimeoutMs / 5)),
+  );
+  return Math.max(1, parentTimeoutMs - parentMarginMs);
 }
 
 function codexCommandHookTrustedHash(params: {
