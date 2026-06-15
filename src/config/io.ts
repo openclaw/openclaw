@@ -284,8 +284,6 @@ export type ConfigWriteOptions = {
   includeFileHashesForWrite?: Record<string, string>;
   /** Internal snapshot-time canonical targets for include files that mutation writers may update. */
   includeFileTargetsForWrite?: Record<string, string>;
-  /** Internal snapshot-time include roots, already expanded with this ConfigIO's homedir. */
-  includeRootsForWrite?: readonly string[];
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -2256,7 +2254,6 @@ export function createConfigIO(
         expectedConfigPath: configPath,
         includeFileHashesForWrite: result.includeFileHashesForWrite,
         includeFileTargetsForWrite: result.includeFileTargetsForWrite,
-        includeRootsForWrite: resolveIncludeRoots(deps.env, deps.homedir),
         unsetPaths: resolveManagedUnsetPathsForWrite(undefined),
       },
     };

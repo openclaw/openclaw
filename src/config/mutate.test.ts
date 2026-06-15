@@ -789,7 +789,7 @@ describe("config mutate helpers", () => {
             writeConfigFile: ioMocks.writeConfigFile,
           },
         }),
-      ).rejects.toThrow("Include write path resolves outside config directory");
+      ).rejects.toThrow("Config mutation cannot update external $include target");
 
       await expect(fs.stat(outsidePluginsPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
@@ -1010,7 +1010,7 @@ describe("config mutate helpers", () => {
     expect(persistedPlugins.entries?.["strict-plugin"]).toEqual({ enabled: true });
   });
 
-  it("uses snapshot-resolved OPENCLAW_INCLUDE_ROOTS for direct include writes", async () => {
+  it("rejects direct mutations to external include roots", async () => {
     const home = await suiteRootTracker.make("include-allowed-root");
     const sharedRoot = path.join(home, "shared");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -1042,25 +1042,26 @@ describe("config mutate helpers", () => {
       writeOptions: { expectedConfigPath: configPath },
     });
 
-    await replaceConfigFile({
-      baseHash: snapshot.hash,
-      snapshot,
-      writeOptions: {
-        expectedConfigPath: snapshot.path,
-        includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-        includeRootsForWrite: [sharedRoot],
-      },
-      nextConfig,
-      io: {
-        env: { OPENCLAW_INCLUDE_ROOTS: "~/shared" },
-        readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
-        writeConfigFile: ioMocks.writeConfigFile,
-      },
-    });
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig,
+        io: {
+          env: { OPENCLAW_INCLUDE_ROOTS: "~/shared" },
+          readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+          writeConfigFile: ioMocks.writeConfigFile,
+        },
+      }),
+    ).rejects.toThrow("Config mutation cannot update external $include target");
 
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
     await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(
-      `${JSON.stringify(nextConfig.plugins, null, 2)}\n`,
+      `${JSON.stringify({ entries: {} }, null, 2)}\n`,
     );
   });
 
@@ -1314,124 +1315,6 @@ describe("config mutate helpers", () => {
       setRuntimeConfigSnapshotRefreshHandler(null);
     }
   });
-
-  it.runIf(process.platform !== "win32")(
-    "rejects an include target retargeted after the snapshot",
-    async () => {
-      const home = await suiteRootTracker.make("include-target-retarget");
-      const targetA = await suiteRootTracker.make("include-target-retarget-a");
-      const targetB = await suiteRootTracker.make("include-target-retarget-b");
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const linkPath = path.join(home, ".openclaw", "shared");
-      const pluginsPath = path.join(linkPath, "plugins.json5");
-      const targetAPluginsPath = path.join(targetA, "plugins.json5");
-      const targetBPluginsPath = path.join(targetB, "plugins.json5");
-      const rootConfig = { plugins: { $include: "./shared/plugins.json5" } };
-      const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
-      await fs.writeFile(targetAPluginsPath, initialPluginsRaw, "utf-8");
-      await fs.writeFile(targetBPluginsPath, initialPluginsRaw, "utf-8");
-      await fs.symlink(targetA, linkPath);
-      const snapshot = createSnapshot({
-        hash: "hash-include-target-retarget",
-        path: configPath,
-        parsed: rootConfig,
-        sourceConfig: { plugins: { entries: {} } },
-      });
-      await fs.unlink(linkPath);
-      await fs.symlink(targetB, linkPath);
-
-      await expect(
-        replaceConfigFile({
-          baseHash: snapshot.hash,
-          snapshot,
-          writeOptions: {
-            expectedConfigPath: snapshot.path,
-            includeFileHashesForWrite: { [pluginsPath]: hashConfigIncludeRaw(initialPluginsRaw) },
-            includeFileTargetsForWrite: {
-              [pluginsPath]: await resolveIncludeTarget(targetAPluginsPath),
-            },
-          },
-          nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
-          io: {
-            env: { OPENCLAW_INCLUDE_ROOTS: [targetA, targetB].join(path.delimiter) },
-            readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
-            writeConfigFile: ioMocks.writeConfigFile,
-          },
-        }),
-      ).rejects.toThrow("included config target changed since last load");
-
-      await expect(fs.readFile(targetAPluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
-      await expect(fs.readFile(targetBPluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
-    },
-  );
-
-  it.runIf(process.platform !== "win32").each(["preflight", "backup"] as const)(
-    "rejects an include target retargeted during %s",
-    async (phase) => {
-      const home = await suiteRootTracker.make(`include-target-retarget-${phase}`);
-      const targetA = await suiteRootTracker.make(`include-target-retarget-${phase}-a`);
-      const targetB = await suiteRootTracker.make(`include-target-retarget-${phase}-b`);
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const linkPath = path.join(home, ".openclaw", "shared");
-      const pluginsPath = path.join(linkPath, "plugins.json5");
-      const targetAPluginsPath = path.join(targetA, "plugins.json5");
-      const targetBPluginsPath = path.join(targetB, "plugins.json5");
-      const rootConfig = { plugins: { $include: "./shared/plugins.json5" } };
-      const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
-      await fs.writeFile(targetAPluginsPath, initialPluginsRaw, "utf-8");
-      await fs.writeFile(targetBPluginsPath, initialPluginsRaw, "utf-8");
-      await fs.symlink(targetA, linkPath);
-      const expectedTarget = await resolveIncludeTarget(targetAPluginsPath);
-      const snapshot = createSnapshot({
-        hash: `hash-include-target-retarget-${phase}`,
-        path: configPath,
-        parsed: rootConfig,
-        sourceConfig: { plugins: { entries: {} } },
-      });
-      const retarget = async () => {
-        await fs.unlink(linkPath);
-        await fs.symlink(targetB, linkPath);
-      };
-      if (phase === "backup") {
-        backupMocks.maintainConfigBackups.mockImplementationOnce(retarget);
-      }
-
-      try {
-        if (phase === "preflight") {
-          setRuntimeConfigSnapshotRefreshHandler({
-            preflight: retarget,
-            refresh: () => true,
-          });
-        }
-        await expect(
-          replaceConfigFile({
-            baseHash: snapshot.hash,
-            snapshot,
-            writeOptions: {
-              expectedConfigPath: snapshot.path,
-              includeFileHashesForWrite: { [pluginsPath]: hashConfigIncludeRaw(initialPluginsRaw) },
-              includeFileTargetsForWrite: { [pluginsPath]: expectedTarget },
-            },
-            nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
-            io: {
-              env: { OPENCLAW_INCLUDE_ROOTS: [targetA, targetB].join(path.delimiter) },
-              readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
-              writeConfigFile: ioMocks.writeConfigFile,
-            },
-          }),
-        ).rejects.toThrow("included config target changed since last load");
-
-        await expect(fs.readFile(targetAPluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
-        await expect(fs.readFile(targetBPluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
-      } finally {
-        setRuntimeConfigSnapshotRefreshHandler(null);
-      }
-    },
-  );
 
   it.runIf(process.platform !== "win32")(
     "does not create a missing include through a parent symlink swapped during preflight",

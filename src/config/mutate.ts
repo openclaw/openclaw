@@ -12,7 +12,12 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
-import { hashConfigIncludeRaw, INCLUDE_KEY, resolveConfigIncludeWritePath } from "./includes.js";
+import {
+  ConfigIncludeError,
+  hashConfigIncludeRaw,
+  INCLUDE_KEY,
+  resolveConfigIncludeWritePath,
+} from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
   readConfigFileSnapshotForWrite,
@@ -29,7 +34,7 @@ import {
 } from "./io.write-prepare.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
-import { resolveConfigPath, resolveIncludeRoots } from "./paths.js";
+import { resolveConfigPath } from "./paths.js";
 import {
   createRuntimeConfigWriteNotification,
   finalizeRuntimeSnapshotWrite,
@@ -324,7 +329,21 @@ async function resolveExpectedRootBoundIncludeFile(params: {
   allowedRoots: readonly string[];
   expectedAbsolutePath: string;
 }): Promise<RootBoundIncludeFile> {
-  const target = await resolveRootBoundIncludeFile(params);
+  let target: RootBoundIncludeFile;
+  try {
+    target = await resolveRootBoundIncludeFile(params);
+  } catch (error) {
+    if (
+      error instanceof ConfigIncludeError ||
+      (error instanceof Error &&
+        error.message.startsWith("Config include write path has no approved existing root:"))
+    ) {
+      throw new ConfigMutationConflictError("included config target changed since last load", {
+        currentHash: null,
+      });
+    }
+    throw error;
+  }
   if (path.normalize(target.absolutePath) !== path.normalize(params.expectedAbsolutePath)) {
     throw new ConfigMutationConflictError("included config target changed since last load", {
       currentHash: null,
@@ -488,12 +507,18 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const nextConfigRecord = nextConfig as Record<string, unknown>;
 
   const writeEnv = params.io?.env ?? process.env;
-  const allowedRoots = params.writeOptions?.includeRootsForWrite ?? resolveIncludeRoots(writeEnv);
+  const allowedRoots: readonly string[] = [];
   const expectedIncludeTarget = params.writeOptions?.includeFileTargetsForWrite?.[includePath];
   if (!expectedIncludeTarget) {
     throw new ConfigMutationConflictError("included config target changed since last load", {
       currentHash: null,
     });
+  }
+  const configRoot = await fs.realpath(path.dirname(params.snapshot.path));
+  if (!isPathInside(configRoot, expectedIncludeTarget)) {
+    throw new Error(
+      `Config mutation cannot update external $include target ${includePath}; edit the included file directly or move it under the config directory.`,
+    );
   }
   const includeTarget = await resolveExpectedRootBoundIncludeFile({
     configPath: params.snapshot.path,

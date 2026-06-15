@@ -73,7 +73,6 @@ export type ConfigSnapshotForInstallPersist = {
     | "envSnapshotForRestore"
     | "includeFileHashesForWrite"
     | "includeFileTargetsForWrite"
-    | "includeRootsForWrite"
   >;
 };
 
