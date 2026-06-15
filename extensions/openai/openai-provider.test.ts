@@ -849,6 +849,20 @@ describe("buildOpenAIProvider", () => {
         auth: "api-key",
       },
     } as never);
+    const runtimeModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      modelRegistry: { find: () => null },
+      agentRuntimeId: "codex",
+    } as never);
+    const apiKeyRuntimeModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      modelRegistry: { find: () => null },
+      agentRuntimeId: "codex",
+      authProfileId: "openai:api-key",
+      authProfileMode: "api_key",
+    } as never);
     const unknownModelHint = provider.buildUnknownModelHint?.({
       provider: "openai",
       modelId: "gpt-5.3-codex-spark",
@@ -864,7 +878,18 @@ describe("buildOpenAIProvider", () => {
       contextTokens: 128_000,
       maxTokens: 128_000,
     });
+    expectFields(runtimeModel, {
+      provider: "openai",
+      id: "gpt-5.3-codex-spark",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      input: ["text"],
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+      maxTokens: 128_000,
+    });
     expect(apiKeyModel).toBeUndefined();
+    expect(apiKeyRuntimeModel).toBeUndefined();
     expect(unknownModelHint).toContain("ChatGPT/Codex OAuth");
     expect(unknownModelHint).toContain("OpenAI API-key auth cannot use this model");
   });

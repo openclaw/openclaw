@@ -39,7 +39,13 @@ type DynamicModelContext = {
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistryLike;
-  providerConfig?: { api?: string | null; baseUrl?: string };
+  agentRuntimeId?: string;
+  authProfileMode?: "api_key" | "aws-sdk" | "oauth" | "token";
+  providerConfig?: {
+    api?: string | null;
+    auth?: "api-key" | "aws-sdk" | "oauth" | "token";
+    baseUrl?: string;
+  };
 };
 
 type ResolvedModelLike = Record<string, unknown>;
@@ -296,9 +302,22 @@ function buildDynamicModel(
       const isLegacyGpt54Alias = lower === "gpt-5.4-codex";
       const isSparkModel = lower === "gpt-5.3-codex-spark";
       const exactModel = params.modelRegistry.find("openai", modelId) as ResolvedModelLike | null;
+      const explicitResponsesAuth =
+        params.authProfileMode === "api_key" ||
+        params.authProfileMode === "aws-sdk" ||
+        params.providerConfig?.auth === "api-key" ||
+        params.providerConfig?.auth === "aws-sdk";
+      const explicitCodexAuth =
+        params.authProfileMode === "oauth" ||
+        params.authProfileMode === "token" ||
+        params.providerConfig?.auth === "oauth" ||
+        params.providerConfig?.auth === "token";
       const providerConfigSelectsChatGpt =
-        params.providerConfig?.api === "openai-chatgpt-responses" ||
-        isNativeOpenAICodexBaseUrl(params.providerConfig?.baseUrl);
+        !explicitResponsesAuth &&
+        (explicitCodexAuth ||
+          params.providerConfig?.api === "openai-chatgpt-responses" ||
+          isNativeOpenAICodexBaseUrl(params.providerConfig?.baseUrl) ||
+          params.agentRuntimeId === "codex");
       if (
         lower === "gpt-5.5" &&
         (providerConfigSelectsChatGpt || isOpenAIChatGptModelTemplate(exactModel))
@@ -695,7 +714,13 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       context: {
         modelId: string;
         modelRegistry: ModelRegistryLike;
-        providerConfig?: { api?: string | null; baseUrl?: string };
+        agentRuntimeId?: string;
+        authProfileMode?: "api_key" | "aws-sdk" | "oauth" | "token";
+        providerConfig?: {
+          api?: string | null;
+          auth?: "api-key" | "aws-sdk" | "oauth" | "token";
+          baseUrl?: string;
+        };
       };
     }) =>
       handledDynamicProviders.has(params.provider)
@@ -704,6 +729,8 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
               provider: params.provider,
               modelId: params.context.modelId,
               modelRegistry: params.context.modelRegistry,
+              agentRuntimeId: params.context.agentRuntimeId,
+              authProfileMode: params.context.authProfileMode,
               providerConfig: params.context.providerConfig,
             },
             {

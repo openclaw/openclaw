@@ -22,6 +22,7 @@ import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
@@ -1134,6 +1135,12 @@ function resolvePluginDynamicModelWithRegistry(params: {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const agentHarnessPolicy = resolveAgentHarnessPolicy({ provider, modelId, config: cfg });
+  const agentRuntimeId =
+    agentHarnessPolicy.runtimeSource !== "implicit" ||
+    cfg?.plugins?.entries?.codex?.enabled === true
+      ? agentHarnessPolicy.runtime
+      : undefined;
   const authProfile = resolveDynamicModelAuthProfile({
     provider,
     cfg,
@@ -1157,6 +1164,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
       config: cfg,
       agentDir,
       workspaceDir,
+      ...(agentRuntimeId ? { agentRuntimeId } : {}),
       provider,
       modelId,
       modelRegistry,

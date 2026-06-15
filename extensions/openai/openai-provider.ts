@@ -515,7 +515,11 @@ function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelC
   if (ctx.providerConfig?.baseUrl && !isOpenAIApiBaseUrl(ctx.providerConfig.baseUrl)) {
     return false;
   }
-  return resolveConfiguredAuthTransport(ctx) === "codex";
+  const authTransport = resolveConfiguredAuthTransport(ctx);
+  if (authTransport) {
+    return authTransport === "codex";
+  }
+  return ctx.agentRuntimeId === "codex";
 }
 
 function buildOpenAIUnknownModelHint(modelId: string): string | undefined {

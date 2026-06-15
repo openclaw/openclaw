@@ -213,6 +213,58 @@ describe("resolveModel forward-compat errors and overrides", () => {
     );
   });
 
+  it("resolves suppressed openai gpt-5.3-codex-spark through model-scoped Codex runtime", () => {
+    mockOpenAICodexTemplateModel(discoverModels);
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.3-codex-spark": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(
+      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
+    );
+  });
+
+  it("keeps model-scoped Codex runtime blocked for explicit OpenAI API-key provider config", () => {
+    mockOpenAICodexTemplateModel(discoverModels);
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.3-codex-spark": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            auth: "api-key",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("OpenAI API-key auth cannot use this model");
+  });
+
   it("keeps suppressed stale direct openai gpt-5.3-codex-spark catalog rows blocked", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
