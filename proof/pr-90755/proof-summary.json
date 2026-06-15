@@ -1,0 +1,16 @@
+{
+  "scenario": "Control UI tab switch-back restores inFlightRun from chat.history (matches #90755 steps)",
+  "steps": [
+    "Open Session A with committed user message only",
+    "Switch to Session B (clears local stream state)",
+    "Switch back to Session A; mock chat.history returns inFlightRun buffered assistant text"
+  ],
+  "observedAfterFix": {
+    "chatRunId": "run-proof-90755",
+    "chatStream": "still working in the background…",
+    "visibleInDom": "still working in the background…"
+  },
+  "capturedAt": "2026-06-15T13:27:35.767Z",
+  "pr": "https://github.com/openclaw/openclaw/pull/93273",
+  "issue": "https://github.com/openclaw/openclaw/issues/90755"
+}
