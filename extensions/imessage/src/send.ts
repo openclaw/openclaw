@@ -46,6 +46,19 @@ const MIN_PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
 const PENDING_PERSISTED_ECHO_GRACE_MS = 5_000;
 type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
+// OpenClaw config exposes the transport as `auto`/`bridge`/`applescript`. The
+// JSON-RPC `send` path forwards that token verbatim because the imsg RPC server
+// maps `bridge` to its IMCore bridge internally. The `send-attachment` CLI is a
+// different boundary: it accepts `auto`/`dylib`/`applescript` and rejects
+// `bridge`. The bridge is implemented by the injected helper dylib, so `bridge`
+// maps to `dylib` at the attachment argv boundary; `auto` and `applescript`
+// pass through unchanged.
+type IMessageAttachmentTransport = "auto" | "dylib" | "applescript";
+
+function toAttachmentTransport(transport: IMessageSendTransport): IMessageAttachmentTransport {
+  return transport === "bridge" ? "dylib" : transport;
+}
+
 type IMessageSendOpts = {
   cliPath?: string;
   dbPath?: string;
@@ -804,7 +817,7 @@ async function trySendAttachmentForTarget(params: {
       ...(params.audioAsVoice ? ["--audio"] : []),
       ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
-      params.transport ?? "auto",
+      toAttachmentTransport(params.transport ?? "auto"),
     ]);
   } catch (error) {
     forgetPersistedIMessageEchoKey(pendingEchoKey);
