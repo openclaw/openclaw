@@ -19,6 +19,6 @@ export default definePluginEntry({
     restartPrefixes: ["plugins.entries.advisor"],
   },
   register(api) {
-    api.registerTool((ctx) => createAdvisorTool(ctx, api));
+    api.registerTool((ctx) => createAdvisorTool(ctx, api), { name: "advisor" });
   },
 });

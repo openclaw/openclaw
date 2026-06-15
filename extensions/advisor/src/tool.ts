@@ -70,7 +70,6 @@ Pass rich context in \`question\` — the advisor only sees what you provide her
         messages: [{ role: "user", content: userContent }],
         systemPrompt: ADVISOR_SYSTEM_PROMPT,
         ...(configuredModelRef ? { model: configuredModelRef } : {}),
-        agentId: ctx.agentId,
         signal,
         purpose: "advisor",
       });

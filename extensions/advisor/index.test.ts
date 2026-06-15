@@ -88,6 +88,9 @@ describe("advisor plugin", () => {
         purpose: "advisor",
       }),
     );
+    expect(completeMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: expect.anything() }),
+    );
     expect(result.content[0]?.text).toContain("Looks good.");
   });
 

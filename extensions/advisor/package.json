@@ -1,8 +1,11 @@
 {
   "name": "@openclaw/advisor-plugin",
-  "version": "2026.6.2",
-  "private": true,
+  "version": "2026.6.5",
   "description": "OpenClaw model-agnostic advisor plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -13,6 +16,23 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/advisor-plugin",
+      "npmSpec": "@openclaw/advisor-plugin",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.2"
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.2"
+    },
+    "build": {
+      "openclawVersion": "2026.6.2",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
   }
 }
