@@ -48,7 +48,11 @@ import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diag
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
+import {
+  type DmPolicyAllowFromViolation,
+  evaluateDmPolicyAllowFromDependency,
+  isBuiltInModelProviderOverlayId,
+} from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set([
@@ -312,53 +316,78 @@ function formatRawChannelConfigIssueMessage(message: string): string {
   return `invalid config: ${message}`;
 }
 
-function hasWildcardAllowFrom(value: unknown): boolean {
-  return Array.isArray(value) && value.some((entry) => String(entry).trim() === "*");
+function asAllowFromList(value: unknown): Array<string | number> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.filter(
+    (entry): entry is string | number => typeof entry === "string" || typeof entry === "number",
+  );
 }
 
-function collectMattermostOpenDmAllowFromIssues(
-  value: unknown,
-  pathPrefix: string,
-): ConfigValidationIssue[] {
-  if (!isRecord(value)) {
+function buildDmPolicyDependencyWarning(params: {
+  channelId: string;
+  accountId?: string;
+  violation: DmPolicyAllowFromViolation;
+}): ConfigValidationIssue {
+  const channelBase = `channels.${params.channelId}`;
+  const scope = params.accountId ? `${channelBase}.accounts.${params.accountId}` : channelBase;
+  const allowFromPath = `${scope}.allowFrom`;
+  // Account allowFrom inherits the channel default when unset, so name both targets.
+  const allowFromHint = params.accountId
+    ? `${allowFromPath} (or ${channelBase}.allowFrom)`
+    : allowFromPath;
+  const message =
+    params.violation === "open_requires_wildcard"
+      ? `${scope}.dmPolicy="open" but ${allowFromHint} does not include "*"; all DMs will be dropped. Add "*" to ${allowFromHint} or set ${scope}.dmPolicy to "pairing"/"allowlist".`
+      : `${scope}.dmPolicy="allowlist" but ${allowFromHint} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromHint} or change ${scope}.dmPolicy.`;
+  return { path: allowFromPath, message };
+}
+
+/**
+ * Surface dmPolicy/allowFrom dependency problems generically for every channel that
+ * uses the shared top-level dmPolicy/allowFrom contract. These configs parse fine but
+ * drop every DM at runtime, so we warn (rather than reject) to stay consistent with
+ * `security audit`/`doctor` and avoid breaking existing-but-usable configs on upgrade.
+ */
+function collectChannelDmPolicyDependencyWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+  if (!config.channels || !isRecord(config.channels)) {
     return [];
   }
-  const issues: ConfigValidationIssue[] = [];
-  if (value.dmPolicy === "open" && !hasWildcardAllowFrom(value.allowFrom)) {
-    issues.push({
-      path: `${pathPrefix}.allowFrom`,
-      message: formatRawChannelConfigIssueMessage(
-        `${pathPrefix}.dmPolicy="open" requires ${pathPrefix}.allowFrom to include "*"`,
-      ),
+  const warnings: ConfigValidationIssue[] = [];
+  for (const [channelId, channelValue] of Object.entries(config.channels)) {
+    if (channelId === "defaults" || channelId === "modelByChannel" || !isRecord(channelValue)) {
+      continue;
+    }
+    const channelPolicy =
+      typeof channelValue.dmPolicy === "string" ? channelValue.dmPolicy : undefined;
+    const channelAllowFrom = asAllowFromList(channelValue.allowFrom);
+    const channelViolation = evaluateDmPolicyAllowFromDependency({
+      policy: channelPolicy,
+      allowFrom: channelAllowFrom,
     });
-  }
-  if (isRecord(value.accounts)) {
-    for (const [accountId, accountConfig] of Object.entries(value.accounts)) {
-      if (!isRecord(accountConfig)) {
+    if (channelViolation) {
+      warnings.push(buildDmPolicyDependencyWarning({ channelId, violation: channelViolation }));
+    }
+    if (!isRecord(channelValue.accounts)) {
+      continue;
+    }
+    for (const [accountId, accountValue] of Object.entries(channelValue.accounts)) {
+      if (!isRecord(accountValue)) {
         continue;
       }
-      const accountPath = `${pathPrefix}.accounts.${accountId}`;
-      if (accountConfig.dmPolicy === "open" && !hasWildcardAllowFrom(accountConfig.allowFrom)) {
-        issues.push({
-          path: `${accountPath}.allowFrom`,
-          message: formatRawChannelConfigIssueMessage(
-            `${accountPath}.dmPolicy="open" requires ${accountPath}.allowFrom to include "*"`,
-          ),
-        });
+      const accountViolation = evaluateDmPolicyAllowFromDependency({
+        policy: typeof accountValue.dmPolicy === "string" ? accountValue.dmPolicy : channelPolicy,
+        allowFrom: asAllowFromList(accountValue.allowFrom) ?? channelAllowFrom,
+      });
+      if (accountViolation) {
+        warnings.push(
+          buildDmPolicyDependencyWarning({ channelId, accountId, violation: accountViolation }),
+        );
       }
     }
   }
-  return issues;
-}
-
-function collectBundledChannelConfigDependencyIssues(
-  channelId: string,
-  value: unknown,
-): ConfigValidationIssue[] {
-  if (channelId === "mattermost") {
-    return collectMattermostOpenDmAllowFromIssues(value, "channels.mattermost");
-  }
-  return [];
+  return warnings;
 }
 
 function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
@@ -370,9 +399,6 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
     if (!Object.hasOwn(config.channels, channelId)) {
       continue;
     }
-    issues.push(
-      ...collectBundledChannelConfigDependencyIssues(channelId, config.channels[channelId]),
-    );
     const result = validateJsonSchemaValue({
       schema: schema as Record<string, unknown>,
       cacheKey: `raw-channel:${channelId}`,
@@ -1115,6 +1141,9 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
+  // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
+  // so account inheritance matches the per-channel Zod refinements.
+  warnings.push(...collectChannelDmPolicyDependencyWarnings(base.config));
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
@@ -1622,7 +1651,6 @@ function validateConfigObjectWithPluginsBase(
         }
         continue;
       }
-      issues.push(...collectBundledChannelConfigDependencyIssues(trimmed, result.value));
       replaceChannelConfig(trimmed, result.value);
     }
   }

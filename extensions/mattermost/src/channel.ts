@@ -63,7 +63,6 @@ import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
-import { collectMattermostStatusIssues } from "./status-issues.js";
 import type { MattermostConfig } from "./types.js";
 
 const loadMattermostChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
@@ -835,7 +834,6 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         lastConnectedAt: null,
         lastDisconnect: null,
       }),
-      collectStatusIssues: collectMattermostStatusIssues,
       buildChannelSummary: ({ snapshot }) =>
         buildPassiveProbedChannelStatusSummary(snapshot, {
           botTokenSource: snapshot.botTokenSource ?? "none",
@@ -861,7 +859,6 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           botTokenSource: account.botTokenSource,
           baseUrl: account.baseUrl,
           dmPolicy: account.config.dmPolicy ?? "pairing",
-          allowFrom: account.config.allowFrom ?? [],
           connected: runtime?.connected ?? false,
           lastConnectedAt: runtime?.lastConnectedAt ?? null,
           lastDisconnect: runtime?.lastDisconnect ?? null,

@@ -285,7 +285,7 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
     }
   });
 
-  it('rejects Mattermost dmPolicy="open" without wildcard allowFrom', () => {
+  it('warns on Mattermost dmPolicy="open" without wildcard allowFrom', () => {
     const result = validateConfigObjectWithPlugins({
       channels: {
         mattermost: {
@@ -297,20 +297,16 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.mattermost.allowFrom",
-          message: expect.stringContaining(
-            'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
-          ),
-        }),
-      );
-    }
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({
+        path: "channels.mattermost.allowFrom",
+        message: expect.stringContaining('channels.mattermost.dmPolicy="open"'),
+      }),
+    );
   });
 
-  it('rejects account-scoped Mattermost dmPolicy="open" without wildcard allowFrom', () => {
+  it('warns on account-scoped Mattermost dmPolicy="open" without wildcard allowFrom', () => {
     const result = validateConfigObjectWithPlugins({
       channels: {
         mattermost: {
@@ -326,17 +322,76 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.mattermost.accounts.work.allowFrom",
-          message: expect.stringContaining(
-            'channels.mattermost.accounts.work.dmPolicy="open" requires channels.mattermost.accounts.work.allowFrom to include "*"',
-          ),
-        }),
-      );
-    }
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({
+        path: "channels.mattermost.accounts.work.allowFrom",
+        message: expect.stringContaining('channels.mattermost.accounts.work.dmPolicy="open"'),
+      }),
+    );
+  });
+
+  it("applies the dmPolicy/allowFrom dependency check generically (telegram), not just Mattermost", () => {
+    // Use generated bundled metadata (no plugin-owned schema override) so this proves
+    // the check is channel-agnostic rather than wired to a specific channel id.
+    mockLoadPluginManifestRegistry.mockReturnValue({ diagnostics: [], plugins: [] });
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        telegram: {
+          botToken: "test-token",
+          dmPolicy: "open",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toContainEqual(
+      expect.objectContaining({
+        path: "channels.telegram.allowFrom",
+        message: expect.stringContaining('channels.telegram.dmPolicy="open"'),
+      }),
+    );
+  });
+
+  it('does not warn when dmPolicy="open" includes a wildcard allowFrom', () => {
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://chat.example.com",
+          botToken: "test-token",
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(
+      result.warnings.some((warning) => warning.path === "channels.mattermost.allowFrom"),
+    ).toBe(false);
+  });
+
+  it("does not warn when an account inherits a wildcard allowFrom from the channel default", () => {
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        mattermost: {
+          baseUrl: "https://chat.example.com",
+          botToken: "test-token",
+          allowFrom: ["*"],
+          accounts: {
+            work: {
+              dmPolicy: "open",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((warning) => warning.path.startsWith("channels.mattermost"))).toBe(
+      false,
+    );
   });
 });
 
