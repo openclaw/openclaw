@@ -81,6 +81,7 @@ function buildChunkTextResolver(params: {
   textLimit: number;
   chunkMode: ChunkMode;
   tableMode?: MarkdownTableMode;
+  skipEntityDetection?: boolean;
 }): ChunkTextFn {
   return (markdown: string) => {
     return splitTelegramRichMessageTextChunks({
@@ -89,6 +90,7 @@ function buildChunkTextResolver(params: {
       textMode: "markdown",
       chunkMode: params.chunkMode,
       tableMode: params.tableMode,
+      skipEntityDetection: params.skipEntityDetection,
     });
   };
 }
@@ -726,6 +728,7 @@ export async function deliverReplies(params: {
     textLimit: Math.min(params.textLimit, TELEGRAM_RICH_TEXT_LIMIT),
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
+    skipEntityDetection: params.linkPreview === false,
   });
   const candidateReplies: ReplyPayload[] = [];
   for (const reply of params.replies) {

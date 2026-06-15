@@ -1072,6 +1072,28 @@ describe("sendMessageTelegram", () => {
     expect(richSendCallParams()[0]?.rich_message?.html).toContain("<table>");
   });
 
+  it("does not auto-linkify Markdown URLs when link previews are disabled", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 50, chat: { id: "123" } });
+    const cfg = {
+      channels: {
+        telegram: {
+          markdown: { tables: "block" as const },
+          linkPreview: false,
+        },
+      },
+    };
+
+    await sendMessageTelegram("123", "https://example.com", {
+      cfg,
+      token: "tok",
+    });
+
+    expect(richSendCallParams()[0]?.rich_message).toEqual({
+      html: "https://example.com",
+      skip_entity_detection: true,
+    });
+  });
+
   it("renders wide Markdown tables as code blocks when they exceed Telegram's column limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 51, chat: { id: "123" } });
     const markdown = markdownTable(21);

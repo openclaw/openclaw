@@ -362,16 +362,18 @@ export function splitTelegramRichMessageTextChunks(params: {
   textMode: TelegramRichTextMode;
   chunkMode: ChunkMode;
   tableMode?: MarkdownTableMode;
+  skipEntityDetection?: boolean;
 }): TelegramRichTextChunk[] {
+  const renderMarkdownChunk = (chunk: string) =>
+    markdownToTelegramRichHtml(chunk, {
+      tableMode: params.tableMode,
+      skipEntityDetection: params.skipEntityDetection,
+    });
   const htmlChunks =
     params.textMode === "html"
       ? splitTelegramHtmlChunks(sanitizeTelegramRichHtml(params.text), params.textLimit)
       : splitTelegramRichMarkdownChunks(params.text, params.textLimit, params.chunkMode).flatMap(
-          (chunk) =>
-            splitTelegramHtmlChunks(
-              markdownToTelegramRichHtml(chunk, { tableMode: params.tableMode }),
-              params.textLimit,
-            ),
+          (chunk) => splitTelegramHtmlChunks(renderMarkdownChunk(chunk), params.textLimit),
         );
   return htmlChunks.map((chunk) => ({
     text: chunk,

@@ -707,6 +707,7 @@ export async function sendMessageTelegram(
       textMode,
       chunkMode,
       tableMode,
+      skipEntityDetection: richMessageOptions.skipEntityDetection,
     });
   };
 
