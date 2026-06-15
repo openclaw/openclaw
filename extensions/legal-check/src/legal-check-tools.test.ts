@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
+import { ApiKeyResolver } from "./key-resolver.js";
 
 const { mockPostForm, mockGetJson } = vi.hoisted(() => ({
   mockPostForm: vi.fn<(...args: unknown[]) => Promise<Record<string, unknown>>>(),
@@ -19,8 +20,14 @@ const fakeApi = {
   logger: { info() {}, warn() {}, error() {}, debug() {} },
 } as unknown as OpenClawPluginApi;
 
+// Resolver with an explicit override for 1749 and no db: 1749 resolves to the
+// override; any other uid throws (no override, no db to provision from).
+const resolver = new ApiKeyResolver({ "1749": "sk_test1749" }, undefined);
+
+const createFactory = createLegalCheckCreateToolFactory(fakeApi, resolver);
+const statusFactory = createLegalCheckStatusToolFactory(fakeApi, resolver);
+
 function parse(result: unknown): Record<string, unknown> {
-  // jsonResult returns { content: [{ text }], details: payload }; details IS the payload.
   const r = result as { details?: unknown; content?: Array<{ text?: string }> };
   if (r?.details && typeof r.details === "object") {
     return r.details as Record<string, unknown>;
@@ -33,36 +40,32 @@ afterEach(() => vi.clearAllMocks());
 
 describe("factory gating", () => {
   it("hides both tools from non-rabbitmq agents", () => {
-    expect(createLegalCheckCreateToolFactory(fakeApi)({ agentId: "telegram-1" })).toBeNull();
-    expect(createLegalCheckStatusToolFactory(fakeApi)({ agentId: undefined })).toBeNull();
+    expect(createFactory({ agentId: "telegram-1" })).toBeNull();
+    expect(statusFactory({ agentId: undefined })).toBeNull();
   });
 
   it("exposes the tools to rabbitmq-<userId> agents", () => {
-    expect(createLegalCheckCreateToolFactory(fakeApi)({ agentId: "rabbitmq-1749" })?.name).toBe(
-      "legal_check_create",
-    );
-    expect(createLegalCheckStatusToolFactory(fakeApi)({ agentId: "rabbitmq-1749" })?.name).toBe(
-      "legal_check_status",
-    );
+    expect(createFactory({ agentId: "rabbitmq-1749" })?.name).toBe("legal_check_create");
+    expect(statusFactory({ agentId: "rabbitmq-1749" })?.name).toBe("legal_check_status");
   });
 });
 
 describe("legal_check_create", () => {
-  const tool = () => createLegalCheckCreateToolFactory(fakeApi)({ agentId: "rabbitmq-1749" })!;
+  const tool = () => createFactory({ agentId: "rabbitmq-1749" })!;
 
   it("posts /legal/save-job with extracted link + violation defaults and returns the jobId", async () => {
     mockPostForm.mockResolvedValue({ job: { id: 6378, label: "某文章", status: "Pending" } });
     const res = parse(await tool().execute("c1", { content: "看 https://www.msn.cn/a 这条" }));
 
     expect(mockPostForm).toHaveBeenCalledTimes(1);
-    const [, path, fields, userId] = mockPostForm.mock.calls[0] as [
+    const [, path, fields, apiKey] = mockPostForm.mock.calls[0] as [
       unknown,
       string,
       Record<string, unknown>,
       string,
     ];
     expect(path).toBe("/legal/save-job");
-    expect(userId).toBe("1749");
+    expect(apiKey).toBe("sk_test1749");
     expect(fields).toMatchObject({
       requirement: "看 https://www.msn.cn/a 这条",
       link: "https://www.msn.cn/a",
@@ -106,10 +109,17 @@ describe("legal_check_create", () => {
     const res = parse(await tool().execute("c4", { content: "https://a.com/x" }));
     expect(res).toMatchObject({ success: false, error: "额度不足" });
   });
+
+  it("errors (no backend call) when no key can be resolved for the account", async () => {
+    const noKeyTool = createFactory({ agentId: "rabbitmq-2005" })!;
+    const res = parse(await noKeyTool.execute("c5", { content: "https://a.com/x" }));
+    expect(res.success).toBe(false);
+    expect(mockPostForm).not.toHaveBeenCalled();
+  });
 });
 
 describe("legal_check_status", () => {
-  const tool = () => createLegalCheckStatusToolFactory(fakeApi)({ agentId: "rabbitmq-1749" })!;
+  const tool = () => statusFactory({ agentId: "rabbitmq-1749" })!;
 
   it("summarizes a completed job", async () => {
     mockGetJson.mockResolvedValue({

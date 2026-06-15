@@ -1,4 +1,4 @@
-import type { LegalApiConfig } from "./types.js";
+import type { LegalApiConfig, MySqlConfig } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://v2.businesstimescn.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -12,9 +12,32 @@ export function resolveConfig(pluginConfig: Record<string, unknown>): LegalApiCo
   const timeoutMs = Number(
     block?.timeoutMs ?? process.env.LEGAL_API_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS,
   );
+  const rawKeys = (block?.apiKeys as Record<string, unknown> | undefined) ?? {};
+  const apiKeys: Record<string, string> = {};
+  for (const [uid, key] of Object.entries(rawKeys)) {
+    if (typeof key === "string" && key.trim()) {
+      apiKeys[uid] = key.trim();
+    }
+  }
+
+  const dbBlock = block?.db as Record<string, unknown> | undefined;
+  const db: MySqlConfig | undefined =
+    dbBlock || process.env.WRITER_MYSQL_HOST
+      ? {
+          host: (dbBlock?.host as string) ?? process.env.WRITER_MYSQL_HOST ?? "127.0.0.1",
+          port: Number(dbBlock?.port ?? process.env.WRITER_MYSQL_PORT ?? 3306),
+          user: (dbBlock?.user as string) ?? process.env.WRITER_MYSQL_USER ?? "",
+          password: (dbBlock?.password as string) ?? process.env.WRITER_MYSQL_PASSWORD ?? "",
+          database:
+            (dbBlock?.database as string) ?? process.env.WRITER_MYSQL_DATABASE ?? "superworker",
+        }
+      : undefined;
+
   return {
     baseUrl,
     timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS,
+    apiKeys,
+    db,
   };
 }
 
@@ -58,15 +81,15 @@ async function fetchWithTimeout(
 }
 
 /**
- * POST application/x-www-form-urlencoded to the PHP backend as the given user.
- * The backend authenticates the request from the X-Auth-Token header (the uid),
- * exactly as the Nuxt /api/post proxy does for the web UI.
+ * POST application/x-www-form-urlencoded to the PHP backend, authenticating as
+ * the user via `Authorization: Bearer <apiKey>` (the server-to-server path that
+ * resolves the uid from sha256(key) and skips the web client-IP check).
  */
 export async function postForm(
   config: LegalApiConfig,
   path: string,
   fields: Record<string, string | number | undefined>,
-  userId: string,
+  apiKey: string,
 ): Promise<Record<string, unknown>> {
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(fields)) {
@@ -80,7 +103,7 @@ export async function postForm(
     {
       method: "POST",
       headers: {
-        "X-Auth-Token": userId,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
       },
@@ -94,12 +117,12 @@ export async function postForm(
   return parseJsonOrThrow(text, status) as Record<string, unknown>;
 }
 
-/** GET JSON from the PHP backend as the given user (X-Auth-Token = uid). */
+/** GET JSON from the PHP backend, authenticating via `Authorization: Bearer <apiKey>`. */
 export async function getJson(
   config: LegalApiConfig,
   path: string,
   params: Record<string, string | number | undefined>,
-  userId: string,
+  apiKey: string,
 ): Promise<Record<string, unknown>> {
   const url = new URL(joinUrl(config.baseUrl, path));
   for (const [key, value] of Object.entries(params)) {
@@ -109,7 +132,7 @@ export async function getJson(
   }
   const { status, text } = await fetchWithTimeout(
     url.toString(),
-    { method: "GET", headers: { "X-Auth-Token": userId, Accept: "application/json" } },
+    { method: "GET", headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" } },
     config.timeoutMs,
   );
   if (status < 200 || status >= 300) {

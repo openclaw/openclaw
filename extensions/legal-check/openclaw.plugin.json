@@ -12,7 +12,25 @@
         "description": "leading-v2.0 PHP backend the agent calls on behalf of the user.",
         "properties": {
           "baseUrl": { "type": "string", "default": "https://v2.businesstimescn.com" },
-          "timeoutMs": { "type": "number", "default": 30000 }
+          "timeoutMs": { "type": "number", "default": 30000 },
+          "apiKeys": {
+            "type": "object",
+            "description": "Optional explicit per-userId raw API keys; overrides the api_key lookup.",
+            "additionalProperties": { "type": "string" }
+          },
+          "db": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Write-capable MySQL (superworker) for per-uid api_key lookup/auto-provision.",
+            "properties": {
+              "host": { "type": "string" },
+              "port": { "type": "number" },
+              "user": { "type": "string" },
+              "password": { "type": "string" },
+              "database": { "type": "string" }
+            },
+            "required": ["host", "user", "password", "database"]
+          }
         },
         "required": ["baseUrl"]
       }

@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import { extractUrl } from "./extract-url.js";
 import { getJson, LegalApiError, postForm, resolveConfig } from "./http-client.js";
+import { ApiKeyResolver } from "./key-resolver.js";
 import type { LegalApiConfig } from "./types.js";
 
 /** Chat agents are named `rabbitmq-<userId>`; that userId is the trusted identity. */
@@ -81,7 +82,10 @@ function envelopeError(res: Record<string, unknown>): string | null {
   return null;
 }
 
-export function createLegalCheckCreateToolFactory(api: OpenClawPluginApi) {
+export function createLegalCheckCreateToolFactory(
+  api: OpenClawPluginApi,
+  resolver: ApiKeyResolver,
+) {
   const config = resolveConfig(api.pluginConfig ?? {});
 
   return (ctx: { agentId?: string }) => {
@@ -99,6 +103,19 @@ export function createLegalCheckCreateToolFactory(api: OpenClawPluginApi) {
         "Each check consumes the account's legal-check credit.",
       parameters: CreateSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        let apiKey: string;
+        try {
+          apiKey = await resolver.getApiKey(userId);
+        } catch (error) {
+          api.logger.error(
+            `[LEGAL_CHECK_CREATE] key resolution failed for ${userId}: ${String(error)}`,
+          );
+          return jsonResult({
+            success: false,
+            error:
+              "Could not resolve an API key for this account; ask the operator to check legal-check config.",
+          });
+        }
         const content = asString(rawParams.content);
         if (!content) {
           return jsonResult({
@@ -132,7 +149,7 @@ export function createLegalCheckCreateToolFactory(api: OpenClawPluginApi) {
 
         let res: Record<string, unknown>;
         try {
-          res = await postForm(config, "/legal/save-job", fields, userId);
+          res = await postForm(config, "/legal/save-job", fields, apiKey);
         } catch (error) {
           return failure(api, "legal_check_create", userId, error);
         }
@@ -161,7 +178,10 @@ export function createLegalCheckCreateToolFactory(api: OpenClawPluginApi) {
   };
 }
 
-export function createLegalCheckStatusToolFactory(api: OpenClawPluginApi) {
+export function createLegalCheckStatusToolFactory(
+  api: OpenClawPluginApi,
+  resolver: ApiKeyResolver,
+) {
   const config = resolveConfig(api.pluginConfig ?? {});
 
   return (ctx: { agentId?: string }) => {
@@ -178,6 +198,19 @@ export function createLegalCheckStatusToolFactory(api: OpenClawPluginApi) {
         "Returns the job stage, the verdict/result when done, and which complaint letters are ready.",
       parameters: StatusSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
+        let apiKey: string;
+        try {
+          apiKey = await resolver.getApiKey(userId);
+        } catch (error) {
+          api.logger.error(
+            `[LEGAL_CHECK_STATUS] key resolution failed for ${userId}: ${String(error)}`,
+          );
+          return jsonResult({
+            success: false,
+            error:
+              "Could not resolve an API key for this account; ask the operator to check legal-check config.",
+          });
+        }
         const jobId = Number(rawParams.jobId);
         if (!Number.isInteger(jobId) || jobId <= 0) {
           return jsonResult({ success: false, error: "jobId must be a positive integer." });
@@ -189,7 +222,7 @@ export function createLegalCheckStatusToolFactory(api: OpenClawPluginApi) {
             config,
             "/ai/fetch-job",
             { id: jobId, workspace: "pr", all: 1 },
-            userId,
+            apiKey,
           );
         } catch (error) {
           return failure(api, "legal_check_status", userId, error);

@@ -5,7 +5,8 @@
   "description": "OpenClaw legal-check plugin: create 图文/视频违规·不实信息检测 jobs and query their status via the leading-v2.0 HTTP API",
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.49"
+    "@sinclair/typebox": "0.34.49",
+    "mysql2": "^3.12.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

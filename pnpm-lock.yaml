@@ -715,6 +715,9 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
+      mysql2:
+        specifier: ^3.12.0
+        version: 3.22.0(@types/node@25.6.0)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
