@@ -73,7 +73,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
-      destructiveApprovalMode: "auto",
+      destructiveApprovalMode: "allow",
       mcpServerNames: ["google-calendar"],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -140,14 +140,14 @@ describe("Codex plugin thread config", () => {
     ).toBe(true);
     expect(
       pluginOverrideEnabled.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode,
-    ).toBe("auto");
+    ).toBe("allow");
   });
 
-  it("exposes destructive app access while marking on-request approval mode", async () => {
+  it("exposes destructive app access while marking auto approval mode", async () => {
     const config = await buildReadyGoogleCalendarThreadConfig({
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: "on-request",
+        allow_destructive_actions: "auto",
         plugins: {
           "google-calendar": {
             marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -166,7 +166,7 @@ describe("Codex plugin thread config", () => {
     });
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       allowDestructiveActions: true,
-      destructiveApprovalMode: "on-request",
+      destructiveApprovalMode: "auto",
     });
   });
 
@@ -301,7 +301,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
-      destructiveApprovalMode: "auto",
+      destructiveApprovalMode: "allow",
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -373,7 +373,7 @@ describe("Codex plugin thread config", () => {
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
-          destructiveApprovalMode: "auto",
+          destructiveApprovalMode: "allow",
         },
         message: "google-calendar-app is not accessible or enabled for google-calendar.",
       },
@@ -444,7 +444,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
-      destructiveApprovalMode: "auto",
+      destructiveApprovalMode: "allow",
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -535,7 +535,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
-      destructiveApprovalMode: "auto",
+      destructiveApprovalMode: "allow",
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);

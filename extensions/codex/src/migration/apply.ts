@@ -508,7 +508,7 @@ function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy |
     pluginName,
     enabled: true,
     allowDestructiveActions: true,
-    destructiveApprovalMode: "auto",
+    destructiveApprovalMode: "allow",
   };
 }
 

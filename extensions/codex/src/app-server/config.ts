@@ -67,8 +67,8 @@ export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "dange
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
-export type CodexPluginDestructivePolicy = boolean | "on-request";
-export type CodexPluginDestructiveApprovalMode = "auto" | "deny" | "on-request";
+export type CodexPluginDestructivePolicy = boolean | "auto";
+export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -261,7 +261,7 @@ const codexAppServerApprovalPolicySchema = z.enum([
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
-const codexPluginDestructivePolicySchema = z.union([z.boolean(), z.literal("on-request")]);
+const codexPluginDestructivePolicySchema = z.union([z.boolean(), z.literal("auto")]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
     (value) => (value === null ? null : normalizeCodexServiceTier(value)),
@@ -420,12 +420,12 @@ function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolic
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 } {
-  if (policy === "on-request") {
-    return { allowDestructiveActions: true, destructiveApprovalMode: "on-request" };
+  if (policy === "auto") {
+    return { allowDestructiveActions: true, destructiveApprovalMode: "auto" };
   }
   return {
     allowDestructiveActions: policy,
-    destructiveApprovalMode: policy ? "auto" : "deny",
+    destructiveApprovalMode: policy ? "allow" : "deny",
   };
 }
 

@@ -867,7 +867,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
-          destructiveApprovalMode: "auto",
+          destructiveApprovalMode: "allow",
         },
         {
           configKey: "slack",
@@ -881,11 +881,11 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("parses on-request native Codex plugin destructive policy", () => {
+  it("parses auto native Codex plugin destructive policy", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: "on-request",
+        allow_destructive_actions: "auto",
         plugins: {
           "google-calendar": {
             marketplaceName: "openai-curated",
@@ -905,12 +905,12 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       },
     });
 
-    expect(config.codexPlugins?.allow_destructive_actions).toBe("on-request");
+    expect(config.codexPlugins?.allow_destructive_actions).toBe("auto");
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
       allowDestructiveActions: true,
-      destructiveApprovalMode: "on-request",
+      destructiveApprovalMode: "auto",
       pluginPolicies: [
         {
           configKey: "gmail",
@@ -918,7 +918,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "gmail",
           enabled: true,
           allowDestructiveActions: true,
-          destructiveApprovalMode: "auto",
+          destructiveApprovalMode: "allow",
         },
         {
           configKey: "google-calendar",
@@ -926,7 +926,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
-          destructiveApprovalMode: "on-request",
+          destructiveApprovalMode: "auto",
         },
         {
           configKey: "slack",
@@ -974,7 +974,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       configured: true,
       enabled: true,
       allowDestructiveActions: true,
-      destructiveApprovalMode: "auto",
+      destructiveApprovalMode: "allow",
       pluginPolicies: [
         {
           configKey: "slack",
@@ -982,7 +982,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "slack",
           enabled: true,
           allowDestructiveActions: true,
-          destructiveApprovalMode: "auto",
+          destructiveApprovalMode: "allow",
         },
       ],
     });

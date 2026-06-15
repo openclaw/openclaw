@@ -311,7 +311,7 @@ async function buildPluginPolicyElicitationResponse(params: {
   }
   const response = buildElicitationResponse(approvalPrompt, "approved-once");
   if (isJsonObject(response) && response.action === "accept") {
-    if (mode === "auto") {
+    if (mode === "allow") {
       return response;
     }
     const outcome = await requestPluginApprovalOutcome({
@@ -329,8 +329,8 @@ async function buildPluginPolicyElicitationResponse(params: {
 
 function resolvePluginDestructiveApprovalMode(
   entry: PluginAppPolicyContextEntry,
-): "auto" | "deny" | "on-request" {
-  return entry.destructiveApprovalMode ?? (entry.allowDestructiveActions ? "auto" : "deny");
+): "allow" | "deny" | "auto" {
+  return entry.destructiveApprovalMode ?? (entry.allowDestructiveActions ? "allow" : "deny");
 }
 
 function readPluginApprovalElicitation(
