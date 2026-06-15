@@ -20,12 +20,12 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
+import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
-import { splitTelegramRichTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
-export const TELEGRAM_TEXT_CHUNK_LIMIT = TELEGRAM_RICH_TEXT_LIMIT;
+export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 export const TELEGRAM_POLL_OPTION_LIMIT = 10;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
@@ -53,12 +53,9 @@ function chunkTelegramOutboundText(
   limit: number,
   ctx?: { formatting?: OutboundDeliveryFormattingOptions },
 ): string[] {
-  return splitTelegramRichTextChunks({
-    text,
-    textLimit: limit,
-    textMode: ctx?.formatting?.parseMode === "HTML" ? "html" : "markdown",
-    chunkMode: ctx?.formatting?.chunkMode ?? "length",
-  });
+  return ctx?.formatting?.parseMode === "HTML"
+    ? splitTelegramHtmlChunks(text, limit)
+    : markdownToTelegramHtmlChunks(text, limit, { tableMode: ctx?.formatting?.tableMode });
 }
 
 async function resolveTelegramSendContext(params: {
@@ -177,6 +174,7 @@ export function createTelegramOutboundAdapter(
     deliveryMode: "direct",
     chunker: chunkTelegramOutboundText,
     chunkerMode: "markdown",
+    chunkedTextFormatting: { parseMode: "HTML" },
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
     shouldSuppressLocalPayloadPrompt: options.shouldSuppressLocalPayloadPrompt,
@@ -202,7 +200,7 @@ export function createTelegramOutboundAdapter(
           maxLabelLength: 64,
         },
         text: {
-          markdownDialect: "markdown",
+          markdownDialect: "html",
         },
       },
     },
@@ -251,9 +249,7 @@ export function createTelegramOutboundAdapter(
       });
     },
     resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
-      typeof fallbackLimit === "number"
-        ? Math.min(fallbackLimit, TELEGRAM_RICH_TEXT_LIMIT)
-        : TELEGRAM_RICH_TEXT_LIMIT,
+      typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
     pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,
     supportsPollDurationSeconds: true,
     supportsAnonymousPolls: true,

@@ -1,7 +1,7 @@
 // Telegram tests cover telegram outbound plugin behavior.
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { describe, expect, it } from "vitest";
-import { splitTelegramHtmlChunks } from "./format.js";
+import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
 import { telegramOutbound } from "./outbound-adapter.js";
 import { clearTelegramRuntime } from "./runtime.js";
 
@@ -19,15 +19,15 @@ describe("telegramPlugin outbound", () => {
   it("uses static outbound contract when Telegram runtime is uninitialized", () => {
     clearTelegramRuntime();
     const text = `${"hello\n".repeat(1200)}tail`;
-    const expected = chunkMarkdownTextWithMode(text, 32_768, "length");
+    const expected = markdownToTelegramHtmlChunks(text, 4000);
 
-    expect(telegramOutbound.chunker?.(text, 32_768)).toEqual(expected);
+    expect(telegramOutbound.chunker?.(text, 4000)).toEqual(expected);
     expect(telegramOutbound.deliveryMode).toBe("direct");
     expect(telegramOutbound.chunkerMode).toBe("markdown");
-    expect(telegramOutbound.chunkedTextFormatting).toBeUndefined();
-    expect(telegramOutbound.textChunkLimit).toBe(32_768);
+    expect(telegramOutbound.chunkedTextFormatting).toEqual({ parseMode: "HTML" });
+    expect(telegramOutbound.textChunkLimit).toBe(4000);
     expect(telegramOutbound.presentationCapabilities?.limits?.text?.markdownDialect).toBe(
-      "markdown",
+      "html",
     );
     expect(telegramOutbound.sanitizeText).toBeUndefined();
     expect(telegramOutbound.pollMaxOptions).toBe(10);
@@ -54,16 +54,16 @@ describe("telegramPlugin outbound", () => {
     expect(chunks).toEqual([text]);
   });
 
-  it("keeps wide markdown tables for rich HTML rendering", () => {
+  it("wraps wide markdown tables before rich message parsing", () => {
     clearTelegramRuntime();
     const text = markdownTable(21);
 
     const chunks = telegramOutbound.chunker?.(text, 32_768);
 
-    expect(chunks).toEqual([text]);
+    expect(chunks).toEqual(["```\n" + text + "\n```"]);
   });
 
-  it("keeps fenced and unfenced wide markdown tables for rich HTML rendering", () => {
+  it("wraps only wide markdown tables outside fences", () => {
     clearTelegramRuntime();
     const fencedTable = markdownTable(25);
     const outsideTable = markdownTable(21);
@@ -71,7 +71,9 @@ describe("telegramPlugin outbound", () => {
 
     const chunks = telegramOutbound.chunker?.(text, 32_768);
 
-    expect(chunks).toEqual([text]);
+    expect(chunks).toEqual([
+      ["Before", "~~~", fencedTable, "~~~", "After", "```", outsideTable, "```"].join("\n"),
+    ]);
   });
 
   it("chunks rich markdown by Telegram's block limit", () => {

@@ -116,6 +116,7 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramReasoningStepState,
@@ -125,7 +126,6 @@ import {
   buildTelegramRichHtml,
   buildTelegramRichMarkdown,
   splitTelegramRichMarkdownChunks,
-  TELEGRAM_RICH_TEXT_LIMIT,
 } from "./rich-message.js";
 import { editMessageTelegram } from "./send.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -891,7 +891,7 @@ export const dispatchTelegramMessage = async ({
   const draftMaxChars =
     streamMode === "block"
       ? Math.min(resolveTelegramDraftStreamingChunking(cfg, route.accountId).maxChars, textLimit)
-      : Math.min(textLimit, TELEGRAM_RICH_TEXT_LIMIT);
+      : Math.min(textLimit, TELEGRAM_TEXT_CHUNK_LIMIT);
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
