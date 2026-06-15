@@ -133,8 +133,6 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
 }));
 
 const { describeImageWithModel } = await import("./image.js");
-const { buildQwenMediaUnderstandingProvider } =
-  await import("../../extensions/qwen/media-understanding-provider.js");
 const { buildMediaUnderstandingRegistry, getMediaUnderstandingProvider } =
   await import("./provider-registry.js");
 
@@ -835,31 +833,46 @@ describe("describeImageWithModel", () => {
     });
   });
 
-  it("places OpenRouter image prompts in user content before images", async () => {
+  it.each([
+    {
+      label: "OpenRouter",
+      provider: "openrouter",
+      modelId: "google/gemini-2.5-flash",
+      baseUrl: "https://openrouter.ai/api/v1",
+      responseText: "openrouter ok",
+    },
+    {
+      label: "Qwen DashScope",
+      provider: "qwen",
+      modelId: "qwen-vl-max-latest",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      responseText: "qwen ok",
+    },
+  ])("places $label image prompts in user content before images", async (entry) => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         api: "openai-completions",
-        provider: "openrouter",
-        id: "google/gemini-2.5-flash",
+        provider: entry.provider,
+        id: entry.modelId,
         input: ["text", "image"],
-        baseUrl: "https://openrouter.ai/api/v1",
+        baseUrl: entry.baseUrl,
       })),
     });
     completeMock.mockResolvedValue({
       role: "assistant",
       api: "openai-completions",
-      provider: "openrouter",
-      model: "google/gemini-2.5-flash",
+      provider: entry.provider,
+      model: entry.modelId,
       stopReason: "stop",
       timestamp: Date.now(),
-      content: [{ type: "text", text: "openrouter ok" }],
+      content: [{ type: "text", text: entry.responseText }],
     });
 
     const result = await describeImageWithModel({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
-      provider: "openrouter",
-      model: "google/gemini-2.5-flash",
+      provider: entry.provider,
+      model: entry.modelId,
       buffer: Buffer.from("png-bytes"),
       fileName: "image.png",
       mime: "image/png",
@@ -868,15 +881,15 @@ describe("describeImageWithModel", () => {
     });
 
     expect(result).toEqual({
-      text: "openrouter ok",
-      model: "google/gemini-2.5-flash",
+      text: entry.responseText,
+      model: entry.modelId,
     });
-    const firstCall = requireFirstMockCall(completeMock, "OpenRouter image completion");
+    const firstCall = requireFirstMockCall(completeMock, `${entry.label} image completion`);
     const [, context] = firstCall;
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages[0];
     if (!userMessage) {
-      throw new Error("expected OpenRouter image completion user message");
+      throw new Error(`expected ${entry.label} image completion user message`);
     }
     expect(userMessage.content).toEqual([
       { type: "text", text: "Describe the image." },
@@ -1340,7 +1353,13 @@ describe("describeImageWithModel", () => {
     });
 
     const registry = buildMediaUnderstandingRegistry(
-      { qwen: buildQwenMediaUnderstandingProvider("qwen") },
+      {
+        qwen: {
+          id: "qwen",
+          capabilities: ["image"],
+          modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+        },
+      },
       { plugins: { enabled: false } } as never,
     );
     const provider = getMediaUnderstandingProvider("qwen", registry);

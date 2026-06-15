@@ -2,7 +2,6 @@
 // loading plugin runtime code.
 import type { OpenClawConfig } from "../config/types.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
-import { knownProviderModelCapabilities } from "./model-capability-overrides.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -40,7 +39,6 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
         autoPriority: metadata.autoPriority,
         nativeDocumentInputs: metadata.nativeDocumentInputs,
         documentModels: metadata.documentModels,
-        ...knownProviderModelCapabilities(normalizedProviderId),
       });
     }
   }

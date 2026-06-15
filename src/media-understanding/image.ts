@@ -327,6 +327,7 @@ function shouldPlaceImagePromptInUserContent(model: Model): boolean {
   });
   return (
     capabilities.endpointClass === "openrouter" ||
+    capabilities.endpointClass === "modelstudio-native" ||
     (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
   );
 }

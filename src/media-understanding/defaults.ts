@@ -6,7 +6,6 @@ import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { configuredModelInputSupportsImage } from "./known-model-capabilities.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
-import { knownProviderModelCapabilities } from "./model-capability-overrides.js";
 import {
   normalizeMediaExecutionProviderId,
   normalizeMediaProviderId,
@@ -93,9 +92,7 @@ function resolveConfiguredImageProviderModel(params: {
         configuredModelInputSupportsImage({
           modelId: id,
           input: model?.input,
-          provider:
-            params.registry.get(normalizeMediaProviderId(providerKey)) ??
-            knownProviderModelCapabilities(providerKey),
+          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
         }),
       );
     });
@@ -126,9 +123,7 @@ function resolveConfiguredImageProviderIds(params: {
         configuredModelInputSupportsImage({
           modelId: id,
           input: model?.input,
-          provider:
-            params.registry.get(normalizeMediaProviderId(providerKey)) ??
-            knownProviderModelCapabilities(providerKey),
+          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
         }),
       );
     });

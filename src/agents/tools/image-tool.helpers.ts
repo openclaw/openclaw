@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { configuredModelInputSupportsImage } from "../../media-understanding/known-model-capabilities.js";
 import {
-  knownProviderModelCapabilities,
   providerModelCapabilities,
   type MediaUnderstandingProviderModelCapabilities,
 } from "../../media-understanding/model-capability-overrides.js";
@@ -210,9 +209,7 @@ function findConfiguredImageModelMatches(params: {
         !configuredModelInputSupportsImage({
           modelId,
           input: entry?.input,
-          provider:
-            providerModelCapabilities(params.providerRegistry?.get(provider)) ??
-            knownProviderModelCapabilities(provider),
+          provider: providerModelCapabilities(params.providerRegistry?.get(provider)),
         })
       ) {
         continue;
@@ -305,9 +302,7 @@ export function resolveProviderVisionModelFromConfig(params: {
   ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
   const models = providerCfg?.models ?? [];
   const providerId = normalizeProviderId(params.provider);
-  const providerMetadata =
-    providerModelCapabilities(params.providerRegistry?.get(providerId)) ??
-    knownProviderModelCapabilities(providerId);
+  const providerMetadata = providerModelCapabilities(params.providerRegistry?.get(providerId));
   const picked = models.find((m) => {
     const id = (m?.id ?? "").trim();
     return Boolean(

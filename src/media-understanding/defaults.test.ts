@@ -188,7 +188,7 @@ describe("resolveDefaultMediaModel", () => {
     ).toBe("auto");
   });
 
-  it("ignores known non-image Qwen configured models when a runtime registry is provided", () => {
+  it("uses runtime provider metadata to ignore known non-image configured models", () => {
     const cfg = {
       models: {
         providers: {
@@ -204,7 +204,15 @@ describe("resolveDefaultMediaModel", () => {
         providerId: "qwen",
         capability: "image",
         cfg,
-        providerRegistry: new Map(),
+        providerRegistry: new Map([
+          [
+            "qwen",
+            {
+              id: "qwen",
+              modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+            },
+          ],
+        ]),
       }),
     ).toBeUndefined();
   });

@@ -1617,11 +1617,11 @@ describe("image tool implicit imageModel config", () => {
         describeImageWithModel: describeGenericImageWithModel,
         describeImagesWithModel: describeGenericImagesWithModel,
         resolveAutoMediaKeyProviders: ({ capability }) => (capability === "image" ? ["qwen"] : []),
-        resolveDefaultMediaModel: ({ providerId, capability, providerRegistry }) => {
+        resolveDefaultMediaModel: ({ providerId, capability, providerRegistry: registry }) => {
           if (providerId !== "qwen" || capability !== "image") {
             return undefined;
           }
-          const provider = providerRegistry?.get("qwen") as ImageToolTestProvider | undefined;
+          const provider = registry?.get("qwen") as ImageToolTestProvider | undefined;
           return provider?.modelCapabilityOverrides ? "qwen-vl-max-latest" : "qwen3.7-max";
         },
       });

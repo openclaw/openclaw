@@ -15,21 +15,34 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import {
-  QWEN_MODEL_CAPABILITY_OVERRIDES,
-  QWEN_MODEL_CAPABILITY_PROVIDER_IDS,
-  type MediaUnderstandingProviderModelCapabilities,
-} from "../../src/media-understanding/model-capability-overrides.js";
 import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 
 const DEFAULT_QWEN_IMAGE_MODEL = "qwen-vl-max-latest";
 const DEFAULT_QWEN_VIDEO_MODEL = "qwen-vl-max-latest";
 const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
+const QWEN_MODEL_CAPABILITY_OVERRIDES = {
+  nonImageModelFamilies: ["qwen3.7-max"],
+} as const;
+
+export const QWEN_MEDIA_UNDERSTANDING_PROVIDER_IDS = [
+  "qwen",
+  "qwencloud",
+  "modelstudio",
+  "dashscope",
+] as const;
+
+type MediaUnderstandingModelCapabilityOverrides = {
+  nonImageModels?: readonly string[];
+  nonImageModelFamilies?: readonly string[];
+};
+
+type MediaUnderstandingProviderModelCapabilities = {
+  id?: string;
+  modelCapabilityOverrides?: MediaUnderstandingModelCapabilityOverrides;
+};
 
 type QwenMediaUnderstandingProvider = MediaUnderstandingProvider &
   MediaUnderstandingProviderModelCapabilities;
-
-export const QWEN_MEDIA_UNDERSTANDING_PROVIDER_IDS = QWEN_MODEL_CAPABILITY_PROVIDER_IDS;
 
 export async function describeQwenVideo(
   params: VideoDescriptionRequest,

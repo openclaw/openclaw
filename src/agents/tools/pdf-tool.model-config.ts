@@ -11,7 +11,6 @@ import {
   resolveDocumentMediaModel,
 } from "../../media-understanding/defaults.js";
 import { configuredModelInputSupportsImage } from "../../media-understanding/known-model-capabilities.js";
-import { knownProviderModelCapabilities } from "../../media-understanding/model-capability-overrides.js";
 import { normalizeMediaProviderId } from "../../media-understanding/provider-id.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -56,13 +55,14 @@ function configuredProviderHasModelEntries(params: {
 function configuredProviderRuntimeCapabilityRegistry(params: {
   cfg?: OpenClawConfig;
   providerId: string;
+  providerRegistry?: ReturnType<typeof buildMediaUnderstandingRegistry>;
 }) {
   if (!configuredProviderHasModelEntries(params)) {
     return undefined;
   }
   const providerId = normalizeMediaProviderId(params.providerId);
-  const capabilities = knownProviderModelCapabilities(providerId);
-  return capabilities ? new Map([[providerId, capabilities]]) : undefined;
+  const provider = params.providerRegistry?.get(providerId);
+  return provider ? new Map([[providerId, provider]]) : undefined;
 }
 
 function resolveConfiguredImageRefsForPdf(params: {
@@ -142,6 +142,7 @@ function resolveImageCandidateRefs(params: {
         providerRegistry: configuredProviderRuntimeCapabilityRegistry({
           cfg: params.cfg,
           providerId,
+          providerRegistry: params.getProviderRegistry(),
         }),
         provider: providerId,
       });
@@ -311,6 +312,7 @@ export function resolvePdfModelConfigForTool(params: {
   const primaryProviderRegistry = configuredProviderRuntimeCapabilityRegistry({
     cfg: params.cfg,
     providerId: primary.provider,
+    providerRegistry: getProviderRegistry(),
   });
   const providerVision = providerOk
     ? resolveProviderVisionModelFromConfig({
@@ -396,6 +398,7 @@ export function resolvePdfModelConfigForTool(params: {
       const providerMetadata = configuredProviderRuntimeCapabilityRegistry({
         cfg: params.cfg,
         providerId,
+        providerRegistry: getProviderRegistry(),
       })?.get(normalizeMediaProviderId(providerId));
       const models = providerCfg?.models ?? [];
       const modelId = models
