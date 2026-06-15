@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Ensures Playwright Chromium is installed or a usable system browser is available.
 import { spawnSync as spawnSyncImpl } from "node:child_process";
 import { existsSync as existsSyncImpl, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -18,6 +19,9 @@ const playwrightInstallWithDepsArgs = [
   "chromium",
 ];
 const executableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
+/**
+ * System Chromium executable paths used before downloading Playwright browsers.
+ */
 export const systemChromiumExecutableCandidates = [
   "/snap/bin/chromium",
   "/usr/bin/chromium-browser",
@@ -26,6 +30,9 @@ export const systemChromiumExecutableCandidates = [
   "/usr/bin/google-chrome-stable",
 ];
 
+/**
+ * Checks whether a Chromium executable can start enough to print its version.
+ */
 export function canRunChromiumExecutable(executablePath, spawnSync = spawnSyncImpl) {
   const result = spawnSync(executablePath, ["--version"], {
     stdio: "ignore",
@@ -33,6 +40,9 @@ export function canRunChromiumExecutable(executablePath, spawnSync = spawnSyncIm
   return result.status === 0;
 }
 
+/**
+ * Resolves the first runnable system Chromium executable path.
+ */
 export function resolveSystemChromiumExecutablePath(
   existsSync = existsSyncImpl,
   spawnSync = spawnSyncImpl,
@@ -44,11 +54,13 @@ export function resolveSystemChromiumExecutablePath(
   );
 }
 
+/**
+ * Builds the pnpm runner invocation for Playwright browser install.
+ */
 export function resolvePlaywrightInstallRunner(options = {}) {
   const env = options.env ?? process.env;
   return resolvePnpmRunner({
     comSpec: options.comSpec ?? env.ComSpec ?? env.COMSPEC,
-    cwd: options.cwd,
     env,
     npmExecPath: env === process.env ? env.npm_execpath : (env.npm_execpath ?? ""),
     platform: options.platform,
@@ -61,6 +73,9 @@ function isTruthyEnvFlag(value) {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
+/**
+ * Reports whether Linux system dependencies should be installed with Chromium.
+ */
 export function shouldInstallPlaywrightSystemDependencies(options = {}) {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
@@ -78,6 +93,9 @@ export function shouldInstallPlaywrightSystemDependencies(options = {}) {
   );
 }
 
+/**
+ * Checks whether this module is the direct script entrypoint.
+ */
 export function isDirectScriptExecution(
   argvEntry = process.argv[1],
   modulePath = fileURLToPath(import.meta.url),
@@ -93,6 +111,9 @@ export function isDirectScriptExecution(
   }
 }
 
+/**
+ * Ensures a runnable Chromium exists for Playwright-based UI tests.
+ */
 export function ensurePlaywrightChromium(options = {}) {
   const env = options.env ?? process.env;
   const executableOverride =
