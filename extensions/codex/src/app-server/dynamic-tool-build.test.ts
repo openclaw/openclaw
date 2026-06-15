@@ -105,6 +105,14 @@ function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
   };
 }
 
+function codexBridgeResponseText(response: {
+  contentItems: Array<Record<string, unknown>>;
+}): string {
+  return response.contentItems
+    .map((item) => (typeof item.text === "string" ? item.text : ""))
+    .join("");
+}
+
 async function buildDynamicToolsForTest(
   params: EmbeddedRunAttemptParams,
   workspaceDir: string,
@@ -897,7 +905,13 @@ describe("Codex app-server dynamic tool build", () => {
       nativeToolSurfaceEnabled: true,
     });
 
-    expect(tools.map((tool) => tool.name)).toEqual(["message", "node_exec", "node_process"]);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "message",
+      "node_exec",
+      "node_process",
+      "exec",
+      "process",
+    ]);
     const nodeExec = tools.find((tool) => tool.name === "node_exec");
     expect(nodeExec?.description).toContain("Select the node by name or id");
     expect(nodeExec?.parameters).toEqual({
@@ -980,7 +994,7 @@ describe("Codex app-server dynamic tool build", () => {
     const gatewayTools = await buildDynamicToolsForTest(gatewayParams, workspaceDir, {
       nativeToolSurfaceEnabled: true,
     });
-    expect(gatewayTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(gatewayTools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
   });
 
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
@@ -1010,7 +1024,7 @@ describe("Codex app-server dynamic tool build", () => {
     );
   });
 
-  it("exposes node shell but not sandbox shell tools when sandbox routing is disabled", async () => {
+  it("exposes node shell and restores OpenClaw exec/process without sandbox aliases when sandbox routing is disabled", async () => {
     setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),
       createRuntimeDynamicTool("process"),
@@ -1026,11 +1040,144 @@ describe("Codex app-server dynamic tool build", () => {
       sandbox: { enabled: false, backendId: "ssh" } as never,
     });
 
-    expect(disabledSandboxTools.map((tool) => tool.name)).toEqual([
+    const disabledSandboxToolNames = disabledSandboxTools.map((tool) => tool.name);
+    // With native surface enabled and no OpenClaw sandbox, exec host auto resolves
+    // to gateway: node shell aliases stay available (remote-node option) while the
+    // direct-shell restore re-adds OpenClaw exec/process so the turn keeps a working
+    // local shell (Codex native advertises none without a turn environment, #92238).
+    expect(disabledSandboxToolNames).toEqual([
       "message",
       "node_exec",
       "node_process",
+      "exec",
+      "process",
     ]);
+    expect(disabledSandboxToolNames).not.toContain("sandbox_exec");
+    expect(disabledSandboxToolNames).not.toContain("sandbox_process");
+  });
+
+  it("keeps OpenClaw exec/process when the native surface has no Codex environment (issue #92238)", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("read"),
+      createRuntimeDynamicTool("write"),
+      createRuntimeDynamicTool("edit"),
+      createRuntimeDynamicTool("apply_patch"),
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "openai";
+    params.modelId = "gpt-5.5";
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const sandbox = { enabled: false, backendId: "docker" } as never;
+
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox,
+      nativeToolSurfaceEnabled,
+    });
+
+    expect(nativeToolSurfaceEnabled).toBe(true);
+    expect(tools.map((tool) => tool.name)).toContain("exec");
+    expect(tools.map((tool) => tool.name)).toContain("process");
+  });
+
+  it("dispatches the restored exec through the Codex bridge when the native surface has no environment (issue #92238)", async () => {
+    const execTool = createRuntimeDynamicTool("exec");
+    setOpenClawCodingToolsFactoryForTests(() => [execTool, createRuntimeDynamicTool("message")]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "openai";
+    params.modelId = "gpt-5.5";
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const sandbox = { enabled: false, backendId: "docker" } as never;
+
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox,
+      nativeToolSurfaceEnabled,
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: tools as never,
+      signal: new AbortController().signal,
+      loading: "direct",
+    });
+    const response = await bridge.handleToolCall({
+      tool: "exec",
+      callId: "exec-call-1",
+      arguments: { command: "echo restored" },
+    } as never);
+
+    expect(nativeToolSurfaceEnabled).toBe(true);
+    expect(execTool.execute).toHaveBeenCalledTimes(1);
+    const [dispatchedCallId, dispatchedArgs, dispatchedSignal] = expectDefined(
+      vi.mocked(execTool.execute).mock.calls[0],
+      "restored exec dispatch",
+    );
+    expect(dispatchedCallId).toBe("exec-call-1");
+    expect(dispatchedArgs).toEqual({ command: "echo restored" });
+    expect(dispatchedSignal).toBeInstanceOf(AbortSignal);
+    expect(response.success).toBe(true);
+    expect(codexBridgeResponseText(response)).toContain("exec done");
+  });
+
+  it("reports exec as unavailable through the Codex bridge when no restore branch applies", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: { enabled: true, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: true,
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: tools as never,
+      signal: new AbortController().signal,
+      loading: "direct",
+    });
+    const response = await bridge.handleToolCall({
+      tool: "exec",
+      callId: "exec-call-2",
+      arguments: { command: "echo restored" },
+    } as never);
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(response.success).toBe(false);
+    expect(codexBridgeResponseText(response)).toContain("Unknown OpenClaw tool: exec");
+  });
+
+  it("defers to Codex native shell when the sandbox exec-server supplies an environment", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: { enabled: true, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: true,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
   });
 
   it("does not expose sandbox_exec without a matching process follow-up tool", async () => {

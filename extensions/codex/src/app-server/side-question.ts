@@ -38,6 +38,7 @@ import {
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import {
+  filterCodexSideQuestionTools,
   resolveCodexMessageToolProvider,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
@@ -51,10 +52,7 @@ import {
   resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
 } from "./dynamic-tool-execution.js";
-import {
-  filterCodexDynamicTools,
-  resolveCodexDynamicToolsLoading,
-} from "./dynamic-tool-profile.js";
+import { resolveCodexDynamicToolsLoading } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector.js";
@@ -990,7 +988,7 @@ async function createCodexSideToolBridge(input: {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
     });
-    const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
+    const codexFilteredTools = filterCodexSideQuestionTools(allTools, input.pluginConfig, sandbox);
     tools = filterToolsForVisionInputs(codexFilteredTools, {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       hasInboundImages: false,
