@@ -2464,9 +2464,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
     });
 
-    const lastUpdate = answerDraftStream.update.mock.calls.at(-1)?.[0];
-    expect(lastUpdate).toContain("completed");
-    expect(lastUpdate).not.toContain("install dependencies");
+    const lastUpdate = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(lastUpdate?.text).toContain("completed");
+    expect(lastUpdate?.text).not.toContain("install dependencies");
+    expect(lastUpdate?.richMessage.html).toContain("<code>completed</code>");
+    expect(lastUpdate?.richMessage.html).not.toContain("install dependencies");
   });
 
   it("sends trailing verbose status after a progress-mode final answer", async () => {
