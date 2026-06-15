@@ -110,6 +110,56 @@ const qaEvidenceMappingSchema = z
   })
   .strict();
 
+const qaEvidenceScorecardCountSchema = z
+  .object({
+    total: z.number().int().nonnegative(),
+    fulfilled: z.number().int().nonnegative(),
+    partial: z.number().int().nonnegative().optional(),
+    missing: z.number().int().nonnegative(),
+    fulfillmentPercent: z.number().finite().nonnegative(),
+  })
+  .strict();
+
+const qaEvidenceScorecardCategorySchema = z
+  .object({
+    id: nonEmptyStringSchema,
+    surfaceId: nonEmptyStringSchema,
+    name: nonEmptyStringSchema,
+    status: z.enum(["fulfilled", "partial", "missing"]),
+    features: qaEvidenceScorecardCountSchema.extend({
+      secondaryOnly: z.number().int().nonnegative(),
+    }),
+    missingCoverageIds: z.array(nonEmptyStringSchema),
+  })
+  .strict();
+
+const qaEvidenceScorecardSchema = z
+  .object({
+    kind: z.literal("openclaw.qa.scorecard"),
+    profile: qaEvidenceProfileIdSchema,
+    taxonomy: z
+      .object({
+        path: nullableStringSchema,
+        title: nullableStringSchema,
+      })
+      .strict(),
+    filters: z
+      .object({
+        surface: nullableStringSchema,
+        category: nullableStringSchema,
+      })
+      .strict(),
+    run: z
+      .object({
+        evidenceEntryCount: z.number().int().nonnegative(),
+      })
+      .strict(),
+    categories: qaEvidenceScorecardCountSchema,
+    features: qaEvidenceScorecardCountSchema,
+    categoryReports: z.array(qaEvidenceScorecardCategorySchema),
+  })
+  .strict();
+
 const qaEvidenceArtifactSchema = z
   .object({
     kind: nonEmptyStringSchema,
@@ -152,6 +202,7 @@ export const qaEvidenceSummarySchema = z
     schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
     generatedAt: nonEmptyStringSchema,
     entries: z.array(qaEvidenceSummaryEntrySchema),
+    scorecard: qaEvidenceScorecardSchema.optional(),
   })
   .strict();
 
@@ -159,6 +210,7 @@ export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
 export type QaEvidencePackageSource = z.infer<typeof qaEvidencePackageSourceSchema>;
+export type QaEvidenceScorecardJson = z.infer<typeof qaEvidenceScorecardSchema>;
 export type QaEvidenceSummaryEntry = z.infer<typeof qaEvidenceSummaryEntrySchema>;
 export type QaEvidenceSummaryJson = z.infer<typeof qaEvidenceSummarySchema>;
 
@@ -474,6 +526,16 @@ function buildQaEvidenceSummary(params: {
 
 export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSummaryJson {
   return qaEvidenceSummarySchema.parse(summary);
+}
+
+export function attachQaEvidenceScorecard(params: {
+  summary: QaEvidenceSummaryJson;
+  scorecard: QaEvidenceScorecardJson;
+}): QaEvidenceSummaryJson {
+  return validateQaEvidenceSummaryJson({
+    ...params.summary,
+    scorecard: params.scorecard,
+  });
 }
 
 export function buildQaSuiteEvidenceSummary(

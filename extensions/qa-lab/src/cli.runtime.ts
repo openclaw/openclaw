@@ -68,6 +68,7 @@ import {
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
+import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import {
   readQaScorecardTaxonomyReport,
   type QaScorecardCategoryMappingReport,
@@ -663,8 +664,9 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   process.stdout.write(
     `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
   );
+  let evidencePath: string | undefined;
   await withTemporaryQaProfileEnv(profile, async () => {
-    await runQaSuiteCommand({
+    const suiteResult = await runQaSuiteCommand({
       repoRoot,
       outputDir: opts.outputDir,
       transportId: opts.transportId,
@@ -676,7 +678,23 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
     });
+    evidencePath =
+      suiteResult && "evidencePath" in suiteResult ? suiteResult.evidencePath : undefined;
   });
+  if (!evidencePath) {
+    throw new Error("qa run --qa-profile did not produce qa-evidence.json.");
+  }
+  await attachQaProfileScorecardEvidenceToFile({
+    evidencePath,
+    taxonomyReport: scorecardReport,
+    profile,
+    filters: {
+      surface: opts.surface,
+      category: opts.category,
+    },
+    categories,
+  });
+  process.stdout.write(`QA profile scorecard: ${evidencePath}\n`);
 }
 
 function normalizeQaRunProfile(value: string, profileIds: readonly string[]) {
@@ -814,7 +832,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
         process.exitCode = 1;
       }
     }
-    return;
+    return result;
   }
   if (opts.preflight === true) {
     await runQaParityPreflight({
@@ -825,7 +843,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       alternateModel,
       allowFailures,
     });
-    return;
+    return undefined;
   }
   const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
   const runtimeResult = await runQaSuiteWithInfraRetry(() =>
@@ -856,7 +874,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       if (!allowFailures && result.scenarios.some((scenario) => scenario.status !== "pass")) {
         process.exitCode = 1;
       }
-      return;
+      return result;
     }
     case "flow": {
       const result = runtimeResult.result;
@@ -870,8 +888,10 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       if (!allowFailures && blockingScenarioCount > 0) {
         process.exitCode = 1;
       }
+      return result;
     }
   }
+  return undefined;
 }
 
 export async function runQaParityReportCommand(opts: {

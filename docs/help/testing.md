@@ -148,6 +148,8 @@ inside every shard.
   - Writes top-level `qa-evidence.json`, `qa-suite-summary.json`, and
     `qa-suite-report.md` artifacts for the selected scenario set, including
     mixed flow, Vitest, and Playwright scenario selections.
+  - When dispatched by `pnpm openclaw qa run --qa-profile <profile>`, embeds the
+    selected taxonomy profile scorecard in the same `qa-evidence.json`.
   - Runs multiple selected scenarios in parallel by default with isolated
     gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
     selected scenario count). Use `--concurrency <count>` to tune the worker

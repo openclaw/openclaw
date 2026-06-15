@@ -119,6 +119,15 @@ function expectWriteContains(mock: unknown, fragment: string): void {
   ).toBe(true);
 }
 
+function makeQaEvidence(entries: unknown[] = []) {
+  return {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt: "2026-06-14T00:00:00.000Z",
+    entries,
+  };
+}
+
 function flowSuiteRuntimeResult(params: {
   evidencePath?: string;
   reportPath: string;
@@ -178,7 +187,7 @@ describe("qa cli runtime", () => {
     telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
     telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
-    await fs.writeFile(suiteEvidencePath, JSON.stringify({ entries: [] }), "utf8");
+    await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
@@ -301,7 +310,7 @@ describe("qa cli runtime", () => {
 
   it("runs selected Playwright scenarios through the suite command", async () => {
     const evidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
-    await fs.writeFile(evidencePath, JSON.stringify({ entries: [] }), "utf8");
+    await fs.writeFile(evidencePath, JSON.stringify(makeQaEvidence()), "utf8");
     runQaSuite.mockResolvedValueOnce(
       unifiedSuiteRuntimeResult({
         outputDir: suiteArtifactsDir,
@@ -349,6 +358,63 @@ describe("qa cli runtime", () => {
     try {
       runQaSuite.mockImplementationOnce(async () => {
         expect(process.env.OPENCLAW_QA_PROFILE).toBe("smoke-ci");
+        await fs.writeFile(
+          suiteEvidencePath,
+          JSON.stringify(
+            makeQaEvidence([
+              {
+                test: {
+                  kind: "qa-scenario",
+                  id: "dm-chat-baseline",
+                  title: "DM baseline conversation",
+                  source: {
+                    path: "qa/scenarios/channels/dm-chat-baseline.yaml",
+                  },
+                },
+                mapping: {
+                  profile: "smoke-ci",
+                  coverage: [
+                    {
+                      id: "channels.dm",
+                      role: "primary",
+                      surfaceIds: ["dm"],
+                      categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
+                    },
+                  ],
+                },
+                execution: {
+                  runner: "host",
+                  environment: {
+                    ref: null,
+                    os: process.platform,
+                    nodeVersion: process.version,
+                  },
+                  provider: {
+                    id: "openai",
+                    live: false,
+                    model: {
+                      name: "gpt-5.5",
+                      ref: "mock-openai/gpt-5.5",
+                    },
+                    fixture: "mock-openai",
+                  },
+                  channel: {
+                    id: "qa-channel",
+                    live: false,
+                  },
+                  packageSource: {
+                    kind: "source-checkout",
+                  },
+                  artifacts: [],
+                },
+                result: {
+                  status: "pass",
+                },
+              },
+            ]),
+          ),
+          "utf8",
+        );
         return flowSuiteRuntimeResult({
           reportPath: suiteReportPath,
           summaryPath: suiteSummaryPath,
@@ -379,7 +445,34 @@ describe("qa cli runtime", () => {
       expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
       expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
+      const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+        scorecard?: {
+          profile?: unknown;
+          run?: { evidenceEntryCount?: unknown };
+          features?: { fulfilled?: unknown };
+          categoryReports?: Array<{
+            id?: unknown;
+            features?: { fulfilled?: unknown };
+            missingCoverageIds?: unknown;
+          }>;
+        };
+      };
+      expect(evidence.scorecard).toMatchObject({
+        profile: "smoke-ci",
+        run: {
+          evidenceEntryCount: 1,
+        },
+      });
+      expect(evidence.scorecard?.features?.fulfilled).toBe(1);
+      expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
+        id: "agent-runtime-and-provider-execution.agent-turn-execution",
+        features: {
+          fulfilled: 1,
+        },
+      });
+      expect(JSON.stringify(evidence.scorecard)).not.toContain("dm-chat-baseline");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
+      expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);
     } finally {
       if (previousProfile === undefined) {
         delete process.env.OPENCLAW_QA_PROFILE;
