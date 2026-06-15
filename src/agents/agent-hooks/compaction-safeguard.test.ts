@@ -2463,6 +2463,154 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(true);
   });
 
+  it("does not replay inter-session sessions_send branch turns as fallback history", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("branch summary");
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          message: {
+            role: "user",
+            content: "say bee",
+            provenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:pm",
+              sourceTool: "sessions_send",
+            },
+            timestamp: now,
+          },
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: new Date(now + 1).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "bee reply" }],
+            timestamp: now + 1,
+          },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-7",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "test-key",
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("No prior history.");
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not replay source-session sessions_send tool calls as fallback history", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("user request summary");
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          message: {
+            role: "user",
+            content: "ask the bee session to respond",
+            timestamp: now,
+          },
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: new Date(now + 1).toISOString(),
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "sessions_send",
+                arguments: { sessionKey: "agent:bee", message: "say bee" },
+              },
+            ],
+            timestamp: now + 1,
+          },
+        },
+        {
+          type: "message",
+          id: "tool-1",
+          parentId: "assistant-1",
+          timestamp: new Date(now + 2).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "sessions_send",
+            content: [{ type: "text", text: "delivered" }],
+            timestamp: now + 2,
+          },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-8",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "test-key",
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("user request summary");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const messages = requireArray(summarizeCall.messages);
+    expect(messages.map((message) => requireRecord(message).role)).toEqual(["user"]);
+    expect(JSON.stringify(messages)).not.toContain("sessions_send");
+  });
+
   it("recovers user and assistant branch turns when compaction preparation has only tool output", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("branch summary with visible turns");
