@@ -1,5 +1,6 @@
 // Telegram plugin module implements delivery.send behavior.
 import { type Bot, GrammyError } from "grammy";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -100,6 +101,7 @@ export async function sendTelegramText(
     thread?: TelegramThreadSpec | null;
     textMode?: "markdown" | "html";
     linkPreview?: boolean;
+    tableMode?: MarkdownTableMode;
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
@@ -117,6 +119,7 @@ export async function sendTelegramText(
   const textMode = opts?.textMode ?? "markdown";
   const richMessage = buildTelegramRichMessage(text, textMode, {
     skipEntityDetection: opts?.linkPreview === false,
+    tableMode: opts?.tableMode,
   });
   const richRawApi = getTelegramRichRawApi(bot.api);
 

@@ -951,6 +951,7 @@ export const registerTelegramNativeCommands = ({
       cfg: runtimeCfg,
       channel: "telegram",
       accountId: route.accountId,
+      supportsBlockTables: true,
     });
     const chunkMode = nativeCommandRuntime.resolveChunkMode(
       runtimeCfg,

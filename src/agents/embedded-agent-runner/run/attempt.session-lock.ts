@@ -7,7 +7,10 @@ import { createReadStream, readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import {
+  type OwnedSessionTranscriptCacheSnapshot,
+  withOwnedSessionTranscriptWrites,
+} from "../../../config/sessions/transcript-write-context.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
@@ -52,6 +55,8 @@ type SessionFileFingerprint =
       mtimeNs: bigint;
       ctimeNs: bigint;
     };
+
+export type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
 
 const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set(["delivery-mirror", "gateway-injected"]);
 const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
@@ -655,6 +660,10 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
 }
 
 export type EmbeddedAttemptSessionLockController = {
+  canAdvanceSessionEntryCache(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
+  publishOwnedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
+  publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
+  readTrustedCurrentSessionFileSnapshot(): Promise<TrustedSessionFileSnapshot | undefined>;
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
@@ -1037,6 +1046,55 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   }
 
   return {
+    canAdvanceSessionEntryCache(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean {
+      if (takeoverDetected || activeWriteLock.getStore()?.active !== true) {
+        return false;
+      }
+      const fingerprint: SessionFileFingerprint = { exists: true, ...snapshot };
+      return (
+        (fenceActive && sameSessionFileFingerprint(fenceFingerprint, fingerprint)) ||
+        isTrustedSessionFileState(sessionFileFenceKey, fingerprint)
+      );
+    },
+    publishOwnedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean {
+      if (takeoverDetected || activeWriteLock.getStore()?.active !== true) {
+        return false;
+      }
+      const fingerprint: SessionFileFingerprint = { exists: true, ...snapshot };
+      const current = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      if (!sameSessionFileFingerprint(fingerprint, current)) {
+        return false;
+      }
+      const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, current);
+      if (fenceActive) {
+        fenceFingerprint = current;
+        fenceSnapshot = { fingerprint: current };
+        fenceGeneration = generation;
+      }
+      return true;
+    },
+    publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean {
+      if (takeoverDetected || !heldLock || heldLockDraining) {
+        return false;
+      }
+      const fingerprint: SessionFileFingerprint = { exists: true, ...snapshot };
+      const current = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      if (!sameSessionFileFingerprint(fingerprint, current)) {
+        return false;
+      }
+      fenceGeneration = recordTrustedSessionFileState(sessionFileFenceKey, current);
+      if (fenceActive) {
+        fenceFingerprint = current;
+        fenceSnapshot = { fingerprint: current };
+      }
+      return true;
+    },
+    async readTrustedCurrentSessionFileSnapshot(): Promise<TrustedSessionFileSnapshot | undefined> {
+      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      return fingerprint.exists && isTrustedSessionFileState(sessionFileFenceKey, fingerprint)
+        ? fingerprint
+        : undefined;
+    },
     async releaseForPrompt(): Promise<void> {
       await releaseHeldLockWithFence();
     },
@@ -1044,10 +1102,26 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       await releaseHeldLockWithFence();
     },
     refreshAfterOwnedSessionWrite(): void {
-      if (fenceActive && !takeoverDetected) {
-        fenceFingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
-        fenceSnapshot = { fingerprint: fenceFingerprint };
+      if (takeoverDetected) {
+        return;
       }
+      const beforeWrite = fenceFingerprint;
+      const fingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      if (!fenceActive) {
+        // User-message persistence occurs before the prompt fence activates.
+        // The retained session lock owns that write, so publish its exact state
+        // for the next attempt before release establishes the active fence.
+        fenceGeneration = recordTrustedSessionFileState(sessionFileFenceKey, fingerprint);
+        return;
+      }
+      if (
+        !sameSessionFileFingerprint(beforeWrite, fingerprint) &&
+        isTrustedSessionFileState(sessionFileFenceKey, beforeWrite ?? { exists: false })
+      ) {
+        fenceGeneration = recordOwnedSessionFileWrite(sessionFileFenceKey, fingerprint);
+      }
+      fenceFingerprint = fingerprint;
+      fenceSnapshot = { fingerprint };
     },
     withOwnedSessionFileWrite<T>(
       run: () => T,
@@ -1175,6 +1249,8 @@ export function installPromptSubmissionLockRelease(params: {
     run: () => Promise<T> | T,
     options?: SessionWriteLockRunOptions,
   ) => Promise<T>;
+  canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
+  publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
 }): void {
   const agent = (params.session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
@@ -1195,6 +1271,8 @@ export function installPromptSubmissionLockRelease(params: {
             sessionFile: params.sessionFile,
             sessionKey: params.sessionKey,
             withSessionWriteLock: params.withSessionWriteLock,
+            canAdvanceSessionEntryCache: params.canAdvanceSessionEntryCache,
+            publishSessionFileSnapshot: params.publishSessionFileSnapshot,
           },
           async () => await originalStreamFn(...args),
         );

@@ -79,6 +79,11 @@ function telegramDraftPreviewKey(preview: TelegramDraftPreview): string {
   return JSON.stringify(preview.richMessage);
 }
 
+function telegramDraftPreviewPayloadLength(preview: TelegramDraftPreview): number {
+  const richMessage = preview.richMessage;
+  return richMessage.html !== undefined ? richMessage.html.length : richMessage.markdown.length;
+}
+
 function findTelegramDraftChunkLength(
   text: string,
   maxChars: number,
@@ -89,8 +94,8 @@ function findTelegramDraftChunkLength(
   let high = text.length;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
-    const renderedText = renderTelegramDraftPreview(text.slice(0, mid), renderText).text.trimEnd();
-    if (renderedText && renderedText.length <= maxChars) {
+    const preview = renderTelegramDraftPreview(text.slice(0, mid), renderText);
+    if (preview.text.trimEnd() && telegramDraftPreviewPayloadLength(preview) <= maxChars) {
       best = mid;
       low = mid + 1;
     } else {
@@ -206,11 +211,9 @@ export function createTelegramDraftStream(params: {
     streamVisibleSinceMs = visibleSinceMs;
     return true;
   };
-  const stopOversizedPreview = (renderedText: string): false => {
+  const stopOversizedPreview = (payloadLength: number): false => {
     streamState.stopped = true;
-    params.warn?.(
-      `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
-    );
+    params.warn?.(`telegram stream preview stopped (text length ${payloadLength} > ${maxChars})`);
     return false;
   };
 
@@ -239,10 +242,11 @@ export function createTelegramDraftStream(params: {
     const renderedText = rendered.text.trimEnd();
     const renderedPreview = { ...rendered, text: renderedText };
     const renderedPreviewKey = telegramDraftPreviewKey(renderedPreview);
+    const renderedPayloadLength = telegramDraftPreviewPayloadLength(renderedPreview);
     if (!renderedText) {
       return false;
     }
-    if (renderedText.length > maxChars) {
+    if (renderedPayloadLength > maxChars) {
       const chunkLength = findTelegramDraftChunkLength(currentText, maxChars, params.renderText);
       if (!streamState.final) {
         if (chunkLength > 0) {
@@ -250,7 +254,7 @@ export function createTelegramDraftStream(params: {
             trimmed.slice(0, deliveredTextOffset) + currentText.slice(0, chunkLength),
           );
         }
-        return stopOversizedPreview(renderedText);
+        return stopOversizedPreview(renderedPayloadLength);
       }
       if (lastDeliveredText.length > deliveredTextOffset) {
         const supersededMessageId = streamMessageId;
@@ -277,7 +281,7 @@ export function createTelegramDraftStream(params: {
         }
         return await sendOrEditStreamMessage(trimmed);
       }
-      return stopOversizedPreview(renderedText);
+      return stopOversizedPreview(renderedPayloadLength);
     }
     if (renderedPreviewKey === lastSentPreviewKey) {
       return true;

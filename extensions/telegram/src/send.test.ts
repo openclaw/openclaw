@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { markdownToTelegramHtml } from "./format.js";
+import { markdownToTelegramHtml, markdownToTelegramRichHtml } from "./format.js";
 import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
@@ -129,7 +129,7 @@ const sendMessageTelegram: typeof sendMessageTelegramImpl = async (to, text, opt
       : opts,
   );
 
-const TELEGRAM_TEST_CFG = {};
+const TELEGRAM_TEST_CFG = { channels: { telegram: { markdown: { tables: "block" as const } } } };
 let sentMessageStore: NonNullable<Parameters<typeof setTelegramSentMessageStoreForTest>[0]>;
 
 function markdownTable(columns: number): string {
@@ -908,7 +908,7 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("sends raw rich markdown for durable text", async () => {
+  it("sends Markdown durable text as Telegram rich HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
 
     await sendMessageTelegram("123", "**hi**", {
@@ -918,11 +918,11 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown: "**hi**" },
+      rich_message: { html: "<b>hi</b>" },
     });
   });
 
-  it("keeps complex markdown raw for rich message text", async () => {
+  it("sends complex Markdown through Telegram rich HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
     const markdown = [
       "# Heading",
@@ -943,11 +943,33 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
   });
 
-  it("preserves rich markdown line breaks outside fenced code", async () => {
+  it("does not pass currency through Telegram Rich Markdown math parsing", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
+    const text =
+      "10Y realistic strong outcome: ~$400-600K TC, top end ($800K+) gated on frontier lab equity.";
+
+    await sendMessageTelegram("123", text, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: {
+        html: markdownToTelegramRichHtml(text),
+      },
+    });
+    const richMessage = richSendCallParams()[0]?.rich_message;
+    expect(richMessage?.html).toContain("$400-600K");
+    expect(richMessage?.html).toContain("($800K+)");
+    expect(richMessage?.markdown).toBeUndefined();
+  });
+
+  it("preserves line breaks outside fenced code through rich HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
     const markdown = [
       "Status: ok | mode",
@@ -959,16 +981,6 @@ describe("sendMessageTelegram", () => {
       "```",
       "Tail",
     ].join("\n");
-    const expectedMarkdown = [
-      "Status: ok | mode  ",
-      "Models: ready",
-      "",
-      "```",
-      "a",
-      "b",
-      "```",
-      "Tail",
-    ].join("\n");
 
     await sendMessageTelegram("123", markdown, {
       cfg: TELEGRAM_TEST_CFG,
@@ -977,28 +989,17 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown: expectedMarkdown },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
   });
 
-  it("keeps markdown media syntax on the text-only rich path", async () => {
+  it("isolates supported rich HTML media tags as blocks", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 48, chat: { id: "123" } });
+    const html = '<b>See</b><img src="https://example.com/diagram.png">';
+    const expectedHtml =
+      '<b>See</b>\n\n<figure><img src="https://example.com/diagram.png"/></figure>';
 
-    await sendMessageTelegram("123", "See ![diagram](https://example.com/diagram.png)", {
-      cfg: TELEGRAM_TEST_CFG,
-      token: "tok",
-    });
-
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown: "See [diagram](https://example.com/diagram.png)" },
-    });
-  });
-
-  it("escapes HTML media tags on the text-only rich path", async () => {
-    botApi.sendMessage.mockResolvedValue({ message_id: 49, chat: { id: "123" } });
-
-    await sendMessageTelegram("123", '<b>See</b><img src="https://example.com/diagram.png">', {
+    await sendMessageTelegram("123", html, {
       cfg: TELEGRAM_TEST_CFG,
       token: "tok",
       textMode: "html",
@@ -1006,13 +1007,56 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: {
-        html: "<b>See</b>&lt;img src=&quot;https://example.com/diagram.png&quot;&gt;",
-      },
+      rich_message: { html: expectedHtml },
     });
   });
 
-  it("keeps native rich markdown tables within Telegram's column limit", async () => {
+  it("preserves supported Telegram rich HTML structures", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 49, chat: { id: "123" } });
+    const html = [
+      "<h2>Plan</h2>",
+      "<details><summary>More</summary><p>Hidden</p></details>",
+      "<table><thead><tr><th>A</th></tr></thead><tbody><tr><td>B</td></tr></tbody></table>",
+      '<figure tg-spoiler><img src="https://example.com/diagram.png" alt="diagram"></figure>',
+      "<tg-math>x^2 + y^2</tg-math>",
+    ].join("");
+
+    await sendMessageTelegram("123", html, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      textMode: "html",
+    });
+
+    const renderedHtml = richSendCallParams()[0]?.rich_message?.html ?? "";
+    expect(renderedHtml).toContain("<h2>Plan</h2>");
+    expect(renderedHtml).toContain("<details><summary>More</summary><p>Hidden</p></details>");
+    expect(renderedHtml).toContain("<table>");
+    expect(renderedHtml).toContain(
+      '\n\n<figure tg-spoiler><img src="https://example.com/diagram.png" alt="diagram"/></figure>\n\n',
+    );
+    expect(renderedHtml).toContain("<tg-math>x^2 + y^2</tg-math>");
+  });
+
+  it("sends raw rich HTML tags through Telegram rich HTML", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 49, chat: { id: "123" } });
+    const markdown = [
+      '<img src="https://example.com/diagram.png" alt="Diagram">',
+      "<details><summary>More</summary>Hidden</details>",
+      "<sup>1</sup>",
+      '<input type="checkbox" checked>',
+    ].join(" ");
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(richSendCallParams()[0]?.rich_message).toEqual({
+      html: markdownToTelegramRichHtml(markdown),
+    });
+  });
+
+  it("sends Markdown tables within Telegram's column limit as rich HTML tables", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 50, chat: { id: "123" } });
     const markdown = markdownTable(20);
 
@@ -1023,11 +1067,34 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
+    });
+    expect(richSendCallParams()[0]?.rich_message?.html).toContain("<table>");
+  });
+
+  it("does not auto-linkify Markdown URLs when link previews are disabled", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 50, chat: { id: "123" } });
+    const cfg = {
+      channels: {
+        telegram: {
+          markdown: { tables: "block" as const },
+          linkPreview: false,
+        },
+      },
+    };
+
+    await sendMessageTelegram("123", "https://example.com", {
+      cfg,
+      token: "tok",
+    });
+
+    expect(richSendCallParams()[0]?.rich_message).toEqual({
+      html: "https://example.com",
+      skip_entity_detection: true,
     });
   });
 
-  it("wraps wide rich markdown tables that exceed Telegram's column limit", async () => {
+  it("renders wide Markdown tables as code blocks when they exceed Telegram's column limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 51, chat: { id: "123" } });
     const markdown = markdownTable(21);
 
@@ -1038,11 +1105,12 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown: `\`\`\`\n${markdown}\n\`\`\`` },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
+    expect(richSendCallParams()[0]?.rich_message?.html).toContain("<pre><code>");
   });
 
-  it("leaves wide rich markdown tables alone inside fences", async () => {
+  it("renders fenced wide Markdown tables as code in rich HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 52, chat: { id: "123" } });
     const markdown = `~~~\n${markdownTable(25)}\n~~~`;
 
@@ -1053,11 +1121,11 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
   });
 
-  it("wraps only wide rich markdown tables outside fences", async () => {
+  it("falls back only wide Markdown tables outside fences", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 52, chat: { id: "123" } });
     const fencedTable = markdownTable(25);
     const outsideTable = markdownTable(21);
@@ -1070,33 +1138,27 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: {
-        markdown: ["Before", "~~~", fencedTable, "~~~", "After", "```", outsideTable, "```"].join(
-          "\n",
-        ),
-      },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
   });
 
-  it("sends long rich markdown as one message", async () => {
+  it("chunks long rich HTML when source text exceeds the message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
     const line = "**section** with _style_ and `code`";
-    const markdown = `# Long\n\n${`${line}\n`.repeat(800)}`;
-    const expectedMarkdown = `# Long\n\n${`${line}  \n`.repeat(799)}${line}\n`;
+    const markdown = `# Long\n\n${`${line}\n`.repeat(2000)}`;
 
     await sendMessageTelegram("123", markdown, {
       cfg: TELEGRAM_TEST_CFG,
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { markdown: expectedMarkdown },
-    });
+    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 32_768)).toBe(true);
+    expect(chunks.join("").match(/<b>section<\/b>/g)).toHaveLength(2000);
   });
 
-  it("chunks rich markdown above the Bot API rich message limit", async () => {
+  it("chunks rich HTML above the Bot API rich message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 54, chat: { id: "123" } });
     const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(3000)}`;
 
@@ -1106,14 +1168,13 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
-    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
-    const joinedChunks = chunks.join("\n");
-    expect(joinedChunks.startsWith("# Long")).toBe(true);
-    expect(joinedChunks.match(/\*\*section\*\* with _style_ and `code`/g)?.length).toBe(3000);
+    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
+    expect(chunks.at(0)).toContain("Long");
+    expect(chunks.join("").match(/<b>section<\/b>/g)).toHaveLength(3000);
     expect(chunks.every((chunk) => chunk.length <= 32_768)).toBe(true);
   });
 
-  it("chunks long inline rich markdown without converting to HTML", async () => {
+  it("chunks long inline Markdown as bounded rich HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 52, chat: { id: "123" } });
     const markdown = `**${"A".repeat(70_000)}**`;
 
@@ -1124,9 +1185,9 @@ describe("sendMessageTelegram", () => {
 
     const chunks = richSendCallParams().map((params) => params.rich_message);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk?.html === undefined)).toBe(true);
-    expect(chunks.every((chunk) => (chunk?.markdown ?? "").length <= 32_768)).toBe(true);
-    expect(chunks.map((chunk) => chunk?.markdown ?? "").join("")).toBe(markdown);
+    expect(chunks.every((chunk) => chunk?.markdown === undefined)).toBe(true);
+    expect(chunks.every((chunk) => (chunk?.html ?? "").length <= 32_768)).toBe(true);
+    expect(chunks.map((chunk) => chunk?.html ?? "").join("")).toContain("A".repeat(100));
   });
 
   it("chunks rich markdown above Telegram's rich block limit", async () => {
@@ -1140,14 +1201,10 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
+    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
     expect(chunks).toHaveLength(2);
-    expect(
-      chunks.every(
-        (chunk) => chunk.split(/\n[\t ]*\n+/).filter((block) => block.trim()).length <= 500,
-      ),
-    ).toBe(true);
-    expect(chunks.join("\n\n")).toBe(markdown);
+    expect(chunks.every((chunk) => (chunk.match(/Paragraph \d+/g)?.length ?? 0) <= 500)).toBe(true);
+    expect(chunks.join("").match(/Paragraph \d+/g)).toHaveLength(900);
   });
 
   it("chunks rich markdown headings above Telegram's rich block limit", async () => {
@@ -1159,11 +1216,10 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
+    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
     expect(chunks).toHaveLength(2);
-    expect(chunks.at(0)?.match(/^# /gm)).toHaveLength(500);
-    expect(chunks.at(1)?.match(/^# /gm)).toHaveLength(100);
-    expect(chunks.join("\n")).toBe(markdown);
+    expect(chunks.at(0)?.match(/Heading \d+/g)).toHaveLength(500);
+    expect(chunks.at(1)?.match(/Heading \d+/g)).toHaveLength(100);
   });
 
   it("keeps long rich markdown lists intact", async () => {
@@ -1178,7 +1234,7 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
   });
 
@@ -1198,7 +1254,7 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
   });
 
@@ -1216,7 +1272,7 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
   });
 
@@ -1235,11 +1291,11 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
       chat_id: "123",
-      rich_message: { markdown },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
   });
 
-  it("chunks long rich markdown fences into bounded markdown chunks", async () => {
+  it("chunks long rich markdown fences into bounded rich HTML chunks", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 59, chat: { id: "123" } });
     const markdown = `~~~ts\n${"const value = 1;\n".repeat(5000)}~~~`;
 
@@ -1248,11 +1304,10 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.markdown ?? "");
+    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 32_768)).toBe(true);
-    expect(chunks.every((chunk) => chunk.startsWith("~~~ts\n"))).toBe(true);
-    expect(chunks.every((chunk) => chunk.endsWith("\n~~~") || chunk.endsWith("~~~"))).toBe(true);
+    expect(chunks.join("")).toContain("const value = 1;");
   });
 
   it("chunks explicit rich HTML above the Bot API rich message limit", async () => {
@@ -1275,6 +1330,31 @@ describe("sendMessageTelegram", () => {
     expect(calls.at(-1)?.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
+  });
+
+  it("chunks explicit rich HTML after media normalization", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 61, chat: { id: "123" } });
+    const img = '<img src="https://example.com/a.png">';
+    const html = img.repeat(3);
+    const cfg = {
+      channels: {
+        telegram: {
+          markdown: { tables: "block" as const },
+          textChunkLimit: html.length + 5,
+        },
+      },
+    };
+
+    await sendMessageTelegram("123", html, {
+      cfg,
+      token: "tok",
+      textMode: "html",
+    });
+
+    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= html.length + 5)).toBe(true);
+    expect(chunks.join("")).toContain("<figure>");
   });
 
   it("fails when Telegram text send returns no message_id", async () => {
@@ -3370,7 +3450,7 @@ describe("editMessageTelegram", () => {
     expect(botApi.editMessageText).toHaveBeenCalledTimes(2);
   });
 
-  it("edits text with raw rich markdown", async () => {
+  it("edits Markdown text as Telegram rich HTML", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
     await editMessageTelegram("123", 1, "**edited**", {
@@ -3381,11 +3461,11 @@ describe("editMessageTelegram", () => {
     expect(botRawApi.editMessageText).toHaveBeenCalledWith({
       chat_id: "123",
       message_id: 1,
-      rich_message: { markdown: "**edited**" },
+      rich_message: { html: "<b>edited</b>" },
     });
   });
 
-  it("edits complex text as raw rich markdown", async () => {
+  it("edits complex Markdown text as Telegram rich HTML", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
     const markdown = ["## Updated", "", "- **bold**", "- _italic_", "", "`code`"].join("\n");
 
@@ -3397,7 +3477,7 @@ describe("editMessageTelegram", () => {
     expect(botRawApi.editMessageText).toHaveBeenCalledWith({
       chat_id: "123",
       message_id: 1,
-      rich_message: { markdown },
+      rich_message: { html: markdownToTelegramRichHtml(markdown) },
     });
   });
 
@@ -3415,7 +3495,7 @@ describe("editMessageTelegram", () => {
       chat_id: "123",
       message_id: 1,
       rich_message: {
-        markdown: "https://example.com",
+        html: "https://example.com",
         skip_entity_detection: true,
       },
     });

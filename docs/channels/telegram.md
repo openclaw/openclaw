@@ -403,11 +403,11 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Accordion title="Rich message formatting">
     Outbound text uses Telegram rich messages.
 
-    - Markdown text is sent as rich Markdown without converting it to HTML.
-    - Explicit HTML payloads are sent as rich HTML.
+    - Markdown text is rendered through OpenClaw's Markdown IR and sent as Telegram rich HTML.
+    - Explicit rich HTML payloads preserve supported Bot API 10.1 tags such as headings, tables, details, rich media, and formulas.
     - Media captions still use Telegram HTML captions because rich messages do not replace captions.
 
-    Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
+    This keeps model text away from Telegram Rich Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
 
     Link previews are enabled by default. `channels.telegram.linkPreview: false` skips automatic entity detection for rich text.
 

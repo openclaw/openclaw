@@ -992,8 +992,21 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(telegramPrompt).toContain("Telegram rich text is available");
     expect(telegramPrompt).toContain("<details><summary>...</summary>...</details>");
+    expect(telegramPrompt).toContain("tables with alignment/captions/spans");
+    expect(telegramPrompt).toContain("pull quotes");
+    expect(telegramPrompt).toContain('task lists via `<input type="checkbox"/>` inside `<li>`');
+    expect(telegramPrompt).toContain("anchors/in-message links");
+    expect(telegramPrompt).toContain("maps/collages/slideshows");
+    expect(telegramPrompt).toContain("use `<details>`, not legacy `<blockquote expandable>`");
+    expect(telegramPrompt).toContain("use `<ul><li>...</li></ul>`, not literal bullet characters");
+    expect(telegramPrompt).toContain(
+      'standalone rich media blocks such as `<img src="https://..."/>`',
+    );
+    expect(telegramPrompt).toContain("use captions/credits when helpful");
+    expect(telegramPrompt).toContain("Media tags are blocks, not inline prose");
     expect(telegramPrompt).toContain("This is not legacy MarkdownV2/parse_mode");
-    expect(telegramPrompt).toContain("Button labels are plain text only");
+    expect(telegramPrompt).toContain("OpenClaw renders Telegram-safe rich messages");
+    expect(telegramPrompt).toContain("button labels are plain text only");
     expect(telegramPrompt.indexOf("Telegram rich text is available")).toBeGreaterThan(
       telegramPrompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
     );

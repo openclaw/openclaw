@@ -882,10 +882,14 @@ export const dispatchTelegramMessage = async ({
     cfg,
     channel: "telegram",
     accountId: route.accountId,
+    supportsBlockTables: true,
   });
   const renderStreamText = (text: string) => ({
     text,
-    richMessage: buildTelegramRichMarkdown(text),
+    richMessage: buildTelegramRichMarkdown(text, {
+      tableMode,
+      skipEntityDetection: telegramCfg.linkPreview === false,
+    }),
   });
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??
@@ -2430,7 +2434,7 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushStreamToolProgress(
-                      buildChannelProgressDraftLine({
+                      buildChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "command-output",
                         itemId: payload.itemId,
                         toolCallId: payload.toolCallId,
