@@ -43,6 +43,9 @@ export const AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN = "device-token";
 // The request path enters the node-pairing storage lock, so bursts must be
 // throttled before they queue behind that lock and delay operator actions.
 export const AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING = "node-pairing";
+// Paired-node approval-surface changes use a dedicated limiter so reconnect
+// storms cannot queue unbounded writes behind the shared pairing-state lock.
+export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
 // Per-IP gate for the pre-auth bootstrap-token verify path.
 // `verifyDeviceBootstrapToken` is `withLock`-serialized in
 // `device-bootstrap.ts` and runs fs read + fs write on every attempt;
@@ -52,6 +55,7 @@ export const AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING = "node-pairing";
 export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
+const IDENTITY_RATE_LIMIT_KEY_PREFIX = "identity:";
 
 interface RateLimitEntry {
   /** Timestamps (epoch ms) of recent failed attempts inside the window. */
@@ -102,10 +106,19 @@ const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
  * share one representation (including IPv4-mapped IPv6 forms).
  */
 export function normalizeRateLimitClientIp(ip: string | undefined): string {
-  if (typeof ip === "string" && ip.startsWith(BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX)) {
+  if (
+    typeof ip === "string" &&
+    (ip.startsWith(BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX) ||
+      ip.startsWith(IDENTITY_RATE_LIMIT_KEY_PREFIX))
+  ) {
     return ip;
   }
   return resolveClientIp({ remoteAddr: ip }) ?? "unknown";
+}
+
+/** Build an opaque limiter identity that is not subject to loopback IP exemptions. */
+export function buildRateLimitIdentityKey(namespace: string, identity: string): string {
+  return `${IDENTITY_RATE_LIMIT_KEY_PREFIX}${namespace}:${identity}`;
 }
 
 function resolvePruneIntervalMs(value: number | undefined): number {

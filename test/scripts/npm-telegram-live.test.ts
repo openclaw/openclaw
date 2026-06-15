@@ -82,8 +82,11 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('docker_e2e_print_log "$run_log"');
     expect(script).not.toContain('cat "$run_log"');
     expect(script).toContain('"${docker_env[@]}"');
-    expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
+    expect(script).toContain(
+      'if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then',
+    );
     expect(script).toContain('credential_role="ci"');
+    expect(script).toContain('credential_role="maintainer"');
   });
 
   it("bounds installed-package hot path OpenClaw commands", () => {
@@ -115,6 +118,9 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ");
     expect(script).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(script).toContain('-e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"');
+    expect(script).toContain('-e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"');
+    expect(script).toContain("OPENCLAW_QA_PACKAGE_SOURCE_SHA");
     expect(script).toContain(
       'package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")',
     );
@@ -137,6 +143,15 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).not.toContain(
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
     );
+  });
+
+  it("forwards repeated RTT controls to the package Telegram live lane", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_CHECKS");
   });
 
   it("keeps private QA harness imports local while using the installed package dist", () => {
@@ -192,13 +207,52 @@ describe("package Telegram live Docker E2E", () => {
     ).toBe("ci");
   });
 
+  it("defaults package Telegram RTT for the normal package live lane", () => {
+    expect(testing.resolveRttOptions({})).toEqual({
+      rttCount: 20,
+      rttTimeoutMs: undefined,
+      maxRttFailures: 20,
+      rttCheckIds: [],
+    });
+  });
+
+  it("does not force default RTT onto focused non-RTT scenario runs", () => {
+    expect(testing.resolveRttOptions({}, ["telegram-canary"])).toEqual({});
+  });
+
+  it("maps repeated RTT env onto package Telegram live options", () => {
+    expect(
+      testing.resolveRttOptions({
+        OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: "7",
+        OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS: "45000",
+        OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES: "2",
+        OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "telegram-mentioned-message-reply",
+      }),
+    ).toEqual({
+      rttCount: 7,
+      rttTimeoutMs: 45_000,
+      maxRttFailures: 2,
+      rttCheckIds: ["telegram-mentioned-message-reply"],
+    });
+  });
+
+  it("rejects invalid repeated RTT env", () => {
+    expect(() =>
+      testing.resolveRttOptions({
+        OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: "7samples",
+      }),
+    ).toThrow("invalid OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: 7samples");
+  });
+
   it("gates package Telegram status on the summary artifact", async () => {
-    const summaryPath = path.join(mkTempRoot(), "telegram-qa-summary.json");
+    const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
     writeFileSync(
       summaryPath,
       JSON.stringify({
-        counts: { total: 1, passed: 1, failed: 0 },
-        scenarios: [{ status: "fail" }],
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-05-01T00:00:00.000Z",
+        entries: [{ result: { status: "fail" } }],
       }),
       "utf8",
     );

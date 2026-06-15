@@ -2,7 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToMode } from "../../config/types.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
@@ -32,6 +32,11 @@ function resolveReplyThreadingForPayload(params: {
   currentMessageId?: string;
   replyThreading?: ReplyThreadingPolicy;
 }): ReplyPayload {
+  const payload = normalizeOptionalString(params.payload.replyToId)
+    ? setReplyPayloadMetadata(copyReplyPayloadMetadata(params.payload, { ...params.payload }), {
+        replyToIdExplicit: true,
+      })
+    : params.payload;
   const implicitReplyToId = normalizeOptionalString(params.implicitReplyToId);
   const currentMessageId = normalizeOptionalString(params.currentMessageId);
   const allowImplicitReplyToCurrentMessage = resolveImplicitCurrentMessageReplyAllowance(
@@ -42,7 +47,7 @@ function resolveReplyThreadingForPayload(params: {
   // Distinguish between (a) explicit null = "do not reply" suppression, (b) a
   // trimmed non-empty explicit replyToId, and (c) blank/whitespace strings that
   // should fall through to implicit threading.
-  const explicitReplyToIdRaw = params.payload.replyToId;
+  const explicitReplyToIdRaw = payload.replyToId;
   const isExplicitNull = explicitReplyToIdRaw === null;
   const trimmedExplicitReplyToId =
     typeof explicitReplyToIdRaw === "string"
@@ -55,11 +60,11 @@ function resolveReplyThreadingForPayload(params: {
   const normalizedPayload: ReplyPayload =
     typeof explicitReplyToIdRaw === "string" &&
     explicitReplyToIdRaw !== (trimmedExplicitReplyToId ?? "")
-      ? copyReplyPayloadMetadata(params.payload, {
-          ...params.payload,
+      ? copyReplyPayloadMetadata(payload, {
+          ...payload,
           replyToId: trimmedExplicitReplyToId,
         })
-      : params.payload;
+      : payload;
 
   const hasExplicitReplyToId = isExplicitNull || trimmedExplicitReplyToId !== undefined;
 

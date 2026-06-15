@@ -14,7 +14,9 @@ import {
   formatError,
   getStatusCode,
   logoutWeb,
+  readWebAuthExistsForDecision,
   waitForWaConnection,
+  WhatsAppAuthUnstableError,
 } from "./session.js";
 import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
@@ -30,6 +32,10 @@ const WHATSAPP_LOGIN_TIMEOUT_RESTART_MESSAGE =
   "WhatsApp connection timed out before login; retrying with a fresh socket…";
 const WHATSAPP_LOGGED_OUT_RELINK_MESSAGE =
   "WhatsApp reported the session is logged out. Cleared cached web session; please rerun openclaw channels login and scan the QR again.";
+const WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE =
+  "WhatsApp connected, but saving the linked credentials has not settled on disk yet. Retry login in a moment.";
+const WHATSAPP_LOGIN_AUTH_NOT_PERSISTED_MESSAGE =
+  "WhatsApp connected, but the linked credentials were not found on disk. Retry login in a moment.";
 export const WHATSAPP_LOGGED_OUT_QR_MESSAGE =
   "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.";
 export const WHATSAPP_WATCHDOG_TIMEOUT_ERROR = "watchdog-timeout";
@@ -234,6 +240,22 @@ export async function waitForWhatsAppLoginResult(params: {
   while (true) {
     try {
       await wait(currentSock, { timeout: "none" });
+      // Socket open only proves in-memory auth; require persisted creds before success.
+      const persistedAuth = await readWebAuthExistsForDecision(params.authDir);
+      if (persistedAuth.outcome === "unstable") {
+        return {
+          outcome: "failed",
+          message: WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE,
+          error: new WhatsAppAuthUnstableError(WHATSAPP_LOGIN_AUTH_UNSTABLE_MESSAGE),
+        };
+      }
+      if (!persistedAuth.exists) {
+        return {
+          outcome: "failed",
+          message: WHATSAPP_LOGIN_AUTH_NOT_PERSISTED_MESSAGE,
+          error: new WhatsAppAuthUnstableError(WHATSAPP_LOGIN_AUTH_NOT_PERSISTED_MESSAGE),
+        };
+      }
       return {
         outcome: "connected",
         restarted: postPairingRestarted || timeoutRestarted,

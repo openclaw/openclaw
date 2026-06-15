@@ -158,6 +158,7 @@ async function swapMemoryIndexFiles(
   targetPath: string,
   tempPath: string,
   options: MemoryIndexFileOptions = {},
+  afterPublish?: () => Promise<void> | void,
 ): Promise<void> {
   // On POSIX (Linux/macOS), rename(2) atomically overwrites the target,
   // so there is no absent-window between removing the old index and
@@ -165,12 +166,21 @@ async function swapMemoryIndexFiles(
   // exists, so the three-step backup protocol is retained.
   const resolvedOptions = resolveMemoryIndexFileOptions(options);
   const backupPath = `${targetPath}.backup-${randomUUID()}`;
+  let published = false;
+  const markPublished = async () => {
+    if (published) {
+      return;
+    }
+    published = true;
+    await afterPublish?.();
+  };
   // The old and temp DBs are checkpointed and closed before swap. Hide target
   // sidecars before publishing the new main DB, but keep them rollbackable
   // until the main-file publish succeeds.
   await moveMemoryIndexSidecarsWithRollback(targetPath, backupPath, resolvedOptions);
   try {
     await renameWithRetry(tempPath, targetPath, resolvedOptions);
+    await markPublished();
   } catch (err) {
     if (
       (err as NodeJS.ErrnoException).code === "EPERM" ||
@@ -185,6 +195,7 @@ async function swapMemoryIndexFiles(
       }
       try {
         await renameWithRetry(tempPath, targetPath, resolvedOptions);
+        await markPublished();
       } catch (moveErr) {
         await moveMemoryIndexFiles(backupPath, targetPath, options);
         throw moveErr;
@@ -205,11 +216,17 @@ export async function runMemoryAtomicReindex<T>(params: {
   tempPath: string;
   build: () => Promise<T>;
   beforeTempCleanup?: () => Promise<void> | void;
+  afterPublish?: () => Promise<void> | void;
   fileOptions?: MemoryIndexFileOptions;
 }): Promise<T> {
   try {
     const result = await params.build();
-    await swapMemoryIndexFiles(params.targetPath, params.tempPath, params.fileOptions);
+    await swapMemoryIndexFiles(
+      params.targetPath,
+      params.tempPath,
+      params.fileOptions,
+      params.afterPublish,
+    );
     return result;
   } catch (err) {
     try {

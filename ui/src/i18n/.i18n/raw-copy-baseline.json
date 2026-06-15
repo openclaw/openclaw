@@ -1532,13 +1532,6 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Refresh files"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/views/chat.ts",
       "text": "Remove attachment"
     },
     {
@@ -1572,13 +1565,6 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Workspace files"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Auto"
@@ -1603,13 +1589,6 @@
       "name": "title",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Exit focus mode"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Refresh files"
     },
     {
       "count": 1,
@@ -1668,13 +1647,6 @@
       "text": "Exact VAD"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Files"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -1700,20 +1672,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Loading files..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Missing"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
       "text": "Model"
     },
     {
@@ -1729,13 +1687,6 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "No matching messages"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "No workspace files"
     },
     {
       "count": 1,
@@ -1771,13 +1722,6 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Talk settings"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "Workspace"
     },
     {
       "count": 1,
@@ -4043,55 +3987,6 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/ui/views/logs.ts",
-      "text": "Search logs"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/logs.ts",
-      "text": "Auto-follow"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/logs.ts",
-      "text": "Filter"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/logs.ts",
-      "text": "Gateway file logs (JSONL)."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/logs.ts",
-      "text": "Log output truncated; showing latest chunk."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/logs.ts",
-      "text": "Logs"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/logs.ts",
-      "text": "No log entries."
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/markdown-sidebar.ts",
       "text": "Close sidebar"
@@ -4132,7 +4027,7 @@
       "text": "Sanitized rich-text preview for quick reading."
     },
     {
-      "count": 3,
+      "count": 4,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/markdown-sidebar.ts",
