@@ -2,6 +2,7 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import type { TelegramInputRichMessage } from "./rich-message.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
@@ -73,7 +74,8 @@ function requireSendMessageCallText(
   api: ReturnType<typeof createMockDraftApi>,
   callIndex: number,
 ): string {
-  const call = api.sendMessage.mock.calls[callIndex];
+  const calls = api.sendMessage.mock.calls as unknown[][];
+  const call = calls[callIndex];
   expect(call, `sendMessage call ${callIndex}`).toBeDefined();
   return String(call?.[1] ?? "");
 }
@@ -636,7 +638,9 @@ describe("createTelegramDraftStream", () => {
     stream.update(text);
     await stream.flush();
 
-    const richMessage = api.raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    const calls = api.raw.sendRichMessage.mock.calls as unknown[][];
+    const params = calls[0]?.[0] as { rich_message?: TelegramInputRichMessage } | undefined;
+    const richMessage = params?.rich_message;
     expect(richMessage?.html).toContain("paragraph 499");
     expect(richMessage?.html).not.toContain("paragraph 500");
   });
