@@ -687,6 +687,11 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   const effectiveUser = readSystemctlEffectiveUser();
   const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
   const isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
+  // When the gateway unit file already exists under the current (root) HOME,
+  // the service is installed for root, not the sudo user.  A stale SUDO_USER
+  // from a prior sudo escalation must not redirect systemctl --user away from
+  // root's own user manager (#81410).
+  const preferMachineScope = isSudoToRoot && !isGatewayUnitInstalledForCurrentUser(env);
   const machineUser = isSudoToRoot
     ? sudoUser
     : isNonRootUser(envUser)
@@ -696,8 +701,17 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
         : effectiveUser || envUser || sudoUser || null;
   return {
     machineUser,
-    preferMachineScope: isSudoToRoot,
+    preferMachineScope,
   };
+}
+
+function isGatewayUnitInstalledForCurrentUser(env: GatewayServiceEnv): boolean {
+  try {
+    const unitPath = resolveSystemdUnitPath(env);
+    return fsSync.existsSync(unitPath);
+  } catch {
+    return false;
+  }
 }
 
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {

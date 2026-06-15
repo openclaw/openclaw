@@ -2049,6 +2049,21 @@ describe("systemd service control", () => {
     await assertRestartSuccess({ SUDO_USER: "debian" });
   });
 
+  it("falls back to bare --user when root unit file exists despite stale SUDO_USER (#81410)", async () => {
+    mockEffectiveUid(0);
+    existsSyncMock.mockReturnValue(true); // unit file exists in root's HOME
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+    await assertRestartSuccess({ SUDO_USER: "debian", HOME: "/root" });
+  });
+
   it("keeps direct --user scope when SUDO_USER is root", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
