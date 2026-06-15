@@ -41,6 +41,7 @@ import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   filterLiveShortTermRecallEntries,
   readLightStagedKeys,
+  readPhaseSignalEntries,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
   recordRemConsideredPhaseSignals,
@@ -1703,8 +1704,29 @@ async function runLightDreaming(params: {
       lookbackDays: params.config.lookbackDays,
     }),
   });
+  // Filter entries already emitted in a prior light-phase cycle and not
+  // recalled again since.  This prevents the work-summary block from
+  // repeating verbatim across consecutive cycles when the same entries
+  // remain within the lookback window.  See #72096.
+  const phaseSignals = await readPhaseSignalEntries({
+    workspaceDir: params.workspaceDir,
+    nowMs,
+  });
+  const freshEntries = recentEntries.filter((entry) => {
+    const signal = phaseSignals[entry.key];
+    if (!signal?.lastLightAt) {
+      return true; // never emitted → include
+    }
+    const lastLightMs = Date.parse(signal.lastLightAt);
+    const lastRecalledMs = Date.parse(entry.lastRecalledAt);
+    if (!Number.isFinite(lastLightMs) || !Number.isFinite(lastRecalledMs)) {
+      return true; // malformed timestamps → include conservatively
+    }
+    // Include only if the entry was recalled again after the last emission.
+    return lastRecalledMs > lastLightMs;
+  });
   const rankedEntries = dedupeEntries(
-    recentEntries.toSorted((a, b) => {
+    freshEntries.toSorted((a, b) => {
       const byTime = Date.parse(b.lastRecalledAt) - Date.parse(a.lastRecalledAt);
       if (byTime !== 0) {
         return byTime;
