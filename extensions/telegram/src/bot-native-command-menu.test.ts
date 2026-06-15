@@ -658,7 +658,9 @@ describe("bot-native-command-menu", () => {
       commandsToRegister: commands, accountId, botIdentity: "bot-b",
     });
     // No additional setMyCommands calls — sync was skipped
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), 100);
+    });
     expect(setMyCommands).toHaveBeenCalledTimes(2);
   });
 });
