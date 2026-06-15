@@ -4,6 +4,22 @@ on:
   schedule:
     - cron: "37 8 * * *"
   workflow_dispatch:
+    inputs:
+      run_session_steward_live:
+        description: Run a self-contained live Session Steward eval after the static catalog gate
+        required: false
+        default: false
+        type: boolean
+      live_model:
+        description: Model ref for the opt-in Session Steward live eval
+        required: false
+        default: "ollama/qwen3.5:4b"
+        type: string
+      timeout_seconds:
+        description: Session Steward live eval timeout in seconds
+        required: false
+        default: "180"
+        type: string
 
 permissions:
   contents: read
@@ -30,3 +46,70 @@ jobs:
           install-bun: "false"
       - name: Validate role contracts
         run: pnpm agents:eval:contracts
+
+  session-steward-live:
+    name: Session Steward live eval
+    needs: contract-catalog
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_session_steward_live }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+      - name: Validate Session Steward live eval inputs
+        env:
+          INPUT_LIVE_MODEL: ${{ inputs.live_model }}
+          INPUT_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+        run: |
+          case "$INPUT_LIVE_MODEL" in
+            ollama/*) ;;
+            *)
+              echo "::error::live_model must be an ollama/<model> ref for this workflow"
+              exit 1
+              ;;
+          esac
+          model_id="${INPUT_LIVE_MODEL#ollama/}"
+          case "$model_id" in
+            ""|*[!A-Za-z0-9._:/-]*)
+              echo "::error::live_model contains unsupported characters"
+              exit 1
+              ;;
+          esac
+          case "$INPUT_TIMEOUT_SECONDS" in
+            ""|*[!0-9]*)
+              echo "::error::timeout_seconds must be a positive integer"
+              exit 1
+              ;;
+          esac
+          if [ "$INPUT_TIMEOUT_SECONDS" -lt 1 ] || [ "$INPUT_TIMEOUT_SECONDS" -gt 1800 ]; then
+            echo "::error::timeout_seconds must be between 1 and 1800"
+            exit 1
+          fi
+          echo "SESSION_STEWARD_LIVE_MODEL=$INPUT_LIVE_MODEL" >> "$GITHUB_ENV"
+          echo "SESSION_STEWARD_TIMEOUT_SECONDS=$INPUT_TIMEOUT_SECONDS" >> "$GITHUB_ENV"
+      - name: Start local Ollama for Session Steward live eval
+        run: |
+          docker run --rm -d --name openclaw-agent-role-ollama -p 127.0.0.1:11434:11434 ollama/ollama:latest
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
+              break
+            fi
+            if [ "$attempt" = "60" ]; then
+              echo "::error::Ollama did not become ready"
+              docker logs openclaw-agent-role-ollama || true
+              exit 1
+            fi
+            sleep 2
+          done
+          model_id="${SESSION_STEWARD_LIVE_MODEL#ollama/}"
+          docker exec openclaw-agent-role-ollama ollama pull "$model_id"
+      - name: Run Session Steward live eval
+        run: node scripts/agent-role-eval.mjs --live --self-contained --agent session-steward --model "$SESSION_STEWARD_LIVE_MODEL" --timeout "$SESSION_STEWARD_TIMEOUT_SECONDS" --json
+      - name: Stop local Ollama
+        if: always()
+        run: docker rm -f openclaw-agent-role-ollama || true
