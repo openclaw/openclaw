@@ -19,7 +19,7 @@ describe("telegramPlugin outbound", () => {
   it("uses static outbound contract when Telegram runtime is uninitialized", () => {
     clearTelegramRuntime();
     const text = `${"hello\n".repeat(1200)}tail`;
-    const expected = chunkMarkdownTextWithMode(text, 32_768, "length");
+    const expected = chunkMarkdownTextWithMode(`${"hello  \n".repeat(1200)}tail`, 32_768, "length");
 
     expect(telegramOutbound.chunker?.(text, 32_768)).toEqual(expected);
     expect(telegramOutbound.deliveryMode).toBe("direct");

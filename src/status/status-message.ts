@@ -69,9 +69,6 @@ type AgentConfig = Partial<AgentDefaults> & {
   model?: AgentDefaults["model"] | string;
 };
 
-// Status rows are intentional layout, not GFM soft-wrapped prose.
-const STATUS_MARKDOWN_LINE_BREAK = "  \n";
-
 export const formatTokenCount = formatTokenCountShared;
 
 type QueueStatus = {
@@ -1053,6 +1050,5 @@ export function buildStatusMessage(args: StatusArgs): string {
     activationLine,
   ]
     .filter((line): line is string => Boolean(line))
-    .flatMap((line) => line.split("\n"))
-    .join(STATUS_MARKDOWN_LINE_BREAK);
+    .join("\n");
 }

@@ -130,12 +130,6 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(
-      text
-        .split("\n")
-        .slice(0, -1)
-        .every((line) => line.endsWith("  ")),
-    ).toBe(true);
     expect(normalized).toContain("OpenClaw");
     expect(normalized).toContain("Model: anthropic/test:opus");
     expect(normalized).toContain("api-key");
