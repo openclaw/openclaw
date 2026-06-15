@@ -80,7 +80,7 @@ jobs:
               per_page: 100,
             });
 
-            const artifactName = `ios-periphery-dead-code-${run.id}`;
+            const artifactName = `ios-periphery-dead-code-${run.id}-${run.run_attempt}`;
             const artifact = artifacts.find((item) => item.name === artifactName);
             if (!artifact) {
               core.warning(`No ${artifactName} artifact found.`);

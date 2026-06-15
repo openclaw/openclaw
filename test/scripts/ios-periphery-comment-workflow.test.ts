@@ -7,10 +7,13 @@ import { parse } from "yaml";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 
 const WORKFLOW_PATH = ".github/workflows/ios-periphery-comment.yml";
+const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
+const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type WorkflowStep = {
   name?: string;
   with?: {
+    name?: string;
     script?: string;
   };
 };
@@ -18,6 +21,14 @@ type WorkflowStep = {
 type Workflow = {
   jobs?: {
     comment?: {
+      steps?: WorkflowStep[];
+    };
+  };
+};
+
+type ProducerWorkflow = {
+  jobs?: {
+    scan?: {
       steps?: WorkflowStep[];
     };
   };
@@ -58,10 +69,10 @@ async function runCommenter(
     existingComments?: ExistingComment[];
     liveHeadSha?: string;
     runHeadSha?: string;
+    runAttempt?: number;
   } = {},
 ) {
   const script = commenterScript();
-  const artifactName = "ios-periphery-dead-code-12345";
   const core = {
     infos: [] as string[],
     warnings: [] as string[],
@@ -110,7 +121,7 @@ async function runCommenter(
     async paginate(_request: unknown, params: Record<string, unknown>) {
       if (params.run_id === 12345) {
         artifactListCount += 1;
-        return [{ ...artifact, name: artifact.name || artifactName }];
+        return [{ ...artifact, name: artifact.name || ARTIFACT_NAME }];
       }
       if (params.issue_number === 123) {
         return options.existingComments ?? [];
@@ -127,6 +138,7 @@ async function runCommenter(
         name: "iOS Periphery Dead Code",
         pull_requests: [{ number: 123 }],
         repository: { full_name: "openclaw/openclaw" },
+        run_attempt: options.runAttempt ?? 2,
       },
     },
     repo: {
@@ -268,6 +280,17 @@ describe("iOS Periphery comment workflow", () => {
     ).not.toThrow();
   });
 
+  it("scopes the report artifact to the workflow attempt", () => {
+    const workflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
+    const upload = workflow.jobs?.scan?.steps?.find(
+      (step) => step.name === "Upload Periphery report",
+    );
+
+    expect(upload?.with?.name).toBe(
+      "ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+  });
+
   it("accepts a valid small Periphery artifact", async () => {
     const archive = makeZip({
       "periphery.json": "[]\n",
@@ -277,7 +300,7 @@ describe("iOS Periphery comment workflow", () => {
       {
         expired: false,
         id: 77,
-        name: "ios-periphery-dead-code-12345",
+        name: ARTIFACT_NAME,
         size_in_bytes: archive.length,
       },
       archive,
@@ -292,7 +315,7 @@ describe("iOS Periphery comment workflow", () => {
       {
         expired: false,
         id: 77,
-        name: "ios-periphery-dead-code-12345",
+        name: ARTIFACT_NAME,
         size_in_bytes: 1024 * 1024 + 1,
       },
       Buffer.alloc(0),
@@ -300,7 +323,7 @@ describe("iOS Periphery comment workflow", () => {
 
     expect(result.downloadCount).toBe(0);
     expect(result.core.warnings).toEqual([
-      "Skipping ios-periphery-dead-code-12345; compressed artifact size 1048577 exceeds the 1048576 byte limit.",
+      `Skipping ${ARTIFACT_NAME}; compressed artifact size 1048577 exceeds the 1048576 byte limit.`,
     ]);
   });
 
@@ -313,7 +336,7 @@ describe("iOS Periphery comment workflow", () => {
       {
         expired: false,
         id: 77,
-        name: "ios-periphery-dead-code-12345",
+        name: ARTIFACT_NAME,
         size_in_bytes: archive.length,
       },
       archive,
@@ -321,7 +344,7 @@ describe("iOS Periphery comment workflow", () => {
 
     expect(result.createdBodies).toEqual([]);
     expect(result.core.warnings).toEqual([
-      "Skipping ios-periphery-dead-code-12345; unexpected artifact entry ../periphery.json.",
+      `Skipping ${ARTIFACT_NAME}; unexpected artifact entry ../periphery.json.`,
     ]);
   });
 
@@ -336,7 +359,7 @@ describe("iOS Periphery comment workflow", () => {
       {
         expired: false,
         id: 77,
-        name: "ios-periphery-dead-code-12345",
+        name: ARTIFACT_NAME,
         size_in_bytes: archive.length,
       },
       archive,
@@ -344,7 +367,7 @@ describe("iOS Periphery comment workflow", () => {
 
     expect(result.createdBodies).toEqual([]);
     expect(result.core.warnings).toEqual([
-      "Skipping ios-periphery-dead-code-12345; periphery.json is encrypted.",
+      `Skipping ${ARTIFACT_NAME}; periphery.json is encrypted.`,
     ]);
   });
 
@@ -353,7 +376,7 @@ describe("iOS Periphery comment workflow", () => {
       {
         expired: false,
         id: 77,
-        name: "ios-periphery-dead-code-12345",
+        name: ARTIFACT_NAME,
         size_in_bytes: 1,
       },
       Buffer.alloc(0),
@@ -365,6 +388,21 @@ describe("iOS Periphery comment workflow", () => {
 
     expect(result.artifactListCount).toBe(0);
     expect(result.downloadCount).toBe(0);
+  });
+
+  it("does not reuse an artifact from an earlier workflow attempt", async () => {
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: "ios-periphery-dead-code-12345-1",
+        size_in_bytes: 1,
+      },
+      Buffer.alloc(0),
+    );
+
+    expect(result.downloadCount).toBe(0);
+    expect(result.core.warnings).toEqual([`No ${ARTIFACT_NAME} artifact found.`]);
   });
 
   it("escapes finding text before creating a PR comment", async () => {
@@ -383,7 +421,7 @@ describe("iOS Periphery comment workflow", () => {
       {
         expired: false,
         id: 77,
-        name: "ios-periphery-dead-code-12345",
+        name: ARTIFACT_NAME,
         size_in_bytes: archive.length,
       },
       archive,
@@ -414,7 +452,7 @@ describe("iOS Periphery comment workflow", () => {
       {
         expired: false,
         id: 77,
-        name: "ios-periphery-dead-code-12345",
+        name: ARTIFACT_NAME,
         size_in_bytes: archive.length,
       },
       archive,
@@ -439,7 +477,7 @@ describe("iOS Periphery comment workflow", () => {
       {
         expired: false,
         id: 77,
-        name: "ios-periphery-dead-code-12345",
+        name: ARTIFACT_NAME,
         size_in_bytes: archive.length,
       },
       archive,
