@@ -611,17 +611,20 @@ describe("channel-streaming", () => {
 
   it("does not report started when delayed progress startup rejects", async () => {
     vi.useFakeTimers();
+    const error = new Error("draft unavailable");
     const onStart = vi
       .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("draft unavailable"))
+      .mockRejectedValueOnce(error)
       .mockResolvedValueOnce(undefined);
-    const gate = createChannelProgressDraftGate({ onStart });
+    const onStartError = vi.fn();
+    const gate = createChannelProgressDraftGate({ onStart, onStartError });
 
     await expect(gate.noteWork()).resolves.toBe(false);
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(gate.hasStarted).toBe(false);
+    expect(onStartError).toHaveBeenCalledWith(error);
 
     await expect(gate.noteWork()).resolves.toBe(true);
 

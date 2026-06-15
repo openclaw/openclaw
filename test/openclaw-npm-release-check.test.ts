@@ -571,7 +571,7 @@ describe("collectForbiddenPackedPathErrors", () => {
         "dist/plugin-sdk/qa-channel-protocol.d.ts",
         "dist/qa-runtime-B9LDtssJ.js",
         "docs/channels/qa-channel.md",
-        "qa/scenarios/index.md",
+        "qa/scenarios/index.yaml",
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
@@ -584,7 +584,7 @@ describe("collectForbiddenPackedPathErrors", () => {
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
       'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
       'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
-      'npm package must not include private QA suite artifact "qa/scenarios/index.md".',
+      'npm package must not include private QA suite artifact "qa/scenarios/index.yaml".',
     ]);
   });
 

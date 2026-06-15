@@ -46,7 +46,7 @@ async function runQaSelfCheck(opts: { repoRoot?: string; output?: string }) {
   await runtime.runQaLabSelfCheckCommand(opts);
 }
 
-async function runQaSuite(opts: {
+async function runQaSuiteCliCommand(opts: {
   repoRoot?: string;
   outputDir?: string;
   transportId?: string;
@@ -300,7 +300,7 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
-    .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
+    .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option(
@@ -372,7 +372,7 @@ export function registerQaLabCli(program: Command) {
         runtimePair?: string;
         runtimeParityTier?: string[];
       }) => {
-        await runQaSuite({
+        await runQaSuiteCliCommand({
           repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
           transportId: opts.transport,
@@ -436,7 +436,7 @@ export function registerQaLabCli(program: Command) {
     );
 
   qa.command("coverage")
-    .description("Print the markdown QA coverage inventory")
+    .description("Print the YAML QA coverage inventory")
     .option("--repo-root <path>", "Repository root to target when writing --output")
     .option("--output <path>", "Write the coverage inventory to this path")
     .option("--json", "Print JSON instead of Markdown", false)
@@ -444,7 +444,7 @@ export function registerQaLabCli(program: Command) {
     .option("--summary <path>", "Runtime qa-suite-summary.json to overlay on --tools coverage")
     .option(
       "--match <query>",
-      "Search scenario metadata and print matching qa suite targets (repeatable)",
+      "Search scenario metadata and print matching scenario refs (repeatable)",
       collectString,
       [],
     )

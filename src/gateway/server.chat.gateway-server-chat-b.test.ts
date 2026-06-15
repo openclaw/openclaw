@@ -119,6 +119,10 @@ async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
   await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
 }
 
+async function removeTempDir(dir: string): Promise<void> {
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+}
+
 async function readTimelineEvents(filePath: string): Promise<Array<Record<string, unknown>>> {
   const raw = await fs.readFile(filePath, "utf-8");
   return raw
@@ -296,7 +300,7 @@ describe("gateway server chat", () => {
       clearConfigCache();
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -527,7 +531,7 @@ describe("gateway server chat", () => {
       expect(payload?.metadata).toBeUndefined();
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -687,7 +691,7 @@ describe("gateway server chat", () => {
       );
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -892,7 +896,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1082,7 +1086,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1234,7 +1238,7 @@ describe("gateway server chat", () => {
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
         clearConfigCache();
-        await fs.rm(sessionDir, { recursive: true, force: true });
+        await removeTempDir(sessionDir);
       }
     },
   );
@@ -1421,7 +1425,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1536,7 +1540,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1670,7 +1674,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1821,7 +1825,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1973,7 +1977,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -2354,7 +2358,7 @@ describe("gateway server chat", () => {
       } else {
         process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = previousTimelinePath;
       }
-      await fs.rm(timelineDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(timelineDir);
     }
   });
 
@@ -2717,6 +2721,39 @@ describe("gateway server chat", () => {
       expect(full.ok).toBe(true);
       expect(full.unavailableReason).toBeUndefined();
       expect(JSON.stringify(full.message)).toContain("abcdefghij");
+      expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+    });
+  });
+
+  test("chat.message.get returns archive-backed rows surfaced by history", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await fs.writeFile(
+        path.join(sessionDir, "sess-main.jsonl.reset.2026-02-16T22-26-34.000Z"),
+        [
+          JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+          JSON.stringify({
+            id: "msg-archive-full-assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "archive abcdefghij" }],
+              timestamp: Date.now(),
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const historyMessages = await fetchHistoryMessages(ws, { maxChars: 12 });
+      expect(JSON.stringify(historyMessages)).toContain("archive abcd\\n...(truncated)...");
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-archive-full-assistant",
+      });
+      expect(full.ok).toBe(true);
+      expect(full.unavailableReason).toBeUndefined();
+      expect(JSON.stringify(full.message)).toContain("archive abcdefghij");
       expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
     });
   });
