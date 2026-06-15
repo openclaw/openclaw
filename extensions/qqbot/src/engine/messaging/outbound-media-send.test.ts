@@ -97,11 +97,7 @@ describe("trySendViaHostRead error handling", () => {
       contentType: "application/octet-stream",
     });
     mockedSenderSendMedia.mockRejectedValue(
-      new MockUploadDailyLimitExceededError(
-        "/tmp/openclaw-sandbox/report.docx",
-        2048,
-        "daily quota",
-      ),
+      new MockUploadDailyLimitExceededError("<buffer>", 2048, "daily quota"),
     );
 
     const result = (await sendPhoto(
@@ -114,6 +110,7 @@ describe("trySendViaHostRead error handling", () => {
       errorCode: OUTBOUND_ERROR_CODES.UPLOAD_DAILY_LIMIT_EXCEEDED,
       qqBizCode: 40093002,
     });
-    expect(result.error).toContain("report.docx");
+    expect(result.error).toContain("/tmp/openclaw-sandbox/report.docx");
+    expect(result.error).not.toContain("<buffer>");
   });
 });

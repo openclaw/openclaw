@@ -249,7 +249,11 @@ async function trySendViaHostRead(
     return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
   } catch (err) {
     if (err instanceof UploadDailyLimitExceededError) {
-      return buildDailyLimitExceededResult(err);
+      return buildDailyLimitExceededResult(
+        err.filePath === "<buffer>"
+          ? new UploadDailyLimitExceededError(mediaPath, err.fileSize, err.message)
+          : err,
+      );
     }
     return {
       channel: "qqbot",
