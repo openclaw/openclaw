@@ -119,6 +119,9 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml('![Diagram](https://example.com/a.jpg "Caption")')).toBe(
       '<figure><img src="https://example.com/a.jpg" alt="Diagram"/><figcaption>Caption</figcaption></figure>',
     );
+    expect(markdownToTelegramRichHtml("See ![Diagram](https://example.com/a.jpg).")).toBe(
+      'See <a href="https://example.com/a.jpg">Diagram</a>.',
+    );
     expect(markdownToTelegramRichHtml("```\n![](https://example.com/a.jpg)\n```")).toBe(
       "<pre><code>![](https://example.com/a.jpg)\n</code></pre>",
     );

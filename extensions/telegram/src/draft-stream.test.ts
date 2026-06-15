@@ -798,7 +798,7 @@ describe("createTelegramDraftStream", () => {
       chatId: 123,
       maxChars: 100,
       renderText: () => ({
-        text: `<b>${"<".repeat(120)}</b>`,
+        text: "short raw text",
         richMessage: { html: `<b>${"<".repeat(120)}</b>` },
       }),
       warn,

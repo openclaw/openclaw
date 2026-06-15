@@ -185,6 +185,8 @@ const TELEGRAM_RICH_MEDIA_BLOCK_PATTERN =
   /[^\S\r\n]*(?:<figure\b[^>]*>[\s\S]*?<\/figure>|<tg-collage\b[^>]*>[\s\S]*?<\/tg-collage>|<tg-slideshow\b[^>]*>[\s\S]*?<\/tg-slideshow>|<img\b[^>]*\bsrc="https?:\/\/[^"]+"[^>]*\/?>|<video\b[^>]*\bsrc="https?:\/\/[^"]+"[^>]*(?:\/>|>[\s\S]*?<\/video>)|<audio\b[^>]*\bsrc="https?:\/\/[^"]+"[^>]*(?:\/>|>[\s\S]*?<\/audio>)|<tg-map\b[^>]*\/?>)[^\S\r\n]*/gi;
 const TELEGRAM_MARKDOWN_MEDIA_BLOCK_PATTERN =
   /^([ \t]*)!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)(?:\s+"([^"\n]*)")?\)[ \t]*$/;
+const TELEGRAM_MARKDOWN_INLINE_IMAGE_PATTERN = /!\[([^\]\n]*)\]\(([^)\n]+)\)/g;
+const TELEGRAM_MARKDOWN_REFERENCE_IMAGE_PATTERN = /!\[([^\]\n]*)\]\[([^\]\n]+)\]/g;
 const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
   "b",
   "strong",
@@ -678,7 +680,7 @@ function isolateTelegramRichMediaBlocks(html: string): string {
     .trim();
 }
 
-function normalizeTelegramRichMarkdownMediaBlocks(markdown: string): string {
+function normalizeTelegramRichMarkdownMedia(markdown: string): string {
   const lines = markdown.split("\n");
   const out: string[] = [];
   let inFence = false;
@@ -689,8 +691,16 @@ function normalizeTelegramRichMarkdownMediaBlocks(markdown: string): string {
       continue;
     }
     const match = inFence ? null : TELEGRAM_MARKDOWN_MEDIA_BLOCK_PATTERN.exec(line);
-    if (!match) {
+    if (inFence) {
       out.push(line);
+      continue;
+    }
+    if (!match) {
+      out.push(
+        line
+          .replace(TELEGRAM_MARKDOWN_INLINE_IMAGE_PATTERN, "[$1]($2)")
+          .replace(TELEGRAM_MARKDOWN_REFERENCE_IMAGE_PATTERN, "[$1][$2]"),
+      );
       continue;
     }
     const [, indent, alt, src, caption] = match;
@@ -772,7 +782,7 @@ export function markdownToTelegramRichHtml(
 ): string {
   const tableMode = options.tableMode === "off" ? "off" : "block";
   const { ir, tables } = markdownToIRWithMeta(
-    preserveTelegramListBoundarySpacing(normalizeTelegramRichMarkdownMediaBlocks(markdown ?? "")),
+    preserveTelegramListBoundarySpacing(normalizeTelegramRichMarkdownMedia(markdown ?? "")),
     {
       linkify: true,
       enableSpoilers: true,
