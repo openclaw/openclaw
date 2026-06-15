@@ -185,6 +185,11 @@ const TELEGRAM_HTML_ENTITY_PATTERN = /&(#x[0-9A-Fa-f]+|#\d+|amp|lt|gt|quot|apos)
 const TELEGRAM_HTML_TAG_PATTERN = /<[^>]*>/g;
 const TELEGRAM_RICH_MEDIA_BLOCK_PATTERN =
   /[^\S\r\n]*(?:<figure\b[^>]*>[\s\S]*?<\/figure>|<tg-collage\b[^>]*>[\s\S]*?<\/tg-collage>|<tg-slideshow\b[^>]*>[\s\S]*?<\/tg-slideshow>|<img\b[^>]*\bsrc="https?:\/\/[^"]+"[^>]*\/?>|<video\b[^>]*\bsrc="https?:\/\/[^"]+"[^>]*(?:\/>|>[\s\S]*?<\/video>)|<audio\b[^>]*\bsrc="https?:\/\/[^"]+"[^>]*(?:\/>|>[\s\S]*?<\/audio>)|<tg-map\b[^>]*\/?>)[^\S\r\n]*/gi;
+const TELEGRAM_RICH_HTML_TABLE_PATTERN = /<table\b[^>]*>[\s\S]*?<\/table>/gi;
+const TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+const TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+const TELEGRAM_HTML_CAPTION_PATTERN = /<caption\b[^>]*>([\s\S]*?)<\/caption>/i;
+const TELEGRAM_HTML_COLSPAN_PATTERN = /\bcolspan\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i;
 const TELEGRAM_MARKDOWN_MEDIA_BLOCK_PATTERN =
   /^([ \t]*)!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)(?:\s+"([^"\n]*)")?\)[ \t]*$/;
 const TELEGRAM_MARKDOWN_INLINE_IMAGE_PATTERN = /!\[([^\]\n]*)\]\(([^)\n]+)\)/g;
@@ -657,7 +662,9 @@ export function renderTelegramHtmlText(
 
 export function sanitizeTelegramRichHtml(html: string): string {
   return isolateTelegramRichMediaBlocks(
-    escapeUnsupportedTelegramHtml(html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
+    normalizeWideTelegramRichHtmlTables(
+      escapeUnsupportedTelegramHtml(html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
+    ),
   );
 }
 
@@ -680,6 +687,68 @@ function isolateTelegramRichMediaBlocks(html: string): string {
     )
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function parseTelegramHtmlColspan(attrs: string): number {
+  const raw = TELEGRAM_HTML_COLSPAN_PATTERN.exec(attrs)?.slice(1).find(Boolean);
+  const value = raw ? Number.parseInt(raw, 10) : 1;
+  return Number.isFinite(value) && value > 1 ? value : 1;
+}
+
+function parseTelegramRichHtmlTableRows(tableHtml: string): string[][] {
+  const rows: string[][] = [];
+  TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN.lastIndex = 0;
+  let rowMatch: RegExpExecArray | null;
+  while ((rowMatch = TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN.exec(tableHtml)) !== null) {
+    const rowHtml = rowMatch[1] ?? "";
+    const row: string[] = [];
+    TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN.lastIndex = 0;
+    let cellMatch: RegExpExecArray | null;
+    while ((cellMatch = TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN.exec(rowHtml)) !== null) {
+      const attrs = cellMatch[2] ?? "";
+      const text = telegramHtmlToPlainTextFallback(cellMatch[3] ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
+      row.push(text, ...Array.from({ length: parseTelegramHtmlColspan(attrs) - 1 }, () => ""));
+    }
+    if (row.length) {
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+
+function renderTelegramRichHtmlRawTableFallback(
+  tableHtml: string,
+  rows: readonly string[][],
+): string {
+  const columnCount = Math.max(...rows.map((row) => row.length), 0);
+  const widths = Array.from({ length: columnCount }, () => 3);
+  for (const row of rows) {
+    for (let index = 0; index < columnCount; index += 1) {
+      widths[index] = Math.max(widths[index] ?? 3, row[index]?.length ?? 0);
+    }
+  }
+  const caption = telegramHtmlToPlainTextFallback(
+    TELEGRAM_HTML_CAPTION_PATTERN.exec(tableHtml)?.[1] ?? "",
+  ).trim();
+  const tableText = rows
+    .map(
+      (row) => `| ${widths.map((width, index) => (row[index] ?? "").padEnd(width)).join(" | ")} |`,
+    )
+    .join("\n");
+  return `<pre><code>${escapeHtml([caption, tableText].filter(Boolean).join("\n"))}</code></pre>\n\n`;
+}
+
+function normalizeWideTelegramRichHtmlTables(html: string): string {
+  TELEGRAM_RICH_HTML_TABLE_PATTERN.lastIndex = 0;
+  return html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml) => {
+    const rows = parseTelegramRichHtmlTableRows(tableHtml);
+    const columnCount = Math.max(...rows.map((row) => row.length), 0);
+    return columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT
+      ? renderTelegramRichHtmlRawTableFallback(tableHtml, rows)
+      : tableHtml;
+  });
 }
 
 function normalizeTelegramRichMarkdownMedia(markdown: string): string {

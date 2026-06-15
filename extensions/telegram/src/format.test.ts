@@ -5,6 +5,7 @@ import {
   markdownToTelegramHtml,
   markdownToTelegramRichHtml,
   renderTelegramHtmlText,
+  sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
@@ -139,6 +140,16 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml(table(21))).toContain("<pre><code>");
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).toContain("<pre><code>");
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).not.toContain("<table>");
+  });
+
+  it("falls back over-wide raw rich HTML tables", () => {
+    const cells = Array.from({ length: 21 }, (_, index) => `<td>C${index + 1}</td>`).join("");
+    const html = `<table><caption>Wide</caption><tbody><tr>${cells}</tr></tbody></table>`;
+    const sanitized = sanitizeTelegramRichHtml(html);
+
+    expect(sanitized).toContain("<pre><code>Wide");
+    expect(sanitized).toContain("C21");
+    expect(sanitized).not.toContain("<table>");
   });
 
   it("renders block-mode tables as code in legacy Telegram HTML", () => {

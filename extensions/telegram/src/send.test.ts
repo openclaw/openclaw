@@ -1310,6 +1310,31 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("chunks explicit rich HTML after media normalization", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 61, chat: { id: "123" } });
+    const img = '<img src="https://example.com/a.png">';
+    const html = img.repeat(3);
+    const cfg = {
+      channels: {
+        telegram: {
+          markdown: { tables: "block" as const },
+          textChunkLimit: html.length + 5,
+        },
+      },
+    };
+
+    await sendMessageTelegram("123", html, {
+      cfg,
+      token: "tok",
+      textMode: "html",
+    });
+
+    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= html.length + 5)).toBe(true);
+    expect(chunks.join("")).toContain("<figure>");
+  });
+
   it("fails when Telegram text send returns no message_id", async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       chat: { id: "123" },

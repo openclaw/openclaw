@@ -352,7 +352,7 @@ export function splitTelegramRichTextChunks(params: {
   chunkMode: ChunkMode;
 }): string[] {
   return params.textMode === "html"
-    ? splitTelegramHtmlChunks(params.text, params.textLimit)
+    ? splitTelegramHtmlChunks(sanitizeTelegramRichHtml(params.text), params.textLimit)
     : splitTelegramRichMarkdownChunks(params.text, params.textLimit, params.chunkMode);
 }
 
@@ -365,7 +365,7 @@ export function splitTelegramRichMessageTextChunks(params: {
 }): TelegramRichTextChunk[] {
   const htmlChunks =
     params.textMode === "html"
-      ? splitTelegramHtmlChunks(params.text, params.textLimit)
+      ? splitTelegramHtmlChunks(sanitizeTelegramRichHtml(params.text), params.textLimit)
       : splitTelegramRichMarkdownChunks(params.text, params.textLimit, params.chunkMode).flatMap(
           (chunk) =>
             splitTelegramHtmlChunks(
