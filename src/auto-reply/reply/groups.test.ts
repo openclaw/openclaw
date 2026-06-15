@@ -125,14 +125,14 @@ describe("group runtime loading", () => {
       sessionCtx: {
         ChatType: "group",
         Provider: "telegram",
-        BotUsername: "kesslerAIBot",
+        BotUsername: "SirPinchALotBot",
       },
       silentToken: "NO_REPLY",
       silentReplyPolicy: "allow",
     });
 
-    expect(context).toContain("Telegram: @kesslerAIBot is your bot handle in this chat.");
-    expect(context).toContain("Treat messages addressed to @kesslerAIBot as addressed to you");
+    expect(context).toContain("Telegram: @SirPinchALotBot is your bot handle in this chat.");
+    expect(context).toContain("Treat messages addressed to @SirPinchALotBot as addressed to you");
 
     const nonTelegram = groups.buildGroupChatContext({
       sessionCtx: {
@@ -143,7 +143,7 @@ describe("group runtime loading", () => {
       silentToken: "NO_REPLY",
       silentReplyPolicy: "allow",
     });
-    expect(nonTelegram).not.toContain("@kesslerAIBot is your bot handle");
+    expect(nonTelegram).not.toContain("@SirPinchALotBot is your bot handle");
   });
 
   it("marks non-visible assistant replies silent for groups with silence allowed", () => {
