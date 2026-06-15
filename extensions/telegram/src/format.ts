@@ -197,7 +197,7 @@ const TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1
 const TELEGRAM_HTML_CAPTION_PATTERN = /<caption\b[^>]*>([\s\S]*?)<\/caption>/i;
 const TELEGRAM_HTML_COLSPAN_PATTERN = /\bcolspan\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i;
 const TELEGRAM_MARKDOWN_MEDIA_BLOCK_PATTERN =
-  /^([ \t]*)!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)(?:\s+"([^"\n]*)")?\)[ \t]*$/;
+  /^([ \t]*)!\[([^\]\n]*)\]\((https?:\/\/[^\s)"]+)(?:\s+"([^"\n]*)")?\)[ \t]*$/;
 const TELEGRAM_MARKDOWN_INLINE_IMAGE_PATTERN = /!\[([^\]\n]*)\]\(([^)\n]+)\)/g;
 const TELEGRAM_MARKDOWN_REFERENCE_IMAGE_PATTERN = /!\[([^\]\n]*)\]\[([^\]\n]+)\]/g;
 const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
@@ -792,8 +792,8 @@ function normalizeTelegramRichMarkdownMedia(markdown: string): string {
       continue;
     }
     const [, indent, alt, src, caption] = match;
-    const img = `<img src="${escapeHtmlAttr(src)}"${alt ? ` alt="${escapeHtmlAttr(alt)}"` : ""}/>`;
-    const figcaption = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
+    const img = `<img src="${src}"${alt ? ` alt="${alt.replace(/"/g, "'")}"` : ""}/>`;
+    const figcaption = caption ? `<figcaption>${caption}</figcaption>` : "";
     out.push(`${indent}<figure>${img}${figcaption}</figure>`);
   }
   return out.join("\n");
