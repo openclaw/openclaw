@@ -49,6 +49,8 @@ export type TelegramDraftStream = {
   materialize?: () => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
+  /** True when this stream uses Telegram's native temporary draft surface. */
+  temporary?: () => boolean;
   /** True when a preview sendMessage was attempted but the response was lost. */
   sendMayHaveLanded?: () => boolean;
 };
@@ -105,6 +107,28 @@ function findTelegramDraftChunkLength(
   return best;
 }
 
+let nextTelegramNativeDraftId = 1;
+
+function allocateTelegramNativeDraftId(): number {
+  const draftId = nextTelegramNativeDraftId;
+  nextTelegramNativeDraftId =
+    nextTelegramNativeDraftId >= 0x7fffffff ? 1 : nextTelegramNativeDraftId + 1;
+  return draftId;
+}
+
+function normalizePrivateTelegramChatId(
+  chatId: Parameters<Bot["api"]["sendMessage"]>[0],
+): number | undefined {
+  if (typeof chatId === "number") {
+    return Number.isInteger(chatId) && chatId > 0 ? chatId : undefined;
+  }
+  if (typeof chatId === "string" && /^\d+$/u.test(chatId)) {
+    const parsed = Number(chatId);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: Parameters<Bot["api"]["sendMessage"]>[0];
@@ -116,6 +140,8 @@ export function createTelegramDraftStream(params: {
   minInitialChars?: number;
   /** Optional preview renderer (e.g. markdown -> HTML + parse mode). */
   renderText?: (text: string) => TelegramDraftPreview;
+  /** Prefer Bot API native temporary rich drafts when the target supports them. */
+  preferNativeDraft?: boolean;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
   log?: (message: string) => void;
@@ -128,6 +154,8 @@ export function createTelegramDraftStream(params: {
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
+  const nativeDraftChatId = normalizePrivateTelegramChatId(chatId);
+  const nativeDraftId = allocateTelegramNativeDraftId();
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const richReplyParams: Omit<TelegramSendRichMessageParams, "chat_id" | "rich_message"> =
@@ -154,26 +182,58 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
+  let nativeDraftActive = false;
+  let nativeDraftDisabled = false;
+  const richRawApi = () => getTelegramRichRawApi(params.api);
+  const canUseNativeDraft = () =>
+    params.preferNativeDraft === true &&
+    !nativeDraftDisabled &&
+    nativeDraftChatId !== undefined &&
+    params.thread?.scope !== "forum" &&
+    typeof richRawApi().sendRichMessageDraft === "function";
   type PreviewSendParams = {
     preview: TelegramDraftPreview;
     sendGeneration: number;
   };
   const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
-    const richRawApi = getTelegramRichRawApi(params.api);
-    return await richRawApi.sendRichMessage({
+    return await richRawApi().sendRichMessage({
       chat_id: chatId,
       rich_message: preview.richMessage,
       ...richReplyParams,
     });
   };
+  const sendRenderedNativeDraft = async (preview: TelegramDraftPreview): Promise<boolean> => {
+    if (!canUseNativeDraft() || nativeDraftChatId === undefined) {
+      return false;
+    }
+    await richRawApi().sendRichMessageDraft?.({
+      chat_id: nativeDraftChatId,
+      draft_id: nativeDraftId,
+      rich_message: preview.richMessage,
+      ...threadParams,
+    });
+    nativeDraftActive = true;
+    streamVisibleSinceMs ??= Date.now();
+    return true;
+  };
   const sendMessageTransportPreview = async ({
     preview,
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
+    if (canUseNativeDraft()) {
+      try {
+        return await sendRenderedNativeDraft(preview);
+      } catch (err) {
+        nativeDraftDisabled = true;
+        nativeDraftActive = false;
+        params.warn?.(
+          `telegram native stream draft failed; falling back to preview message: ${formatErrorMessage(err)}`,
+        );
+      }
+    }
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
-      const richRawApi = getTelegramRichRawApi(params.api);
-      await richRawApi.editMessageText({
+      await richRawApi().editMessageText({
         chat_id: chatId,
         message_id: streamMessageId,
         rich_message: preview.richMessage,
@@ -398,6 +458,7 @@ export function createTelegramDraftStream(params: {
     messageSendAttempted = false;
     streamMessageId = undefined;
     streamVisibleSinceMs = undefined;
+    nativeDraftActive = false;
     lastSentPreviewKey = "";
     if (options?.resetOffset !== false) {
       deliveredTextOffset = 0;
@@ -426,10 +487,12 @@ export function createTelegramDraftStream(params: {
         params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
       }
     }
+    nativeDraftActive = false;
   };
 
   const discard = async () => {
     await stopForClear();
+    nativeDraftActive = false;
   };
 
   const forceNewMessage = () => {
@@ -438,6 +501,22 @@ export function createTelegramDraftStream(params: {
 
   const materialize = async (): Promise<number | undefined> => {
     await stop();
+    if (nativeDraftActive && typeof streamMessageId !== "number") {
+      const finalText = lastRequestedText.trimEnd();
+      const preview =
+        lastRequestedPreview?.text.trimEnd() === finalText
+          ? { ...lastRequestedPreview, text: finalText }
+          : renderTelegramDraftPreview(finalText, params.renderText);
+      if (preview.text.trimEnd()) {
+        const sent = await sendRenderedMessage(preview);
+        const sentMessageId = sent?.message_id;
+        if (typeof sentMessageId === "number" && Number.isFinite(sentMessageId)) {
+          streamMessageId = Math.trunc(sentMessageId);
+          streamVisibleSinceMs ??= Date.now();
+        }
+      }
+      nativeDraftActive = false;
+    }
     return streamMessageId;
   };
 
@@ -456,6 +535,8 @@ export function createTelegramDraftStream(params: {
     discard,
     materialize,
     forceNewMessage,
-    sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
+    temporary: () => canUseNativeDraft() || nativeDraftActive,
+    sendMayHaveLanded: () =>
+      !nativeDraftActive && messageSendAttempted && typeof streamMessageId !== "number",
   };
 }

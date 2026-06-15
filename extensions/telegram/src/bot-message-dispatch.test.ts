@@ -2513,7 +2513,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith({
       text: "Cracking\n\n`🛠️ Exec`\n`🛠️ git rev-parse --abbrev-ref HEAD`",
       richMessage: {
-        html: "<b>Cracking</b><br><b>🛠️ Exec</b><br><b>🛠️ Exec</b> <code>git rev-parse --abbrev-ref HEAD</code>",
+        html: "<b>Cracking</b><br><b>🛠️ Exec</b><br><b>🛠️ Exec</b><br> <code>git rev-parse --abbrev-ref HEAD</code>",
         skip_entity_detection: true,
       },
     });
@@ -2881,7 +2881,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith({
       text: "Shelling\n\n`🛠️ exit 2; command false`",
       richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>command false</code> <i>exit 2</i>",
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br> <i>exit 2</i>; <code>command false</code>",
         skip_entity_detection: true,
       },
     });
@@ -2924,7 +2924,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith({
       text: "Shelling\n\n`🛠️ exit 2`",
       richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>exit 2</code>",
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br> <code>exit 2</code>",
         skip_entity_detection: true,
       },
     });
@@ -3149,7 +3149,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.updatePreview).toHaveBeenCalledWith({
       text: "Shelling\n\n`🔎 Web Search: docs lookup`\n• `tests passed`",
       richMessage: {
-        html: "<b>Shelling</b><br><b>🔎 Web Search</b> <code>docs lookup</code><br><b>Update</b> <code>tests passed</code>",
+        html: "<b>Shelling</b><br><b>🔎 Web Search</b><br> <code>docs lookup</code><br><b>Update</b><br> <code>tests passed</code>",
         skip_entity_detection: true,
       },
     });

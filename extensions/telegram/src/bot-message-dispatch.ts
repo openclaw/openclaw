@@ -446,20 +446,24 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
     return renderTelegramProgressStringLine(line.text);
   }
   const label = [line.icon, line.label].filter(Boolean).join(" ");
-  const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
+  const labelHtml = `<b>${escapeTelegramProgressHtml(label)}</b>`;
   const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
-  if (detail) {
-    parts.push(`<code>${escapeTelegramProgressHtml(clipProgressMarkdownText(detail))}</code>`);
-  } else {
-    const text = line.text.trim();
-    if (text && text !== label) {
-      parts.push(renderTelegramProgressStringLine(text));
-    }
+  const clippedDetail = detail ? clipProgressMarkdownText(detail) : undefined;
+  const status = line.status && line.status !== line.detail ? line.status : undefined;
+  if (clippedDetail && status) {
+    return `${labelHtml}<br> <i>${escapeTelegramProgressHtml(status)}</i>; <code>${escapeTelegramProgressHtml(clippedDetail)}</code>`;
   }
-  if (line.status && line.status !== line.detail) {
-    parts.push(`<i>${escapeTelegramProgressHtml(line.status)}</i>`);
+  if (clippedDetail) {
+    return `${labelHtml}<br> <code>${escapeTelegramProgressHtml(clippedDetail)}</code>`;
   }
-  return parts.join(" ");
+  if (status) {
+    return `${labelHtml}<br> <i>${escapeTelegramProgressHtml(status)}</i>`;
+  }
+  const text = line.text.trim();
+  if (text && text !== label) {
+    return `${labelHtml}<br> ${renderTelegramProgressStringLine(text)}`;
+  }
+  return labelHtml;
 }
 
 function renderTelegramProgressDraftPreview(
@@ -990,6 +994,7 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderStreamText,
+          preferNativeDraft: true,
           onSupersededPreview: (superseded) => {
             if (superseded.retain) {
               lanes[laneName].activeChunkIndex += 1;

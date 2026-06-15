@@ -8,6 +8,7 @@ type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0]
 
 function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number }>) {
   const sendRichMessage = vi.fn(sendMessageImpl ?? (async () => ({ message_id: 17 })));
+  const sendRichMessageDraft = vi.fn().mockResolvedValue(true);
   const editRichMessageText = vi.fn().mockResolvedValue(true);
   return {
     sendMessage: vi.fn(sendMessageImpl ?? (async () => ({ message_id: 17 }))),
@@ -15,6 +16,7 @@ function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number
     deleteMessage: vi.fn().mockResolvedValue(true),
     raw: {
       sendRichMessage,
+      sendRichMessageDraft,
       editMessageText: editRichMessageText,
     },
   };
@@ -284,6 +286,83 @@ describe("createTelegramDraftStream", () => {
 
     expect(materializedId).toBe(17);
     expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses native temporary rich drafts only for supported private chats", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      preferNativeDraft: true,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessageDraft).toHaveBeenCalledWith({
+      chat_id: 123,
+      draft_id: expect.any(Number),
+      rich_message: { html: markdownToTelegramRichHtml("Hello") },
+      message_thread_id: 42,
+    });
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
+    expect(api.raw.editMessageText).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBeUndefined();
+    expect(stream.temporary?.()).toBe(true);
+  });
+
+  it("materializes native temporary rich drafts with sendRichMessage", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      preferNativeDraft: true,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBe(17);
+    expect(api.raw.sendRichMessageDraft).toHaveBeenCalledWith({
+      chat_id: 123,
+      draft_id: expect.any(Number),
+      rich_message: { html: markdownToTelegramRichHtml("Hello") },
+    });
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: { html: markdownToTelegramRichHtml("Hello") },
+    });
+  });
+
+  it("falls back to rich preview messages when native drafts are unsupported", async () => {
+    const api = createMockDraftApi();
+    api.raw.sendRichMessageDraft.mockRejectedValueOnce(
+      new Error("400: Bad Request: chat_id must be a private chat"),
+    );
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      preferNativeDraft: true,
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessageDraft).toHaveBeenCalledTimes(1);
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: { html: markdownToTelegramRichHtml("Hello") },
+    });
+    expect(warn.mock.calls[0]?.[0]).toContain("falling back to preview message");
+  });
+
+  it("does not use native drafts for forum targets", async () => {
+    const api = createMockDraftApi();
+    const stream = createForumDraftStream(api);
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessageDraft).not.toHaveBeenCalled();
+    expectRichSend(api, "Hello", { message_thread_id: 99 });
   });
 
   it("deletes message preview on clear after finalization", async () => {
