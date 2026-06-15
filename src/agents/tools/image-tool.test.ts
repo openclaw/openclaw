@@ -24,6 +24,7 @@ import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
+import { resolveProviderVisionModelFromConfig } from "./image-tool.helpers.js";
 import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
@@ -1599,6 +1600,52 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("passes provider capability metadata into implicit default image routing", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("DASHSCOPE_API_KEY", "qwen-test");
+      const qwenProvider: ImageToolTestProvider = {
+        id: "qwen",
+        capabilities: ["image"],
+        defaultModels: { image: "qwen-vl-max-latest" },
+        modelCapabilityOverrides: { nonImageModels: ["qwen3.7-max"] },
+      };
+      const providerRegistry = new Map<string, ImageToolTestProvider>([["qwen", qwenProvider]]);
+      testing.setProviderDepsForTest({
+        buildProviderRegistry: () => providerRegistry,
+        getMediaUnderstandingProvider: (id: string, registry: Map<string, ImageToolTestProvider>) =>
+          registry.get(id.toLowerCase()),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveAutoMediaKeyProviders: ({ capability }) => (capability === "image" ? ["qwen"] : []),
+        resolveDefaultMediaModel: ({ providerId, capability, providerRegistry }) => {
+          if (providerId !== "qwen" || capability !== "image") {
+            return undefined;
+          }
+          const provider = providerRegistry?.get("qwen") as ImageToolTestProvider | undefined;
+          return provider?.modelCapabilityOverrides ? "qwen-vl-max-latest" : "qwen3.7-max";
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "qwen/qwen3.7-max" } } },
+        models: {
+          mode: "merge",
+          providers: {
+            qwen: {
+              baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              apiKey: "${DASHSCOPE_API_KEY}",
+              api: "openai-completions",
+              models: [makeModelDefinition("qwen3.7-max", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "qwen/qwen-vl-max-latest",
+      });
+    });
+  });
+
   it("pairs opencode primary with the plugin-owned image model when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCODE_API_KEY", "opencode-test");
@@ -1798,6 +1845,23 @@ describe("image tool implicit imageModel config", () => {
         fallbacks: ["ollama/qwen2.5vl:7b", "ollama/G-2.5-f"],
       });
     });
+  });
+
+  it("ignores known non-image Qwen models when resolving configured provider vision", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          qwen: {
+            baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            apiKey: "${DASHSCOPE_API_KEY}",
+            api: "openai-completions",
+            models: [makeModelDefinition("qwen3.7-max", ["text", "image"])],
+          },
+        },
+      },
+    };
+
+    expect(resolveProviderVisionModelFromConfig({ cfg, provider: "qwen" })).toBeNull();
   });
 
   it("runs providerless explicit image models on the inferred provider", async () => {

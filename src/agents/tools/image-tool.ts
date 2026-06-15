@@ -232,7 +232,7 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
  */
 export function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
-  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>;
+  providerRegistry?: Map<string, MediaUnderstandingProvider>;
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
@@ -302,6 +302,7 @@ export function resolveImageModelConfigForTool(params: {
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       providerId: primary.provider,
+      providerRegistry,
       capability: "image",
       includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
     });
@@ -328,6 +329,7 @@ export function resolveImageModelConfigForTool(params: {
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
         providerId,
+        providerRegistry,
         capability: "image",
         includeConfiguredImageModels: !isMinimaxVlmProvider(providerId),
       });
@@ -795,9 +797,7 @@ export function createImageTool(options?: {
     }
     return null;
   }
-  let providerRegistry:
-    | ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>
-    | undefined;
+  let providerRegistry: Map<string, MediaUnderstandingProvider> | undefined;
   const getProviderRegistry = () => {
     providerRegistry ??= imageToolProviderDeps.buildProviderRegistry(undefined, options?.config);
     return providerRegistry;

@@ -187,6 +187,27 @@ describe("resolveDefaultMediaModel", () => {
       }),
     ).toBe("auto");
   });
+
+  it("ignores known non-image Qwen configured models when a runtime registry is provided", () => {
+    const cfg = {
+      models: {
+        providers: {
+          qwen: {
+            models: [{ id: "qwen3.7-max", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      resolveDefaultMediaModel({
+        providerId: "qwen",
+        capability: "image",
+        cfg,
+        providerRegistry: new Map(),
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("resolveAutoMediaKeyProviders", () => {

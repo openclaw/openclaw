@@ -6,6 +6,7 @@ import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { configuredModelInputSupportsImage } from "./known-model-capabilities.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
+import { knownProviderModelCapabilities } from "./model-capability-overrides.js";
 import {
   normalizeMediaExecutionProviderId,
   normalizeMediaProviderId,
@@ -24,14 +25,14 @@ export {
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
 
-let defaultRegistryCache: Map<string, MediaUnderstandingProvider> | null = null;
-const configRegistryCache = new Map<string, Map<string, MediaUnderstandingProvider>>();
+let defaultRegistryCache: ReadonlyMap<string, MediaUnderstandingProvider> | null = null;
+const configRegistryCache = new Map<string, ReadonlyMap<string, MediaUnderstandingProvider>>();
 const MAX_CONFIG_REGISTRY_CACHE_ENTRIES = 32;
 
 function cacheConfigRegistry(
   key: string,
-  registry: Map<string, MediaUnderstandingProvider>,
-): Map<string, MediaUnderstandingProvider> {
+  registry: ReadonlyMap<string, MediaUnderstandingProvider>,
+): ReadonlyMap<string, MediaUnderstandingProvider> {
   // Config snapshots are process-stable enough for bounded reuse; cap entries so
   // tests and multi-workspace runs cannot grow this cache without limit.
   if (
@@ -73,7 +74,7 @@ function providerHasDeclaredCapability(
 function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
   providerId: string;
-  registry: Map<string, MediaUnderstandingProvider>;
+  registry: ReadonlyMap<string, MediaUnderstandingProvider>;
 }): string | undefined {
   const normalizedProviderId = normalizeMediaProviderId(params.providerId);
   const providers = params.cfg?.models?.providers;
@@ -92,7 +93,9 @@ function resolveConfiguredImageProviderModel(params: {
         configuredModelInputSupportsImage({
           modelId: id,
           input: model?.input,
-          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
+          provider:
+            params.registry.get(normalizeMediaProviderId(providerKey)) ??
+            knownProviderModelCapabilities(providerKey),
         }),
       );
     });
@@ -103,7 +106,7 @@ function resolveConfiguredImageProviderModel(params: {
 
 function resolveConfiguredImageProviderIds(params: {
   cfg?: OpenClawConfig;
-  registry: Map<string, MediaUnderstandingProvider>;
+  registry: ReadonlyMap<string, MediaUnderstandingProvider>;
 }): string[] {
   const providers = params.cfg?.models?.providers;
   if (!providers || typeof providers !== "object") {
@@ -123,7 +126,9 @@ function resolveConfiguredImageProviderIds(params: {
         configuredModelInputSupportsImage({
           modelId: id,
           input: model?.input,
-          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
+          provider:
+            params.registry.get(normalizeMediaProviderId(providerKey)) ??
+            knownProviderModelCapabilities(providerKey),
         }),
       );
     });
@@ -164,12 +169,12 @@ export function resolveDefaultMediaModel(params: {
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProvider>;
   includeConfiguredImageModels?: boolean;
 }): string | undefined {
   const registry =
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
-  if (!params.providerRegistry && params.includeConfiguredImageModels !== false) {
+  if (params.includeConfiguredImageModels !== false) {
     const configuredImageModel =
       params.capability === "image"
         ? resolveConfiguredImageProviderModel({
@@ -197,7 +202,7 @@ export function resolveAutoMediaKeyProviders(params: {
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProvider>;
 }): string[] {
   const registry =
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
@@ -236,7 +241,7 @@ export function providerSupportsNativePdfDocument(params: {
   providerId: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProvider>;
 }): boolean {
   const registry =
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
@@ -251,7 +256,7 @@ export function resolveDocumentMediaModel(params: {
   mode: "textExtraction" | "image";
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProvider>;
 }): string | false | undefined {
   const registry =
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);

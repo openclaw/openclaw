@@ -11,10 +11,7 @@ import {
   resolveDocumentMediaModel,
 } from "../../media-understanding/defaults.js";
 import { configuredModelInputSupportsImage } from "../../media-understanding/known-model-capabilities.js";
-import {
-  QWEN_MODEL_CAPABILITY_OVERRIDES,
-  QWEN_MODEL_CAPABILITY_PROVIDER_IDS,
-} from "../../media-understanding/model-capability-overrides.js";
+import { knownProviderModelCapabilities } from "../../media-understanding/model-capability-overrides.js";
 import { normalizeMediaProviderId } from "../../media-understanding/provider-id.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -64,19 +61,8 @@ function configuredProviderRuntimeCapabilityRegistry(params: {
     return undefined;
   }
   const providerId = normalizeMediaProviderId(params.providerId);
-  const qwenProviderIds: readonly string[] = QWEN_MODEL_CAPABILITY_PROVIDER_IDS;
-  if (!qwenProviderIds.includes(providerId)) {
-    return undefined;
-  }
-  return new Map([
-    [
-      providerId,
-      {
-        id: providerId,
-        modelCapabilityOverrides: QWEN_MODEL_CAPABILITY_OVERRIDES,
-      },
-    ],
-  ]);
+  const capabilities = knownProviderModelCapabilities(providerId);
+  return capabilities ? new Map([[providerId, capabilities]]) : undefined;
 }
 
 function resolveConfiguredImageRefsForPdf(params: {

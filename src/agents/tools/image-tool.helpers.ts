@@ -8,8 +8,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { configuredModelInputSupportsImage } from "../../media-understanding/known-model-capabilities.js";
-import type { MediaUnderstandingProviderModelCapabilities } from "../../media-understanding/model-capability-overrides.js";
-import { providerModelCapabilities } from "../../media-understanding/model-capability-overrides.js";
+import {
+  knownProviderModelCapabilities,
+  providerModelCapabilities,
+  type MediaUnderstandingProviderModelCapabilities,
+} from "../../media-understanding/model-capability-overrides.js";
 import { extractAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -207,7 +210,9 @@ function findConfiguredImageModelMatches(params: {
         !configuredModelInputSupportsImage({
           modelId,
           input: entry?.input,
-          provider: providerModelCapabilities(params.providerRegistry?.get(provider)),
+          provider:
+            providerModelCapabilities(params.providerRegistry?.get(provider)) ??
+            knownProviderModelCapabilities(provider),
         })
       ) {
         continue;
@@ -299,9 +304,10 @@ export function resolveProviderVisionModelFromConfig(params: {
     params.provider,
   ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
   const models = providerCfg?.models ?? [];
-  const providerMetadata = providerModelCapabilities(
-    params.providerRegistry?.get(normalizeProviderId(params.provider)),
-  );
+  const providerId = normalizeProviderId(params.provider);
+  const providerMetadata =
+    providerModelCapabilities(params.providerRegistry?.get(providerId)) ??
+    knownProviderModelCapabilities(providerId);
   const picked = models.find((m) => {
     const id = (m?.id ?? "").trim();
     return Boolean(

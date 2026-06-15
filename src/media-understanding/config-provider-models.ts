@@ -2,7 +2,10 @@
 // media-understanding auto-registration.
 import type { OpenClawConfig } from "../config/types.js";
 import { configuredModelInputSupportsImage } from "./known-model-capabilities.js";
-import type { MediaUnderstandingProviderModelCapabilities } from "./model-capability-overrides.js";
+import {
+  knownProviderModelCapabilities,
+  type MediaUnderstandingProviderModelCapabilities,
+} from "./model-capability-overrides.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 
 type ConfigProvider = NonNullable<
@@ -24,7 +27,9 @@ function hasImageCapableModel(params: {
       configuredModelInputSupportsImage({
         modelId,
         input: model?.input,
-        provider: params.providerRegistry?.get(normalizeMediaProviderId(params.providerId)),
+        provider:
+          params.providerRegistry?.get(normalizeMediaProviderId(params.providerId)) ??
+          knownProviderModelCapabilities(params.providerId),
       }),
     );
   });

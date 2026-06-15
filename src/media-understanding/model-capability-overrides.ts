@@ -1,3 +1,5 @@
+import { normalizeMediaProviderId } from "./provider-id.js";
+
 export const QWEN_MODEL_CAPABILITY_PROVIDER_IDS = [
   "qwen",
   "qwencloud",
@@ -26,4 +28,18 @@ export function providerModelCapabilities(
     return undefined;
   }
   return provider as MediaUnderstandingProviderModelCapabilities;
+}
+
+export function knownProviderModelCapabilities(
+  providerId: string,
+): MediaUnderstandingProviderModelCapabilities | undefined {
+  const normalizedProviderId = normalizeMediaProviderId(providerId);
+  const qwenProviderIds: readonly string[] = QWEN_MODEL_CAPABILITY_PROVIDER_IDS;
+  if (!qwenProviderIds.includes(normalizedProviderId)) {
+    return undefined;
+  }
+  return {
+    id: normalizedProviderId,
+    modelCapabilityOverrides: QWEN_MODEL_CAPABILITY_OVERRIDES,
+  };
 }
