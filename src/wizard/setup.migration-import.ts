@@ -105,19 +105,22 @@ function hasMeaningfulConfig(config: OpenClawConfig): boolean {
   }
   const pluginKeys = Object.keys(config.plugins ?? {});
   const entries = Object.entries(config.plugins?.entries ?? {});
+  const installs = Object.entries(config.plugins?.installs ?? {});
   const retryablePluginIds = new Set(
     resolveInstallableSetupMigrationProviders().map((provider) => provider.entry.pluginId),
   );
   return (
-    pluginKeys.length !== 1 ||
-    pluginKeys[0] !== "entries" ||
-    entries.length === 0 ||
+    pluginKeys.some((key) => key !== "entries" && key !== "installs") ||
+    entries.length + installs.length === 0 ||
     entries.some(([pluginId, entry]) => {
       if (!retryablePluginIds.has(pluginId) || !entry || typeof entry !== "object") {
         return true;
       }
       const entryRecord = entry as Record<string, unknown>;
       return Object.keys(entryRecord).length !== 1 || entryRecord.enabled !== true;
+    }) ||
+    installs.some(([pluginId, record]) => {
+      return !retryablePluginIds.has(pluginId) || !record || typeof record !== "object";
     })
   );
 }

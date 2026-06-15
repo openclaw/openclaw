@@ -412,7 +412,7 @@ export async function runSetupWizard(
     }
   }
 
-  if (opts.importFrom || flow === "import") {
+  if (opts.importFrom || opts.importSource || opts.importSecrets || flow === "import") {
     await runSetupMigrationImport({
       opts,
       baseConfig,

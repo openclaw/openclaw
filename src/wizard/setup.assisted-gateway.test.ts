@@ -257,4 +257,31 @@ describe("agent-assisted Gateway runtime", () => {
     child.emit("exit", 0, null);
     await stop;
   });
+
+  it("stops the temporary Gateway when post-spawn setup fails", async () => {
+    const child = createMockChild();
+    spawn.mockReturnValueOnce(child);
+    waitForGatewayReachable.mockResolvedValueOnce({ ok: true });
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]);
+    killProcessTree.mockImplementationOnce(() => queueMicrotask(() => child.emit("exit", 0, null)));
+    const prompter = createWizardPrompter({
+      note: vi.fn(async () => {
+        throw new Error("note failed");
+      }),
+    });
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter,
+      }),
+    ).rejects.toThrow("note failed");
+
+    expect(killProcessTree).toHaveBeenCalledWith(4321, {
+      detached: process.platform !== "win32",
+      graceMs: 1500,
+    });
+    expect(detach).toHaveBeenCalledOnce();
+  });
 });

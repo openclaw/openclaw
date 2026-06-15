@@ -245,31 +245,35 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
     },
   };
 
-  const directReady = await probe(15_000);
-  const childAlive = child.exitCode === null && child.signalCode === null;
-  const ownedReady =
-    !directReady.ok && params.settings.authMode === "trusted-proxy" && child.pid
-      ? await waitForOwnedGatewayListener({
-          port: params.settings.port,
-          pid: child.pid,
-          deadlineMs: 15_000,
-        })
-      : { ok: false, detail: "The temporary OpenClaw Gateway process has no PID." };
-  // Trusted-proxy policy can reject direct local RPCs, so that mode falls back
-  // to proving the listener belongs to the process started by this setup run.
-  const ready = {
-    ok: (directReady.ok && childAlive) || ownedReady.ok,
-    detail: directReady.detail ?? ownedReady.detail,
-  };
-  if (!ready.ok) {
-    await temporaryRuntime.stop();
-    const detail = outputTail() || ready.detail || "Gateway did not become reachable.";
-    throw new Error(`Unable to start Gateway for assisted setup: ${formatErrorMessage(detail)}`);
-  }
+  try {
+    const directReady = await probe(15_000);
+    const childAlive = child.exitCode === null && child.signalCode === null;
+    const ownedReady =
+      !directReady.ok && params.settings.authMode === "trusted-proxy" && child.pid
+        ? await waitForOwnedGatewayListener({
+            port: params.settings.port,
+            pid: child.pid,
+            deadlineMs: 15_000,
+          })
+        : { ok: false, detail: "The temporary OpenClaw Gateway process has no PID." };
+    // Trusted-proxy policy can reject direct local RPCs, so that mode falls back
+    // to proving the listener belongs to the process started by this setup run.
+    const ready = {
+      ok: (directReady.ok && childAlive) || ownedReady.ok,
+      detail: directReady.detail ?? ownedReady.detail,
+    };
+    if (!ready.ok) {
+      const detail = outputTail() || ready.detail || "Gateway did not become reachable.";
+      throw new Error(`Unable to start Gateway for assisted setup: ${formatErrorMessage(detail)}`);
+    }
 
-  await params.prompter.note(
-    t("wizard.setup.agentAssistedGatewayReady"),
-    t("wizard.setup.agentAssistedGatewayReadyTitle"),
-  );
-  return temporaryRuntime;
+    await params.prompter.note(
+      t("wizard.setup.agentAssistedGatewayReady"),
+      t("wizard.setup.agentAssistedGatewayReadyTitle"),
+    );
+    return temporaryRuntime;
+  } catch (error) {
+    await temporaryRuntime.stop();
+    throw error;
+  }
 }

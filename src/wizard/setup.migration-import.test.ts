@@ -181,6 +181,19 @@ describe("setup migration import freshness", () => {
         workspaceDir,
       }),
     ).resolves.toMatchObject({ fresh: false });
+    await expect(
+      inspectSetupMigrationFreshness({
+        baseConfig: {
+          plugins: {
+            installs: {
+              example: { source: "npm", spec: "example" },
+            },
+          },
+        },
+        stateDir,
+        workspaceDir,
+      }),
+    ).resolves.toMatchObject({ fresh: false });
   });
 
   it("checks the configured state directory when deciding whether to offer import", async () => {
@@ -340,6 +353,13 @@ describe("setup migration import", () => {
       plugins: {
         entries: {
           codex: { enabled: true },
+        },
+        installs: {
+          codex: {
+            source: "npm" as const,
+            spec: "@openclaw/codex",
+            installPath: "/tmp/openclaw-extensions/codex",
+          },
         },
       },
     };

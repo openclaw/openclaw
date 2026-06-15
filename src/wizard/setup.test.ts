@@ -665,6 +665,37 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("routes explicit migration flags directly into migration import", async () => {
+    runSetupMigrationImport.mockClear();
+    listSetupMigrationOptions.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        importSource: "/tmp/hermes-home",
+        importSecrets: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(runSetupMigrationImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({
+          importSource: "/tmp/hermes-home",
+          importSecrets: true,
+        }),
+      }),
+    );
+    expect(listSetupMigrationOptions).not.toHaveBeenCalled();
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
   it("continues to standalone model setup when a selected migration is not runnable", async () => {
     listSetupMigrationOptions.mockResolvedValueOnce([
       {
