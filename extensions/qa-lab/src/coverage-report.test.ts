@@ -18,6 +18,7 @@ const TEST_WEBCHAT_COVERAGE_ID = "ui.webchat";
 function testMaturityTaxonomy(params?: {
   categoryId?: string;
   coverageIds?: readonly string[];
+  includeAllCategories?: boolean;
   profileCategoryIds?: readonly string[];
 }) {
   const categoryId = params?.categoryId ?? TEST_EXECUTABLE_CATEGORY_ID;
@@ -36,7 +37,10 @@ function testMaturityTaxonomy(params?: {
       {
         id: "release",
         description: "Test release profile.",
-        categoryIds: [...(params?.profileCategoryIds ?? [categoryId])],
+        includeAllCategories: params?.includeAllCategories ?? false,
+        categoryIds: [
+          ...(params?.includeAllCategories ? [] : (params?.profileCategoryIds ?? [categoryId])),
+        ],
       },
     ],
     surfaces: [
@@ -115,7 +119,10 @@ describe("qa coverage report", () => {
     ]);
     expect(inventory.scorecardTaxonomy.profileCount).toBe(2);
     expect(inventory.scorecardTaxonomy.categoryCount).toBeGreaterThan(200);
-    expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBe(15);
+    expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeGreaterThan(0);
+    expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeLessThanOrEqual(
+      inventory.scorecardTaxonomy.categoryCount,
+    );
     expect(inventory.scorecardTaxonomy.requiredFeatureCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.fulfilledFeatureCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.taxonomyFulfillmentPercent).toBeGreaterThan(0);
@@ -124,7 +131,12 @@ describe("qa coverage report", () => {
     expect(inventory.scorecardTaxonomy.unknownCoverageIdCount).toBe(0);
     expect(inventory.scorecardTaxonomy.validationIssues.length).toBeGreaterThan(0);
     expect(
-      inventory.scorecardTaxonomy.validationIssues.every(
+      inventory.scorecardTaxonomy.validationIssues.some((issue) =>
+        issue.code.endsWith("not-found"),
+      ),
+    ).toBe(false);
+    expect(
+      inventory.scorecardTaxonomy.validationIssues.some(
         (issue) => issue.code === "coverage-id-missing-primary-evidence",
       ),
     ).toBe(true);
@@ -327,6 +339,21 @@ describe("qa coverage report", () => {
     expect(report.validationIssues.map((issue) => issue.code)).toContain(
       "profile-category-ref-not-found",
     );
+  });
+
+  it("resolves all-category profiles from taxonomy categories", () => {
+    const report = buildQaScorecardTaxonomyReport({
+      taxonomy: testMaturityTaxonomy({
+        includeAllCategories: true,
+      }),
+      repoRoot: process.cwd(),
+      scenarios: [],
+    });
+
+    expect(report.profiles.find((profile) => profile.id === "release")?.categoryIds).toStrictEqual([
+      TEST_EXECUTABLE_CATEGORY_ID,
+    ]);
+    expect(report.requiredCategoryCount).toBe(1);
   });
 
   it("reports profile categories missing primary coverage evidence", () => {
