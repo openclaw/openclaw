@@ -15,6 +15,10 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
+vi.mock("./session-state-migration.js", () => ({
+  ensureSessionStateMigratedForCommand: vi.fn(async () => {}),
+}));
+
 describe("sandbox explain command", () => {
   it("prints JSON shape + fix-it keys", { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS }, async () => {
     mockCfg = {
