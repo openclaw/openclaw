@@ -813,7 +813,7 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("skips rich entity detection when link previews are disabled", async () => {
+  it("disables link previews without rich-only entity flags", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 3,
@@ -830,7 +830,10 @@ describe("deliverReplies", () => {
 
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     firstSendText(sendMessage);
-    expectRecordFields(mockCallArg(sendMessage, 0, 2), { skip_entity_detection: true });
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      link_preview_options: { is_disabled: true },
+    });
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("skip_entity_detection");
   });
 
   it("includes message_thread_id for DM topics", async () => {

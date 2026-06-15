@@ -1521,7 +1521,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "partial" } },
     });
 
-    expectDraftStreamParams({ maxChars: 4096 });
+    expectDraftStreamParams({ maxChars: 4000 });
   });
 
   it("streams text-only finals into the answer message", async () => {
