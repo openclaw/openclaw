@@ -55,3 +55,57 @@ export async function browserPdfSave(
     timeoutMs: 20000,
   });
 }
+
+type BrowserDownloadResult = {
+  ok: true;
+  targetId: string;
+  download: { url: string; suggestedFilename: string; path: string };
+};
+
+/** Click an element via ref and wait for the download to complete. */
+export async function browserDownload(
+  baseUrl: string | undefined,
+  opts: {
+    targetId?: string;
+    ref: string;
+    path: string;
+    timeoutMs?: number;
+    profile?: string;
+  },
+): Promise<BrowserDownloadResult> {
+  const q = buildProfileQuery(opts.profile);
+  return await fetchBrowserJson<BrowserDownloadResult>(withBaseUrl(baseUrl, `/download${q}`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      ref: opts.ref,
+      path: opts.path,
+      timeoutMs: opts.timeoutMs,
+    }),
+    timeoutMs: 60000,
+  });
+}
+
+/** Wait for a pending download without clicking. */
+export async function browserWaitForDownload(
+  baseUrl: string | undefined,
+  opts: {
+    targetId?: string;
+    path?: string;
+    timeoutMs?: number;
+    profile?: string;
+  } = {},
+): Promise<BrowserDownloadResult> {
+  const q = buildProfileQuery(opts.profile);
+  return await fetchBrowserJson<BrowserDownloadResult>(withBaseUrl(baseUrl, `/wait/download${q}`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      path: opts.path,
+      timeoutMs: opts.timeoutMs,
+    }),
+    timeoutMs: 60000,
+  });
+}

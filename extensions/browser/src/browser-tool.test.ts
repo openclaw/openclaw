@@ -61,6 +61,24 @@ const browserActionsMocks = vi.hoisted(() => ({
   browserNavigate: vi.fn(async () => ({ ok: true })),
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
   browserScreenshotAction: vi.fn(async () => ({ ok: true, path: "/tmp/test.png" })),
+  browserDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    download: {
+      url: "https://example.com/file.pdf",
+      suggestedFilename: "file.pdf",
+      path: "/tmp/downloads/file.pdf",
+    },
+  })),
+  browserWaitForDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    download: {
+      url: "https://example.com/file.pdf",
+      suggestedFilename: "file.pdf",
+      path: "/tmp/downloads/file.pdf",
+    },
+  })),
 }));
 vi.mock("./browser/client-actions.js", () => browserActionsMocks);
 
@@ -302,6 +320,7 @@ function resetBrowserToolMocks() {
     browserArmFileChooser: browserActionsMocks.browserArmFileChooser as never,
     browserCloseTab: browserClientMocks.browserCloseTab as never,
     browserDoctor: browserClientMocks.browserDoctor as never,
+    browserDownload: browserActionsMocks.browserDownload as never,
     browserFocusTab: browserClientMocks.browserFocusTab as never,
     browserNavigate: browserActionsMocks.browserNavigate as never,
     browserOpenTab: browserClientMocks.browserOpenTab as never,
@@ -311,6 +330,7 @@ function resetBrowserToolMocks() {
     browserStart: browserClientMocks.browserStart as never,
     browserStatus: browserClientMocks.browserStatus as never,
     browserStop: browserClientMocks.browserStop as never,
+    browserWaitForDownload: browserActionsMocks.browserWaitForDownload as never,
     describeImageFile: toolCommonMocks.describeImageFile as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
     getRuntimeConfig: configMocks.loadConfig as never,
@@ -1854,7 +1874,7 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
     expect(result?.content[0]).toHaveProperty("type", "text");
   });
 
-  it("rejects files outside both uploads and inbound media directories", async () => {
+  it("rejects files outside both uploads and incoming media directories", async () => {
     pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
       ok: false as const,
       error: "path outside allowed directories",
@@ -1868,5 +1888,99 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
         ref: "file-input-1",
       }),
     ).rejects.toThrow("path outside allowed directories");
+  });
+});
+
+describe("browser tool download actions", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("download action calls browserDownload with ref and path", async () => {
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "download",
+      target: "host",
+      ref: "e12",
+      path: "/tmp/downloads/file.pdf",
+    });
+
+    const opts = lastMockCallArg<{ ref?: string; path?: string }>(
+      browserActionsMocks.browserDownload,
+      1,
+    );
+    expect(opts.ref).toBe("e12");
+    expect(opts.path).toBe("/tmp/downloads/file.pdf");
+    expect(result?.content[0]?.type).toBe("text");
+    const { download } = JSON.parse(result?.content[0]?.text ?? "{}");
+    expect(download?.path).toBe("/tmp/downloads/file.pdf");
+  });
+
+  it("wait-for-download action calls browserWaitForDownload", async () => {
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "wait-for-download",
+      target: "host",
+    });
+
+    expect(browserActionsMocks.browserWaitForDownload).toHaveBeenCalledTimes(1);
+    expect(result?.content[0]?.type).toBe("text");
+  });
+
+  it("download action requires ref", async () => {
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "download",
+        target: "host",
+        path: "/tmp/downloads/file.pdf",
+      }),
+    ).rejects.toThrow("ref required");
+  });
+
+  it("download action tracks touched tab", async () => {
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+    await tool.execute?.("call-1", {
+      action: "download",
+      target: "host",
+      ref: "e12",
+      path: "/tmp/downloads/file.pdf",
+    });
+
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalled();
+  });
+
+  it("download action routes through node proxy", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          targetId: "node-t1",
+          download: {
+            url: "https://example.com/f",
+            suggestedFilename: "f.pdf",
+            path: "/tmp/f.pdf",
+          },
+        },
+      },
+    });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "download",
+      target: "node",
+      ref: "e12",
+      path: "/tmp/downloads/file.pdf",
+    });
+
+    const { request } = lastNodeInvokeCall();
+    expect(request.params?.method).toBe("POST");
+    expect(request.params?.path).toBe("/download");
+    const body = request.params?.body as { ref?: string; path?: string } | undefined;
+    expect(body?.ref).toBe("e12");
+    expect(body?.path).toBe("/tmp/downloads/file.pdf");
+    expect(result?.content[0]?.type).toBe("text");
+    expect(browserActionsMocks.browserDownload).not.toHaveBeenCalled();
   });
 });

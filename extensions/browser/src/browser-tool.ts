@@ -21,6 +21,7 @@ import {
   browserArmFileChooser,
   browserCloseTab,
   browserDoctor,
+  browserDownload,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -30,6 +31,7 @@ import {
   browserStart,
   browserStatus,
   browserStop,
+  browserWaitForDownload,
   callGatewayTool,
   describeImageFile,
   getRuntimeConfig,
@@ -64,6 +66,7 @@ const browserToolDeps = {
   browserArmFileChooser,
   browserCloseTab,
   browserDoctor,
+  browserDownload,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -73,6 +76,7 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
+  browserWaitForDownload,
   describeImageFile,
   getRuntimeConfig,
   imageResultFromFile,
@@ -93,6 +97,7 @@ export const testing = {
       browserArmFileChooser: typeof browserArmFileChooser;
       browserCloseTab: typeof browserCloseTab;
       browserDoctor: typeof browserDoctor;
+      browserDownload: typeof browserDownload;
       browserFocusTab: typeof browserFocusTab;
       browserNavigate: typeof browserNavigate;
       browserOpenTab: typeof browserOpenTab;
@@ -102,6 +107,7 @@ export const testing = {
       browserStart: typeof browserStart;
       browserStatus: typeof browserStatus;
       browserStop: typeof browserStop;
+      browserWaitForDownload: typeof browserWaitForDownload;
       describeImageFile: typeof describeImageFile;
       imageResultFromFile: typeof imageResultFromFile;
       getRuntimeConfig: typeof getRuntimeConfig;
@@ -120,6 +126,7 @@ export const testing = {
       overrides?.browserArmFileChooser ?? browserArmFileChooser;
     browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
     browserToolDeps.browserDoctor = overrides?.browserDoctor ?? browserDoctor;
+    browserToolDeps.browserDownload = overrides?.browserDownload ?? browserDownload;
     browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
     browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
     browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
@@ -130,6 +137,8 @@ export const testing = {
     browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
     browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
     browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
+    browserToolDeps.browserWaitForDownload =
+      overrides?.browserWaitForDownload ?? browserWaitForDownload;
     browserToolDeps.describeImageFile = overrides?.describeImageFile ?? describeImageFile;
     browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
     browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
@@ -477,6 +486,7 @@ export function createBrowserTool(opts?: {
       'For profile="user" or other existing-session profiles, omit timeoutMs on act:type, evaluate, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
+      "For download actions, use action=download (click an element and wait for download) or action=wait-for-download (wait for a pending download). Both return the file path in the configured downloads directory.",
       "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
@@ -988,6 +998,67 @@ export function createBrowserTool(opts?: {
             profile,
           });
           touchTrackedTab(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+          return jsonResult(result);
+        }
+        case "download": {
+          const ref = readStringParam(params, "ref", { required: true });
+          const path = readStringParam(params, "path", { required: true });
+          const targetId = normalizeOptionalString(params.targetId);
+          if (proxyRequest) {
+            const result = await proxyRequest({
+              method: "POST",
+              path: "/download",
+              profile,
+              body: {
+                targetId,
+                ref,
+                path,
+                timeoutMs: requestedTimeoutMs,
+              },
+              timeoutMs: requestedTimeoutMs ?? 60000,
+            });
+            touchTrackedTab(
+              readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+            );
+            return jsonResult(result);
+          }
+          const result = await browserToolDeps.browserDownload(baseUrl, {
+            targetId,
+            ref,
+            path,
+            timeoutMs: requestedTimeoutMs,
+            profile,
+          });
+          touchTrackedTab(result.targetId);
+          return jsonResult(result);
+        }
+        case "wait-for-download": {
+          const targetId = normalizeOptionalString(params.targetId);
+          const path = readStringParam(params, "path");
+          if (proxyRequest) {
+            const result = await proxyRequest({
+              method: "POST",
+              path: "/wait/download",
+              profile,
+              body: {
+                targetId,
+                path,
+                timeoutMs: requestedTimeoutMs,
+              },
+              timeoutMs: requestedTimeoutMs ?? 60000,
+            });
+            touchTrackedTab(
+              readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+            );
+            return jsonResult(result);
+          }
+          const result = await browserToolDeps.browserWaitForDownload(baseUrl, {
+            targetId,
+            path,
+            timeoutMs: requestedTimeoutMs,
+            profile,
+          });
+          touchTrackedTab(result.targetId);
           return jsonResult(result);
         }
         case "act": {

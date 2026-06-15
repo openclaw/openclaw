@@ -47,6 +47,8 @@ const BROWSER_TOOL_ACTIONS = [
   "upload",
   "dialog",
   "act",
+  "download",
+  "wait-for-download",
 ] as const;
 
 const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
@@ -123,6 +125,7 @@ export const BrowserToolSchema = Type.Object({
   interactive: Type.Optional(Type.Boolean()),
   compact: Type.Optional(Type.Boolean()),
   depth: optionalNonNegativeIntegerSchema(),
+  path: Type.Optional(Type.String()),
   selector: Type.Optional(Type.String()),
   frame: Type.Optional(Type.String()),
   labels: Type.Optional(Type.Boolean()),
