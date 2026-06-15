@@ -191,7 +191,7 @@ describe("message action threading helpers", () => {
     expect(resolveAutoThreadId).not.toHaveBeenCalled();
   });
 
-  it("canonicalizes explicit threadId and replyTo for one-root providers", () => {
+  it("canonicalizes an explicit thread root through Slack-style reply transport", () => {
     const actionParams: Record<string, unknown> = {
       channel: "forum",
       target: "forum:123",
@@ -206,9 +206,9 @@ describe("message action threading helpers", () => {
       to: "forum:123",
       toolContext: defaultForumToolContext,
       resolveAutoThreadId,
-      resolveReplyTransport: ({ replyToId }) => ({
-        replyToId,
-        threadId: replyToId,
+      resolveReplyTransport: ({ threadId, replyToId }) => ({
+        replyToId: threadId ?? replyToId,
+        threadId: null,
       }),
     });
 

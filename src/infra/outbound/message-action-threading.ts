@@ -61,7 +61,7 @@ export function resolveAndApplyOutboundThreadId(
     })?.replyToId;
     // Providers that use one canonical root for reply and thread routing opt in
     // through resolveReplyTransport. Other transports keep message replies intact.
-    if (replyToId && canonicalReplyToId && replyToId !== canonicalReplyToId) {
+    if (canonicalReplyToId && replyToId !== canonicalReplyToId) {
       actionParams.replyTo = canonicalReplyToId;
     }
   }
