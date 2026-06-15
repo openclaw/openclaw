@@ -132,6 +132,9 @@ describe("google gemini cli backend auth bridge", () => {
       expect(prepared?.env?.GOOGLE_CLOUD_PROJECT).toBe("profile-project");
       expect(prepared?.env?.GOOGLE_CLOUD_PROJECT_ID).toBe("profile-project");
       expect(prepared?.env?.GOOGLE_CLOUD_QUOTA_PROJECT).toBe("profile-project");
+      if (!context.agentDir) {
+        throw new Error("expected Gemini test context to include an agent directory");
+      }
       expect(home).toContain(path.join(context.agentDir, "cli-runtimes", "google-gemini-cli"));
       expect(home).not.toContain("user@example.test");
 
