@@ -6,7 +6,7 @@ vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
 }));
 
 const { MockUploadDailyLimitExceededError } = vi.hoisted(() => {
-  class MockUploadDailyLimitExceededError extends Error {
+  class HoistedUploadDailyLimitExceededError extends Error {
     override readonly name = "UploadDailyLimitExceededError";
 
     constructor(
@@ -17,7 +17,7 @@ const { MockUploadDailyLimitExceededError } = vi.hoisted(() => {
       super(message);
     }
   }
-  return { MockUploadDailyLimitExceededError };
+  return { MockUploadDailyLimitExceededError: HoistedUploadDailyLimitExceededError };
 });
 
 vi.mock("./sender.js", () => ({
@@ -32,7 +32,7 @@ vi.mock("./sender.js", () => ({
 
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { sendPhoto } from "./outbound-media-send.js";
-import { OUTBOUND_ERROR_CODES, type OutboundResult } from "./outbound-types.js";
+import { OUTBOUND_ERROR_CODES } from "./outbound-types.js";
 import { sendMedia as senderSendMedia } from "./sender.js";
 
 const mockedLoadOutboundMediaFromUrl = vi.mocked(loadOutboundMediaFromUrl);
@@ -100,7 +100,7 @@ describe("trySendViaHostRead error handling", () => {
       new MockUploadDailyLimitExceededError("<buffer>", 2048, "daily quota"),
     );
 
-    const result = (await sendPhoto(makeCtx(), "report.docx")) as OutboundResult;
+    const result = await sendPhoto(makeCtx(), "report.docx");
 
     expect(result).toMatchObject({
       channel: "qqbot",
