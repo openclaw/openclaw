@@ -463,20 +463,28 @@ export async function prepareCliRunContext(
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
-  const preparedExecution = await backendResolved.prepareExecution?.({
+  const prepareExecutionContext = {
     config: params.config,
     workspaceDir,
     agentDir,
     provider: params.provider,
     modelId,
     authProfileId: effectiveAuthProfileId,
-    // Private bridge for bundled Gemini CLI. This is intentionally not part
-    // of the public Plugin SDK until a credential-forwarding contract exists.
-    authCredential,
     executionMode,
-  } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0] & {
-    authCredential?: AuthProfileCredential;
-  });
+  } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
+  const preparedExecution = await backendResolved.prepareExecution?.(
+    (backendResolved.id === "google-gemini-cli"
+      ? {
+          ...prepareExecutionContext,
+          // Private bridge for bundled Gemini CLI. This is intentionally not
+          // part of the public Plugin SDK until a credential-forwarding
+          // contract exists.
+          authCredential,
+        }
+      : prepareExecutionContext) as typeof prepareExecutionContext & {
+      authCredential?: AuthProfileCredential;
+    },
+  );
   const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
     authEpochMode: backendResolved.authEpochMode,
     authProfileId: effectiveAuthProfileId,
