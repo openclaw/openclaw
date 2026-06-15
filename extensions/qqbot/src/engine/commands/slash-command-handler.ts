@@ -66,23 +66,6 @@ export async function trySlashCommand(
         msg.groupOpenid ?? msg.channelId ?? null,
       )
     : undefined;
-
-  // Urgent command detection — bypass queue and execute immediately.
-  const contentLower = content.toLowerCase();
-  const isUrgentCommand = URGENT_COMMANDS.some(
-    (cmd) => contentLower === cmd.toLowerCase() || contentLower.startsWith(cmd.toLowerCase() + " "),
-  );
-  if (isUrgentCommand) {
-    if (isGroup && groupCommandLevel === "strict") {
-      return "enqueue";
-    }
-    log?.info(`Urgent command detected: ${content.slice(0, 20)}`);
-    return "urgent";
-  }
-
-  // Normal slash command — try to match and execute.
-  const receivedAt = Date.now();
-  const peerId = ctx.getMessagePeerId(msg);
   const commandsAllowFrom = resolveQQBotCommandsAllowFrom(ctx.cfg);
   const commandAuthorized = ctx.resolveCommandAuthorized
     ? await ctx.resolveCommandAuthorized({
@@ -100,6 +83,23 @@ export async function trySlashCommand(
         groupAllowFrom: account.config?.groupAllowFrom,
         commandsAllowFrom,
       });
+
+  // Urgent command detection — bypass queue and execute immediately.
+  const contentLower = content.toLowerCase();
+  const isUrgentCommand = URGENT_COMMANDS.some(
+    (cmd) => contentLower === cmd.toLowerCase() || contentLower.startsWith(cmd.toLowerCase() + " "),
+  );
+  if (isUrgentCommand) {
+    if (isGroup && !commandAuthorized) {
+      return "enqueue";
+    }
+    log?.info(`Urgent command detected: ${content.slice(0, 20)}`);
+    return "urgent";
+  }
+
+  // Normal slash command — try to match and execute.
+  const receivedAt = Date.now();
+  const peerId = ctx.getMessagePeerId(msg);
   const cmdCtx: SlashCommandContext = {
     type: msg.type,
     senderId: msg.senderId,

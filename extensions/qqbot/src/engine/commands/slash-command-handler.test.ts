@@ -38,6 +38,16 @@ function createGroupStopMessage(): QueuedMessage {
   };
 }
 
+function createDmStopMessage(): QueuedMessage {
+  return {
+    type: "c2c",
+    senderId: "TRUSTED_OPENID",
+    content: "/stop",
+    messageId: "msg-stop-dm",
+    timestamp: "2026-01-01T00:00:00.000Z",
+  };
+}
+
 function createAccount(): GatewayAccount {
   return {
     accountId: "default",
@@ -49,6 +59,10 @@ function createAccount(): GatewayAccount {
       streaming: false,
     },
   };
+}
+
+function authorizeGroupCommands(account: GatewayAccount): void {
+  account.config.groupAllowFrom = ["TRUSTED_OPENID"];
 }
 
 describe("trySlashCommand", () => {
@@ -92,8 +106,9 @@ describe("trySlashCommand", () => {
     expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("已开启");
   });
 
-  it("does not treat group /stop as urgent when command level is strict", async () => {
+  it("keeps group /stop urgent when command level is strict", async () => {
     const account = createAccount();
+    authorizeGroupCommands(account);
     account.config.groups = {
       GROUP_OPENID: { commandLevel: "strict" },
     };
@@ -110,14 +125,49 @@ describe("trySlashCommand", () => {
       }),
     });
 
-    expect(result).toBe("enqueue");
+    expect(result).toBe("urgent");
   });
 
   it("keeps group /stop urgent outside strict command level", async () => {
+    const account = createAccount();
+    authorizeGroupCommands(account);
+
+    const result = await trySlashCommand(createGroupStopMessage(), {
+      account,
+      cfg: {},
+      getMessagePeerId: () => "group:GROUP_OPENID",
+      getQueueSnapshot: () => ({
+        totalPending: 0,
+        activeUsers: 0,
+        maxConcurrentUsers: 1,
+        senderPending: 0,
+      }),
+    });
+
+    expect(result).toBe("urgent");
+  });
+
+  it("does not let unauthorized group /stop bypass the queue", async () => {
     const result = await trySlashCommand(createGroupStopMessage(), {
       account: createAccount(),
       cfg: {},
       getMessagePeerId: () => "group:GROUP_OPENID",
+      getQueueSnapshot: () => ({
+        totalPending: 0,
+        activeUsers: 0,
+        maxConcurrentUsers: 1,
+        senderPending: 0,
+      }),
+    });
+
+    expect(result).toBe("enqueue");
+  });
+
+  it("keeps open DM /stop urgent", async () => {
+    const result = await trySlashCommand(createDmStopMessage(), {
+      account: createAccount(),
+      cfg: {},
+      getMessagePeerId: () => "c2c:TRUSTED_OPENID",
       getQueueSnapshot: () => ({
         totalPending: 0,
         activeUsers: 0,

@@ -74,4 +74,52 @@ describe("runGroupGateStage", () => {
       expect(result.skipReason).toBe("private_command_only");
     }
   });
+
+  it("classifies mention-stripped private commands", () => {
+    const event = buildGroupEvent("<@BOT_OPENID> /config show");
+    event.mentions = [
+      {
+        member_openid: "BOT_OPENID",
+        username: "OpenClaw",
+      },
+    ];
+
+    const result = runGroupGateStage({
+      event,
+      deps: buildDeps(),
+      accountId: "default",
+      sessionKey: "qqbot:group:G1",
+      userContent: "/config show",
+      access: buildAccess(),
+    });
+
+    expect(result.kind).toBe("skip");
+    if (result.kind === "skip") {
+      expect(result.skipReason).toBe("private_command_only");
+    }
+  });
+
+  it("does not reject urgent stop in strict groups", () => {
+    const deps = buildDeps();
+    (
+      deps.cfg as { channels: { qqbot: { groups: { G1: { commandLevel: string } } } } }
+    ).channels.qqbot.groups.G1.commandLevel = "strict";
+    vi.mocked(deps.adapters.mentionGate.resolveInboundMentionDecision).mockReturnValue({
+      effectiveWasMentioned: true,
+      shouldSkip: false,
+      shouldBypassMention: true,
+      implicitMention: false,
+    });
+
+    const result = runGroupGateStage({
+      event: buildGroupEvent("/stop"),
+      deps,
+      accountId: "default",
+      sessionKey: "qqbot:group:G1",
+      userContent: "/stop",
+      access: buildAccess(),
+    });
+
+    expect(result.kind).toBe("pass");
+  });
 });

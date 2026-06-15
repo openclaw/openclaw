@@ -97,6 +97,9 @@ export function classifyCoreCommandForGroup(
     };
   }
   if (commandLevel === "strict") {
+    if (commandName === "stop") {
+      return { commandName, visibility: "group" };
+    }
     if (STRICT_CORE_COMMANDS.has(commandName)) {
       return { commandName, visibility: "hidden" };
     }

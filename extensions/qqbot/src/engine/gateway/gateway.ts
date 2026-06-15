@@ -195,7 +195,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         : undefined;
     const groupCommandVisibility =
       event.type === "group" || event.type === "guild"
-        ? classifyCoreCommandForGroup(event.content, groupCommandLevel)
+        ? classifyCoreCommandForGroup(inbound.agentBody, groupCommandLevel)
         : { visibility: "unknown" as const };
     if (groupCommandVisibility.visibility === "private") {
       log?.info(

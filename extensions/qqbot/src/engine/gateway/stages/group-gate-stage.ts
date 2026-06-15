@@ -108,7 +108,7 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
     },
   };
 
-  const commandVisibility = classifyCoreCommandForGroup(content, settings.config.commandLevel);
+  const commandVisibility = classifyCoreCommandForGroup(userContent, settings.config.commandLevel);
   if (commandAuthorized && commandVisibility.visibility === "private") {
     return { kind: "skip", groupInfo, skipReason: "private_command_only" };
   }

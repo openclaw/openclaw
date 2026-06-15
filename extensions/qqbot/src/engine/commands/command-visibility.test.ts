@@ -50,7 +50,11 @@ describe("QQBot command visibility", () => {
     }
   });
 
-  it("only allows reset/new core commands in strict mode", () => {
+  it("keeps urgent stop callable in strict mode", () => {
+    expect(classifyCoreCommandForGroup("/stop", "strict").visibility).toBe("group");
+  });
+
+  it("limits other core commands in strict mode", () => {
     expect(classifyCoreCommandForGroup("/new", "strict").visibility).toBe("hidden");
     expect(classifyCoreCommandForGroup("/reset", "strict").visibility).toBe("hidden");
     expect(classifyCoreCommandForGroup("/status", "strict").visibility).toBe("private");
