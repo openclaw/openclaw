@@ -17,6 +17,8 @@ profiles:
       - security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
       - telemetry-diagnostics-and-observability.telemetry-export
       - channel-framework.conversation-routing-and-delivery
+      - channel-framework.outbound-delivery-and-reply-pipeline
+      - channel-framework.group-thread-and-ambient-room-behavior
       - session-memory-and-context-engine.memory
       - session-memory-and-context-engine.diagnostics-maintenance-and-recovery
       - automation-cron-hooks-tasks-polling.cron-jobs
