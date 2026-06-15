@@ -170,6 +170,31 @@ describe("OpenClaw dual-published plugin metadata", () => {
       });
     }
   });
+
+  it("keeps llama.cpp package install metadata aligned with ClawHub validation", () => {
+    const packageJson = JSON.parse(readFileSync("extensions/llama-cpp/package.json", "utf8")) as {
+      version?: string;
+      openclaw?: {
+        compat?: {
+          pluginApi?: string;
+        };
+        build?: {
+          openclawVersion?: string;
+        };
+        install?: unknown;
+      };
+    };
+
+    expect(packageJson.version).toBe("2026.6.6");
+    expect(packageJson.openclaw?.compat?.pluginApi).toBe(">=2026.6.6");
+    expect(packageJson.openclaw?.build?.openclawVersion).toBe("2026.6.6");
+    expect(packageJson.openclaw?.install).toEqual({
+      clawhubSpec: "clawhub:@openclaw/llama-cpp-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.6.6",
+      npmSpec: "@openclaw/llama-cpp-provider",
+    });
+  });
 });
 
 describe("collectClawHubVersionGateErrors", () => {

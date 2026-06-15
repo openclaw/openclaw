@@ -204,9 +204,10 @@
           "embeddingProviders": ["local"]
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/llama-cpp-provider",
           "npmSpec": "@openclaw/llama-cpp-provider",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.6.2"
+          "minHostVersion": ">=2026.6.6"
         }
       }
     },

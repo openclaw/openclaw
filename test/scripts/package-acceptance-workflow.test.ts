@@ -18,6 +18,7 @@ const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
 const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
 const CRABBOX_HYDRATE_WORKFLOW = ".github/workflows/crabbox-hydrate.yml";
 const CRABBOX_CONFIG = ".crabbox.yaml";
+const PLUGIN_CLAWHUB_VALIDATE_WORKFLOW = ".github/workflows/plugin-clawhub-validate.yml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
 const TUI_PTY_WORKFLOW = ".github/workflows/tui-pty.yml";
 const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
@@ -1973,6 +1974,51 @@ describe("package artifact reuse", () => {
       releaseWorkflow.lastIndexOf("append_release_proof_to_github_release"),
     );
     expect(releaseWorkflow).toContain("finished with ${conclusion} in ${duration_label}");
+  });
+
+  it("runs ClawHub package validation only for plugin PR changes without publish secrets", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const validateScript = readFileSync("scripts/validate-changed-clawhub-plugins.ts", "utf8");
+    const workflowText = readFileSync(PLUGIN_CLAWHUB_VALIDATE_WORKFLOW, "utf8");
+    const workflow = readWorkflow(PLUGIN_CLAWHUB_VALIDATE_WORKFLOW);
+    const validateJob = workflowJob(
+      PLUGIN_CLAWHUB_VALIDATE_WORKFLOW,
+      "validate_changed_clawhub_plugins",
+    );
+    const validateStep = workflowStep(validateJob, "Validate changed ClawHub plugin packages");
+
+    expect(packageJson.devDependencies?.clawhub).toBeUndefined();
+    expect(packageJson.scripts?.["plugins:clawhub:validate-changed"]).toBe(
+      "node --import tsx scripts/validate-changed-clawhub-plugins.ts",
+    );
+    expect(validateScript).toContain('CLAWHUB_VALIDATE_CLI_PACKAGE = "clawhub@0.21.0"');
+    expect(validateScript).toContain('"dlx"');
+    expect(workflowText).toContain("name: Plugin ClawHub Validate");
+    expect(workflowText).toContain("pull_request:");
+    expect(workflowText).toContain('      - "extensions/**"');
+    expect(workflowText).not.toContain("CLAWHUB_TOKEN");
+    expect(workflowText).not.toContain("clawhub_token");
+    expect(workflow.env?.FORCE_JAVASCRIPT_ACTIONS_TO_NODE24).toBe("true");
+    expect(validateJob.if).toBe(
+      "github.event_name != 'pull_request' || !github.event.pull_request.draft",
+    );
+    expect(validateJob.permissions).toBeUndefined();
+    expect(workflowStep(validateJob, "Checkout").uses).toBe("actions/checkout@v6");
+    expect(workflowStep(validateJob, "Checkout").with?.["persist-credentials"]).toBe(false);
+    expect(workflowStep(validateJob, "Checkout").with?.["fetch-depth"]).toBe(2);
+    expect(workflowStep(validateJob, "Setup Node environment").uses).toBe(
+      "./.github/actions/setup-node-env",
+    );
+    expect(validateStep.env).toEqual({
+      BASE_REF: "${{ github.event.pull_request.base.sha }}",
+      HEAD_REF: "${{ github.sha }}",
+    });
+    expect(validateStep.run).toBe(
+      'pnpm plugins:clawhub:validate-changed -- --base-ref "$BASE_REF" --head-ref "$HEAD_REF"',
+    );
   });
 
   it("keeps release workflow setup and timeout budgets bounded", () => {
