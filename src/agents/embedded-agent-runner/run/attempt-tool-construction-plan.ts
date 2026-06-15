@@ -33,6 +33,7 @@ const OPENCLAW_TOOL_FACTORY_NAMES = new Set([
   "music_generate",
   "nodes",
   "pdf",
+  "runtime",
   "session_status",
   "sessions_history",
   "sessions_list",
