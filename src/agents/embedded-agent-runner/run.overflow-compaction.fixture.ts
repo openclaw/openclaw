@@ -37,10 +37,11 @@ export function makeCompactionSuccess(params: {
 export function makeAttemptResult(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
-  const toolMetas = (overrides.toolMetas ?? []).map((entry) => ({
-    ...entry,
-    replaySafe: entry.replaySafe ?? isCoreToolNameReplaySafe(entry.toolName),
-  }));
+  const toolMetas = (overrides.toolMetas ?? []).map((entry) =>
+    Object.assign({}, entry, {
+      replaySafe: entry.replaySafe ?? isCoreToolNameReplaySafe(entry.toolName),
+    }),
+  );
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
   const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
   const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
