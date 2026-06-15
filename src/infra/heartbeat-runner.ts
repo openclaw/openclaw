@@ -1292,6 +1292,20 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   return preflight.pendingEventEntries;
 }
 
+// Recovery fields a completed heartbeat delivery must clear. Mirrors the
+// canonical clearPendingFinalDeliveryAfterSuccess in dispatch-from-config.ts so
+// the send-success and duplicate-skip paths drop the exact same set; leaving any
+// behind keeps the session stuck on a delivery that already happened.
+const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
+  pendingFinalDelivery: undefined,
+  pendingFinalDeliveryText: undefined,
+  pendingFinalDeliveryCreatedAt: undefined,
+  pendingFinalDeliveryLastAttemptAt: undefined,
+  pendingFinalDeliveryAttemptCount: undefined,
+  pendingFinalDeliveryLastError: undefined,
+  pendingFinalDeliveryContext: undefined,
+} as const;
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -1662,6 +1676,30 @@ export async function runHeartbeatOnce(opts: {
     });
   };
 
+  // The duplicate-suppression branch returns before any send, so it never hits
+  // the send-success clear. A duplicate means this exact payload was already
+  // delivered within the dedupe window, and the agent run refreshed
+  // pendingFinalDelivery to this run's output, so the recovery state is
+  // satisfied. Clear it the same way the send-success path does. We must not
+  // text-match the pending against the delivered text: agent-runner stores it
+  // pre-normalization (no responsePrefix), so a byte compare would leave
+  // prefixed agents permanently stuck.
+  const clearSatisfiedPendingFinalDelivery = async () => {
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const current = store[sessionKey];
+        if (current?.pendingFinalDelivery !== true && !current?.pendingFinalDeliveryText) {
+          return false;
+        }
+        store[sessionKey] = { ...current, ...CLEARED_PENDING_FINAL_DELIVERY_FIELDS };
+        return true;
+      },
+      // No pending to clear is the common case; avoid rewriting the store then.
+      { skipSaveWhenResult: (cleared) => !cleared },
+    );
+  };
+
   const consumeInspectedSystemEvents = () => {
     if (!preflight.shouldInspectPendingEvents || inspectedSystemEventsToConsume.length === 0) {
       return;
@@ -1947,6 +1985,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      await clearSatisfiedPendingFinalDelivery();
 
       emitHeartbeatEvent({
         status: "skipped",
@@ -2083,17 +2122,9 @@ export async function runHeartbeatOnce(opts: {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
-          // Heartbeat-driven agent runs can leave pendingFinalDelivery set;
-          // a successful send completes it, so clear the recovery fields the
-          // same way clearPendingFinalDeliveryAfterSuccess does in
-          // dispatch-from-config.ts.
-          pendingFinalDelivery: undefined,
-          pendingFinalDeliveryText: undefined,
-          pendingFinalDeliveryCreatedAt: undefined,
-          pendingFinalDeliveryLastAttemptAt: undefined,
-          pendingFinalDeliveryAttemptCount: undefined,
-          pendingFinalDeliveryLastError: undefined,
-          pendingFinalDeliveryContext: undefined,
+          // Heartbeat-driven agent runs can leave pendingFinalDelivery set; a
+          // successful send completes it, so clear the recovery fields.
+          ...CLEARED_PENDING_FINAL_DELIVERY_FIELDS,
         };
       });
     }

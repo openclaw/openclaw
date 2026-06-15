@@ -7,7 +7,9 @@ import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runn
 
 installHeartbeatRunnerTestRuntime();
 
-describe("runHeartbeatOnce clears stuck pendingFinalDelivery state after a successful send", () => {
+type StoredEntry = Record<string, unknown> | undefined;
+
+describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery is satisfied", () => {
   const TELEGRAM_GROUP = "-1001234567890";
 
   function createHeartbeatConfig(storePath: string): OpenClawConfig {
@@ -28,13 +30,53 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state after a succe
     } as unknown as OpenClawConfig;
   }
 
+  function heartbeatDeps(
+    sendTelegram: ReturnType<typeof vi.fn>,
+    replySpy: ReturnType<typeof vi.fn>,
+  ): HeartbeatDeps {
+    return {
+      telegram: sendTelegram as unknown,
+      getQueueSize: () => 0,
+      nowMs: () => Date.now(),
+      getReplyFromConfig: replySpy,
+    } satisfies HeartbeatDeps;
+  }
+
+  // seedMainSessionStore exposes only part of the pendingFinalDelivery* family;
+  // patch in lastHeartbeat* and the two unexposed pending fields so each test can
+  // prove all seven recovery fields get cleared.
+  async function patchEntry(
+    storePath: string,
+    sessionKey: string,
+    patch: Record<string, unknown>,
+  ): Promise<void> {
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, StoredEntry>;
+    store[sessionKey] = { ...store[sessionKey], ...patch };
+    await fs.writeFile(storePath, JSON.stringify(store));
+  }
+
+  async function readEntry(storePath: string, sessionKey: string): Promise<StoredEntry> {
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, StoredEntry>;
+    return store[sessionKey];
+  }
+
+  function expectPendingFinalDeliveryCleared(entry: StoredEntry): void {
+    expect(entry?.pendingFinalDelivery).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryContext).toBeUndefined();
+  }
+
   it("nulls every pendingFinalDelivery* field after delivering substantive heartbeat content", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatConfig(storePath);
 
       // Seed a session that carries a stuck pendingFinalDelivery from a prior run.
-      // pendingFinalDeliveryText must be a heartbeat-ack token so the heartbeat-defer
-      // window short-circuit at heartbeat-runner.ts:~1328 does not bail before send.
+      // pendingFinalDeliveryText is a heartbeat-ack token so the pendingFinalDelivery
+      // gate at heartbeat-runner.ts:~1390 does not bail before the send.
       const sessionKey = await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
         lastProvider: "telegram",
@@ -42,57 +84,94 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state after a succe
         updatedAt: Date.now(),
         pendingFinalDelivery: true,
         pendingFinalDeliveryText: "HEARTBEAT_OK",
-      });
-
-      // Manually patch in the remaining pendingFinalDelivery* fields the seeder
-      // does not expose, so the test proves *all seven* fields get cleared.
-      const seeded = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        Record<string, unknown> | undefined
-      >;
-      seeded[sessionKey] = {
-        ...seeded[sessionKey],
         pendingFinalDeliveryCreatedAt: 1,
-        pendingFinalDeliveryLastAttemptAt: 2,
         pendingFinalDeliveryAttemptCount: 3,
         pendingFinalDeliveryLastError: "prior-error",
+      });
+      await patchEntry(storePath, sessionKey, {
+        pendingFinalDeliveryLastAttemptAt: 2,
         pendingFinalDeliveryContext: { foo: "bar" },
-      };
-      await fs.writeFile(storePath, JSON.stringify(seeded));
+      });
 
       // Substantive reply text forces the post-success store write path
-      // (heartbeat-runner.ts:~2010, `if (!shouldSkipMain && normalized.text.trim())`).
+      // (heartbeat-runner.ts:~2120, `if (visibleSendSucceeded && !shouldSkipMain ...)`).
       const replyText = "Heartbeat update: everything is green.";
       replySpy.mockResolvedValue({ text: replyText });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
-      const result = await runHeartbeatOnce({
-        cfg,
-        deps: {
-          telegram: sendTelegram as unknown,
-          getQueueSize: () => 0,
-          nowMs: () => Date.now(),
-          getReplyFromConfig: replySpy,
-        } satisfies HeartbeatDeps,
-      });
+      const result = await runHeartbeatOnce({ cfg, deps: heartbeatDeps(sendTelegram, replySpy) });
 
       expect(result.status).toBe("ran");
       expect(sendTelegram).toHaveBeenCalledTimes(1);
 
-      const finalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        Record<string, unknown> | undefined
-      >;
-      const entry = finalStore[sessionKey];
+      const entry = await readEntry(storePath, sessionKey);
       expect(entry?.lastHeartbeatText).toBe(replyText);
       expect(typeof entry?.lastHeartbeatSentAt).toBe("number");
-      expect(entry?.pendingFinalDelivery).toBeUndefined();
-      expect(entry?.pendingFinalDeliveryText).toBeUndefined();
-      expect(entry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-      expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-      expect(entry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
-      expect(entry?.pendingFinalDeliveryLastError).toBeUndefined();
-      expect(entry?.pendingFinalDeliveryContext).toBeUndefined();
+      expectPendingFinalDeliveryCleared(entry);
+    });
+  });
+
+  it("clears pendingFinalDelivery* on a duplicate skip even when responsePrefix diverges the stored text", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      // The send-success clear never runs here: the run reproduces a payload we
+      // already delivered, so the duplicate-suppression branch
+      // (heartbeat-runner.ts:~1944) returns before any send.
+      //
+      // agent-runner stores pendingFinalDeliveryText as the token-stripped body
+      // WITHOUT the responsePrefix (agent-runner.ts:~2490), while
+      // normalizeHeartbeatReply re-adds the prefix to the delivered text
+      // (heartbeat-runner.ts:~838). So the stored pending text legitimately
+      // differs from lastHeartbeatText for the same payload, and the clear must
+      // not depend on a byte-equal text match or prefixed agents stay stuck.
+      const cfg = {
+        ...createHeartbeatConfig(storePath),
+        messages: { responsePrefix: "🤖" },
+      } as unknown as OpenClawConfig;
+
+      const body = "Heartbeat update: everything is green.";
+      const deliveredText = `🤖 ${body}`;
+      // updatedAt is well past the 30s defer window so the pendingFinalDelivery
+      // gate does not bail before the duplicate branch (the pending text is
+      // substantive, not a heartbeat ack).
+      const staleAt = Date.now() - 60_000;
+
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        updatedAt: staleAt,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: body, // prefix-less; diverges from deliveredText
+        pendingFinalDeliveryCreatedAt: 1,
+        pendingFinalDeliveryAttemptCount: 3,
+        pendingFinalDeliveryLastError: "prior-error",
+      });
+      await patchEntry(storePath, sessionKey, {
+        // lastHeartbeat* proves the same payload already went out within 24h,
+        // which is what makes this run a duplicate and the pending clear safe.
+        lastHeartbeatText: deliveredText,
+        lastHeartbeatSentAt: staleAt,
+        pendingFinalDeliveryLastAttemptAt: 2,
+        pendingFinalDeliveryContext: { foo: "bar" },
+      });
+
+      // Reply is the prefix-less body; normalizeHeartbeatReply re-adds "🤖 ", so
+      // normalized.text === deliveredText === lastHeartbeatText → duplicate skip.
+      replySpy.mockResolvedValue({ text: body });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      const result = await runHeartbeatOnce({ cfg, deps: heartbeatDeps(sendTelegram, replySpy) });
+
+      // status "ran" (not "skipped") proves the run reached the duplicate branch
+      // rather than bailing at the pendingFinalDelivery gate.
+      expect(result.status).toBe("ran");
+      // Duplicate payload: nothing is sent this run.
+      expect(sendTelegram).not.toHaveBeenCalled();
+
+      const entry = await readEntry(storePath, sessionKey);
+      // lastHeartbeat* stays intact; only the satisfied pending state clears.
+      expect(entry?.lastHeartbeatText).toBe(deliveredText);
+      expectPendingFinalDeliveryCleared(entry);
     });
   });
 });
