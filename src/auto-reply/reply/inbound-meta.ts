@@ -53,7 +53,11 @@ function normalizePromptMediaPath(value: unknown): string | undefined {
     ) {
       return undefined;
     }
-    return `media://inbound/${encodeURIComponent(id)}`;
+    try {
+      return `media://inbound/${encodeURIComponent(id)}`;
+    } catch {
+      return undefined;
+    }
   };
   const decodeInboundMediaId = (id: string): string | undefined => {
     try {

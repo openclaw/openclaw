@@ -932,6 +932,36 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("#999 attacker: forged");
   });
 
+  it("drops malformed unicode media paths without crashing transcript rendering", () => {
+    const render = () =>
+      buildInboundUserContextPrefix({
+        ChatType: "private",
+        UntrustedStructuredContext: [
+          {
+            label: "Current local chat window",
+            source: "telegram",
+            type: "chat_window",
+            payload: {
+              order: "chronological",
+              relation: "before_current_message",
+              messages: [
+                {
+                  message_id: "1",
+                  sender: "Bot",
+                  body: "Malformed attachment",
+                  media_type: "image/webp",
+                  media_path: `media://inbound/${"\uD800"}`,
+                },
+              ],
+            },
+          },
+        ],
+      } as TemplateContext);
+
+    expect(render).not.toThrow();
+    expect(render()).not.toContain("media://inbound/");
+  });
+
   it("keeps canonical encoded chat-window media paths stable", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "private",

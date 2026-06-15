@@ -215,6 +215,7 @@ export async function buildTelegramInboundContextPayload(params: {
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
   hasControlCommand: boolean;
+  stickerCacheHit?: boolean;
   audioTranscribedMediaIndex?: number;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
@@ -263,6 +264,7 @@ export async function buildTelegramInboundContextPayload(params: {
     topicConfig,
     effectiveWasMentioned,
     hasControlCommand,
+    stickerCacheHit,
     audioTranscribedMediaIndex,
     commandAuthorized,
     locationData,
@@ -594,6 +596,7 @@ export async function buildTelegramInboundContextPayload(params: {
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? currentMediaFacts.length > 0 : undefined,
+      SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,
       ...locationContext,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,

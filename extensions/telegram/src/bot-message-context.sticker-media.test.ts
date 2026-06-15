@@ -69,6 +69,7 @@ describe("buildTelegramMessageContext sticker media", () => {
     expect(ctx?.ctxPayload.MediaUrls).toEqual([stickerPath]);
     expect(ctx?.ctxPayload.MediaTypes).toEqual(["image/webp"]);
     expect(ctx?.ctxPayload.StickerMediaIncluded).toBe(true);
+    expect(ctx?.ctxPayload.SkipStickerMediaUnderstanding).toBe(true);
     expect(ctx?.ctxPayload.Sticker).toMatchObject({
       fileId: "new_file_id",
       fileUniqueId: "sticker_unique_789",
