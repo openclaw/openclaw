@@ -1017,7 +1017,7 @@ export async function loadMemoryCuratorApprovals(state: DreamingState): Promise<
     error: null,
   };
   try {
-    const payload = await state.client.request<unknown>("plugin.approval.list", {});
+    const payload = await state.client.request("plugin.approval.list", {});
     state.memoryCuratorApprovals = {
       ...state.memoryCuratorApprovals,
       loading: false,

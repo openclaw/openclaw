@@ -66,13 +66,13 @@ iPad unavailable (17.5) (0000)`),
     expect(decision.nativeDeviceRequired).toBe(true);
   });
 
-  it("requires visible blocked status text and rejects unsupported complete delivery", () => {
+  it("requires visible recovery status text and rejects unsupported complete delivery", () => {
     const valid = [
       "Verified state: no user-visible payload was available.",
       "Next build gap: resolve liveness blocker.",
       "Completion Grade: 7/10",
       "Criticality: 10/10",
-      "Status: blocked",
+      "Status: continuing",
     ].join("\n");
 
     expect(validateVisibleBlockedText(valid)).toEqual({ ok: true, missing: [] });
@@ -82,7 +82,7 @@ iPad unavailable (17.5) (0000)`),
         "Next build gap",
         "Completion Grade:",
         "Criticality:",
-        "Status: blocked",
+        "Status: continuing",
         "no unsupported delivered Status: complete",
       ]),
     });
@@ -102,7 +102,7 @@ iPad unavailable (17.5) (0000)`),
                 "Next build gap: resolve liveness blocker.",
                 "Completion Grade: 7/10",
                 "Criticality: 10/10",
-                "Status: blocked",
+                "Status: continuing",
               ].join("\n"),
             },
           ],
@@ -123,14 +123,14 @@ iPad unavailable (17.5) (0000)`),
       "Next build gap: resolve liveness blocker.",
       "Completion Grade: 7/10",
       "Criticality: 10/10",
-      "Status: blocked",
+      "Status: continuing",
     ].join("\n");
     const diagnostics = validateSessionDiagnostics({
       sessionKey: "agent:main",
       sessions: [
         {
           key: "agent:main",
-          controlDirectorLivenessAudit: [{ action: "synthesized_blocked_no_visible_output" }],
+          controlDirectorLivenessAudit: [{ action: "queued_safe_continuation" }],
         },
       ],
       visibleText,
@@ -152,15 +152,15 @@ iPad unavailable (17.5) (0000)`),
       "Next build gap: resolve liveness blocker.",
       "Completion Grade: 7/10",
       "Criticality: 10/10",
-      "Status: blocked",
+      "Status: continuing",
     ].join("\n");
     const diagnostics = validateSessionDiagnostics({
       sessionKey: "agent:main",
       sessions: [
         {
           key: "agent:main",
-          controlDirectorLivenessAudit: [{ action: "synthesized_blocked_no_visible_output" }],
-          controlDirectorMissionLedger: [{ status: "blocked" }],
+          controlDirectorLivenessAudit: [{ action: "queued_safe_continuation" }],
+          controlDirectorMissionLedger: [{ status: "continuation_queued" }],
         },
       ],
       visibleText,

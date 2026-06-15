@@ -8,7 +8,9 @@ import type {
   SessionEntry,
 } from "../config/sessions/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { enqueueSessionDelivery } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { persistSessionEntry as persistSessionEntryBase } from "./command/attempt-execution.shared.js";
 import {
@@ -53,6 +55,8 @@ export type ControlDirectorDeliveryGuardResult<T extends ControlDirectorGuardabl
   finalPayloadText: string;
   continuation: ControlDirectorContinuationDecision;
   continuationQueued: boolean;
+  continuationQueueId?: string;
+  continuationQueueError?: string;
   guardActions: string[];
   watchdogActions: string[];
   judgeCompletionGate?: SessionControlDirectorJudgeCompletionGate;
@@ -88,6 +92,12 @@ function buildSessionControlDirectorLivenessAuditEntry(params: {
     nextStatus: params.audit.nextStatus,
     continuationCount: params.audit.continuationCount,
     continuationQueued: params.audit.continuationQueued,
+    ...(params.audit.continuationQueueId
+      ? { continuationQueueId: params.audit.continuationQueueId }
+      : {}),
+    ...(params.audit.continuationQueueError
+      ? { continuationQueueError: params.audit.continuationQueueError }
+      : {}),
     payloadsChecked: params.audit.payloadsChecked,
     payloadsSynthesized: params.audit.payloadsSynthesized,
   };
@@ -237,6 +247,8 @@ function buildSessionControlDirectorMissionLedgerEntry(params: {
   truthAudit?: SessionControlDirectorTruthAuditEntry | undefined;
   guardActions: string[];
   watchdogActions: string[];
+  continuationQueueId?: string | undefined;
+  continuationQueueError?: string | undefined;
   existing?: SessionControlDirectorMissionLedgerEntry | undefined;
   ts?: number;
 }): SessionControlDirectorMissionLedgerEntry {
@@ -250,6 +262,11 @@ function buildSessionControlDirectorMissionLedgerEntry(params: {
     startedAt: params.existing?.startedAt ?? ts,
     updatedAt: ts,
     continuationCount: params.continuationCount,
+    continuationQueued: params.continuationQueued,
+    ...(params.continuationQueueId ? { continuationQueueId: params.continuationQueueId } : {}),
+    ...(params.continuationQueueError
+      ? { continuationQueueError: params.continuationQueueError }
+      : {}),
     finalStatus: params.summary.finalStatus,
     verifiedEvidenceSummary: params.summary.verifiedEvidenceSummary,
     nextBuildGap: params.summary.nextBuildGap,
@@ -281,6 +298,8 @@ async function recordControlDirectorMissionLedger(
     truthAudit?: SessionControlDirectorTruthAuditEntry | undefined;
     guardActions: string[];
     watchdogActions: string[];
+    continuationQueueId?: string | undefined;
+    continuationQueueError?: string | undefined;
   },
 ): Promise<SessionEntry | undefined> {
   if (!params.sessionStore || !params.sessionKey || !params.storePath) {
@@ -305,6 +324,8 @@ async function recordControlDirectorMissionLedger(
     truthAudit: params.truthAudit,
     guardActions: params.guardActions,
     watchdogActions: params.watchdogActions,
+    continuationQueueId: params.continuationQueueId,
+    continuationQueueError: params.continuationQueueError,
     existing,
   });
   const nextLedger = [
@@ -471,20 +492,82 @@ function summarizeJudgeCompletionGate(params: {
   };
 }
 
-function queueControlDirectorContinuation(params: {
+type ControlDirectorContinuationQueueResult = {
+  queued: boolean;
+  queueId?: string;
+  error?: string;
+};
+
+function buildControlDirectorContinuationQueueFailureText(params: {
+  reason: string;
+  queueError: string;
+}): string {
+  return [
+    "Control Director recovery supervisor could not start a safe continuation.",
+    "",
+    "Verified state: liveness recovery was required, but the recovery queue did not accept the continuation.",
+    `Missing evidence: durable recovery queue accepted and woke the continuation. Queue error: ${params.queueError}`,
+    `Next build gap: repair the recovery queue path, then retry the Control Director mission. Original liveness reason: ${params.reason}.`,
+    "Completion Grade: 7/10",
+    "Criticality: 10/10",
+    "Status: blocked",
+  ].join("\n");
+}
+
+function replaceFirstControlDirectorPayloadText<T extends ControlDirectorGuardablePayload>(
+  payloads: readonly T[],
+  text: string,
+): T[] {
+  if (payloads.length === 0) {
+    return [{ text } as T];
+  }
+  return payloads.map((payload, index) => (index === 0 ? { ...payload, text } : payload));
+}
+
+async function queueControlDirectorContinuation(params: {
   decision: ControlDirectorContinuationDecision;
   sessionKey?: string | undefined;
   sessionAgentId: string;
   missionId: string;
-}): boolean {
+}): Promise<ControlDirectorContinuationQueueResult> {
   if (!params.decision.shouldQueue || !params.decision.prompt || !params.sessionKey) {
-    return false;
+    return {
+      queued: false,
+      error: !params.sessionKey
+        ? "session key unavailable"
+        : !params.decision.prompt
+          ? "continuation prompt unavailable"
+          : "continuation decision did not request queueing",
+    };
+  }
+  const idempotencyKey = `${params.missionId}:control-director-recovery:${params.decision.nextContinuationCount}`;
+  let queueId: string;
+  try {
+    queueId = await enqueueSessionDelivery({
+      kind: "systemEvent",
+      sessionKey: params.sessionKey,
+      text: params.decision.prompt,
+      idempotencyKey,
+      maxRetries: 5,
+    });
+  } catch (err) {
+    return {
+      queued: false,
+      error: `durable session delivery enqueue failed: ${formatErrorMessage(err)}`,
+    };
   }
   const queued = enqueueSystemEvent(params.decision.prompt, {
     sessionKey: params.sessionKey,
     contextKey: `${params.missionId}:continuation:${params.decision.nextContinuationCount}`,
     trusted: true,
   });
+  if (!queued) {
+    return {
+      queued: false,
+      queueId,
+      error: `durable queue entry ${queueId} was written, but the in-memory recovery event queue rejected the immediate continuation`,
+    };
+  }
   requestHeartbeat({
     source: "other",
     intent: "immediate",
@@ -492,7 +575,7 @@ function queueControlDirectorContinuation(params: {
     agentId: params.sessionAgentId,
     sessionKey: params.sessionKey,
   });
-  return queued;
+  return { queued: true, queueId };
 }
 
 export async function applyControlDirectorDeliveryGuards<T extends ControlDirectorGuardablePayload>(
@@ -532,25 +615,13 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
       classification: params.classification,
       continuationCount: missionSeed.continuationCount,
       missionId: missionSeed.missionId,
+      requestBody: params.requestBody,
       canQueueContinuation: params.canQueueContinuation,
       needsUserInput: params.needsUserInput,
       approvalPending: params.approvalPending,
       externalAbort: params.externalAbort,
       safeToContinue: params.safeToContinue,
     });
-    if (livenessGuardedFinalOutput.audit) {
-      sessionEntry =
-        (await recordControlDirectorLivenessAudit({
-          audit: livenessGuardedFinalOutput.audit,
-          runId: params.runId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          sessionEntry,
-          sessionStore: params.sessionStore,
-          storePath: params.storePath,
-        })) ?? sessionEntry;
-    }
-
     controlDirectorGuardedFinalOutput = applyControlDirectorFinalOutputGuard({
       agentId,
       payloads: livenessGuardedFinalOutput.payloads,
@@ -592,24 +663,13 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
       classification: params.classification,
       continuationCount: missionSeed.continuationCount,
       missionId: missionSeed.missionId,
+      requestBody: params.requestBody,
       canQueueContinuation: params.canQueueContinuation,
       needsUserInput: params.needsUserInput,
       approvalPending: params.approvalPending,
       externalAbort: params.externalAbort,
       safeToContinue: params.safeToContinue,
     });
-    if (livenessGuardedFinalOutput.audit) {
-      sessionEntry =
-        (await recordControlDirectorLivenessAudit({
-          audit: livenessGuardedFinalOutput.audit,
-          runId: params.runId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          sessionEntry,
-          sessionStore: params.sessionStore,
-          storePath: params.storePath,
-        })) ?? sessionEntry;
-    }
   }
 
   let finalPayloads = shouldApplyLivenessBeforeFinalGuard
@@ -683,15 +743,66 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
     sessionEntry = recorded.sessionEntry ?? sessionEntry;
     sessionTruthAudit = recorded.auditEntry;
   }
-  const continuationQueued =
-    params.queueContinuation === false || !agentId
-      ? false
-      : queueControlDirectorContinuation({
-          decision: livenessGuardedFinalOutput.continuation,
-          sessionKey: params.sessionKey,
-          sessionAgentId: agentId,
-          missionId: missionSeed.missionId,
-        });
+  let continuationQueueResult: ControlDirectorContinuationQueueResult = { queued: false };
+  if (livenessGuardedFinalOutput.continuation.shouldQueue) {
+    continuationQueueResult =
+      params.queueContinuation === false || !agentId
+        ? {
+            queued: false,
+            error:
+              params.queueContinuation === false
+                ? "continuation queue disabled"
+                : "agent id missing",
+          }
+        : await queueControlDirectorContinuation({
+            decision: livenessGuardedFinalOutput.continuation,
+            sessionKey: params.sessionKey,
+            sessionAgentId: agentId,
+            missionId: missionSeed.missionId,
+          });
+  }
+  const continuationQueued = continuationQueueResult.queued;
+  if (
+    livenessGuardedFinalOutput.continuation.shouldQueue &&
+    !continuationQueued &&
+    continuationQueueResult.error
+  ) {
+    finalPayloads = replaceFirstControlDirectorPayloadText(
+      finalPayloads,
+      buildControlDirectorContinuationQueueFailureText({
+        reason: livenessGuardedFinalOutput.continuation.reason,
+        queueError: continuationQueueResult.error,
+      }),
+    );
+  }
+  if (livenessGuardedFinalOutput.audit) {
+    const livenessAudit: ControlDirectorLivenessWatchdogAudit = {
+      ...livenessGuardedFinalOutput.audit,
+      ...(livenessGuardedFinalOutput.continuation.shouldQueue && !continuationQueued
+        ? {
+            action: "blocked_continuation_queue_failed",
+            nextStatus: "blocked",
+          }
+        : {}),
+      continuationQueued,
+      ...(continuationQueueResult.queueId
+        ? { continuationQueueId: continuationQueueResult.queueId }
+        : {}),
+      ...(continuationQueueResult.error
+        ? { continuationQueueError: continuationQueueResult.error }
+        : {}),
+    };
+    sessionEntry =
+      (await recordControlDirectorLivenessAudit({
+        audit: livenessAudit,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionEntry,
+        sessionStore: params.sessionStore,
+        storePath: params.storePath,
+      })) ?? sessionEntry;
+  }
   const finalPayloadText = collectControlDirectorPayloadText(finalPayloads);
   const guardActions = [
     ...(controlDirectorGuardedFinalOutput.audit
@@ -700,7 +811,13 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
     ...(judgeCompletionGate.audit ? [judgeCompletionGate.audit.action] : []),
   ];
   const watchdogActions = livenessGuardedFinalOutput.audit
-    ? [`${livenessGuardedFinalOutput.audit.action}${continuationQueued ? ":queued" : ""}`]
+    ? [
+        `${
+          livenessGuardedFinalOutput.continuation.shouldQueue && !continuationQueued
+            ? "blocked_continuation_queue_failed"
+            : livenessGuardedFinalOutput.audit.action
+        }${continuationQueued ? ":queued" : ""}`,
+      ]
     : [];
   const judgeGateSummary =
     isControlDirectorAgentId(agentId) && finalPayloadText
@@ -722,9 +839,13 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
         requestSummary: summarizeControlDirectorRequest(params.requestBody),
         summary: summarizeControlDirectorMissionFinalText(finalPayloadText),
         continuationCount: livenessGuardedFinalOutput.continuation.shouldQueue
-          ? livenessGuardedFinalOutput.continuation.nextContinuationCount
+          ? continuationQueued
+            ? livenessGuardedFinalOutput.continuation.nextContinuationCount
+            : missionSeed.continuationCount
           : missionSeed.continuationCount,
-        continuationQueued: livenessGuardedFinalOutput.continuation.shouldQueue,
+        continuationQueued,
+        continuationQueueId: continuationQueueResult.queueId,
+        continuationQueueError: continuationQueueResult.error,
         judgeCompletionApproval: toSessionJudgeCompletionApproval(judgeCompletionGate.approval),
         judgeCompletionGate: judgeGateSummary,
         truthAudit: sessionTruthAudit,
@@ -739,6 +860,12 @@ export async function applyControlDirectorDeliveryGuards<T extends ControlDirect
     finalPayloadText,
     continuation: livenessGuardedFinalOutput.continuation,
     continuationQueued,
+    ...(continuationQueueResult.queueId
+      ? { continuationQueueId: continuationQueueResult.queueId }
+      : {}),
+    ...(continuationQueueResult.error
+      ? { continuationQueueError: continuationQueueResult.error }
+      : {}),
     guardActions,
     watchdogActions,
     ...(judgeGateSummary ? { judgeCompletionGate: judgeGateSummary } : {}),

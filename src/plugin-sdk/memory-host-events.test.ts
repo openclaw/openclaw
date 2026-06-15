@@ -196,7 +196,7 @@ describe("memory host event journal helpers", () => {
       approvalId: "plugin:approval-1",
       approvalToolCallId: "memory-curator:abc",
       candidateCount: 1,
-      sensitivityClasses: ["private"],
+      sensitivityClasses: ["private"] as string[],
       reasons: ["private memory requires approval"],
     });
     await appendMemoryHostEvent(workspaceDir, {
@@ -207,7 +207,7 @@ describe("memory host event journal helpers", () => {
       approvalId: "plugin:approval-1",
       approvalToolCallId: "memory-curator:abc",
       candidateCount: 1,
-      sensitivityClasses: ["private"],
+      sensitivityClasses: ["private"] as string[],
       reasons: ["approved"],
     });
     await appendMemoryHostEvent(workspaceDir, {
@@ -218,7 +218,7 @@ describe("memory host event journal helpers", () => {
       approvalId: "plugin:approval-2",
       approvalToolCallId: "memory-curator:def",
       candidateCount: 1,
-      sensitivityClasses: ["private"],
+      sensitivityClasses: ["private"] as string[],
       reasons: ["private memory requires approval"],
     });
 
@@ -340,7 +340,7 @@ describe("memory host event journal helpers", () => {
       approvalId: "plugin:approval-secret",
       approvalToolCallId: "memory-curator:abc",
       candidateCount: 1,
-      sensitivityClasses: ["private"],
+      sensitivityClasses: ["private"] as string[],
       reasons: ["expired approval"],
     });
 
@@ -401,31 +401,30 @@ describe("memory host event journal helpers", () => {
       freshness: "current",
       sensitivityClass: "secret",
       privateOrSharedScope: "private",
-      reasons: ["do not leak token-like reason"],
+      reasons: ["do not leak token-like reason"] as string[],
       redactedPreview: "token=[REDACTED]",
     } as const;
     const signalBase = {
       agentId: "memory-knowledge-curator",
       operation: "cli_promote_apply",
       targetRelativePath: "MEMORY.md",
-      reasons: ["do not leak private note"],
+      reasons: ["do not leak private note"] as string[],
       redactedPreview: "private note [REDACTED]",
     } as const;
     const approvalBase = {
       agentId: "memory-knowledge-curator",
       operation: "cli_promote_apply",
       candidateCount: 1,
-      sensitivityClasses: ["private"],
-      reasons: ["do not leak approval reason"],
+      sensitivityClasses: ["private"] as string[],
+      reasons: ["do not leak approval reason"] as string[],
     } as const;
     const events = [
       ...[0, 1, 2].map(
         (index) =>
-          ({
-            ...decisionBase,
-            type: "memory.curator.decision.deny",
+          Object.assign({}, decisionBase, {
+            type: "memory.curator.decision.deny" as const,
             timestamp: `2026-04-05T00:0${index}:00.000Z`,
-            decision: "deny",
+            decision: "deny" as const,
           }) satisfies MemoryHostEvent,
       ),
       {
@@ -440,9 +439,8 @@ describe("memory host event journal helpers", () => {
       },
       ...[0, 1, 2, 3, 4].map(
         (index) =>
-          ({
-            ...signalBase,
-            type: "memory.curator.stale_recall",
+          Object.assign({}, signalBase, {
+            type: "memory.curator.stale_recall" as const,
             timestamp: `2026-04-05T03:0${index}:00.000Z`,
           }) satisfies MemoryHostEvent,
       ),
@@ -454,18 +452,16 @@ describe("memory host event journal helpers", () => {
       },
       ...[0, 1, 2].map(
         (index) =>
-          ({
-            ...approvalBase,
-            type: "memory.curator.approval.expired",
+          Object.assign({}, approvalBase, {
+            type: "memory.curator.approval.expired" as const,
             timestamp: `2026-04-05T05:0${index}:00.000Z`,
             approvalId: `plugin:expired-${index}`,
           }) satisfies MemoryHostEvent,
       ),
       ...[0, 1, 2].map(
         (index) =>
-          ({
-            ...approvalBase,
-            type: "memory.curator.approval.requested",
+          Object.assign({}, approvalBase, {
+            type: "memory.curator.approval.requested" as const,
             timestamp: `2026-04-05T06:0${index}:00.000Z`,
             approvalId: `plugin:pending-${index}`,
           }) satisfies MemoryHostEvent,

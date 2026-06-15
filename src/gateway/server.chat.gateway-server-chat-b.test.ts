@@ -276,7 +276,7 @@ describe("gateway server chat", () => {
             message: expect.objectContaining({
               content: expect.arrayContaining([
                 expect.objectContaining({
-                  text: expect.stringContaining("Status: blocked"),
+                  text: expect.stringContaining("Status: continuing"),
                 }),
               ]),
             }),
@@ -398,7 +398,7 @@ describe("gateway server chat", () => {
             message: expect.objectContaining({
               content: expect.arrayContaining([
                 expect.objectContaining({
-                  text: expect.stringContaining("Status: blocked"),
+                  text: expect.stringContaining("Status: continuing"),
                 }),
               ]),
             }),
@@ -514,7 +514,7 @@ describe("gateway server chat", () => {
             message: expect.objectContaining({
               content: expect.arrayContaining([
                 expect.objectContaining({
-                  text: expect.stringContaining("Status: blocked"),
+                  text: expect.stringContaining("Status: continuing"),
                 }),
               ]),
             }),

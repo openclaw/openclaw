@@ -8,6 +8,7 @@ import {
   buildMemoryCuratorApprovalRequest,
   evaluateMemoryPromotionDecision,
   type MemoryCuratorOperation,
+  type MemoryCuratorApprovalEvent,
   type MemoryCuratorApprovalRequest,
   type MemoryCuratorApprovalResolution,
   type MemoryPromotionApprovalContext,
@@ -1639,7 +1640,7 @@ function buildApprovalRequestForRecords(params: {
 
 function approvalEventTypeForStatus(
   status: MemoryCuratorApprovalResolution["status"],
-): Parameters<typeof appendMemoryHostEvent>[1]["type"] | null {
+): MemoryCuratorApprovalEvent["type"] | null {
   if (status === "requested") {
     return "memory.curator.approval.requested";
   }

@@ -362,7 +362,7 @@ function buildTrendBuckets(
     addTrendEvent(buckets, event, options);
   }
   return [...buckets.entries()]
-    .sort(([left], [right]) => left - right)
+    .toSorted(([left], [right]) => left - right)
     .slice(-MAX_TREND_BUCKET_DAYS)
     .map(([, bucket]) => bucket);
 }
@@ -561,7 +561,7 @@ function mergeTrendBuckets(
     }
   }
   return [...bucketMap.values()]
-    .sort((left, right) => Date.parse(left.bucketStartIso) - Date.parse(right.bucketStartIso))
+    .toSorted((left, right) => Date.parse(left.bucketStartIso) - Date.parse(right.bucketStartIso))
     .slice(-MAX_TREND_BUCKET_DAYS);
 }
 

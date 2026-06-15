@@ -168,8 +168,8 @@ export type SessionControlDirectorGuardAuditEntry = {
     | "repaired_missing_required_fields"
     | "blocked_missing_judge_approval"
     | "blocked_invalid_judge_approval";
-  originalStatus?: "complete" | "blocked" | "needs_user_input" | null;
-  nextStatus: "complete" | "blocked" | "needs_user_input";
+  originalStatus?: "complete" | "blocked" | "needs_user_input" | "continuing" | null;
+  nextStatus: "complete" | "blocked" | "needs_user_input" | "continuing";
   missing: string[];
   payloadsChecked: number;
   payloadsRewritten: number;
@@ -182,13 +182,16 @@ export type SessionControlDirectorLivenessAuditEntry = {
     | "synthesized_blocked_no_visible_output"
     | "synthesized_blocked_incomplete_classification"
     | "queued_safe_continuation"
+    | "blocked_continuation_queue_failed"
     | "blocked_continuation_limit"
     | "blocked_unsafe_continuation";
   reason: string;
   classification?: "empty" | "reasoning-only" | "planning-only";
-  nextStatus: "blocked";
+  nextStatus: "blocked" | "continuing";
   continuationCount: number;
   continuationQueued: boolean;
+  continuationQueueId?: string;
+  continuationQueueError?: string;
   payloadsChecked: number;
   payloadsSynthesized: number;
 };
@@ -261,11 +264,20 @@ export type SessionControlDirectorMissionLedgerEntry = {
   missionId: string;
   runId?: string;
   requestSummary: string;
-  status: "running" | "complete" | "blocked" | "needs_user_input" | "continuation_queued";
+  status:
+    | "running"
+    | "complete"
+    | "blocked"
+    | "needs_user_input"
+    | "continuing"
+    | "continuation_queued";
   startedAt: number;
   updatedAt: number;
   continuationCount: number;
-  finalStatus?: "complete" | "blocked" | "needs_user_input" | null;
+  finalStatus?: "complete" | "blocked" | "needs_user_input" | "continuing" | null;
+  continuationQueued?: boolean;
+  continuationQueueId?: string;
+  continuationQueueError?: string;
   verifiedEvidenceSummary?: string;
   nextBuildGap?: string;
   completionGrade?: number;

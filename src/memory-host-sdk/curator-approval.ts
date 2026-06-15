@@ -77,11 +77,21 @@ function truncate(value: string, maxLength: number): string {
   return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
+function removeControlCharacters(value: string): string {
+  let cleaned = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code > 0x1f && code !== 0x7f) {
+      cleaned += value[index] ?? "";
+    }
+  }
+  return cleaned;
+}
+
 function sanitizeApprovalText(value: string): string {
   return truncate(
-    value
+    removeControlCharacters(value)
       .replace(/\s+/g, " ")
-      .replace(/[\u0000-\u001f\u007f]/g, "")
       .replace(
         /-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gi,
         "[REDACTED_PRIVATE_KEY]",
