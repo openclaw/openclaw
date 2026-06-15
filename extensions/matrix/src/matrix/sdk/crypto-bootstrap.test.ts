@@ -394,14 +394,12 @@ describe("MatrixCryptoBootstrapper", () => {
       "Matrix cross-signing key upload requires UIA; provide matrix.password for m.login.password fallback",
     );
 
-    // SSSS is bootstrapped upfront before cross-signing, even for forced reset. This is safe
-    // because SSSS recreation only happens when the existing SSSS is broken; if SSSS is healthy
-    // the upfront bootstrap is a no-op. When UIA then fails, the operator fixes the password
-    // config and retries with a working SSSS, which is strictly better than the previous behavior
-    // of a double cross-signing reset that could destroy E2EE state (gh-78396).
-    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalled();
-    // Only one cross-signing attempt — the upfront SSSS fix prevents the repair block from
-    // triggering a second resetCrossSigning.
+    // SSSS bootstrap is deferred for passwordless forced reset to avoid mutating secret storage
+    // before UIA succeeds. The old double-reset path (second bootstrapCrossSigning after SSSS)
+    // is removed entirely (gh-78396).
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
+    // Only one cross-signing attempt — the forced reset's internal repair path is still allowed
+    // for passwordless bots (gh-78396).
     expect(bootstrapCrossSigning).toHaveBeenCalledTimes(1);
   });
 

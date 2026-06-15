@@ -52,25 +52,33 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   ): Promise<MatrixCryptoBootstrapResult> {
     const strict = options.strict === true;
     const forceReset = options.forceResetCrossSigning === true;
+    const hasPassword = Boolean(this.deps.getPassword?.());
+    // Forced reset with a password: bootstrap SSSS upfront (non-strict, recreation allowed)
+    // so broken SSSS is repaired before the destructive reset. For passwordless bots, defer
+    // SSSS to avoid mutating it before UIA succeeds (passwordless-bot guard).
+    const deferSecretStorageBootstrapUntilAfterCrossSigning = forceReset && !hasPassword;
     // Register verification listeners before expensive bootstrap work so incoming requests
     // are not missed during startup.
     this.registerVerificationRequestHandler(crypto);
 
-    // Always bootstrap SSSS before cross-signing. For forced reset, run non-strict with
-    // recreation allowed so broken SSSS is repaired before the destructive reset.
-    await this.bootstrapSecretStorage(crypto, {
-      strict: forceReset ? false : strict,
-      allowSecretStorageRecreateWithoutRecoveryKey:
-        forceReset ? true : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
-    });
+    if (!deferSecretStorageBootstrapUntilAfterCrossSigning) {
+      await this.bootstrapSecretStorage(crypto, {
+        strict: forceReset ? false : strict,
+        allowSecretStorageRecreateWithoutRecoveryKey:
+          forceReset ? true : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+      });
+    }
 
     const crossSigning = await this.bootstrapCrossSigning(crypto, {
       forceResetCrossSigning: forceReset,
       allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
-      // SSSS was already fixed above, so prevent the repair block from doing a second cross-signing
-      // reset after recreating secret storage (https://github.com/openclaw/openclaw/issues/78396).
+      // SSSS was already fixed upfront for forced reset with password, so prevent the repair
+      // block from doing a second reset after recreating secret storage (gh-78396). For
+      // passwordless forced reset, SSSS was deferred so allow the existing repair path.
       allowSecretStorageRecreateWithoutRecoveryKey:
-        forceReset ? false : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+        forceReset && hasPassword
+          ? false
+          : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
       strict,
     });
 
