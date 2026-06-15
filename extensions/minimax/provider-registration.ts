@@ -8,6 +8,7 @@ import type {
   ProviderCatalogContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
@@ -21,7 +22,10 @@ import {
   buildProviderReplayFamilyHooks,
   normalizeModelCompat,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { MINIMAX_FAST_MODE_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
+import {
+  createMinimaxThinkingDisabledWrapper,
+  MINIMAX_FAST_MODE_STREAM_HOOKS,
+} from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -67,6 +71,8 @@ const MINIMAX_PROVIDER_HOOKS = {
   resolveReasoningOutputMode: () => "native" as const,
   resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
     resolveMinimaxThinkingProfile(modelId),
+  wrapSimpleCompletionStreamFn: (ctx: ProviderWrapStreamFnContext) =>
+    createMinimaxThinkingDisabledWrapper(ctx.streamFn, ctx.thinkingLevel),
 };
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {

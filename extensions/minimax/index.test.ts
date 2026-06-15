@@ -95,6 +95,47 @@ describe("minimax provider hooks", () => {
     });
   });
 
+  it("applies the MiniMax thinking wrapper to direct simple completions", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+    let capturedThinking: unknown;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload = {};
+      options?.onPayload?.(payload, model);
+      capturedThinking = (payload as { thinking?: unknown }).thinking;
+      return [] as never;
+    };
+
+    const wrapped = portalProvider.wrapSimpleCompletionStreamFn?.({
+      streamFn: baseStreamFn,
+      provider: "minimax-portal",
+      modelId: "MiniMax-M2.7",
+      model: {
+        id: "MiniMax-M2.7",
+        name: "MiniMax M2.7",
+        provider: "minimax-portal",
+        api: "anthropic-messages",
+      },
+    } as never);
+
+    expect(wrapped).toBeTypeOf("function");
+    void wrapped?.(
+      {
+        id: "MiniMax-M2.7",
+        provider: "minimax-portal",
+        api: "anthropic-messages",
+      } as Model,
+      { messages: [] },
+      {},
+    );
+
+    expect(capturedThinking).toEqual({ type: "disabled" });
+  });
+
   it("keeps MiniMax auth setup metadata aligned across regions", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,

@@ -196,7 +196,10 @@ export {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
-export { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
+export {
+  createMinimaxFastModeWrapper,
+  createMinimaxThinkingDisabledWrapper,
+} from "../llm/providers/stream-wrappers/minimax.js";
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,
