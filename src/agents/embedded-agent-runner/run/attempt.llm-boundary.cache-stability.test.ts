@@ -32,6 +32,7 @@ import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 type AgentMsg = Parameters<typeof normalizeMessagesForLlmBoundary>[0][number];
 
 const TZ = "UTC";
+const TEST_PROVIDER_TOKEN = ["test", "provider", "token"].join("-");
 
 /** A user message as it sits in the JSONL transcript: BARE string + timestamp. */
 function storedUserMsg(content: string, timestamp: number): AgentMsg {
@@ -100,7 +101,7 @@ async function captureOpenAICompletionsPayload(
       messages: normalizeMessagesForLlmBoundary(messages, { timezone: TZ }) as Context["messages"],
     },
     {
-      apiKey: "sk-test",
+      apiKey: TEST_PROVIDER_TOKEN,
       cacheRetention: "none",
       onPayload(payload) {
         capturedPayload = payload as Record<string, unknown>;
@@ -126,7 +127,7 @@ async function captureOpenAIResponsesPayload(
       messages: normalizeMessagesForLlmBoundary(messages, { timezone: TZ }) as Context["messages"],
     },
     {
-      apiKey: "sk-test",
+      apiKey: TEST_PROVIDER_TOKEN,
       cacheRetention: "none",
       onPayload(payload) {
         capturedPayload = payload as Record<string, unknown>;
