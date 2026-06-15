@@ -78,7 +78,8 @@ OpenClaw assumes the host and config boundary are trusted:
 - For mixed-trust teams, split trust boundaries with separate gateways (or at minimum separate OS users/hosts).
 - Recommended default: one user per machine/host (or VPS), one gateway for that user, and one or more agents in that gateway.
 - Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
-- Session identifiers (`sessionKey`, session IDs, labels) are routing selectors, not authorization tokens.
+- Session identifiers (`sessionKey`, session IDs, labels) are
+  [routing selectors, not authorization tokens](/gateway/session-boundaries).
 - If several people can message one tool-enabled agent, each of them can steer that same permission set. Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
 
 ### Secure file operations
@@ -121,7 +122,7 @@ Treat Gateway and node as one operator trust domain, with different roles:
   device identity. This is not a remote or browser pairing bypass: network
   clients, node clients, device-token clients, and explicit device identities
   still go through pairing and scope-upgrade enforcement.
-- `sessionKey` is routing/context selection, not per-user auth.
+- `sessionKey` is [routing/context selection, not per-user auth](/gateway/session-boundaries).
 - Exec approvals (allowlist + ask) are guardrails for operator intent, not hostile multi-tenant isolation.
 - OpenClaw's product default for trusted single-operator setups is that host exec on `gateway`/`node` is allowed without approval prompts (`security="full"`, `ask="off"` unless you tighten it). That default is intentional UX, not a vulnerability by itself.
 - Exec approvals bind exact request context and best-effort direct local file operands; they do not semantically model every runtime/interpreter loader path. Use sandboxing and host isolation for strong boundaries.
@@ -132,15 +133,15 @@ If you need hostile-user isolation, split trust boundaries by OS user/host and r
 
 Use this as the quick model when triaging risk:
 
-| Boundary or control                                       | What it means                                     | Common misread                                                                |
-| --------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `gateway.auth` (token/password/trusted-proxy/device auth) | Authenticates callers to gateway APIs             | "Needs per-message signatures on every frame to be secure"                    |
-| `sessionKey`                                              | Routing key for context/session selection         | "Session key is a user auth boundary"                                         |
-| Prompt/content guardrails                                 | Reduce model abuse risk                           | "Prompt injection alone proves auth bypass"                                   |
-| `canvas.eval` / browser evaluate                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
-| Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
-| Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
-| `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
+| Boundary or control                                       | What it means                                                                                     | Common misread                                                                |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `gateway.auth` (token/password/trusted-proxy/device auth) | Authenticates callers to gateway APIs                                                             | "Needs per-message signatures on every frame to be secure"                    |
+| `sessionKey`                                              | Routing key for context/session selection. See [Session boundaries](/gateway/session-boundaries). | "Session key is a user auth boundary"                                         |
+| Prompt/content guardrails                                 | Reduce model abuse risk                                                                           | "Prompt injection alone proves auth bypass"                                   |
+| `canvas.eval` / browser evaluate                          | Intentional operator capability when enabled                                                      | "Any JS eval primitive is automatically a vuln in this trust model"           |
+| Local TUI `!` shell                                       | Explicit operator-triggered local execution                                                       | "Local shell convenience command is remote injection"                         |
+| Node pairing and node commands                            | Operator-level remote execution on paired devices                                                 | "Remote device control should be treated as untrusted user access by default" |
+| `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy                                                     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
 
 ## Not vulnerabilities by design
 

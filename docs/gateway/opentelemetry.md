@@ -136,6 +136,9 @@ and sanitized attributes by default, but the raw log message body is exported
 only when `diagnostics.otel.captureContent` is set to boolean `true`. Granular
 `captureContent.*` subkeys do not enable log bodies. Labels that look like
 scoped agent session keys are replaced with `unknown`.
+Session Steward diagnostics emit only redacted boundary metadata such as
+boundary kind, agent relation, and redacted affected session; they never emit
+raw session selectors. See [Session boundaries](/gateway/session-boundaries).
 Talk metrics export only bounded event metadata such as mode, transport,
 provider, and event type. They do not include transcripts, audio payloads,
 session ids, turn ids, call ids, room ids, or handoff tokens.

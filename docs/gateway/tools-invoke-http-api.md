@@ -100,6 +100,10 @@ If a tool is not allowed by policy, the endpoint returns **404**.
 
 Important boundary notes:
 
+- `sessionKey` is a routing selector, not an authorization token. When a request
+  provides both `sessionKey` and `agentId`, cross-agent `agent:*` mismatches are
+  rejected before tool resolution or execution. See
+  [Session boundaries](/gateway/session-boundaries).
 - Exec approvals are operator guardrails, not a separate authorization boundary for this HTTP endpoint. If a tool is reachable here via Gateway auth + tool policy, `/tools/invoke` does not add an extra per-call approval prompt.
 - If `exec` is reachable here, treat it as a mutating shell surface. Denying `write`, `edit`, `apply_patch`, or HTTP filesystem-write tools does not make shell execution read-only.
 - Do not share Gateway bearer credentials with untrusted callers. If you need separation across trust boundaries, run separate gateways (and ideally separate OS users/hosts).
