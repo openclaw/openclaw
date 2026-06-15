@@ -32,6 +32,7 @@ function testMaturityTaxonomy(params?: {
       {
         id: "smoke-ci",
         description: "Test smoke profile.",
+        includeAllCategories: false,
         categoryIds: [],
       },
       {
