@@ -1350,7 +1350,7 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
-  it("injects the bot's previous message body when users reply to it", async () => {
+  it("does not inject the bot's previous message body when users reply to it", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("self-reply media should not be fetched");
     });
@@ -1404,7 +1404,69 @@ describe("processDiscordMessage session routing", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
     expect(dispatchCtx.ReplyToSender).toBe("Spartacus");
-    expect(dispatchCtx.ReplyToBody).toBe("The same stale bot response keeps looping.");
+    expect(dispatchCtx.ReplyToBody).toBeUndefined();
+    expect(dispatchCtx.MediaPath).toBeUndefined();
+    expect(dispatchCtx.MediaPaths).toBeUndefined();
+  });
+
+  it("injects bot-authored cron failure alert body when users reply to it", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("self-reply media should not be fetched");
+    });
+    const alertBody =
+      'Cron job "WhatsApp Incremental Archive" failed 1 times\n' +
+      "Last error: check git status (agent) failed";
+    const ctx = await createBaseContext({
+      botUserId: "bot-1",
+      cfg: {
+        channels: { discord: { contextVisibility: "all" } },
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      discordRestFetch: fetchImpl,
+      message: {
+        id: "m-alert-reply",
+        channelId: "c1",
+        content: "<@bot> please investigate this",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+        messageReference: {
+          type: 0,
+          message_id: "m-cron-alert",
+          channel_id: "c1",
+        },
+        referencedMessage: {
+          id: "m-cron-alert",
+          channelId: "c1",
+          content: alertBody,
+          timestamp: new Date().toISOString(),
+          attachments: [
+            {
+              id: "att-cron-alert",
+              url: "https://cdn.discordapp.com/attachments/alert.png",
+              content_type: "image/png",
+              filename: "alert.png",
+            },
+          ],
+          author: {
+            id: "bot-1",
+            username: "SnabbelClaw",
+            discriminator: "0",
+            globalName: "SnabbelClaw",
+          },
+        },
+      },
+      baseText: "<@bot> please investigate this",
+      messageText: "<@bot> please investigate this",
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(dispatchCtx.ReplyToId).toBe("m-cron-alert");
+    expect(dispatchCtx.ReplyToSender).toBe("SnabbelClaw");
+    expect(dispatchCtx.ReplyToBody).toBe(alertBody);
     expect(dispatchCtx.MediaPath).toBeUndefined();
     expect(dispatchCtx.MediaPaths).toBeUndefined();
   });

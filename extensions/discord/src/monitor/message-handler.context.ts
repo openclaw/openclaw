@@ -46,6 +46,21 @@ function isContextAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
 
+function shouldPreserveDiscordSelfReplyBody(body: string | undefined): boolean {
+  const normalized = body?.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /^Cron job "[^"\n]+" (?:failed|skipped) \d+ times\n(?:Last error|Skip reason): [\s\S]+$/.test(
+      normalized,
+    ) ||
+    /^[^\n]*Cron job "[^"\n]+" has been auto-disabled after \d+ consecutive schedule errors\. Last error: [\s\S]+$/.test(
+      normalized,
+    )
+  );
+}
+
 export async function buildDiscordMessageProcessContext(params: {
   ctx: DiscordMessagePreflightContext;
   text: string;
@@ -318,11 +333,12 @@ export async function buildDiscordMessageProcessContext(params: {
           storePath,
           sessionKey: effectiveSessionKey,
         });
+  const preserveSelfReplyBody = shouldPreserveDiscordSelfReplyBody(replyContext?.body);
 
   const ctxPayload = await buildChannelInboundEventContext({
     channel: "discord",
     resolveSupplementalMedia: true,
-    suppressSelfQuoteBody: false,
+    suppressSelfQuoteBody: !preserveSelfReplyBody,
     contextVisibility: contextVisibilityMode,
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,
