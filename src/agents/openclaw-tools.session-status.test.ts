@@ -871,11 +871,15 @@ describe("session_status tool", () => {
     ).rejects.toThrow("Unknown sessionKey: agent:main:telegram:default:direct:1053274893");
   });
 
-  it("resolves current session key to requester session locally", async () => {
+  it("prefers a literal current session key in session_status", async () => {
     resetSessionStore({
       main: {
         sessionId: "s-main",
         updatedAt: 10,
+      },
+      "agent:main:current": {
+        sessionId: "s-current",
+        updatedAt: 20,
       },
     });
 
@@ -884,14 +888,18 @@ describe("session_status tool", () => {
     const result = await tool.execute("call-current-literal-key", { sessionKey: "current" });
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("main");
+    expect(details.sessionKey).toBe("agent:main:current");
   });
 
-  it("does not apply the active run model to the resolved current session", async () => {
+  it("does not apply the active run model to a literal current session key", async () => {
     resetSessionStore({
       main: {
         sessionId: "s-main",
         updatedAt: 10,
+      },
+      "agent:main:current": {
+        sessionId: "s-current",
+        updatedAt: 20,
         providerOverride: "anthropic",
         modelOverride: "claude-sonnet-4-6",
       },
@@ -907,7 +915,7 @@ describe("session_status tool", () => {
     });
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("main");
+    expect(details.sessionKey).toBe("agent:main:current");
 
     const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
     expectRecordFields(statusArg.sessionEntry, {
@@ -1346,11 +1354,15 @@ describe("session_status tool", () => {
     expect(text).not.toContain("all done");
   });
 
-  it("resolves current key to requester session without sessionId lookup", async () => {
+  it("resolves a literal current sessionId in session_status", async () => {
     resetSessionStore({
       main: {
         sessionId: "s-main",
         updatedAt: 10,
+      },
+      "agent:main:other": {
+        sessionId: "current",
+        updatedAt: 20,
       },
     });
     mockConfig = {
@@ -1372,7 +1384,7 @@ describe("session_status tool", () => {
     const result = await tool.execute("call-current-literal-id", { sessionKey: "current" });
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("main");
+    expect(details.sessionKey).toBe("agent:main:other");
   });
 
   it("keeps sessionKey=current bound to the requester subagent session", async () => {
