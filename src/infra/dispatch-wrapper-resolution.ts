@@ -16,10 +16,18 @@ export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
 const CAFFEINATE_OPTIONS_WITH_VALUE = new Set(["-t", "-w"]);
 const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
-const FLOCK_SHORT_FLAG_OPTIONS = new Set(["-e", "-n", "-s", "-x"]);
-const FLOCK_LONG_FLAG_OPTIONS = new Set(["--exclusive", "--nonblock", "--shared", "--verbose"]);
+const FLOCK_SHORT_FLAG_OPTIONS = new Set(["-e", "-F", "-n", "-o", "-s", "-x"]);
+const FLOCK_LONG_FLAG_OPTIONS = new Set([
+  "--close",
+  "--exclusive",
+  "--nb",
+  "--no-fork",
+  "--nonblock",
+  "--shared",
+  "--verbose",
+]);
 const FLOCK_SHORT_OPTIONS_WITH_VALUE = new Set(["-E", "-w"]);
-const FLOCK_LONG_OPTIONS_WITH_VALUE = new Set(["--conflict-exit-code", "--timeout"]);
+const FLOCK_LONG_OPTIONS_WITH_VALUE = new Set(["--conflict-exit-code", "--timeout", "--wait"]);
 const TIME_FLAG_OPTIONS = new Set([
   "-a",
   "--append",
@@ -267,6 +275,8 @@ function unwrapFlockInvocation(argv: string[]): string[] | null {
       return "invalid";
     },
     adjustCommandIndex: (commandIndex, currentArgv) => {
+      // The first non-option token is the lock target; only the next token can be
+      // the wrapped executable. Shell-string and fd-only forms stay blocked.
       const wrappedCommandIndex = commandIndex + 1;
       const wrappedCommand = currentArgv[wrappedCommandIndex]?.trim() ?? "";
       return wrappedCommand && (!wrappedCommand.startsWith("-") || wrappedCommand === "-")
