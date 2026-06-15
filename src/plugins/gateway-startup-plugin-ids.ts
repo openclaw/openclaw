@@ -206,6 +206,40 @@ function hasConfiguredStartupChannel(params: {
   );
 }
 
+// #93219: an externally-installed channel plugin enabled only via
+// `plugins.entries.<id>.enabled=true` (no `channels.<id>` config block, no
+// `activation.onStartup`) must still load at gateway startup so its channel can
+// listen. Manifest channel ownership scopes this to channel plugins so explicitly
+// enabled tool plugins stay lazy, and bundled channels keep starting from channel
+// config/default rules rather than from a bare plugin entry.
+function hasExplicitlyEnabledExternalStartupChannel(params: {
+  plugin: InstalledPluginIndexRecord;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  manifestLookup: ManifestRegistryLookup;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (params.plugin.origin === "bundled") {
+    return false;
+  }
+  if (listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).length === 0) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled && activationState.explicitlyEnabled;
+}
+
 type ManifestRegistryLookup = ReadonlyMap<string, PluginManifestRecord>;
 
 function createManifestRegistryLookup(
@@ -1926,13 +1960,20 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const pluginIds: string[] = [];
   for (const plugin of params.index.plugins) {
     const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
-    if (
-      hasConfiguredStartupChannel({
-        plugin,
-        manifestLookup,
-        configuredChannelIds,
-      })
-    ) {
+    const hasConfiguredChannel = hasConfiguredStartupChannel({
+      plugin,
+      manifestLookup,
+      configuredChannelIds,
+    });
+    const hasExplicitExternalChannel = hasExplicitlyEnabledExternalStartupChannel({
+      plugin,
+      config: params.config,
+      pluginsConfig,
+      activationSource,
+      manifestLookup,
+      platform: params.platform,
+    });
+    if (hasConfiguredChannel || hasExplicitExternalChannel) {
       const canStartConfiguredChannel = canStartConfiguredChannelPlugin({
         plugin,
         config: params.config,
@@ -1943,7 +1984,9 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       });
       if (canStartConfiguredChannel) {
         pluginIds.push(plugin.pluginId);
-        if (plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen) {
+        // Deferred configured-channel load applies only when a channels.<id>
+        // config block exists, not to the bare-entry explicit-external path.
+        if (hasConfiguredChannel && plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen) {
           configuredDeferredChannelPluginIds.push(plugin.pluginId);
         }
       }

@@ -2360,6 +2360,55 @@ describe("resolveGatewayStartupPluginIds", () => {
     ]);
   });
 
+  it("starts an explicitly enabled external channel plugin without channel config (#93219)", () => {
+    const registry: PluginManifestRegistry = {
+      plugins: [
+        withManifestLoadPaths({
+          id: "openclaw-weixin",
+          channels: ["weixin"],
+          origin: "global",
+          enabledByDefault: undefined,
+          providers: [],
+          cliBackends: [],
+        }),
+        withManifestLoadPaths({
+          id: "external-tool-only",
+          channels: [],
+          origin: "global",
+          enabledByDefault: undefined,
+          providers: [],
+          cliBackends: [],
+        }),
+      ] as PluginManifestRecord[],
+      diagnostics: [],
+    };
+    const index = createInstalledPluginIndexFixture(registry);
+
+    const plan = resolveGatewayStartupPluginPlanFromRegistry({
+      config: {
+        channels: {},
+        plugins: {
+          entries: {
+            "openclaw-weixin": { enabled: true },
+            "external-tool-only": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      env: createPluginPlanningTestEnv(),
+      index,
+      manifestRegistry: registry,
+    });
+
+    // The channel plugin must load at startup so it can listen, even though no
+    // channels.<id> config block exists — only plugins.entries enablement (#93219).
+    expect(plan.pluginIds).toContain("openclaw-weixin");
+    // Laziness guard: an explicitly enabled external tool plugin (no channels)
+    // must NOT be force-loaded at gateway startup.
+    expect(plan.pluginIds).not.toContain("external-tool-only");
+    // No channels.<id> config => not a deferred configured-channel load.
+    expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([]);
+  });
+
   it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {
     useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
 
