@@ -553,6 +553,34 @@ function pluginMetadataSnapshotCoversProvider(
   });
 }
 
+/**
+ * Extract tool-use content blocks from the last assistant message for hook
+ * payloads. Returns an empty array when the message has no tool_use blocks.
+ */
+function extractToolUseBlocksForHook(
+  lastAssistant: AssistantMessage | undefined,
+): { id: string; name: string; input: unknown }[] {
+  if (!lastAssistant) {
+    return [];
+  }
+  const content = (lastAssistant as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content
+    .filter(
+      (block): block is Record<string, unknown> =>
+        Boolean(block) &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "tool_use",
+    )
+    .map((block) => ({
+      id: typeof block.id === "string" ? block.id : "",
+      name: typeof block.name === "string" ? block.name : "",
+      input: block.input,
+    }));
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -3609,6 +3637,7 @@ export async function runEmbeddedAttempt(
         abort: (reason) => abortActiveRunExternally(reason),
       };
       let lastAssistant: AssistantMessage | undefined;
+      let toolUsesForHook: { id: string; name: string; input: unknown }[] = [];
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: PromptCacheBreak | null = null;
@@ -4893,6 +4922,7 @@ export async function runEmbeddedAttempt(
             .slice()
             .toReversed()
             .find((message): message is AssistantMessage => message.role === "assistant");
+          toolUsesForHook = extractToolUseBlocksForHook(lastAssistant);
           currentAttemptAssistant = findCurrentAttemptAssistantMessage({
             messagesSnapshot,
             prePromptMessageCount,
@@ -5074,6 +5104,7 @@ export async function runEmbeddedAttempt(
               success: !aborted && !promptError,
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
+              ...(toolUsesForHook.length > 0 ? { toolUses: toolUsesForHook } : {}),
             },
             ctx: {
               runId: params.runId,
@@ -5229,6 +5260,7 @@ export async function runEmbeddedAttempt(
                 : {}),
               assistantTexts,
               lastAssistant,
+              ...(toolUsesForHook.length > 0 ? { toolUses: toolUsesForHook } : {}),
               usage: attemptUsage,
             },
             {

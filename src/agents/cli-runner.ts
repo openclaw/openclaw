@@ -497,6 +497,30 @@ export async function runPreparedCliAgent(
     }),
   ];
 
+  const extractToolUseBlocksForCliHook = (
+    lastAssistant: unknown,
+  ): { id: string; name: string; input: unknown }[] => {
+    if (!lastAssistant || typeof lastAssistant !== "object") {
+      return [];
+    }
+    const content = (lastAssistant as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      return [];
+    }
+    return content
+      .filter(
+        (block): block is Record<string, unknown> =>
+          Boolean(block) &&
+          typeof block === "object" &&
+          (block as { type?: unknown }).type === "tool_use",
+      )
+      .map((block) => ({
+        id: typeof block.id === "string" ? block.id : "",
+        name: typeof block.name === "string" ? block.name : "",
+        input: block.input,
+      }));
+  };
+
   const buildFailedAgentEndEvent = (error: string) => ({
     messages: buildAgentEndMessages(),
     success: false,
@@ -810,11 +834,13 @@ export async function runPreparedCliAgent(
         params.provider,
         context.cwd ?? context.workspaceDir,
       );
+      const cliToolUses = extractToolUseBlocksForCliHook(lastAssistant);
       await runCliAgentEndHook(params, {
         event: {
           messages: buildAgentEndMessages(lastAssistant),
           success: true,
           durationMs: Date.now() - context.started,
+          ...(cliToolUses.length > 0 ? { toolUses: cliToolUses } : {}),
         },
         ctx: hookContext,
         hookRunner,
