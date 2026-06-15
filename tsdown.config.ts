@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
+import zodCompiler from "zod-compiler/rolldown";
 import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
@@ -801,6 +802,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildUnifiedDistEntries(),
+    plugins: [zodCompiler()],
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
