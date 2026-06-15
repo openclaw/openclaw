@@ -184,7 +184,8 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   // component, and client-local payload semantics.
   resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
-  requiresTrustedRequesterSender: ({ action }) => isTrustedRequesterGuildAdminAction(action),
+  requiresTrustedRequesterSender: ({ action, toolContext }) =>
+    Boolean(toolContext) && isTrustedRequesterGuildAdminAction(action),
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {
