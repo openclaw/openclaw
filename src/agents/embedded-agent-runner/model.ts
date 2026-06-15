@@ -880,8 +880,6 @@ function shouldSuppressInlineConfiguredModel(params: {
   ) {
     return false;
   }
-  // Spark is a ChatGPT/Codex OAuth-only OpenAI model. Inline custom endpoints
-  // may still opt in, but direct/default OpenAI API transports must fail here.
   return shouldSuppressBuiltInModel({
     provider: params.provider,
     id: params.modelId,
@@ -1213,8 +1211,6 @@ function resolveRuntimePreferredSuppressedModel(params: {
   ) {
     return undefined;
   }
-  // Runtime-preferred providers may restore an auth-bound model while the
-  // suppression still blocks stale static catalog rows for other auth modes.
   return resolvePluginDynamicModelWithRegistry({ ...params, runtimeHooks });
 }
 

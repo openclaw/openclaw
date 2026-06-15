@@ -163,8 +163,6 @@ describe("resolveModel forward-compat errors and overrides", () => {
   });
 
   it("rejects direct openai gpt-5.3-codex-spark with a codex-only hint", () => {
-    // Spark is intentionally suppressed from direct OpenAI routing; falling back
-    // would make a removed catalog row appear usable.
     const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent");
 
     expect(result.model).toBeUndefined();
