@@ -830,7 +830,9 @@ describe("deliverReplies", () => {
 
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     firstSendText(sendMessage);
-    expectRecordFields(mockCallArg(sendMessage, 0, 2), { skip_entity_detection: true });
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      link_preview_options: { is_disabled: true },
+    });
   });
 
   it("includes message_thread_id for DM topics", async () => {

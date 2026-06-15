@@ -5,24 +5,26 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
+import {
+  escapeTelegramHtml,
+  markdownToTelegramChunks,
+  renderTelegramHtmlText,
+  splitTelegramHtmlChunks,
+  telegramHtmlToPlainTextFallback,
+} from "../format.js";
 import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
 import {
   buildTelegramSendParams,
   getTelegramNativeQuoteReplyMessageId,
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
-import {
-  buildTelegramRichMessage,
-  getTelegramRichRawApi,
-  removeTelegramRichNativeQuoteParam,
-  toTelegramRichMessageContextParams,
-} from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
 export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+const TELEGRAM_TEXT_CHUNK_LIMIT = 4096;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -115,31 +117,57 @@ export async function sendTelegramText(
     thread: opts?.thread,
     silent: opts?.silent,
   });
-  const richParams = toTelegramRichMessageContextParams(baseParams);
+  const messageParams = baseParams;
   const textMode = opts?.textMode ?? "markdown";
-  const richMessage = buildTelegramRichMessage(text, textMode, {
-    skipEntityDetection: opts?.linkPreview === false,
-    tableMode: opts?.tableMode,
-  });
-  const richRawApi = getTelegramRichRawApi(bot.api);
 
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const res = await sendTelegramWithThreadFallback({
-    operation: "sendRichMessage",
-    runtime,
-    thread: opts?.thread,
-    requestParams: richParams,
-    removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
-    send: (effectiveParams) =>
-      richRawApi.sendRichMessage({
-        chat_id: chatId,
-        rich_message: richMessage,
-        ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-        ...effectiveParams,
-      }),
-  });
-  runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
-  return res.message_id;
+
+  const buildChunks = () => {
+    if (textMode === "html") {
+      const html = renderTelegramHtmlText(text, { textMode, tableMode: opts?.tableMode });
+      return splitTelegramHtmlChunks(html, TELEGRAM_TEXT_CHUNK_LIMIT).map((chunk) => ({
+        html: chunk,
+        plainText: telegramHtmlToPlainTextFallback(chunk),
+      }));
+    }
+    const chunks = markdownToTelegramChunks(text, TELEGRAM_TEXT_CHUNK_LIMIT, {
+      tableMode: opts?.tableMode,
+    }).map((chunk) => ({ html: chunk.html, plainText: chunk.text }));
+    if (chunks.length > 0) {
+      return chunks;
+    }
+    const fallbackHtml = escapeTelegramHtml(text);
+    return splitTelegramHtmlChunks(fallbackHtml, TELEGRAM_TEXT_CHUNK_LIMIT).map((chunk) => ({
+      html: chunk,
+      plainText: telegramHtmlToPlainTextFallback(chunk),
+    }));
+  };
+
+  const chunks = buildChunks();
+  let lastMessageId = 0;
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    if (!chunk) {
+      continue;
+    }
+    const isLastChunk = index === chunks.length - 1;
+    const res = await sendTelegramWithThreadFallback({
+      operation: "sendMessage",
+      runtime,
+      thread: opts?.thread,
+      requestParams: messageParams,
+      send: (effectiveParams) =>
+        bot.api.sendMessage(chatId, chunk.html, {
+          parse_mode: "HTML",
+          ...(opts?.linkPreview === false ? { link_preview_options: { is_disabled: true } } : {}),
+          ...(isLastChunk && opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...effectiveParams,
+        }),
+    });
+    lastMessageId = res.message_id;
+  }
+  runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${lastMessageId}`);
+  return lastMessageId;
 }
