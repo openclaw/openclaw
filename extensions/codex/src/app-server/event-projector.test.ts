@@ -1082,6 +1082,53 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
   });
 
+  it("dedupes matching commentary emitted by typed and raw response lanes", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "agentMessage",
+          id: "typed-commentary",
+          phase: "commentary",
+          text: "",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      agentMessageDelta("Checking the app-server stream", "typed-commentary"),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          id: "raw-commentary",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Checking the app-server stream" }],
+        },
+      }),
+    );
+
+    const progressEvents = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "preamble");
+
+    expect(progressEvents.map((event) => event.data)).toEqual([
+      {
+        itemId: "typed-commentary",
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText: "Checking the app-server stream",
+        source: "codex-app-server",
+      },
+    ]);
+  });
+
   it("streams commentary agent messages as keyed progress events", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();

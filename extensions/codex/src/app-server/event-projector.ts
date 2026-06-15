@@ -149,6 +149,7 @@ export class CodexAppServerEventProjector {
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
+  private readonly commentaryProgressItemByText = new Map<string, string>();
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
   private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
@@ -1065,7 +1066,12 @@ export class CodexAppServerEventProjector {
     ) {
       return;
     }
+    const previousItemId = this.commentaryProgressItemByText.get(progressText);
+    if (previousItemId && previousItemId !== params.itemId) {
+      return;
+    }
     this.lastCommentaryProgressTextByItem.set(params.itemId, progressText);
+    this.commentaryProgressItemByText.set(progressText, params.itemId);
     this.emitAgentEvent({
       stream: "item",
       data: {
