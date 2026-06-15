@@ -119,6 +119,11 @@ describe("v1 session migration id assignment", () => {
 
     expect(kept).toBeDefined();
     expect(compaction).toMatchObject({ firstKeptEntryId: kept?.id });
-    expect(readFileSync(file, "utf8").trim().split("\n").map(JSON.parse)).toContain(null);
+    expect(
+      readFileSync(file, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as unknown),
+    ).toContain(null);
   });
 });
