@@ -1,12 +1,7 @@
 import * as crypto from "node:crypto";
-import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
-import { resolveFeishuDmIngressAccess } from "./policy.js";
-import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu } from "./send.js";
 
 type FeishuVcIdentity = {
   open_id?: string | null;
@@ -133,69 +128,6 @@ function buildSyntheticMessageEvent(turn: VcMeetingInvitedTurn): FeishuMessageEv
   };
 }
 
-async function ensureVcInviteDmIngress(params: {
-  cfg: ClawdbotConfig;
-  accountId: string;
-  runtime?: RuntimeEnv;
-  turn: VcMeetingInvitedTurn;
-}): Promise<boolean> {
-  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
-  const feishuCfg = account.config;
-  const dmPolicy = feishuCfg.dmPolicy ?? "pairing";
-  const allowFrom = feishuCfg.allowFrom ?? [];
-  const core = getFeishuRuntime();
-  const log = params.runtime?.log ?? console.log;
-  const pairing = createChannelPairingController({
-    core,
-    channel: "feishu",
-    accountId: account.accountId,
-  });
-  const dmIngress = await resolveFeishuDmIngressAccess({
-    cfg: params.cfg,
-    accountId: account.accountId,
-    dmPolicy,
-    allowFrom,
-    readAllowFromStore: pairing.readAllowFromStore,
-    senderOpenId: params.turn.inviter.senderId,
-    senderUserId: params.turn.inviter.userId,
-    conversationId: params.turn.inviter.senderId,
-    mayPair: true,
-  });
-  if (dmIngress.ingress.admission === "dispatch") {
-    return true;
-  }
-  if (dmIngress.ingress.admission === "pairing-required") {
-    await pairing.issueChallenge({
-      senderId: params.turn.inviter.senderId,
-      senderIdLine: `Your Feishu user id: ${params.turn.inviter.senderId}`,
-      meta: { name: params.turn.inviter.name },
-      onCreated: () => {
-        log(
-          `feishu[${account.accountId}]: vc invite pairing request sender=${params.turn.inviter.senderId}`,
-        );
-      },
-      sendPairingReply: async (text) => {
-        await sendMessageFeishu({
-          cfg: params.cfg,
-          to: `user:${params.turn.inviter.senderId}`,
-          text,
-          accountId: account.accountId,
-        });
-      },
-      onReplyError: (err) => {
-        log(
-          `feishu[${account.accountId}]: vc invite pairing reply failed for ${params.turn.inviter.senderId}: ${String(err)}`,
-        );
-      },
-    });
-    return false;
-  }
-  log(
-    `feishu[${account.accountId}]: blocked unauthorized vc invite sender ${params.turn.inviter.senderId} (dmPolicy=${dmPolicy})`,
-  );
-  return false;
-}
-
 async function dispatchVcMeetingInvitedTurn(params: {
   cfg: ClawdbotConfig;
   accountId: string;
@@ -204,17 +136,8 @@ async function dispatchVcMeetingInvitedTurn(params: {
   turn: VcMeetingInvitedTurn;
 }): Promise<void> {
   params.runtime?.log?.(
-    `feishu[${params.accountId}]: vc meeting invited, dispatching through Feishu DM ingress sender=${params.turn.inviter.senderId} meeting_no=${params.turn.meetingNo}`,
+    `feishu[${params.accountId}]: vc meeting invited, dispatching synthetic p2p message sender=${params.turn.inviter.senderId} meeting_no=${params.turn.meetingNo}`,
   );
-  const admitted = await ensureVcInviteDmIngress({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    runtime: params.runtime,
-    turn: params.turn,
-  });
-  if (!admitted) {
-    return;
-  }
   await handleFeishuMessage({
     cfg: params.cfg,
     accountId: params.accountId,
