@@ -239,6 +239,33 @@ describe("firecrawl tools", () => {
 
     const authHeader = new Headers(capturedInit?.headers).get("Authorization");
     expect(authHeader).toBe("Bearer firecrawl-test-key");
+    expect(new Headers(capturedInit?.headers).get("User-Agent")).toMatch(/^openclaw-firecrawl\//);
+  });
+
+  it("omits the Authorization header when no key is supplied and sets a User-Agent", async () => {
+    let capturedInit: RequestInit | undefined;
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ success: true, data: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    global.fetch = fetchSpy as typeof fetch;
+
+    await firecrawlClientTesting.postFirecrawlJson(
+      {
+        url: "https://api.firecrawl.dev/v2/search",
+        timeoutSeconds: 5,
+        body: { query: "openclaw" },
+        errorLabel: "Firecrawl search",
+      },
+      async () => "ok",
+    );
+
+    const headers = new Headers(capturedInit?.headers);
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("User-Agent")).toMatch(/^openclaw-firecrawl\//);
   });
 
   it("blocks private and non-http scrape targets before Firecrawl requests", () => {

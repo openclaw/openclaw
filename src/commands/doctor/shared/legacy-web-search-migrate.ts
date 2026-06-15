@@ -15,6 +15,7 @@ const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["duckduckgo", "duckduckgo"],
   ["exa", "exa"],
   ["firecrawl", "firecrawl"],
+  ["firecrawl-free", "firecrawl"],
   ["gemini", "google"],
   ["grok", "xai"],
   ["kimi", "moonshot"],
@@ -27,9 +28,11 @@ const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["tavily", "tavily"],
 ]);
 
-// Tavily and Parallel (paid + free) only ever used the plugin-owned config path,
-// so there is no legacy `tools.web.search.<id>.*` shape to migrate for them.
+// Tavily, Parallel (paid + free), and Firecrawl Free only ever used the
+// plugin-owned config path, so there is no legacy `tools.web.search.<id>.*`
+// shape to migrate for them. (Keyed `firecrawl` does have a legacy shape.)
 const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set([
+  "firecrawl-free",
   "parallel",
   "parallel-free",
   "tavily",
