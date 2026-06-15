@@ -546,6 +546,9 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 
     nextJob.updatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
+      // The schedule's activation moment: catch-up must not replay slots that
+      // predate it, even when nextRunAtMs was moved into the future (#91944).
+      nextJob.state.scheduleActivatedAtMs = now;
       if (isJobEnabled(nextJob)) {
         nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
       } else {

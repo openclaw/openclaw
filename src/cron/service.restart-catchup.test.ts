@@ -392,6 +392,78 @@ describe("CronService restart catch-up", () => {
     );
   });
 
+  it("uses scheduleActivatedAtMs so a later metadata edit does not suppress a real missed slot", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-metadata-edit",
+          name: "renamed after a missed slot",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          // Schedule last activated at 03:50 (before the missed 04:01 slot); a
+          // later rename bumped updatedAtMs to 04:11:30 without touching the
+          // schedule. The 04:01 slot is genuinely missed and must still replay —
+          // the precise activation timestamp keeps the metadata edit from
+          // masking it. nextRunAtMs (04:11) stays in the future so this exercises
+          // the missed-slot replay path, not the plain due check.
+          updatedAtMs: Date.parse("2025-12-13T04:11:30.000Z"),
+          schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "replay the genuinely missed slot" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
+            lastStatus: "ok",
+            scheduleActivatedAtMs: Date.parse("2025-12-13T03:50:00.000Z"),
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        // The updatedAtMs-only guard would have suppressed this (04:01 <= 04:11:30);
+        // the precise activation timestamp (03:50) lets the real missed slot fire.
+        expectQueuedSystemEvent(enqueueSystemEvent, "replay the genuinely missed slot");
+        expect(requestHeartbeat).toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-metadata-edit");
+        expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
+      },
+    );
+  });
+
+  it("suppresses a pre-activation slot when scheduleActivatedAtMs is set by an update", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-activated-field",
+          name: "schedule activated after the slot",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "must not fire before next slot" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:11:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T03:51:00.000Z"),
+            lastStatus: "ok",
+            scheduleActivatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-activated-field");
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:11:00.000Z"));
+      },
+    );
+  });
+
   it("does not defer-fire a pre-update agent-turn slot after a schedule update", async () => {
     const store = await makeStorePath();
     const startNow = Date.parse("2025-12-13T04:02:00.000Z");

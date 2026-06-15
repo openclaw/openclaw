@@ -802,6 +802,11 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertFailureDestinationSupport(job);
   assertCronExpressionSatisfiable(job, now);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+  // Creation activates the schedule; absent an explicit caller value, anchor
+  // catch-up's "predates the schedule" boundary at creation time (#91944).
+  if (!isFiniteTimestamp(job.state.scheduleActivatedAtMs)) {
+    job.state.scheduleActivatedAtMs = now;
+  }
   return job;
 }
 

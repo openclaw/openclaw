@@ -284,6 +284,16 @@ export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
+  /**
+   * Timestamp (ms) the schedule/enabled state was last changed, recorded
+   * whenever nextRunAtMs is recomputed from a definition change. Restart
+   * catch-up uses it to skip inferred "missed" slots that predate the current
+   * schedule's activation (#91944). Distinct from the job's updatedAtMs, which
+   * also moves on metadata-only edits; legacy jobs without it fall back to
+   * updatedAtMs at runtime since their misfire occurs at upgrade restart,
+   * before any doctor migration could backfill this field.
+   */
+  scheduleActivatedAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
   /** @deprecated Use lastRunStatus. */

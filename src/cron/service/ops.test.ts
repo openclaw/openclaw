@@ -543,6 +543,41 @@ describe("cron service ops seam coverage", () => {
 
     expect(updated.description).toBe("edited");
     expect(updated.state.nextRunAtMs).toBe(originalNextRunAtMs);
+    // A metadata-only edit must not move the schedule activation timestamp, so
+    // restart catch-up keeps treating earlier slots as genuinely missed (#91944).
+    expect(updated.state.scheduleActivatedAtMs).toBeUndefined();
+  });
+
+  it("records scheduleActivatedAtMs when an update changes the schedule (#91944)", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-04-09T08:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          id: "monthly-report",
+          name: "monthly report",
+          enabled: true,
+          createdAtMs: now - 86_400_000,
+          updatedAtMs: now - 3_600_000,
+          schedule: { kind: "cron", expr: "18 15 10 * *", tz: "Asia/Shanghai" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "monthly" },
+          state: { nextRunAtMs: Date.parse("2026-04-10T07:18:00.000Z") },
+        },
+      ],
+    });
+
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    const updated = await update(state, "monthly-report", {
+      schedule: { kind: "cron", expr: "18 15 11 * *", tz: "Asia/Shanghai" },
+    });
+
+    expect(updated.state.scheduleActivatedAtMs).toBe(now);
+    expect(updated.updatedAtMs).toBe(now);
   });
 
   it("repairs nextRunAtMs=0 on non-schedule edit (#63499)", async () => {
