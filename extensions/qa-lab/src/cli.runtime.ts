@@ -891,6 +891,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       return result;
     }
   }
+  return undefined;
 }
 
 export async function runQaParityReportCommand(opts: {
