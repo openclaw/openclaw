@@ -118,6 +118,9 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   if (!resolved.ok) {
     throw new Error(resolved.error.message);
   }
+  if ("missing" in resolved) {
+    return { ok: false };
+  }
   return { ok: true, key: resolved.key };
 }
 
