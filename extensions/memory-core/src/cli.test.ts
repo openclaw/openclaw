@@ -746,6 +746,149 @@ describe("memory cli", () => {
     });
   });
 
+  it("reports light-only dreaming as active during status", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "5 * * * *",
+                timezone: "UTC",
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 4,
+                    lookbackDays: 2,
+                  },
+                  deep: {
+                    enabled: false,
+                  },
+                  rem: {
+                    enabled: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Dreaming: light=5 * * * * (UTC) · limit=4 · lookbackDays=2");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("reports rem-only dreaming as active during status", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "0 6 * * 0",
+                timezone: "UTC",
+                phases: {
+                  light: {
+                    enabled: false,
+                  },
+                  deep: {
+                    enabled: false,
+                  },
+                  rem: {
+                    enabled: true,
+                    limit: 3,
+                    lookbackDays: 9,
+                    minPatternStrength: 0.81,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(
+      log,
+      "Dreaming: rem=0 6 * * 0 (UTC) · limit=3 · lookbackDays=9 · minPatternStrength=0.81",
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("preserves deep dreaming diagnostics during status", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "0 4 * * *",
+                timezone: "UTC",
+                phases: {
+                  light: {
+                    enabled: false,
+                  },
+                  deep: {
+                    enabled: true,
+                    limit: 6,
+                    minScore: 0.88,
+                    minRecallCount: 5,
+                    minUniqueQueries: 3,
+                    recencyHalfLifeDays: 12,
+                    maxAgeDays: 30,
+                    maxPromotedSnippetTokens: 640,
+                  },
+                  rem: {
+                    enabled: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Dreaming: 0 4 * * * (UTC) · limit=6 · minScore=0.88");
+    expectLogged(log, "minRecallCount=5");
+    expectLogged(log, "minUniqueQueries=3");
+    expectLogged(log, "recencyHalfLifeDays=12");
+    expectLogged(log, "maxAgeDays=30");
+    expectLogged(log, "maxPromotedSnippetTokens=640");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await shortTermTesting.writeRawRecallStore(workspaceDir, {
