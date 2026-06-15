@@ -20,6 +20,7 @@
  *   - src/daemon/runtime-paths.ts (isVersionManagedNodePath)
  */
 
+import os from "node:os";
 import process from "node:process";
 import { isVersionManagedNodePath } from "../daemon/runtime-paths.js";
 import {
@@ -279,6 +280,36 @@ export function buildNodeRuntimeWarnings(
 }
 
 /**
+ * Redact a Node executable path for display in copied Doctor output.
+ *
+ * `shortenHomePath` only redacts the effective OpenClaw home: when
+ * `OPENCLAW_HOME` points to a directory other than the OS home, a Node binary
+ * under the OS home (e.g. `/home/alice/.nvm/...`) is left unchanged and would
+ * leak the OS username. Apply a second pass against the OS home so the path is
+ * redacted regardless of whether `OPENCLAW_HOME` is set elsewhere. Handles both
+ * POSIX and Windows home boundaries.
+ */
+function redactNodeExecPath(execPath: string): string {
+  const shortened = shortenHomePath(execPath);
+  // Only attempt OS-home redaction when shortenHomePath left the path as-is
+  // (i.e. it was not under the OpenClaw home), to avoid double substitution.
+  if (shortened !== execPath) {
+    return shortened;
+  }
+  const osHome = os.homedir();
+  if (!osHome) {
+    return shortened;
+  }
+  if (execPath === osHome) {
+    return "~";
+  }
+  if (execPath.startsWith(osHome + "/") || execPath.startsWith(osHome + "\\")) {
+    return "~" + execPath.slice(osHome.length);
+  }
+  return shortened;
+}
+
+/**
  * Build a one-line Node.js runtime summary for Doctor output.
  *
  * Example: "Node 24.14.0 · ~/.nvm/versions/node/v24.14.0/bin/node · nvm"
@@ -294,7 +325,7 @@ export function buildNodeRuntimeSummary(diag: NodeRuntimeDiagnostics): string {
   // both POSIX ("/") and Windows ("\\") home boundaries — the previous
   // inline "/"-only check leaked full C:\\Users\\<name>\\... paths on Windows.
   if (diag.execPath) {
-    parts.push(shortenHomePath(diag.execPath));
+    parts.push(redactNodeExecPath(diag.execPath));
   }
 
   // Version manager

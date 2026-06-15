@@ -9,7 +9,8 @@
  *   - buildNodeRuntimeSummary: summary line formatting
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import os from "node:os";
 import type { RuntimeDetails } from "../infra/runtime-guard.js";
 import { isVersionManagedNodePath } from "../daemon/runtime-paths.js";
 import {
@@ -389,6 +390,55 @@ describe("buildNodeRuntimeSummary", () => {
       expect(summary).not.toContain("~2/");
     } finally {
       process.env.HOME = originalHome;
+    }
+  });
+
+  it("redacts the OS home from execPath even when OPENCLAW_HOME points elsewhere (POSIX)", () => {
+    const diag = makeDiag({
+      version: "24.14.0",
+      execPath: "/home/alice/.nvm/versions/node/v24.14.0/bin/node",
+      versionManaged: true,
+      versionManagerHint: "nvm",
+    });
+    const originalHome = process.env.HOME;
+    const originalOpenclawHome = process.env.OPENCLAW_HOME;
+    process.env.HOME = "/home/alice";
+    process.env.OPENCLAW_HOME = "/srv/openclaw";
+    try {
+      const summary = buildNodeRuntimeSummary(diag);
+      expect(summary).toContain("~/.nvm/versions/node/v24.14.0/bin/node");
+      expect(summary).not.toContain("/home/alice");
+    } finally {
+      process.env.HOME = originalHome;
+      if (originalOpenclawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = originalOpenclawHome;
+      }
+    }
+  });
+
+  it("redacts the OS home from execPath even when OPENCLAW_HOME points elsewhere (Windows)", () => {
+    const diag = makeDiag({
+      version: "24.14.0",
+      execPath: "C:\\Users\\alice\\AppData\\Roaming\\nvm\\v24.14.0\\node.exe",
+      versionManaged: true,
+      versionManagerHint: "nvm",
+    });
+    const originalOpenclawHome = process.env.OPENCLAW_HOME;
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\alice");
+    process.env.OPENCLAW_HOME = "D:\\openclaw";
+    try {
+      const summary = buildNodeRuntimeSummary(diag);
+      expect(summary).toContain("~\\AppData\\Roaming\\nvm\\v24.14.0\\node.exe");
+      expect(summary).not.toContain("C:\\Users\\alice");
+    } finally {
+      homedirSpy.mockRestore();
+      if (originalOpenclawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = originalOpenclawHome;
+      }
     }
   });
 });
