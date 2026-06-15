@@ -1,5 +1,5 @@
 // Tests reply payload helper behavior and delivery metadata.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
@@ -25,17 +25,6 @@ function targetsMatchTelegramReplySuppression(params: {
     (originTopic === undefined || originTopic === params.targetThreadId)
   );
 }
-
-vi.mock("../../channels/plugins/bundled.js", () => ({
-  getBundledChannelPlugin: (channel: string) =>
-    channel === "telegram"
-      ? {
-          outbound: {
-            targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
-          },
-        }
-      : undefined,
-}));
 
 describe("filterMessagingToolMediaDuplicates", () => {
   it("strips mediaUrl when it matches sentMediaUrls", () => {
@@ -262,7 +251,7 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(true);
   });
 
-  it("matches telegram replies even when the active plugin registry omits telegram", () => {
+  it("uses generic route matching when the active plugin registry omits telegram", () => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createTestRegistry([]));
 
@@ -274,7 +263,7 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
           { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
         ],
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

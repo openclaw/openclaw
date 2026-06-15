@@ -5,7 +5,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -189,7 +188,8 @@ function targetsMatchForDedupe(params: {
   targetKey: string;
   targetThreadId?: string;
 }): boolean {
-  const pluginMatch = getChannelPlugin(params.provider)?.outbound?.targetsMatchForReplySuppression;
+  const pluginMatch = getLoadedChannelPluginForRead(params.provider)?.outbound
+    ?.targetsMatchForReplySuppression;
   if (pluginMatch) {
     return pluginMatch({
       originTarget: params.originTarget,
@@ -214,7 +214,8 @@ function resolveOriginThreadIdForPayload(params: {
     return originThreadId;
   }
   const replyToId = normalizeThreadIdForComparison(params.replyToId);
-  const resolveReplyTransport = getChannelPlugin(params.provider)?.threading?.resolveReplyTransport;
+  const resolveReplyTransport = getLoadedChannelPluginForRead(params.provider)?.threading
+    ?.resolveReplyTransport;
   if (!replyToId || !params.config || !resolveReplyTransport) {
     return originThreadId;
   }
@@ -325,7 +326,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
     // that encode the thread/topic inside the target string carry their own
     // matcher and must still run it.
     const hasPluginThreadMatcher = Boolean(
-      getChannelPlugin(provider)?.outbound?.targetsMatchForReplySuppression,
+      getLoadedChannelPluginForRead(provider)?.outbound?.targetsMatchForReplySuppression,
     );
     if (!hasPluginThreadMatcher && (originRoute.threadId != null || targetRoute.threadId != null)) {
       return false;
