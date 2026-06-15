@@ -125,10 +125,17 @@ describe("buildStatusMessage", () => {
       resolvedHarness: "openclaw",
       queue: { mode: "collect", depth: 0 },
       modelAuth: "api-key",
+      subagentsLine: "🤖 Subagents: 1\n- active run",
       now: 10 * 60_000, // 10 minutes later
     });
     const normalized = normalizeTestText(text);
 
+    expect(
+      text
+        .split("\n")
+        .slice(0, -1)
+        .every((line) => line.endsWith("  ")),
+    ).toBe(true);
     expect(normalized).toContain("OpenClaw");
     expect(normalized).toContain("Model: anthropic/test:opus");
     expect(normalized).toContain("api-key");
@@ -145,6 +152,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
+    expect(normalized).toContain("- active run");
   });
 
   it("shows configured model costs for aws-sdk providers", () => {
