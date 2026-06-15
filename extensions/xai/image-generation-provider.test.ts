@@ -9,6 +9,7 @@ type GenerateImageParams = Parameters<
 const {
   resolveApiKeyForProviderMock,
   isProviderApiKeyConfiguredMock,
+  isPrivateNetworkOptInEnabledMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
@@ -19,6 +20,7 @@ const {
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "xai-key" })),
   isProviderApiKeyConfiguredMock: vi.fn(() => true),
+  isPrivateNetworkOptInEnabledMock: vi.fn(() => false),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
@@ -33,7 +35,7 @@ const {
     }
     return {
       baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
-      allowPrivateNetwork: false,
+      allowPrivateNetwork: params.allowPrivateNetwork ?? false,
       headers,
       dispatcherPolicy: undefined,
     };
@@ -71,6 +73,10 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
     sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
   };
 });
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  isPrivateNetworkOptInEnabled: isPrivateNetworkOptInEnabledMock,
+}));
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   normalizeOptionalString: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
@@ -110,6 +116,7 @@ describe("xai image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
     isProviderApiKeyConfiguredMock.mockClear();
+    isPrivateNetworkOptInEnabledMock.mockClear();
     postJsonRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
@@ -327,5 +334,96 @@ describe("xai image generation provider", () => {
       } as GenerateImageParams),
     ).rejects.toThrow("xAI image editing supports up to 3 reference images");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("defaults allowPrivateNetwork to false when no SSRF opt-in is configured", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("deny").toString("base64") }],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiImageGenerationProvider();
+    await provider.generateImage({
+      provider: "xai",
+      model: "grok-imagine-image",
+      prompt: "deny test",
+      cfg: {},
+    } as any);
+
+    const httpParams = (
+      resolveProviderHttpRequestConfigMock.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { allowPrivateNetwork?: boolean } | undefined;
+    expect(httpParams?.allowPrivateNetwork).toBe(false);
+  });
+
+  it("allows private network when browser.ssrfPolicy opts in", async () => {
+    isPrivateNetworkOptInEnabledMock.mockReturnValueOnce(true);
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("ssrf-ok").toString("base64") }],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiImageGenerationProvider();
+    await provider.generateImage({
+      provider: "xai",
+      model: "grok-imagine-image",
+      prompt: "ssrf opt-in test",
+      cfg: {
+        browser: {
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+        },
+      },
+    } as any);
+
+    expect(isPrivateNetworkOptInEnabledMock).toHaveBeenCalledWith({
+      dangerouslyAllowPrivateNetwork: true,
+    });
+    const httpParams = (
+      resolveProviderHttpRequestConfigMock.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { allowPrivateNetwork?: boolean } | undefined;
+    expect(httpParams?.allowPrivateNetwork).toBe(true);
+  });
+
+  it("allows private network when xai provider request.allowPrivateNetwork is set", async () => {
+    isPrivateNetworkOptInEnabledMock.mockReturnValueOnce(false);
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("provider-opt-in").toString("base64") }],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiImageGenerationProvider();
+    await provider.generateImage({
+      provider: "xai",
+      model: "grok-imagine-image",
+      prompt: "provider opt-in test",
+      cfg: {
+        models: {
+          providers: {
+            xai: {
+              baseUrl: "http://10.0.0.10:8090/xai/v1",
+              request: { allowPrivateNetwork: true },
+            },
+          },
+        },
+      },
+    } as any);
+
+    expect(isPrivateNetworkOptInEnabledMock).toHaveBeenCalledWith(undefined);
+    const httpParams = (
+      resolveProviderHttpRequestConfigMock.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { allowPrivateNetwork?: boolean } | undefined;
+    expect(httpParams?.allowPrivateNetwork).toBe(true);
   });
 });
