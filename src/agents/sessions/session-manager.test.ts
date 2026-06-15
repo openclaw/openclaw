@@ -304,6 +304,81 @@ describe("SessionManager.open", () => {
     expect((warmEntry as { data?: Record<string, unknown> }).data).not.toHaveProperty("dropped");
   });
 
+  it("serializes owned appends once and caches those exact bytes", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(assistantEntry)}\n`,
+      "utf8",
+    );
+
+    let serializationCount = 0;
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendCustomEntry("stateful-json", {
+          value: {
+            toJSON() {
+              serializationCount += 1;
+              return serializationCount === 1 ? "first" : "later";
+            },
+          },
+        });
+      },
+    );
+
+    const warmEntry = SessionManager.open(sessionFile, dir, dir)
+      .getEntries()
+      .find((entry) => entry.type === "custom");
+    const freshEntry = loadEntriesFromFile(sessionFile).find((entry) => entry.type === "custom");
+    expect(serializationCount).toBe(1);
+    expect(warmEntry).toEqual(freshEntry);
+    expect(warmEntry).toMatchObject({ data: { value: "first" } });
+  });
+
+  it("separates an owned append from an unterminated transcript entry", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const firstEntry = buildMessageEntry(1, null);
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(firstEntry)}`,
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendMessage(buildAssistantMessage("message 2"));
+      },
+    );
+
+    const content = await fs.readFile(sessionFile, "utf8");
+    expect(content.endsWith("\n")).toBe(true);
+    expect(content.trimEnd().split("\n")).toHaveLength(3);
+    expect(
+      loadEntriesFromFile(sessionFile)
+        .filter((entry) => entry.type === "message")
+        .map((entry) => readMessageContent(entry)),
+    ).toEqual(["message 1", "message 2"]);
+  });
+
   it("caches the persisted JSON shape after a deferred full write", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");

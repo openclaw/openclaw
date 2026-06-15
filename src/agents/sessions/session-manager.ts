@@ -21,7 +21,6 @@ import { join, resolve } from "node:path";
 import {
   appendJsonlEntrySync,
   serializeJsonlEntries,
-  serializeJsonlEntry,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
 import { hasOwnedSessionTranscriptWriteContext } from "../../config/sessions/transcript-write-context.js";
@@ -429,7 +428,12 @@ function loadEntriesFromFileWithSnapshot(filePath: string): {
     const afterParseSnapshot = readSessionFileSnapshotIfExists(resolvedPath);
     if (afterParseSnapshot && isSameSessionFileSnapshot(beforeReadSnapshot, afterParseSnapshot)) {
       return {
-        entries: rememberSessionEntries(resolvedPath, afterParseSnapshot, entries),
+        entries: rememberSessionEntries(
+          resolvedPath,
+          afterParseSnapshot,
+          entries,
+          content.endsWith("\n"),
+        ),
         snapshot: afterParseSnapshot,
       };
     }
@@ -450,6 +454,7 @@ interface SessionFileSnapshot {
 interface CachedSessionEntries {
   snapshot: SessionFileSnapshot;
   entries: FileEntry[];
+  endsWithNewline: boolean;
 }
 
 const MAX_CACHED_SESSION_FILES = 8;
@@ -483,6 +488,7 @@ function rememberSessionEntries(
   filePath: string,
   snapshot: SessionFileSnapshot,
   entries: FileEntry[],
+  endsWithNewline: boolean,
 ): FileEntry[] {
   if (!hasReadableSessionHeader(entries)) {
     sessionEntriesCache.delete(filePath);
@@ -511,6 +517,7 @@ function rememberSessionEntries(
   const cached: CachedSessionEntries = {
     snapshot,
     entries: cachedEntries,
+    endsWithNewline,
   };
   sessionEntriesCache.delete(filePath);
   sessionEntriesCache.set(filePath, cached);
@@ -585,7 +592,12 @@ function rememberWrittenSessionEntries(
     sessionEntriesCache.delete(resolvedPath);
     return afterReadSnapshot;
   }
-  rememberSessionEntries(resolvedPath, afterReadSnapshot, parseJsonlEntries(content));
+  rememberSessionEntries(
+    resolvedPath,
+    afterReadSnapshot,
+    parseJsonlEntries(content),
+    content.endsWith("\n"),
+  );
   return afterReadSnapshot;
 }
 
@@ -593,7 +605,7 @@ function rememberAppendedSessionEntry(
   filePath: string,
   previousSnapshot: SessionFileSnapshot | undefined,
   beforeAppendSnapshot: SessionFileSnapshot | undefined,
-  entry: FileEntry,
+  serializedAppend: string,
   cacheOwnedAppend: boolean,
 ): SessionFileSnapshot | undefined {
   const resolvedPath = resolve(filePath);
@@ -616,7 +628,7 @@ function rememberAppendedSessionEntry(
   // rewrites refresh the cache explicitly, so identity and size are sufficient
   // to advance this append-only snapshot without reading the whole file.
   const expectedSize =
-    beforeAppendSnapshot.size + BigInt(Buffer.byteLength(serializeJsonlEntry(entry), "utf8"));
+    beforeAppendSnapshot.size + BigInt(Buffer.byteLength(serializedAppend, "utf8"));
   if (
     !snapshot ||
     !cached ||
@@ -635,9 +647,12 @@ function rememberAppendedSessionEntry(
     return snapshot;
   }
 
-  const persistedEntry = JSON.parse(serializeJsonlEntry(entry)) as FileEntry;
+  const persistedEntry = JSON.parse(
+    serializedAppend.startsWith("\n") ? serializedAppend.slice(1) : serializedAppend,
+  ) as FileEntry;
   cached.entries.push(freezeFileEntry(persistedEntry));
   cached.snapshot = snapshot;
+  cached.endsWithNewline = true;
   sessionEntriesCache.delete(resolvedPath);
   sessionEntriesCache.set(resolvedPath, cached);
   trimSessionEntriesCache();
@@ -649,6 +664,30 @@ function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot 
     return readSessionFileSnapshot(filePath);
   } catch {
     return undefined;
+  }
+}
+
+function sessionFileNeedsAppendSeparator(
+  filePath: string,
+  snapshot: SessionFileSnapshot | undefined,
+): boolean {
+  if (!snapshot || snapshot.size === 0n) {
+    return false;
+  }
+
+  const resolvedPath = resolve(filePath);
+  const cached = sessionEntriesCache.get(resolvedPath);
+  if (cached && isSameSessionFileSnapshot(cached.snapshot, snapshot)) {
+    return !cached.endsWithNewline;
+  }
+
+  const fileDescriptor = openSync(resolvedPath, "r");
+  try {
+    const lastByte = Buffer.allocUnsafe(1);
+    const bytesRead = readSync(fileDescriptor, lastByte, 0, 1, snapshot.size - 1n);
+    return bytesRead === 1 && lastByte[0] !== 0x0a;
+  } finally {
+    closeSync(fileDescriptor);
   }
 }
 
@@ -1248,12 +1287,14 @@ export class SessionManager {
       this.sessionFileSnapshot = rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
     } else {
       const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
-      appendJsonlEntrySync(this.sessionFile, entry);
+      const serializedAppend = appendJsonlEntrySync(this.sessionFile, entry, {
+        prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
+      });
       this.sessionFileSnapshot = rememberAppendedSessionEntry(
         this.sessionFile,
         this.sessionFileSnapshot,
         beforeAppendSnapshot,
-        entry,
+        serializedAppend,
         hasOwnedSessionTranscriptWriteContext({ sessionFile: this.sessionFile }),
       );
     }
