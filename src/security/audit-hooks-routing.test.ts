@@ -121,6 +121,21 @@ describe("security audit hooks ingress findings", () => {
     }
   });
 
+  it("does not warn for request sessionKey overrides constrained by prefixes", () => {
+    const findings = collectHooksHardeningFindings({
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+        defaultSessionKey: "hook:ingress",
+        allowRequestSessionKey: true,
+        allowedSessionKeyPrefixes: ["hook:"],
+      },
+    });
+
+    expect(hasFinding(findings, "hooks.request_session_key_enabled", "warn")).toBe(false);
+    expect(hasFinding(findings, "hooks.request_session_key_prefixes_missing", "warn")).toBe(false);
+  });
+
   it("flags hooks token reuse of gateway password auth as critical", () => {
     const findings = collectHooksHardeningFindings({
       gateway: {

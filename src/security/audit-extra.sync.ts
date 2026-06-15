@@ -697,13 +697,13 @@ export function collectHooksHardeningFindings(
     });
   }
 
-  if (allowRequestSessionKey) {
+  if (allowRequestSessionKey && allowedPrefixes.length === 0) {
     findings.push({
       checkId: "hooks.request_session_key_enabled",
       severity: remoteExposure ? "critical" : "warn",
       title: "External hook payloads may override sessionKey",
       detail:
-        "hooks.allowRequestSessionKey=true allows `/hooks/agent` callers to choose the session key. Treat hook token holders as full-trust unless you also restrict prefixes.",
+        "hooks.allowRequestSessionKey=true allows `/hooks/agent` callers to choose arbitrary session key shapes because hooks.allowedSessionKeyPrefixes is unset or empty.",
       remediation:
         "Set hooks.allowRequestSessionKey=false (recommended) or constrain hooks.allowedSessionKeyPrefixes.",
     });
