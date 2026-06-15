@@ -429,6 +429,16 @@ describe("message tool path passthrough", () => {
 
 describe("message tool Telegram topic targets", () => {
   it("passes numeric forum topic targets and thread ids to outbound resolution", async () => {
+    const telegramPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      actions: ["send"],
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
     mockSendResult({ to: "telegram:-1001234567890:topic:42" });
 
     const call = await executeSend({
