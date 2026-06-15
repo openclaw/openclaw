@@ -2434,7 +2434,7 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     await pushStreamToolProgress(
-                      buildChannelProgressDraftLine({
+                      buildChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "command-output",
                         itemId: payload.itemId,
                         toolCallId: payload.toolCallId,
