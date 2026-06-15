@@ -10,8 +10,8 @@ import setupEntry from "./setup-api.js";
 type GeminiPrepareContext = Parameters<
   NonNullable<ReturnType<typeof buildGoogleGeminiCliBackend>["prepareExecution"]>
 >[0] & {
-  authCredential: {
-    type: "api_key" | "oauth";
+  authCredential?: {
+    type: "api_key" | "oauth" | "token";
     provider: string;
     access?: string;
     refresh?: string;
@@ -206,6 +206,49 @@ describe("google gemini cli backend auth bridge", () => {
           },
         } as never),
       ).rejects.toThrow(/vercel-ai-gateway auth profile/);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects selected Gemini token profiles before the CLI can use ambient auth", async () => {
+    const backend = buildGoogleGeminiCliBackend();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
+
+    try {
+      await expect(
+        backend.prepareExecution?.({
+          workspaceDir,
+          agentDir: path.join(workspaceDir, "agent"),
+          provider: "google-gemini-cli",
+          modelId: "gemini-3.1-flash-lite",
+          authProfileId: "google-gemini-cli:token",
+          authCredential: {
+            type: "token",
+            provider: "google-gemini-cli",
+            token: "bearer-token",
+          },
+        } as never),
+      ).rejects.toThrow(/OAuth or API-key auth profiles/);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects selected Gemini profiles with no material before the CLI can use ambient auth", async () => {
+    const backend = buildGoogleGeminiCliBackend();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
+
+    try {
+      await expect(
+        backend.prepareExecution?.({
+          workspaceDir,
+          agentDir: path.join(workspaceDir, "agent"),
+          provider: "google-gemini-cli",
+          modelId: "gemini-3.1-flash-lite",
+          authProfileId: "google-gemini-cli:missing",
+        } as never),
+      ).rejects.toThrow(/no credential material/);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

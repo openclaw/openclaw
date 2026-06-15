@@ -86,6 +86,27 @@ function throwUnsupportedGeminiCredential(credential: GeminiAuthProfileCredentia
   throw new Error("Gemini CLI execution requires a google-gemini-cli auth profile.");
 }
 
+function throwUnstageableSelectedGeminiProfile(
+  ctx: GeminiCliAuthHomeContext,
+  credential: GeminiAuthProfileCredential | undefined,
+): never {
+  const authProfileId = normalizeString(ctx.authProfileId);
+  if (!authProfileId) {
+    throw new Error("Gemini CLI execution requires a selected auth profile.");
+  }
+  if (!credential) {
+    throw new Error(
+      "Gemini CLI auth profile was selected but no credential material was found. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
+    );
+  }
+  if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
+    throwUnsupportedGeminiCredential(credential);
+  }
+  throw new Error(
+    "Gemini CLI execution supports google-gemini-cli OAuth or API-key auth profiles. Re-authenticate with `openclaw models auth login --provider google-gemini-cli --force`.",
+  );
+}
+
 function requireGeminiOAuthCredential(
   credential: GeminiAuthProfileCredential | undefined,
 ): GeminiOAuthCredential | null {
@@ -278,10 +299,16 @@ async function prepareGeminiCliAuthHome(
   ctx: GeminiCliAuthHomeContext,
   credential: GeminiAuthProfileCredential | undefined,
 ): Promise<PreparedGeminiCliExecution | null> {
-  return (
+  const prepared =
     (await prepareGeminiCliOAuthHome(ctx, credential)) ??
-    (await prepareGeminiCliApiKeyHome(ctx, credential))
-  );
+    (await prepareGeminiCliApiKeyHome(ctx, credential));
+  if (prepared) {
+    return prepared;
+  }
+  if (normalizeString(ctx.authProfileId)) {
+    throwUnstageableSelectedGeminiProfile(ctx, credential);
+  }
+  return null;
 }
 
 export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
