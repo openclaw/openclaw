@@ -262,7 +262,7 @@ async function awaitReadinessStep<T>(
       try {
         throwIfAborted(signal);
       } catch (error) {
-        reject(error);
+        reject(error instanceof Error ? error : new Error("aborted", { cause: error }));
       }
     };
     signal.addEventListener("abort", onAbort, { once: true });

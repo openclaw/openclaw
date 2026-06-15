@@ -80,18 +80,6 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
   >((argv: string[]) => ({ handled: false, argv })),
 );
 
-function requireRunCrestodianOptions(index = 0): { onReady?: unknown } {
-  const call = runCrestodianMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected runCrestodian call ${index}`);
-  }
-  expect(typeof call[0]).toBe("object");
-  if (typeof call[0] !== "object" || call[0] === null) {
-    throw new Error(`expected runCrestodian call ${index} to receive options`);
-  }
-  return call[0] as { onReady?: unknown };
-}
-
 vi.mock("commander", () => {
   class MockCommanderError extends Error {
     exitCode: number;

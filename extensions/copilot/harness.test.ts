@@ -38,14 +38,14 @@ const TEST_SESSION_CONFIG = {
   workingDirectory: "/workspace",
 };
 
-function makePoolMock(): CopilotClientPool {
+function makePoolMock() {
   return {
     acquire: vi.fn(),
     invalidate: vi.fn(),
     release: vi.fn(),
     dispose: vi.fn().mockResolvedValue([]),
     size: vi.fn().mockReturnValue(0),
-  };
+  } satisfies CopilotClientPool;
 }
 
 function makeSessionStoreMock() {

@@ -681,9 +681,11 @@ export async function runSetupWizard(
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
   const buildLocalSetupConfig = (config: OpenClawConfig): OpenClawConfig => {
-    let localConfig = applyLocalSetupWorkspaceConfig(config, workspaceDir, {
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
-    });
+    let localConfig = applyLocalSetupWorkspaceConfig(
+      config,
+      workspaceDir,
+      opts.agentId ? { agentId: opts.agentId } : undefined,
+    );
     if (opts.skipBootstrap) {
       localConfig = applySkipBootstrapConfig(localConfig);
     }
@@ -710,11 +712,12 @@ export async function runSetupWizard(
     config: OpenClawConfig,
     model: string,
     applyDefaultModel: (config: OpenClawConfig, model: string) => OpenClawConfig,
+    modelSourceConfig: OpenClawConfig = config,
   ): OpenClawConfig => {
     if (!opts.agentId) {
       return applyDefaultModel(config, model);
     }
-    const existingModel = resolveAgentConfig(config, opts.agentId)?.model;
+    const existingModel = resolveAgentConfig(modelSourceConfig, opts.agentId)?.model;
     return applyAgentConfig(config, {
       agentId: opts.agentId,
       model:
@@ -817,7 +820,10 @@ export async function runSetupWizard(
     }
     return hasRunnableAgent;
   };
-  while (!hasRunnableAgent) {
+  while (true) {
+    if (hasRunnableAgent) {
+      break;
+    }
     if (authChoiceFromPrompt) {
       authChoice = await promptAuthChoiceGrouped!({
         prompter,
@@ -844,10 +850,12 @@ export async function runSetupWizard(
       if (opts.agentId) {
         nextConfig = restoreSetupAgentDefaultModel(nextConfig, configBeforeCustomProvider);
         if (customResult.providerId && customResult.modelId) {
+          const { applyPrimaryModel } = await loadModelPickerModule();
           nextConfig = applySetupAgentModel(
             nextConfig,
             modelKey(customResult.providerId, customResult.modelId),
             applyPrimaryModel,
+            configBeforeCustomProvider,
           );
         }
       }

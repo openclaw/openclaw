@@ -130,6 +130,7 @@ describe("detectPluginVersionDrift", () => {
         community: clawhubRecord("1.2.3", {
           spec: "clawhub:community-plugin@1.2.3",
           clawhubPackage: "community-plugin",
+          clawhubChannel: "community",
         }),
       },
     });

@@ -521,9 +521,11 @@ export async function runSetupMigrationImport(params: {
           message: t("wizard.migration.sourceAgentHome"),
           initialValue: providerId === "hermes" ? "~/.hermes" : undefined,
         }));
-  let targetConfig = applyLocalSetupWorkspaceConfig(resolvedProvider.baseConfig, workspaceDir, {
-    ...(params.opts.agentId ? { agentId: params.opts.agentId } : {}),
-  });
+  let targetConfig = applyLocalSetupWorkspaceConfig(
+    resolvedProvider.baseConfig,
+    workspaceDir,
+    params.opts.agentId ? { agentId: params.opts.agentId } : undefined,
+  );
   if (params.opts.skipBootstrap) {
     targetConfig = applySkipBootstrapConfig(targetConfig);
   }

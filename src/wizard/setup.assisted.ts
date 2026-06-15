@@ -30,7 +30,7 @@ export function resolveAgentAssistedSetupInstructions(): string {
 }
 
 export function hasExplicitFullWizardIntent(opts: OnboardOptions): boolean {
-  return Boolean(
+  return (
     opts.mode !== undefined ||
     opts.authChoice === "skip" ||
     opts.gatewayPort !== undefined ||
@@ -45,7 +45,7 @@ export function hasExplicitFullWizardIntent(opts: OnboardOptions): boolean {
     opts.tailscaleResetOnExit === true ||
     opts.installDaemon !== undefined ||
     opts.daemonRuntime !== undefined ||
-    opts.suppressGatewayTokenOutput === true,
+    opts.suppressGatewayTokenOutput === true
   );
 }
 

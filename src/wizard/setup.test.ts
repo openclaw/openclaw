@@ -24,6 +24,8 @@ type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoi
 type ListSetupMigrationOptions =
   typeof import("./setup.migration-import.js").listSetupMigrationOptions;
 type DefaultGatewayBindMode = typeof import("../gateway/net.js").defaultGatewayBindMode;
+type ApplyPrimaryModel = typeof import("../plugins/provider-model-primary.js").applyPrimaryModel;
+type PromptCustomApiConfig = typeof import("../commands/onboard-custom.js").promptCustomApiConfig;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
@@ -44,9 +46,11 @@ const resolvePluginProvidersRuntime = vi.hoisted(() =>
   vi.fn<ResolvePluginProvidersRuntime>(() => []),
 );
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
-const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
+const applyPrimaryModel = vi.hoisted(() => vi.fn<ApplyPrimaryModel>((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
-const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
+const promptCustomApiConfig = vi.hoisted(() =>
+  vi.fn<PromptCustomApiConfig>(async (args) => ({ config: args.config })),
+);
 const promptRemoteGatewayConfig = vi.hoisted(() => vi.fn(async (config) => config));
 const configureGatewayForSetup = vi.hoisted(() =>
   vi.fn(async (args) => ({

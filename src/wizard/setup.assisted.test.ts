@@ -24,6 +24,10 @@ type MockAgentHarness = {
   id: string;
   checkReadiness?: ReturnType<typeof vi.fn>;
 };
+type LoadManifestModelCatalog =
+  typeof import("../agents/model-catalog.js").loadManifestModelCatalog;
+type ResolveRuntimeSyntheticAuthProviderRefs =
+  typeof import("../plugins/synthetic-auth.runtime.js").resolveRuntimeSyntheticAuthProviderRefs;
 
 const launchTuiCli = vi.hoisted(() => vi.fn(async () => {}));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
@@ -41,7 +45,9 @@ const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const isCliProvider = vi.hoisted(() => vi.fn(() => false));
 const resolveCliBackendConfig = vi.hoisted(() => vi.fn());
 const resolveExecutablePath = vi.hoisted(() => vi.fn());
-const resolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() => vi.fn(() => []));
+const resolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() =>
+  vi.fn<ResolveRuntimeSyntheticAuthProviderRefs>(() => []),
+);
 const ensureOpenClawModelsJson = vi.hoisted(() => vi.fn(async () => ({ wrote: false })));
 const buildAgentRuntimeAuthPlan = vi.hoisted(() =>
   vi.fn<({ provider }: { provider: string }) => MockRuntimeAuthPlan>(({ provider }) => ({
@@ -60,7 +66,7 @@ const resolveModelAsync = vi.hoisted(() =>
     }),
   ),
 );
-const loadManifestModelCatalog = vi.hoisted(() => vi.fn(() => []));
+const loadManifestModelCatalog = vi.hoisted(() => vi.fn<LoadManifestModelCatalog>(() => []));
 
 vi.mock("../tui/tui-launch.js", () => ({
   launchTuiCli,

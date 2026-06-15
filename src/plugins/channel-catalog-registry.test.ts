@@ -238,8 +238,8 @@ describe("listChannelCatalogEntries", () => {
       packageManifest: {
         channel: {
           id: "slack",
-          name: "Slack",
-          description: "Slack channel",
+          label: "Slack",
+          blurb: "Slack channel",
         },
       },
     } satisfies PluginCandidate;
@@ -271,8 +271,8 @@ describe("listChannelCatalogEntries", () => {
       packageManifest: {
         channel: {
           id: "matrix",
-          name: "Matrix",
-          description: "Matrix channel",
+          label: "Matrix",
+          blurb: "Matrix channel",
         },
       },
     } satisfies PluginCandidate;
@@ -317,8 +317,8 @@ describe("listChannelCatalogEntries", () => {
       packageManifest: {
         channel: {
           id: "matrix",
-          name: "Matrix",
-          description: "Matrix channel",
+          label: "Matrix",
+          blurb: "Matrix channel",
         },
       },
     } satisfies PluginCandidate;
@@ -349,8 +349,8 @@ describe("listChannelCatalogEntries", () => {
       packageManifest: {
         channel: {
           id: "slack",
-          name: "Slack",
-          description: "Slack channel",
+          label: "Slack",
+          blurb: "Slack channel",
         },
       },
     } satisfies PluginCandidate;

@@ -345,29 +345,29 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       case "creating":
       case "stopping":
       case "stopped":
-        return;
+        break;
       case "ready":
         if (entry.state.client !== handle.client) {
-          return;
+          break;
         }
         if (entry.refCount > 1) {
           entry.refCount -= 1;
-          return;
+          break;
         }
         entry.refCount = 0;
         await forceStopReadyOrIdleEntry(entry, entry.state.client);
-        return;
+        break;
       case "idle":
         if (entry.state.client !== handle.client) {
-          return;
+          break;
         }
         if (entry.refCount > 1) {
           entry.refCount -= 1;
-          return;
+          break;
         }
         entry.refCount = 0;
         await forceStopReadyOrIdleEntry(entry, entry.state.client, entry.state.idleTimer);
-        return;
+        break;
     }
   };
 
