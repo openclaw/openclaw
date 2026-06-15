@@ -1169,3 +1169,95 @@ describe("normalizeToolParameters", () => {
     expect(params.required).toEqual(["name"]);
   });
 });
+
+describe("Gemini schema cleaning for OpenAI-compat providers (regression #91714)", () => {
+  it("strips Gemini-unsupported keywords when provider is non-Google but modelId contains gemini", () => {
+    const tool = makeTool({
+      type: "object",
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 100 },
+        score: { type: "number", minimum: 0, maximum: 10 },
+      },
+    });
+
+    const result = normalizeToolParameters(tool, {
+      modelProvider: "jjcc",
+      modelId: "gemini-2.0-flash",
+    });
+
+    const params = result.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const nameSchema = params.properties?.name as Record<string, unknown>;
+    const scoreSchema = params.properties?.score as Record<string, unknown>;
+
+    // minLength/maxLength/minimum/maximum are Gemini-unsupported keywords
+    expect(nameSchema.minLength).toBeUndefined();
+    expect(nameSchema.maxLength).toBeUndefined();
+    expect(nameSchema.type).toBe("string");
+
+    expect(scoreSchema.minimum).toBeUndefined();
+    expect(scoreSchema.maximum).toBeUndefined();
+    expect(scoreSchema.type).toBe("number");
+  });
+
+  it("sanitizes required fields not present in properties for Gemini via modelId", () => {
+    const tool = makeTool({
+      type: "object",
+      required: ["action", "amount", "ghost"],
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["buy"] },
+            amount: { type: "number" },
+          },
+        },
+        {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["sell"] },
+            price: { type: "number" },
+          },
+        },
+      ],
+    });
+
+    const result = normalizeToolParameters(tool, {
+      modelProvider: "jjcc",
+      modelId: "gemini-2.0-flash",
+    });
+
+    const params = result.parameters as {
+      required?: string[];
+      properties?: Record<string, unknown>;
+    };
+
+    // "ghost" is not in any variant's properties, so it should be stripped
+    expect(params.required).not.toContain("ghost");
+    expect(params.required).toContain("action");
+  });
+
+  it("does NOT strip Gemini-unsupported keywords when modelId is not Gemini", () => {
+    const tool = makeTool({
+      type: "object",
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 100 },
+      },
+    });
+
+    const result = normalizeToolParameters(tool, {
+      modelProvider: "jjcc",
+      modelId: "gpt-4o",
+    });
+
+    const params = result.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const nameSchema = params.properties?.name as Record<string, unknown>;
+
+    // Without Gemini model ID, unsupported keywords should be preserved
+    expect(nameSchema.minLength).toBe(1);
+    expect(nameSchema.maxLength).toBe(100);
+  });
+});
