@@ -114,6 +114,7 @@ describe("collectPublishablePluginPackageErrors", () => {
         packageJson: {
           name: "@openclaw/zalo",
           version: "2026.3.15",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -158,6 +159,7 @@ describe("collectPublishablePluginPackageErrors", () => {
     ).toEqual([
       'package name must start with "@openclaw/"; found "broken".',
       "package.json private must not be true.",
+      'package.json type must be "module" so built .js runtime entries load as ESM.',
       `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
       'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
@@ -174,6 +176,7 @@ describe("collectPublishablePluginPackageErrors", () => {
         packageJson: {
           name: "@openclaw/twitch",
           version: "2026.5.1-beta.1",
+          type: "module",
           openclaw: {
             extensions: ["./index.ts"],
             ...externalPluginContract("2026.5.1-beta.1"),
@@ -200,6 +203,7 @@ describe("collectPublishablePluginPackageErrors", () => {
         packageJson: {
           name: "@openclaw/voice-call",
           version: "2026.5.1-beta.1",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -225,6 +229,7 @@ describe("collectPublishablePluginPackageErrors", () => {
         packageJson: {
           name: "@openclaw/voice-call",
           version: "2026.5.1-beta.1",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -255,6 +260,7 @@ describe("collectPublishablePluginPackageErrors", () => {
         packageJson: {
           name: "@openclaw/zalo",
           version: "2026.3.15",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -334,6 +340,7 @@ describe("collectPublishablePluginPackages", () => {
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10",
+      type: "module",
       repository: {
         type: "git",
         url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -370,6 +377,7 @@ describe("collectPublishablePluginPackages", () => {
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10-beta.1",
+      type: "module",
       repository: {
         type: "git",
         url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -449,6 +457,7 @@ describe("collectPublishablePluginPackages", () => {
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10-alpha.1",
+      type: "module",
       repository: {
         type: "git",
         url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,

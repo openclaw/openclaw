@@ -10,7 +10,7 @@ import { collectPublishablePluginPackages } from "./lib/plugin-npm-release.ts";
 
 const DEFAULT_CLAWHUB_CLI_PACKAGE = "clawhub@0.21.0";
 
-type PluginReleasePretagPackTarget = {
+export type PluginReleasePretagPackTarget = {
   packageDir: string;
   packageName: string;
   packClawHub: boolean;
@@ -89,15 +89,18 @@ export function runPluginReleasePretagPackCheck(rootDir = resolve(".")) {
     const packEnv = {
       ...process.env,
       CLAWHUB_CLI_PACKAGE: process.env.CLAWHUB_CLI_PACKAGE?.trim() || DEFAULT_CLAWHUB_CLI_PACKAGE,
-      OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
       PATH: `${wrapperDir}:${process.env.PATH ?? ""}`,
+    };
+    const prebuiltPackEnv = {
+      ...packEnv,
+      OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
     };
     for (const [index, target] of targets.entries()) {
       if (target.packNpm) {
         console.log(`npm pack: ${target.packageName}`);
         runCommand("bash", ["scripts/plugin-npm-publish.sh", "--pack-dry-run", target.packageDir], {
           cwd: rootDir,
-          env: packEnv,
+          env: prebuiltPackEnv,
           quietStdout: true,
         });
       }
@@ -107,7 +110,7 @@ export function runPluginReleasePretagPackCheck(rootDir = resolve(".")) {
         runCommand("bash", ["scripts/plugin-clawhub-publish.sh", "--pack", target.packageDir], {
           cwd: rootDir,
           env: {
-            ...packEnv,
+            ...prebuiltPackEnv,
             OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: outputDir,
           },
           quietStdout: true,
