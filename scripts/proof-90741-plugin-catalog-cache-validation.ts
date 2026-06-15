@@ -433,7 +433,7 @@ async function scenarioUnreadableAuthStoreFailsClosed(): Promise<void> {
   const corruptFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir);
   console.log(`    corrupt-db fingerprint cacheable=${corruptFingerprint.cacheable}`);
   assert(
-    corruptFingerprint.cacheable === false,
+    !corruptFingerprint.cacheable,
     "a corrupt/unreadable SQLite auth DB must make the source fingerprint non-cacheable",
   );
 
@@ -470,7 +470,7 @@ async function scenarioUnreadableAuthStoreFailsClosed(): Promise<void> {
   const malformedFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir);
   console.log(`    malformed-json-cell fingerprint cacheable=${malformedFingerprint.cacheable}`);
   assert(
-    malformedFingerprint.cacheable === false,
+    !malformedFingerprint.cacheable,
     "a malformed JSON store cell must make the source fingerprint non-cacheable",
   );
 
