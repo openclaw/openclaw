@@ -664,6 +664,7 @@ describe("buildStatusReply subagent summary", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Model: ollama-cloud/deepseek-v4-pro");
     expect(normalized).toContain("Context: 0/1.0m");
+    expect(normalized).not.toContain("kimi-k2.7-code");
     expect(normalized).not.toContain("Context: 0/262k");
     expect(normalized).not.toContain("/262k");
   });
