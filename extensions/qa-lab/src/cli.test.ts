@@ -248,6 +248,53 @@ describe("qa cli registration", () => {
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
+    ["--surface", ["agent-runtime-and-provider-execution"]],
+    ["--category", ["agent-runtime-and-provider-execution.agent-turn-execution"]],
+    ["--transport", ["qa-channel"]],
+    ["--provider-mode", ["mock-openai"]],
+    ["--model", ["openai/gpt-5.5"]],
+    ["--alt-model", ["anthropic/claude-sonnet-4-6"]],
+    ["--concurrency", ["2"]],
+    ["--allow-failures", []],
+    ["--fast", []],
+  ])("rejects qa run profile-only flag %s without --qa-profile", async (flag, values) => {
+    await expect(
+      program.parseAsync(["node", "openclaw", "qa", "run", flag, ...values]),
+    ).rejects.toThrow(`qa run ${flag} requires --qa-profile`);
+
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty qa run --qa-profile instead of falling back to self-check", async () => {
+    await expect(
+      program.parseAsync(["node", "openclaw", "qa", "run", "--qa-profile", ""]),
+    ).rejects.toThrow("--qa-profile must not be empty.");
+
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects self-check output flags in qa run profile mode", async () => {
+    await expect(
+      program.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "smoke-ci",
+        "--output",
+        ".artifacts/qa-self-check.md",
+      ]),
+    ).rejects.toThrow("qa run --output is only valid for the self-check mode");
+
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
   it("routes mantis discord-smoke flags into the mantis runtime command", async () => {
     await program.parseAsync([
       "node",

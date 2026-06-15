@@ -42,6 +42,21 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     category?: QaProfileCommandOptions["category"];
   };
 
+const QA_RUN_PROFILE_ONLY_OPTIONS = [
+  { optionName: "outputDir", flag: "--output-dir" },
+  { optionName: "surface", flag: "--surface" },
+  { optionName: "category", flag: "--category" },
+  { optionName: "transport", flag: "--transport" },
+  { optionName: "providerMode", flag: "--provider-mode" },
+  { optionName: "model", flag: "--model" },
+  { optionName: "altModel", flag: "--alt-model" },
+  { optionName: "concurrency", flag: "--concurrency" },
+  { optionName: "allowFailures", flag: "--allow-failures" },
+  { optionName: "fast", flag: "--fast" },
+] as const;
+
+const QA_RUN_SELF_CHECK_ONLY_OPTIONS = [{ optionName: "output", flag: "--output" }] as const;
+
 type QaSuiteCliOptions = QaScenarioRunCliOptions & {
   runner?: QaSuiteCommandOptions["runner"];
   thinking?: QaSuiteCommandOptions["thinking"];
@@ -80,6 +95,43 @@ function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
     throw invalidQaCliArgument(`${flag} must be a positive integer.`);
   }
   return parsed;
+}
+
+function collectCliSuppliedQaRunFlags(
+  command: Command,
+  options: readonly { optionName: string; flag: string }[],
+): string[] {
+  return options
+    .filter((option) => command.getOptionValueSource(option.optionName) === "cli")
+    .map((option) => option.flag);
+}
+
+function formatFlagList(flags: readonly string[]): string {
+  return flags.length === 1 ? flags[0] : flags.join(", ");
+}
+
+function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
+  const hasQaProfile = Boolean(opts.qaProfile?.trim());
+  if (command.getOptionValueSource("qaProfile") === "cli" && !hasQaProfile) {
+    throw new Error("--qa-profile must not be empty.");
+  }
+
+  if (hasQaProfile) {
+    const selfCheckFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_SELF_CHECK_ONLY_OPTIONS);
+    if (selfCheckFlags.length > 0) {
+      throw new Error(
+        `qa run ${formatFlagList(selfCheckFlags)} is only valid for the self-check mode without --qa-profile.`,
+      );
+    }
+    return;
+  }
+
+  const profileFlags = collectCliSuppliedQaRunFlags(command, QA_RUN_PROFILE_ONLY_OPTIONS);
+  if (profileFlags.length > 0) {
+    throw new Error(
+      `qa run ${formatFlagList(profileFlags)} requires --qa-profile; without --qa-profile, qa run only executes the self-check.`,
+    );
+  }
 }
 
 async function runQaSelfCheck(opts: QaLabSelfCheckCommandOptions) {
@@ -329,7 +381,8 @@ export function registerQaLabCli(program: Command) {
       false,
     )
     .option("--fast", "Enable provider fast mode where supported", false)
-    .action(async (opts: QaRunCliOptions) => {
+    .action(async (opts: QaRunCliOptions, command: Command) => {
+      validateQaRunMode(opts, command);
       if (opts.qaProfile?.trim()) {
         await runQaProfile({
           repoRoot: opts.repoRoot,
