@@ -2138,6 +2138,11 @@ public struct SessionFileBrowserResult: Codable, Sendable {
     }
 }
 
+public enum SessionFileKind: String, Codable, Sendable {
+    case modified = "modified"
+    case read = "read"
+}
+
 public struct SessionFileEntry: Codable, Sendable {
     public let path: String
     public let name: String
