@@ -66,7 +66,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
-  allocateToolOutcomeOrdinal?: () => number;
+  allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */

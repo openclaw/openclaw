@@ -2788,22 +2788,24 @@ describe("CodexAppServerEventProjector", () => {
         terminalPresentation = observation.terminalPresentation;
       },
     });
+    const item = {
+      type: "commandExecution",
+      id: "command-clear-presentation",
+      command: "git status --short",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [{ type: "unknown", command: "git status --short" }],
+      aggregatedOutput: "",
+      exitCode: 0,
+      durationMs: 1,
+    };
 
+    await projector.handleNotification(forCurrentTurn("item/started", { item }));
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
-        item: {
-          type: "commandExecution",
-          id: "command-clear-presentation",
-          command: "git status --short",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [{ type: "unknown", command: "git status --short" }],
-          aggregatedOutput: "",
-          exitCode: 0,
-          durationMs: 1,
-        },
+        item,
       }),
     );
 
@@ -2826,8 +2828,89 @@ describe("CodexAppServerEventProjector", () => {
           id: "image-view-clear-presentation",
           path: "/workspace/reference.png",
         },
+        {
+          type: "dynamicToolCall",
+          id: "stale-dynamic-tool",
+          turnId: "turn-old",
+          tool: "web_fetch",
+          status: "completed",
+        },
       ]),
     );
+
+    expect(terminalPresentation).toBeUndefined();
+  });
+
+  it("keeps a later dynamic presentation over an earlier snapshot-only native tool", async () => {
+    let terminalPresentation: string | undefined = "later dynamic result";
+    let latestOrdinal = 1;
+    let nextOrdinal = 0;
+    const projector = await createProjector({
+      ...(await createParams()),
+      allocateToolOutcomeOrdinal: () => nextOrdinal++,
+      onToolOutcome: (observation) => {
+        const ordinal = observation.toolCallOrdinal ?? latestOrdinal + 1;
+        if (ordinal >= latestOrdinal) {
+          latestOrdinal = ordinal;
+          terminalPresentation = observation.terminalPresentation;
+        }
+      },
+    });
+    const nativeItem = {
+      type: "imageView",
+      id: "image-view-before-dynamic",
+      path: "/workspace/reference.png",
+    };
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: nativeItem,
+      }),
+    );
+
+    await projector.handleNotification(
+      turnCompleted([
+        nativeItem,
+        {
+          type: "dynamicToolCall",
+          id: "dynamic-after-image-view",
+          turnId: TURN_ID,
+          tool: "web_fetch",
+          status: "completed",
+        },
+        {
+          type: "imageView",
+          id: "stale-image-view",
+          turnId: "turn-old",
+          path: "/workspace/stale.png",
+        },
+      ]),
+    );
+
+    expect(terminalPresentation).toBe("later dynamic result");
+  });
+
+  it("clears a prior presentation for a completion-only native item without a turn snapshot", async () => {
+    let terminalPresentation: string | undefined = "stale dynamic result";
+    let nextOrdinal = 1;
+    const projector = await createProjector({
+      ...(await createParams()),
+      allocateToolOutcomeOrdinal: () => nextOrdinal++,
+      onToolOutcome: (observation) => {
+        terminalPresentation = observation.terminalPresentation;
+      },
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "imageView",
+          id: "completion-only-image-view",
+          path: "/workspace/reference.png",
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted([]));
 
     expect(terminalPresentation).toBeUndefined();
   });

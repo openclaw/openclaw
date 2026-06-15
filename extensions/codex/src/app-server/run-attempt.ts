@@ -85,6 +85,8 @@ import {
   isCurrentThreadTurnRequestParams,
   isNativeResponseStreamDeltaNotification,
   isTerminalTurnStatus,
+  readCodexNotificationItem,
+  readRawResponseToolCallId,
 } from "./attempt-notifications.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -677,8 +679,45 @@ export async function runCodexAppServerAttempt(
     );
   }
   let yieldDetected = false;
+  const toolOutcomeOrdinals = new Map<string, number>();
+  const suppressedDynamicToolOutcomeOrdinals = new Set<number>();
+  const onCodexToolOutcome = params.onToolOutcome
+    ? (observation: Parameters<NonNullable<typeof params.onToolOutcome>>[0]) => {
+        if (
+          observation.toolCallOrdinal !== undefined &&
+          suppressedDynamicToolOutcomeOrdinals.has(observation.toolCallOrdinal)
+        ) {
+          return;
+        }
+        params.onToolOutcome?.(observation);
+      }
+    : undefined;
+  const baseAllocateToolOutcomeOrdinal = params.allocateToolOutcomeOrdinal;
+  const allocateCodexToolOutcomeOrdinal = baseAllocateToolOutcomeOrdinal
+    ? (toolCallId?: string): number => {
+        const reservedOrdinal = toolCallId ? toolOutcomeOrdinals.get(toolCallId) : undefined;
+        if (reservedOrdinal !== undefined) {
+          return reservedOrdinal;
+        }
+        const ordinal = baseAllocateToolOutcomeOrdinal(toolCallId);
+        if (toolCallId) {
+          toolOutcomeOrdinals.set(toolCallId, ordinal);
+        }
+        return ordinal;
+      }
+    : undefined;
+  const dynamicToolParams =
+    allocateCodexToolOutcomeOrdinal || onCodexToolOutcome
+      ? {
+          ...params,
+          ...(allocateCodexToolOutcomeOrdinal
+            ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
+            : {}),
+          ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
+        }
+      : params;
   const tools = await buildDynamicTools({
-    params,
+    params: dynamicToolParams,
     resolvedWorkspace,
     effectiveWorkspace,
     effectiveCwd,
@@ -695,7 +734,7 @@ export async function runCodexAppServerAttempt(
     onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
   });
   const registeredTools = await buildDynamicTools({
-    params,
+    params: dynamicToolParams,
     resolvedWorkspace,
     effectiveWorkspace,
     effectiveCwd,
@@ -732,7 +771,8 @@ export async function runCodexAppServerAttempt(
       currentThreadId: params.currentThreadTs,
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
-      onToolOutcome: params.onToolOutcome,
+      onToolOutcome: onCodexToolOutcome,
+      allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
@@ -1703,6 +1743,20 @@ export async function runCodexAppServerAttempt(
       correlation.matchesActiveTurn === true ||
       (!isNativeResponseStreamDelta && correlation.matchesActiveTurn !== false) ||
       nativeResponseStreamDeltaMatchesActiveTurn;
+    if (correlation.matchesActiveTurn === true) {
+      const modelToolCallId = readRawResponseToolCallId(notification);
+      if (modelToolCallId) {
+        // Raw response items arrive in model order before Codex schedules tool
+        // futures, so later lifecycle races reuse this authoritative position.
+        allocateCodexToolOutcomeOrdinal?.(modelToolCallId);
+      }
+      const nativeItem = readCodexNotificationItem(notification.params);
+      if (nativeItem?.type === "webSearch") {
+        // Upstream omits the raw web-search id. Its lifecycle still follows the
+        // model stream, so reserve synchronously before queued projection.
+        projector.recordNativeToolOutcome(nativeItem);
+      }
+    }
     if (notificationMatchesActiveTurn) {
       // If Codex app-server exposes raw response deltas, treat them as activity
       // only when scoped to this turn or attributable to a single lease.
@@ -1818,6 +1872,7 @@ export async function runCodexAppServerAttempt(
       if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
         return undefined;
       }
+      const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
       armCompletionWatchOnResponse = true;
       markCurrentTurnRequestProgress();
       turnCrossedToolHandoff = true;
@@ -1888,7 +1943,13 @@ export async function runCodexAppServerAttempt(
           toolBridge,
           signal: runAbortController.signal,
           timeoutMs: dynamicToolTimeoutMs,
+          toolCallOrdinal,
           onAgentToolResult: params.onAgentToolResult,
+          onFallbackSelected: () => {
+            if (toolCallOrdinal !== undefined) {
+              suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+            }
+          },
           onTimeout: () => {
             trajectoryRecorder?.recordEvent("tool.timeout", {
               threadId: call.threadId,
@@ -1900,6 +1961,19 @@ export async function runCodexAppServerAttempt(
           },
         });
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
+        if (!protocolResponse.success && toolCallOrdinal !== undefined) {
+          // The underlying tool may ignore cancellation and finish after the
+          // timeout response. Its late presentation must not replace this failure.
+          suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+          params.onToolOutcome?.({
+            toolName: call.tool,
+            argsHash: "",
+            resultHash: "",
+            toolCallOrdinal,
+            terminalPresentation: undefined,
+            presentationOnly: true,
+          });
+        }
         const toolDurationMs = Math.max(0, Date.now() - toolStartedAt);
         trajectoryRecorder?.recordEvent("tool.result", {
           threadId: call.threadId,
@@ -1986,6 +2060,7 @@ export async function runCodexAppServerAttempt(
         }
         throw error;
       } finally {
+        toolOutcomeOrdinals.delete(call.callId);
         unsubscribeToolDiagnosticObserver();
       }
     } finally {
@@ -2371,12 +2446,17 @@ export async function runCodexAppServerAttempt(
     prompt: codexTurnPromptText,
     imagesCount: params.images?.length ?? 0,
   });
-  projectorRef.current = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {
-    nativePostToolUseRelayEnabled:
-      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
-      nativeHookRelay.shouldRelayEvent("post_tool_use"),
-    trajectoryRecorder,
-  });
+  projectorRef.current = new CodexAppServerEventProjector(
+    dynamicToolParams,
+    thread.threadId,
+    activeTurnId,
+    {
+      nativePostToolUseRelayEnabled:
+        nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
+        nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      trajectoryRecorder,
+    },
+  );
   if (
     isTerminalTurnStatus(turn.turn.status) ||
     pendingNotifications.some((notification) =>

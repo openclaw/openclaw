@@ -583,13 +583,15 @@ describe("Codex app-server dynamic tool build", () => {
     });
   });
 
-  it("forwards the tool outcome observer into Codex dynamic tools", async () => {
+  it("forwards tool outcome ordering into Codex dynamic tools", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const onToolOutcome = vi.fn();
+    const allocateToolOutcomeOrdinal = vi.fn(() => 0);
     params.disableTools = false;
     params.onToolOutcome = onToolOutcome;
+    params.allocateToolOutcomeOrdinal = allocateToolOutcomeOrdinal;
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
     setOpenClawCodingToolsFactoryForTests((options) => {
@@ -599,7 +601,10 @@ describe("Codex app-server dynamic tool build", () => {
 
     await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
-    expect(factoryOptions[0]).toMatchObject({ onToolOutcome });
+    expect(factoryOptions[0]).toMatchObject({
+      onToolOutcome,
+      allocateToolOutcomeOrdinal,
+    });
   });
 
   it("preserves before-tool wrapping through Codex runtime normalization", async () => {

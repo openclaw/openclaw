@@ -554,7 +554,7 @@ export function createOpenClawCodingTools(options?: {
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
-  allocateToolOutcomeOrdinal?: () => number;
+  allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
 }): AnyAgentTool[] {

@@ -291,6 +291,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       toolBuildStages.mark(name);
     },
     onToolOutcome: params.onToolOutcome,
+    allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
   });
   toolBuildStages.mark("create-openclaw-coding-tools");
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
