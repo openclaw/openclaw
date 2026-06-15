@@ -457,13 +457,27 @@ function resolveRecordPackageJsonPath(plugin: InstalledPluginIndexRecord): strin
 function hasStalePersistedPluginDiagnostics(index: InstalledPluginIndex): boolean {
   return index.diagnostics.some((diag) => {
     const source = diag.source;
-    return (
-      typeof diag.pluginId === "string" &&
-      diag.pluginId.trim().length > 0 &&
+    const hasPluginId =
+      typeof diag.pluginId === "string" && diag.pluginId.trim().length > 0;
+    const sourceMissing =
       typeof source === "string" &&
       path.isAbsolute(source) &&
-      !fs.existsSync(source)
-    );
+      !fs.existsSync(source);
+    // Diagnostics tied to a specific plugin become stale when the source path
+    // no longer exists (e.g. the plugin was uninstalled or moved).
+    if (hasPluginId && sourceMissing) {
+      return true;
+    }
+    // Diagnostics without a pluginId (e.g. "plugin path not found" from
+    // discoverFromPath) are orphan diagnostics that can't be associated with
+    // any plugin. When no pluginId is set, the diagnostic is always stale
+    // because it can't be verified against an active plugin record, and it
+    // would otherwise persist indefinitely in the SQLite diagnostics_json
+    // column even after the referenced path has been removed.
+    if (!hasPluginId) {
+      return true;
+    }
+    return false;
   });
 }
 
