@@ -181,11 +181,9 @@ export async function runDoctorConfigPreflight(
 
   const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
   if (options.migrateState !== false) {
-    if (snapshot.valid) {
-      const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
-      const cronResult = await repairLegacyCronStoreWithoutPrompt({ cfg: baseConfig });
-      noteStateMigrationResult(cronResult);
-    }
+    const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
+    const cronResult = await repairLegacyCronStoreWithoutPrompt({ cfg: baseConfig });
+    noteStateMigrationResult(cronResult);
     const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } =
       await loadDoctorStateMigrations();
     const stateResult = snapshot.valid

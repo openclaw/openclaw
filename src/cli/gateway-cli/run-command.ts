@@ -8,7 +8,11 @@ function formatModeChoices(modes: readonly string[]): string {
   return modes.map((mode) => `"${mode}"`).join("|");
 }
 
-export function addGatewayRunCommand(cmd: Command): Command {
+type GatewayRunCommandHooks = {
+  beforeRun?: (opts: { reset?: boolean }) => Promise<void> | void;
+};
+
+export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks = {}): Command {
   return cmd
     .option("--port <port>", "Port for the gateway WebSocket")
     .option(
@@ -56,6 +60,8 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
     .action(async (opts, command) => {
       const { resolveGatewayRunOptions, runGatewayCommand } = await import("./run.js");
-      await runGatewayCommand(resolveGatewayRunOptions(opts, command));
+      const resolved = resolveGatewayRunOptions(opts, command);
+      await hooks.beforeRun?.(resolved);
+      await runGatewayCommand(resolved);
     });
 }

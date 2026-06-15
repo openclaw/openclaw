@@ -16,7 +16,6 @@ import {
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
   noteLegacyWhatsAppCrontabHealthCheck,
-  repairLegacyCronStoreWithoutPrompt,
 } from "./index.js";
 
 type TerminalNote = (message: string, title?: string) => void;
@@ -1057,34 +1056,5 @@ describe("legacy WhatsApp crontab health check", () => {
     ).resolves.toBeUndefined();
 
     expect(noteMock).not.toHaveBeenCalled();
-  });
-});
-
-describe("repairLegacyCronStoreWithoutPrompt", () => {
-  it("migrates legacy JSON cron store to SQLite and returns a change summary", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [createLegacyCronJob()]);
-
-    const result = await repairLegacyCronStoreWithoutPrompt({
-      cfg: createCronConfig(storePath),
-    });
-
-    expect(result.changes).toHaveLength(1);
-    expect(result.changes[0]).toContain("Cron store migrated to SQLite");
-    expect(result.warnings).toHaveLength(0);
-    const jobs = await readPersistedJobs(storePath);
-    expect(jobs).toHaveLength(1);
-  });
-
-  it("returns empty result when no legacy store exists", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCurrentCronStore(storePath, [createCurrentCronJob()]);
-
-    const result = await repairLegacyCronStoreWithoutPrompt({
-      cfg: createCronConfig(storePath),
-    });
-
-    expect(result.changes).toHaveLength(0);
-    expect(result.warnings).toHaveLength(0);
   });
 });

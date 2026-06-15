@@ -83,13 +83,13 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
-  it("limits invalid-config preflight to config-independent state migration", async () => {
+  it("still migrates cron storage while limiting other invalid-config state migration", async () => {
     vi.clearAllMocks();
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,
-      config: {},
-      sourceConfig: {},
+      config: { cron: { store: "/tmp/legacy-cron.json" } },
+      sourceConfig: { cron: { store: "/tmp/legacy-cron.json" } },
       legacyIssues: [],
       warnings: [],
       issues: [{ path: "gateway", message: "invalid" }],
@@ -101,7 +101,9 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
 
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
+    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+      cfg: { cron: { store: "/tmp/legacy-cron.json" } },
+    });
     expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
     expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });

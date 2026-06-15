@@ -58,6 +58,7 @@ const runCrestodianMock = vi.hoisted(() =>
 );
 const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
+const ensureCliExecutionBootstrapMock = vi.hoisted(() => vi.fn(async () => {}));
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const enableConsoleCaptureMock = vi.hoisted(() => vi.fn());
 const progressDoneMock = vi.hoisted(() => vi.fn());
@@ -123,6 +124,10 @@ vi.mock("./route.js", () => ({
 
 vi.mock("./gateway-cli/run-command.js", () => ({
   addGatewayRunCommand: addGatewayRunCommandMock,
+}));
+
+vi.mock("./command-execution-startup.js", () => ({
+  ensureCliExecutionBootstrap: ensureCliExecutionBootstrapMock,
 }));
 
 vi.mock("../version.js", () => ({
@@ -462,6 +467,55 @@ describe("runCli exit behavior", () => {
     const parseOrder = commanderParseAsyncMock.mock.invocationCallOrder[0] ?? 0;
     expect(captureOrder).toBeGreaterThan(0);
     expect(parseOrder).toBeGreaterThan(captureOrder);
+  });
+
+  it("configures the gateway foreground fast path with the standard CLI bootstrap", async () => {
+    await runCli(["node", "openclaw", "gateway", "--force"]);
+
+    const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
+      | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
+      | undefined;
+    await hooks?.beforeRun?.({});
+
+    expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandPath: ["gateway"],
+        loadPlugins: false,
+      }),
+    );
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ recoverSuspicious: true });
+    const recoveryOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[0] ?? 0;
+    const bootstrapOrder = ensureCliExecutionBootstrapMock.mock.invocationCallOrder[0] ?? 0;
+    expect(recoveryOrder).toBeGreaterThan(0);
+    expect(bootstrapOrder).toBeGreaterThan(recoveryOrder);
+  });
+
+  it("does not treat gateway option values as bootstrap command paths", async () => {
+    await runCli(["node", "openclaw", "gateway", "--raw-stream-path", "status"]);
+
+    const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
+      | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
+      | undefined;
+    await hooks?.beforeRun?.({});
+
+    expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandPath: ["gateway"],
+        loadPlugins: false,
+      }),
+    );
+  });
+
+  it("skips state migration before destructive gateway dev resets", async () => {
+    await runCli(["node", "openclaw", "gateway", "--dev", "--reset"]);
+
+    const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
+      | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
+      | undefined;
+    await hooks?.beforeRun?.({ reset: true });
+
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
   });
 
   it("honors banner suppression on the gateway foreground fast path", async () => {

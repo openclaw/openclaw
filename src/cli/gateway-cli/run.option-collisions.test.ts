@@ -27,6 +27,9 @@ const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
   await start();
 });
 const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
+const beforeRun = vi.fn(async () => {
+  callOrder.push("bootstrap");
+});
 const callOrder = vi.hoisted(() => [] as string[]);
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
@@ -216,8 +219,8 @@ describe("gateway run option collisions", () => {
     ({ addGatewayRunCommand } = await import("./run-command.js"));
     sharedProgram = new Command();
     sharedProgram.exitOverride();
-    const gateway = addGatewayRunCommand(sharedProgram.command("gateway"));
-    addGatewayRunCommand(gateway.command("run"));
+    const gateway = addGatewayRunCommand(sharedProgram.command("gateway"), { beforeRun });
+    addGatewayRunCommand(gateway.command("run"), { beforeRun });
   });
 
   beforeEach(() => {
@@ -241,6 +244,7 @@ describe("gateway run option collisions", () => {
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
     normalizeStateDirEnv.mockReset();
+    beforeRun.mockClear();
     callOrder.length = 0;
   });
 
@@ -270,6 +274,21 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions().auth?.mode).toBe(mode);
   }
 
+  it("runs the fast-path bootstrap hook before gateway startup", async () => {
+    normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
+      callOrder.push("normalize");
+    });
+    startGatewayServer.mockImplementationOnce(async (_port: number, _opts?: unknown) => {
+      callOrder.push("start");
+      return { close: vi.fn(async () => {}) };
+    });
+
+    await runGatewayCli(["gateway", "--allow-unconfigured"]);
+
+    expect(beforeRun).toHaveBeenCalledOnce();
+    expect(callOrder).toEqual(["bootstrap", "normalize", "start"]);
+  });
+
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
     normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
       callOrder.push("normalize");
@@ -298,7 +317,7 @@ describe("gateway run option collisions", () => {
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(gatewayStartOptions().auth?.token).toBe("tok_run");
     expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
-    expect(callOrder).toEqual(["normalize", "start"]);
+    expect(callOrder).toEqual(["bootstrap", "normalize", "start"]);
   });
 
   it("marks service-mode gateway descendants with the live gateway pid", async () => {

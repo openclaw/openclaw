@@ -23,6 +23,7 @@ import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-targe
 import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
+  resolveGatewayCatalogCommandPath,
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
@@ -173,6 +174,9 @@ async function tryRunGatewayRunFastPath(
     { emitCliBanner },
     { resolveCliStartupPolicy },
     { enableConsoleCapture },
+    { ensureCliExecutionBootstrap },
+    { defaultRuntime },
+    { readConfigFileSnapshot },
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
       import("commander"),
@@ -181,11 +185,15 @@ async function tryRunGatewayRunFastPath(
       import("./banner.js"),
       import("./command-startup-policy.js"),
       loadLoggingModule(),
+      import("./command-execution-startup.js"),
+      import("../runtime.js"),
+      import("../config/config.js"),
     ]),
   );
-  const invocation = resolveCliArgvInvocation(argv);
+  const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
   const startupPolicy = resolveCliStartupPolicy({
-    commandPath: invocation.commandPath,
+    argv,
+    commandPath,
     jsonOutputMode: hasJsonOutputFlag(argv),
     routeMode: true,
   });
@@ -200,11 +208,31 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;
     throw err;
   });
+  const beforeRun = async (opts: { reset?: boolean }) => {
+    // Dev reset deletes the state directory before recreating config. Migrating first would
+    // archive legacy state and then delete its imported SQLite rows.
+    if (opts.reset) {
+      return;
+    }
+    await startupTrace.measure("gateway-run-config-recovery", () =>
+      readConfigFileSnapshot({ recoverSuspicious: true }),
+    );
+    await startupTrace.measure("gateway-run-bootstrap", () =>
+      ensureCliExecutionBootstrap({
+        runtime: defaultRuntime,
+        commandPath,
+        startupPolicy,
+        loadPlugins: false,
+      }),
+    );
+  };
   const gateway = addGatewayRunCommand(
     program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
+    { beforeRun },
   );
   addGatewayRunCommand(
     gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
+    { beforeRun },
   );
   enableConsoleCapture();
   try {
