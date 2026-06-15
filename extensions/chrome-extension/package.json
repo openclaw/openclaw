@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/chrome-extension",
+  "version": "2026.6.2",
+  "private": true,
+  "description": "Bundled Chrome extension for OpenClaw My Browser (driver=extension): dials the node-owned CDP bridge so the agent drives the user's attached tab. Shipped as static assets under dist/extensions/chrome-extension; not a loadable gateway plugin.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "openclaw": {
+    "build": {
+      "openclawVersion": "2026.6.2",
+      "staticAssets": [
+        { "source": "./manifest.json", "output": "manifest.json" },
+        { "source": "./background.js", "output": "background.js" },
+        { "source": "./background-utils.js", "output": "background-utils.js" },
+        { "source": "./device-identity.js", "output": "device-identity.js" },
+        { "source": "./options.html", "output": "options.html" },
+        { "source": "./options.js", "output": "options.js" },
+        { "source": "./options-validation.js", "output": "options-validation.js" },
+        { "source": "./sidepanel.html", "output": "sidepanel.html" },
+        { "source": "./sidepanel.js", "output": "sidepanel.js" },
+        { "source": "./config.example.json", "output": "config.example.json" },
+        { "source": "./icons/icon16.png", "output": "icons/icon16.png" },
+        { "source": "./icons/icon32.png", "output": "icons/icon32.png" },
+        { "source": "./icons/icon48.png", "output": "icons/icon48.png" },
+        { "source": "./icons/icon128.png", "output": "icons/icon128.png" }
+      ]
+    }
+  }
+}
