@@ -267,10 +267,16 @@ const TELEGRAM_RICH_SIMPLE_HTML_TAGS = new Set([
 const TELEGRAM_RICH_ATTR_HTML_TAG_PATTERNS = new Map([
   ...TELEGRAM_ATTR_HTML_TAG_PATTERNS,
   ["a", /^\s+(?:href|name)="[^"]+"\s*$/],
-  ["audio", /^(?:\s+(?:src|title)="[^"]*")*\s*\/?\s*$/],
+  [
+    "audio",
+    /^(?=.*\ssrc="https?:\/\/[^"]+")(?:\s+src="https?:\/\/[^"]+"|\s+title="[^"]*")*\s*\/?\s*$/,
+  ],
   ["details", /^\s+open\s*$/],
   ["figure", /^\s+tg-spoiler\s*$/],
-  ["img", /^(?:\s+(?:src|alt|title)="[^"]*"|\s+tg-spoiler)*\s*\/?\s*$/],
+  [
+    "img",
+    /^(?=.*\ssrc="https?:\/\/[^"]+")(?:\s+src="https?:\/\/[^"]+"|\s+(?:alt|title)="[^"]*"|\s+tg-spoiler)*\s*\/?\s*$/,
+  ],
   ["input", /^\s+type="checkbox"(?:\s+checked)?\s*\/?\s*$/],
   ["li", /^(?:\s+(?:value|type)="[^"]*")*\s*$/],
   ["ol", /^(?:\s+(?:start|type)="[^"]*"|\s+reversed)*\s*$/],
@@ -287,7 +293,10 @@ const TELEGRAM_RICH_ATTR_HTML_TAG_PATTERNS = new Map([
     "th",
     /^(?:\s+(?:colspan|rowspan)="[1-9]\d*"|\s+align="(?:left|center|right)"|\s+valign="(?:top|middle|bottom)")*\s*$/,
   ],
-  ["video", /^(?:\s+(?:src|title)="[^"]*"|\s+tg-spoiler)*\s*\/?\s*$/],
+  [
+    "video",
+    /^(?=.*\ssrc="https?:\/\/[^"]+")(?:\s+src="https?:\/\/[^"]+"|\s+title="[^"]*"|\s+tg-spoiler)*\s*\/?\s*$/,
+  ],
 ]);
 let fileReferencePattern: RegExp | undefined;
 let orphanedTldPattern: RegExp | undefined;

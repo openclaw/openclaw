@@ -116,6 +116,18 @@ describe("markdownToTelegramHtml", () => {
     expect(html).not.toContain('<a href="https://example.com/a.jpg">');
   });
 
+  it("escapes rich media tags without supported http sources", () => {
+    expect(markdownToTelegramRichHtml('<img src="logo.png" alt="Logo">')).toBe(
+      '&lt;img src="logo.png" alt="Logo"&gt;',
+    );
+    expect(markdownToTelegramRichHtml('<audio src="data:audio/wav;base64,x"></audio>')).toBe(
+      '&lt;audio src="data:audio/wav;base64,x"&gt;&lt;/audio&gt;',
+    );
+    expect(markdownToTelegramRichHtml('<video src="https://example.com/a.mp4"></video>')).toBe(
+      '<figure><video src="https://example.com/a.mp4"></video></figure>',
+    );
+  });
+
   it("renders Markdown media blocks on the rich HTML fallback path", () => {
     expect(markdownToTelegramRichHtml('![Diagram](https://example.com/a.jpg "Caption")')).toBe(
       '<figure><img src="https://example.com/a.jpg" alt="Diagram"/><figcaption>Caption</figcaption></figure>',
