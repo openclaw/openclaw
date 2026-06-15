@@ -23,4 +23,11 @@ describe("cron protocol schema", () => {
     expect(properties.lastFailureNotificationDeliveryStatus).toBeDefined();
     expect(properties.lastFailureNotificationDeliveryError).toBeDefined();
   });
+
+  it("exposes the schedule activation timestamp used by restart catch-up", () => {
+    // The closed schema rejects unknown properties, so cron.get/list responses
+    // carrying scheduleActivatedAtMs must declare it here (#91944).
+    const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    expect(properties.scheduleActivatedAtMs).toBeDefined();
+  });
 });
