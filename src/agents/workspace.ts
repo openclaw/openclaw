@@ -1093,12 +1093,17 @@ const CRON_BOOTSTRAP_ALLOWLIST = new Set([
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
+  agentBootstrapList?: string[],
 ): WorkspaceBootstrapFile[] {
   if (!sessionKey) {
     return files;
   }
   if (isSubagentSessionKey(sessionKey)) {
-    return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+    // Use agent-specific bootstrap list if provided, otherwise use default allowlist
+    const allowlist = agentBootstrapList
+      ? new Set(agentBootstrapList)
+      : SUBAGENT_BOOTSTRAP_ALLOWLIST;
+    return files.filter((file) => allowlist.has(file.name));
   }
   if (isCronSessionKey(sessionKey)) {
     return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));

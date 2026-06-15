@@ -306,9 +306,11 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const agentConfig =
+    params.agentId && params.config ? resolveAgentConfig(params.config, params.agentId) : undefined;
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
-      filterBootstrapFilesForSession(rawFiles, sessionKey),
+      filterBootstrapFilesForSession(rawFiles, sessionKey, agentConfig?.bootstrap),
       workspaceSetupCompleted,
       params.workspaceDir,
     ),
