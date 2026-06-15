@@ -310,6 +310,21 @@ describe("createTelegramDraftStream", () => {
     expect(stream.temporary?.()).toBe(true);
   });
 
+  it("does not report a temporary native draft before debounce delivers it", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      preferNativeDraft: true,
+      minInitialChars: 10,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessageDraft).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBeUndefined();
+    expect(stream.temporary?.()).toBe(false);
+  });
+
   it("materializes native temporary rich drafts with sendRichMessage", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {

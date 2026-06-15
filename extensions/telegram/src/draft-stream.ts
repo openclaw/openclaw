@@ -535,7 +535,7 @@ export function createTelegramDraftStream(params: {
     discard,
     materialize,
     forceNewMessage,
-    temporary: () => canUseNativeDraft() || nativeDraftActive,
+    temporary: () => nativeDraftActive,
     sendMayHaveLanded: () =>
       !nativeDraftActive && messageSendAttempted && typeof streamMessageId !== "number",
   };
