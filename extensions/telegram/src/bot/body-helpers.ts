@@ -103,9 +103,9 @@ function hasTelegramRichMessage(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function resolveTelegramRichMessagePlaceholder(msg: {
-  rich_message?: unknown;
-}): string | undefined {
+export function resolveTelegramRichMessagePlaceholder(
+  msg: TelegramTextMessage,
+): string | undefined {
   return hasTelegramRichMessage(msg.rich_message) ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
 }
 
