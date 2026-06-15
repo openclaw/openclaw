@@ -117,6 +117,12 @@ type RetiredSystemdGatewayConflict = InstalledSystemdGatewayConflict & {
   enabled: boolean;
 };
 
+type SystemdUserInstallArtifactSnapshot = {
+  path: string;
+  content: string | null;
+  mode: number | null;
+};
+
 async function findMarkerOwnedSystemSystemdUnit(): Promise<{
   unitName: string;
   unitPath: string;
@@ -222,16 +228,17 @@ export async function findInstalledSystemdGatewayScope(
     ? ({ scope: "system", unitName: canonicalUnitName, unitPath: systemPath } as const)
     : null;
   const selected = await chooseInstalledSystemdGatewayUnit({ env, userUnit, systemUnit });
-  if (selected) {
+  if (selected?.scope === "system") {
     return selected;
   }
   const owned = await findMarkerOwnedSystemSystemdUnit();
+  if (!owned) {
+    return selected;
+  }
   return await chooseInstalledSystemdGatewayUnit({
     env,
     userUnit,
-    systemUnit: owned
-      ? { scope: "system", unitName: owned.unitName, unitPath: owned.unitPath }
-      : null,
+    systemUnit: { scope: "system", unitName: owned.unitName, unitPath: owned.unitPath },
   });
 }
 
@@ -871,6 +878,17 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
+async function readLiveSystemdGatewayConflict(
+  env: GatewayServiceEnv,
+  unit: { unitName: string; unitPath: string },
+): Promise<RetiredSystemdGatewayConflict | null> {
+  const state = await readSystemdUnitLiveState(env, unit.unitName, "system");
+  if (!state.active && !state.enabled) {
+    return null;
+  }
+  return { scope: "system", unitName: unit.unitName, unitPath: unit.unitPath, ...state };
+}
+
 async function readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(
   env: GatewayServiceEnv,
 ): Promise<RetiredSystemdGatewayConflict | null> {
@@ -879,14 +897,17 @@ async function readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(
   }
   const unitName = `${resolveSystemdServiceName(env)}.service`;
   const unitPath = await findSystemSystemdUnitPath(env);
-  if (!unitPath) {
+  if (unitPath) {
+    const canonical = await readLiveSystemdGatewayConflict(env, { unitName, unitPath });
+    if (canonical) {
+      return canonical;
+    }
+  }
+  const owned = await findMarkerOwnedSystemSystemdUnit();
+  if (!owned) {
     return null;
   }
-  const state = await readSystemdUnitLiveState(env, unitName, "system");
-  if (!state.active && !state.enabled) {
-    return null;
-  }
-  return { scope: "system", unitName, unitPath, ...state };
+  return await readLiveSystemdGatewayConflict(env, owned);
 }
 
 async function retireConflictingSystemScopeUnitBeforeUserUnitInstall(
@@ -904,6 +925,52 @@ async function retireConflictingSystemScopeUnitBeforeUserUnitInstall(
     );
   }
   return unit;
+}
+
+async function readSystemdUserInstallArtifactSnapshots(
+  env: GatewayServiceEnv,
+): Promise<SystemdUserInstallArtifactSnapshot[]> {
+  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const unitPath = resolveSystemdUnitPath(env);
+  const paths = [
+    unitPath,
+    `${unitPath}.bak`,
+    resolveSystemdEnvironmentFilePath({ stateDir, environment: env }),
+  ];
+  return await Promise.all(
+    paths.map(async (pathname) => {
+      try {
+        const [content, stat] = await Promise.all([
+          fs.readFile(pathname, "utf8"),
+          fs.stat(pathname),
+        ]);
+        return { path: pathname, content, mode: stat.mode & 0o777 };
+      } catch {
+        return { path: pathname, content: null, mode: null };
+      }
+    }),
+  );
+}
+
+async function restoreSystemdUserInstallArtifacts(
+  snapshots: SystemdUserInstallArtifactSnapshot[],
+): Promise<void> {
+  await Promise.all(
+    snapshots.map(async (snapshot) => {
+      if (snapshot.content === null) {
+        await fs.rm(snapshot.path, { force: true });
+        return;
+      }
+      await fs.mkdir(path.dirname(snapshot.path), { recursive: true });
+      await fs.writeFile(snapshot.path, snapshot.content, {
+        encoding: "utf8",
+        mode: snapshot.mode ?? 0o600,
+      });
+      if (snapshot.mode !== null) {
+        await fs.chmod(snapshot.path, snapshot.mode);
+      }
+    }),
+  );
 }
 
 async function writeSystemdUnit({
@@ -1204,12 +1271,14 @@ async function restoreRetiredSystemUnitAfterUserActivationFailure(
   env: GatewayServiceEnv,
   unit: RetiredSystemdGatewayConflict,
 ): Promise<string | null> {
-  const userDisable = await execSystemctlUser(env, ["disable", "--now", unit.unitName]);
-  if (userDisable.code !== 0) {
-    return `failed to disable replacement user unit ${unit.unitName}: ${readSystemctlDetail(userDisable) || "unknown error"}`;
-  }
+  const replacementUserUnitName = `${resolveSystemdServiceName(env)}.service`;
+  const userDisable = await execSystemctlUser(env, ["disable", "--now", replacementUserUnitName]);
+  const userCleanupError =
+    userDisable.code === 0
+      ? null
+      : `failed to disable replacement user unit ${replacementUserUnitName}: ${readSystemctlDetail(userDisable) || "unknown error"}`;
   if (!unit.enabled && !unit.active) {
-    return null;
+    return userCleanupError;
   }
   const restoreArgs = unit.enabled
     ? unit.active
@@ -1218,21 +1287,29 @@ async function restoreRetiredSystemUnitAfterUserActivationFailure(
     : ["start", unit.unitName];
   const restore = await execSystemctl(restoreArgs, env);
   if (restore.code !== 0) {
-    return `failed to restore system-scope ${unit.unitName}: ${readSystemctlDetail(restore) || "unknown error"}`;
+    const restoreError = `failed to restore system-scope ${unit.unitName}: ${readSystemctlDetail(restore) || "unknown error"}`;
+    return userCleanupError ? `${userCleanupError}; ${restoreError}` : restoreError;
   }
-  return null;
+  return userCleanupError;
 }
 
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
   const liveSystemUnit = await readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(args.env);
+  const artifactSnapshots = await readSystemdUserInstallArtifactSnapshots(args.env);
   const { unitPath, backedUp } = await writeSystemdUnit(args);
   await reloadSystemdUserManager(args.env);
-  const retiredSystemUnit = await retireConflictingSystemScopeUnitBeforeUserUnitInstall(
-    args.env,
-    liveSystemUnit,
-  );
+  let retiredSystemUnit: RetiredSystemdGatewayConflict | null;
+  try {
+    retiredSystemUnit = await retireConflictingSystemScopeUnitBeforeUserUnitInstall(
+      args.env,
+      liveSystemUnit,
+    );
+  } catch (error) {
+    await restoreSystemdUserInstallArtifacts(artifactSnapshots);
+    throw error;
+  }
   try {
     await enablePreparedSystemdService({ env: args.env });
     await restartPreparedSystemdService({ env: args.env });

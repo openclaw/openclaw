@@ -654,8 +654,56 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     });
   });
 
-  it("keeps a canonical user unit when the only system unit is marker-owned with a custom name", async () => {
+  it("prefers an active marker-owned custom system unit over a stale canonical user unit", async () => {
     mockUnitFileLayout({ user: true, system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw.service",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-active", "--quiet", "openclaw.service"]);
+      cb(null, "", "");
+    });
+
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw.service",
+      unitPath: "/etc/systemd/system/openclaw.service",
+      conflictingUnit: {
+        scope: "user",
+        unitName: GATEWAY_SERVICE,
+        unitPath: `${TEST_MANAGED_HOME}/.config/systemd/user/openclaw-gateway.service`,
+      },
+    });
+  });
+
+  it("keeps a canonical user unit when a marker-owned custom system unit is inactive and disabled", async () => {
+    mockUnitFileLayout({ user: true, system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw.service",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["is-active", "--quiet", "openclaw.service"]);
+        cb(createExecFileError("inactive", { code: 3 }), "", "inactive");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["is-enabled", "openclaw.service"]);
+        cb(createExecFileError("disabled", { code: 1 }), "disabled\n", "");
+      });
 
     const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
 
@@ -663,8 +711,12 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
       scope: "user",
       unitName: GATEWAY_SERVICE,
       unitPath: `${TEST_MANAGED_HOME}/.config/systemd/user/openclaw-gateway.service`,
+      conflictingUnit: {
+        scope: "system",
+        unitName: "openclaw.service",
+        unitPath: "/etc/systemd/system/openclaw.service",
+      },
     });
-    expect(findSystemGatewayServicesMock).not.toHaveBeenCalled();
   });
 
   it("findInstalledSystemdGatewayScope ignores legacy clawdbot system units in the marker fallback", async () => {
@@ -1711,6 +1763,8 @@ describe("systemd service install and uninstall", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     execFileMock.mockReset();
+    findSystemGatewayServicesMock.mockReset();
+    findSystemGatewayServicesMock.mockResolvedValue([]);
   });
 
   it("retires an active same-name system-scope gateway unit after staging a user unit", async () => {
@@ -1918,6 +1972,154 @@ describe("systemd service install and uninstall", () => {
     }
   });
 
+  it("retires an active marker-owned custom system unit during user install", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      findSystemGatewayServicesMock.mockResolvedValueOnce([
+        {
+          platform: "linux",
+          label: "openclaw.service",
+          detail: "unit: /etc/systemd/system/openclaw.service",
+          scope: "system",
+          marker: "openclaw",
+        },
+      ]);
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-active", "--quiet", "openclaw.service"]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-enabled", "openclaw.service"]);
+          cb(null, "enabled\n", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["disable", "--now", "openclaw.service"]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+          cb(null, "", "");
+        });
+
+      const { write, stdout } = createWritableStreamMock();
+      await installSystemdService({
+        env,
+        stdout,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
+
+      expect(write.mock.calls.map(([value]) => String(value)).join("\n")).toContain(
+        "openclaw.service (/etc/systemd/system/openclaw.service)",
+      );
+      expect(execFileMock).toHaveBeenCalledTimes(7);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("removes newly staged user unit files when system unit retirement fails", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-retire-failure-test",
+    };
+    const unitPath = resolveSystemdUserUnitPath(env);
+    const envFilePath = path.join(stateDir, "gateway.systemd.env");
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      const realAccess = fs.access.bind(fs);
+      vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+        const pathValue = pathLikeToString(pathname);
+        if (pathValue === "/etc/systemd/system/openclaw-gateway-retire-failure-test.service") {
+          return undefined;
+        }
+        return await realAccess(pathname, mode);
+      });
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual([
+            "is-active",
+            "--quiet",
+            "openclaw-gateway-retire-failure-test.service",
+          ]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-enabled", "openclaw-gateway-retire-failure-test.service"]);
+          cb(null, "enabled\n", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual([
+            "disable",
+            "--now",
+            "openclaw-gateway-retire-failure-test.service",
+          ]);
+          cb(createExecFileError("permission denied"), "", "permission denied");
+        });
+
+      await expect(
+        installSystemdService({
+          env,
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          workingDirectory: "/tmp",
+          environment: {
+            OPENCLAW_GATEWAY_TOKEN: "replacement-token",
+            OPENCLAW_GATEWAY_PORT: "18789",
+          },
+          environmentValueSources: {
+            OPENCLAW_GATEWAY_TOKEN: "file",
+          },
+        }),
+      ).rejects.toThrow(
+        /system-scope openclaw-gateway-retire-failure-test\.service already exists/,
+      );
+
+      await expect(fs.access(unitPath)).rejects.toThrow();
+      await expect(fs.access(envFilePath)).rejects.toThrow();
+      expect(execFileMock).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("restores the system unit when replacement user activation fails", async () => {
     const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
     const home = path.join(tempHomeRoot, "home");
@@ -1995,6 +2197,84 @@ describe("systemd service install and uninstall", () => {
           },
         }),
       ).rejects.toThrow("systemctl restart failed: bad environment");
+
+      expect(execFileMock).toHaveBeenCalledTimes(9);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("restores the custom system unit when replacement user cleanup fails", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-systemd-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      findSystemGatewayServicesMock.mockResolvedValueOnce([
+        {
+          platform: "linux",
+          label: "openclaw.service",
+          detail: "unit: /etc/systemd/system/openclaw.service",
+          scope: "system",
+          marker: "openclaw",
+        },
+      ]);
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-active", "--quiet", "openclaw.service"]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-enabled", "openclaw.service"]);
+          cb(null, "enabled\n", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["disable", "--now", "openclaw.service"]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "enable", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+          cb(createExecFileError("restart failed"), "", "bad environment");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", GATEWAY_SERVICE);
+          cb(createExecFileError("user bus unavailable"), "", "user bus unavailable");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["enable", "--now", "openclaw.service"]);
+          cb(null, "", "");
+        });
+
+      await expect(
+        installSystemdService({
+          env,
+          stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          workingDirectory: "/tmp",
+          environment: {
+            OPENCLAW_GATEWAY_PORT: "18789",
+          },
+        }),
+      ).rejects.toThrow(
+        "systemctl restart failed: bad environment; failed to disable replacement user unit openclaw-gateway.service: user bus unavailable",
+      );
 
       expect(execFileMock).toHaveBeenCalledTimes(9);
     } finally {
