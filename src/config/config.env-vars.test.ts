@@ -1,7 +1,7 @@
 // Covers environment-variable config metadata and parsing.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import {
@@ -78,6 +78,21 @@ describe("config env vars", () => {
       expect(merged.OPENROUTER_API_KEY).toBe("config-key");
       expect(process.env.OPENROUTER_API_KEY).toBeUndefined();
     });
+  });
+
+  it("preserves Windows case-insensitive env precedence in merged runtime env", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const merged = createConfigRuntimeEnv(
+        { env: { vars: { OPENCLAW_LOAD_SHELL_ENV: "1" } } } as OpenClawConfig,
+        { OpenClaw_Load_Shell_Env: "0" },
+      );
+
+      expect(merged.OPENCLAW_LOAD_SHELL_ENV).toBe("0");
+      expect(Object.keys(merged)).toEqual(["OpenClaw_Load_Shell_Env"]);
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("blocks dangerous startup env vars from config env", async () => {

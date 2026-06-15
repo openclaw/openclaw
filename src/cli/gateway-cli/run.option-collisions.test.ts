@@ -515,6 +515,125 @@ describe("gateway run option collisions", () => {
     });
   });
 
+  it("uses config env shell fallback controls without mutating the live env during planning", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_LOAD_SHELL_ENV: undefined,
+        OPENCLAW_SHELL_ENV_TIMEOUT_MS: undefined,
+      },
+      async () => {
+        const finalConfig = {
+          env: {
+            vars: {
+              OPENCLAW_LOAD_SHELL_ENV: "1",
+              OPENCLAW_SHELL_ENV_TIMEOUT_MS: "4321",
+            },
+          },
+          gateway: { auth: { mode: "none" }, mode: "local" },
+        };
+        configState.snapshot = {
+          config: finalConfig,
+          exists: true,
+          parsed: finalConfig,
+          path: "/tmp/openclaw.json",
+          sourceConfig: finalConfig,
+          valid: true,
+        };
+        shouldEnableShellEnvFallback.mockImplementationOnce(
+          (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_LOAD_SHELL_ENV === "1",
+        );
+        resolveShellEnvFallbackTimeoutMs.mockImplementationOnce((env?: NodeJS.ProcessEnv) =>
+          Number(env?.OPENCLAW_SHELL_ENV_TIMEOUT_MS),
+        );
+
+        await runGatewayCli(["gateway"]);
+
+        expect(loadShellEnvFallback).toHaveBeenCalledWith(
+          expect.objectContaining({ enabled: true, timeoutMs: 4321 }),
+        );
+        expect(process.env.OPENCLAW_LOAD_SHELL_ENV).toBe("1");
+        expect(process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS).toBe("4321");
+      },
+    );
+  });
+
+  it("honors config env shell fallback deferral", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_DEFER_SHELL_ENV_FALLBACK: undefined,
+        OPENCLAW_LOAD_SHELL_ENV: undefined,
+      },
+      async () => {
+        const finalConfig = {
+          env: {
+            vars: {
+              OPENCLAW_DEFER_SHELL_ENV_FALLBACK: "1",
+              OPENCLAW_LOAD_SHELL_ENV: "1",
+            },
+          },
+          gateway: { auth: { mode: "none" }, mode: "local" },
+        };
+        configState.snapshot = {
+          config: finalConfig,
+          exists: true,
+          parsed: finalConfig,
+          path: "/tmp/openclaw.json",
+          sourceConfig: finalConfig,
+          valid: true,
+        };
+        shouldEnableShellEnvFallback.mockImplementationOnce(
+          (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_LOAD_SHELL_ENV === "1",
+        );
+        shouldDeferShellEnvFallback.mockImplementationOnce(
+          (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_DEFER_SHELL_ENV_FALLBACK === "1",
+        );
+
+        await runGatewayCli(["gateway"]);
+
+        expect(resolveShellEnvExpectedKeys).not.toHaveBeenCalled();
+        expect(loadShellEnvFallback).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("ignores shell fallback controls from invalid config", async () => {
+    const { clearGatewayRunConfigEnvironment } = await import("./pre-bootstrap.js");
+    clearGatewayRunConfigEnvironment();
+    await withEnvAsync(
+      {
+        OPENCLAW_DEFER_SHELL_ENV_FALLBACK: undefined,
+        OPENCLAW_LOAD_SHELL_ENV: "1",
+      },
+      async () => {
+        const invalidConfig = {
+          env: { vars: { OPENCLAW_DEFER_SHELL_ENV_FALLBACK: "1" } },
+          gateway: { mode: "local" },
+        };
+        configState.snapshot = {
+          config: invalidConfig,
+          exists: true,
+          issues: [{ path: "gateway", message: "invalid" }],
+          parsed: invalidConfig,
+          path: "/tmp/openclaw.json",
+          sourceConfig: invalidConfig,
+          valid: false,
+        };
+        shouldEnableShellEnvFallback.mockImplementation(
+          (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_LOAD_SHELL_ENV === "1",
+        );
+        shouldDeferShellEnvFallback.mockImplementation(
+          (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_DEFER_SHELL_ENV_FALLBACK === "1",
+        );
+
+        await runGatewayCli(["gateway", "--allow-unconfigured"]);
+
+        expect(loadShellEnvFallback).toHaveBeenCalledOnce();
+        expect(startGatewayServer).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
   it("replaces config-derived env when the final startup snapshot changes in place", async () => {
     await withEnvAsync(
       {

@@ -303,22 +303,24 @@ type GatewayRunShellEnvFallbackPlan =
 async function resolveGatewayRunShellEnvFallbackPlan(
   cfg: OpenClawConfig,
 ): Promise<GatewayRunShellEnvFallbackPlan> {
+  const { createConfigRuntimeEnv } = await import("../../config/env-vars.js");
   const {
     resolveShellEnvFallbackTimeoutMs,
     shouldDeferShellEnvFallback,
     shouldEnableShellEnvFallback,
   } = await import("../../infra/shell-env.js");
+  const planEnv = createConfigRuntimeEnv(cfg, process.env);
   const enabled =
-    (shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true) &&
-    !shouldDeferShellEnvFallback(process.env);
+    (shouldEnableShellEnvFallback(planEnv) || cfg.env?.shellEnv?.enabled === true) &&
+    !shouldDeferShellEnvFallback(planEnv);
   if (!enabled) {
     return { enabled: false };
   }
   const { resolveShellEnvExpectedKeys } = await import("../../config/shell-env-expected-keys.js");
   return {
     enabled: true,
-    expectedKeys: resolveShellEnvExpectedKeys(process.env),
-    timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(process.env),
+    expectedKeys: resolveShellEnvExpectedKeys(planEnv),
+    timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(planEnv),
   };
 }
 
@@ -379,7 +381,9 @@ async function readGatewayStartupConfigWithShellEnv(params: {
         opts: params.opts,
         startupTrace: params.startupTrace,
       });
-      const plan = await resolveGatewayRunShellEnvFallbackPlan(startupConfig.cfg);
+      const plan = await resolveGatewayRunShellEnvFallbackPlan(
+        startupConfig.snapshot?.valid === true ? startupConfig.cfg : {},
+      );
       const planSignature = gatewayRunShellEnvFallbackPlanSignature(plan);
       if (!plan.enabled) {
         if (Object.keys(lowerPrecedenceEnv).length === 0) {

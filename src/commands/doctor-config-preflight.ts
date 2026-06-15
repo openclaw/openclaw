@@ -195,18 +195,21 @@ export async function runDoctorConfigPreflight(
     (options.beforeStateMigrations === undefined ||
       (await options.beforeStateMigrations(snapshot)));
   if (stateMigrations && configStateMigrationsAllowed) {
-    const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
-    const cronResult = await repairLegacyCronStoreWithoutPrompt({ cfg: baseConfig });
-    noteStateMigrationResult(cronResult);
     const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } = stateMigrations;
-    const stateResult = snapshot.valid
-      ? await autoMigrateLegacyState({
+    if (snapshot.valid) {
+      const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
+      const cronResult = await repairLegacyCronStoreWithoutPrompt({ cfg: baseConfig });
+      noteStateMigrationResult(cronResult);
+      noteStateMigrationResult(
+        await autoMigrateLegacyState({
           cfg: baseConfig,
           env: process.env,
           recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-        })
-      : await autoMigrateLegacyTaskStateSidecars({ env: process.env });
-    noteStateMigrationResult(stateResult);
+        }),
+      );
+    } else {
+      noteStateMigrationResult(await autoMigrateLegacyTaskStateSidecars({ env: process.env }));
+    }
   }
 
   return {
