@@ -877,6 +877,80 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBe("google:api-key");
   });
 
+  it("selects canonical Google API-key auth order for Google models routed through Gemini CLI", async () => {
+    const sessionKey = "agent:main:direct:gemini-cli-google-api-key-order";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-gemini-api-key-order",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "google:api-key": {
+            type: "api_key",
+            provider: "google",
+            key: "gemini-api-key",
+          },
+        },
+      },
+      tmpDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("gemini cli api-key response"));
+
+    await runAgentAttempt({
+      providerOverride: "google",
+      originalProvider: "google",
+      modelOverride: "gemini-3.1-pro-preview",
+      cfg: {
+        auth: {
+          order: {
+            google: ["google:api-key"],
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "google/gemini-3.1-pro-preview": {
+                agentRuntime: { id: "google-gemini-cli" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-gemini-cli-google-api-key-order",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "google",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().provider).toBe("google-gemini-cli");
+    expect(firstRunCliAgentArg().authProfileId).toBe("google:api-key");
+  });
+
   it("persists CLI replies into the session transcript", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript";
     const sessionFile = path.join(tmpDir, "session-cli-transcript.jsonl");

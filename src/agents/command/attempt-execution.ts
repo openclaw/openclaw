@@ -93,6 +93,8 @@ const ACP_TRANSCRIPT_USAGE = {
     total: 0,
   },
 } as const;
+const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
+const GOOGLE_PROVIDER_ID = "google";
 
 type TranscriptUsage = {
   input?: number;
@@ -237,11 +239,30 @@ function resolveCliExecutionAuthProfileId(params: {
     allowKeychainPrompt: false,
     externalCliProviderIds: [params.cliExecutionProvider],
   });
-  return resolveAuthProfileOrder({
+  const cliProfileId = resolveAuthProfileOrder({
     cfg: params.config,
     store,
     provider: params.cliExecutionProvider,
   })[0];
+  if (cliProfileId) {
+    return cliProfileId;
+  }
+
+  if (
+    params.cliExecutionProvider !== GOOGLE_GEMINI_CLI_PROVIDER_ID ||
+    params.selected.authProfileProvider !== GOOGLE_PROVIDER_ID
+  ) {
+    return undefined;
+  }
+
+  return resolveAuthProfileOrder({
+    cfg: params.config,
+    store,
+    provider: GOOGLE_PROVIDER_ID,
+  }).find((profileId) => {
+    const credential = store.profiles[profileId];
+    return credential?.provider === GOOGLE_PROVIDER_ID && credential.type === "api_key";
+  });
 }
 
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
