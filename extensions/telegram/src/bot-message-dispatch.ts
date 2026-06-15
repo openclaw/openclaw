@@ -1183,6 +1183,24 @@ export const dispatchTelegramMessage = async ({
     }
     await rotateLaneForNewMessage(answerLane);
   };
+  // A streamed answer preamble stays mutable until finalized. When a tool starts
+  // mid-stream and tool progress is suppressed (so prepareAnswerLaneForToolProgress
+  // never rotated), the post-tool answer text would keep editing the preamble
+  // bubble. Rotate the in-flight preamble at the tool boundary so the resumed
+  // text lands in a new message. Skip empty/never-sent drafts, and defer to the
+  // tool-progress path when it already owns the rotation.
+  const rotateInFlightAnswerPreambleForToolBoundary = async () => {
+    if (activeAnswerDraftIsToolProgressOnly) {
+      return;
+    }
+    if (!answerLane.hasStreamedMessage || answerLane.finalized) {
+      return;
+    }
+    if (typeof answerLane.stream?.messageId() !== "number") {
+      return;
+    }
+    await rotateAnswerLaneForNewMessage();
+  };
   const rotateAnswerLaneAfterToolProgress = async () => {
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
@@ -2373,6 +2391,10 @@ export const dispatchTelegramMessage = async ({
                       await statusReactionController.setTool(toolName);
                     }
                     await progressPromise;
+                    // Ordered after pending preamble partials so the rotation
+                    // sees the streamed message; no-op when progress already
+                    // rotated or nothing was sent.
+                    await enqueueDraftLaneEvent(rotateInFlightAnswerPreambleForToolBoundary);
                   },
                   onItemEvent: async (payload) => {
                     if (payload.kind === "preamble") {
