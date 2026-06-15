@@ -1139,8 +1139,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
     });
+    const meta = this.readMeta();
     const storeAvailable =
-      this.vector.available ?? (this.vector.enabled && this.hasIndexedChunks() ? true : undefined);
+      this.vector.available ??
+      (this.vector.enabled && meta?.vectorDims !== undefined ? true : undefined);
 
     return {
       backend: "builtin",

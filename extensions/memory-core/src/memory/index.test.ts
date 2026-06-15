@@ -421,6 +421,14 @@ describe("memory index", () => {
     return result.manager as unknown as MemoryIndexManager;
   }
 
+  function readIndexMeta(manager: MemoryIndexManager): MemoryIndexMeta | null {
+    return (
+      manager as unknown as {
+        readMeta(): MemoryIndexMeta | null;
+      }
+    ).readMeta();
+  }
+
   async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -1688,12 +1696,88 @@ describe("memory index", () => {
     const statusManager = await getFreshManager(cfg, "status");
     try {
       const status = statusManager.status();
+      const meta = readIndexMeta(statusManager);
 
       expect(providerCalls).toStrictEqual([]);
       expect(status.vector?.enabled).toBe(true);
       expect(status.vector?.storeAvailable).toBe(true);
       expect(status.vector?.semanticAvailable).toBeUndefined();
       expect(status.vector?.available).toBeUndefined();
+      expect(meta?.vectorDims).toBe(4);
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
+  it("does not report chunks-only indexes as vector-store ready from plain status", async () => {
+    const dbPath = path.join(workspaceDir, "index-vector-status-fts-only.sqlite");
+    const ftsOnlyCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      vectorEnabled: false,
+    });
+    const ftsOnlyManager = await getFreshManager(ftsOnlyCfg);
+    try {
+      await ftsOnlyManager.sync({ reason: "test", force: true });
+      expect(ftsOnlyManager.status().chunks).toBeGreaterThan(0);
+    } finally {
+      await ftsOnlyManager.close?.();
+    }
+
+    providerCalls = [];
+    forceNoProvider = true;
+    const statusCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      vectorEnabled: true,
+    });
+    const statusManager = await getFreshManager(statusCfg, "status");
+    try {
+      const status = statusManager.status();
+      const meta = readIndexMeta(statusManager);
+
+      expect(providerCalls).toStrictEqual([]);
+      expect(status.vector?.enabled).toBe(true);
+      expect(status.vector?.storeAvailable).toBeUndefined();
+      expect(status.vector?.semanticAvailable).toBeUndefined();
+      expect(status.vector?.available).toBeUndefined();
+      expect(status.chunks).toBeGreaterThan(0);
+      expect(meta?.vectorDims).toBeUndefined();
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
+  it("does not report old vector metadata as store-ready when vectors are disabled", async () => {
+    const dbPath = path.join(workspaceDir, "index-vector-status-disabled.sqlite");
+    const vectorCfg = createCfg({
+      storePath: dbPath,
+      vectorEnabled: true,
+    });
+    const indexManager = await getFreshManager(vectorCfg);
+    try {
+      await indexManager.sync({ reason: "test", force: true });
+    } finally {
+      await indexManager.close?.();
+    }
+
+    providerCalls = [];
+    forceNoProvider = true;
+    const disabledCfg = createCfg({
+      storePath: dbPath,
+      vectorEnabled: false,
+    });
+    const statusManager = await getFreshManager(disabledCfg, "status");
+    try {
+      const status = statusManager.status();
+      const meta = readIndexMeta(statusManager);
+
+      expect(providerCalls).toStrictEqual([]);
+      expect(status.vector?.enabled).toBe(false);
+      expect(status.vector?.storeAvailable).toBeUndefined();
+      expect(status.vector?.semanticAvailable).toBeUndefined();
+      expect(status.vector?.available).toBeUndefined();
+      expect(meta?.vectorDims).toBe(4);
     } finally {
       await statusManager.close?.();
     }
