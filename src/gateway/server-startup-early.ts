@@ -125,7 +125,10 @@ export async function startGatewayEarlyRuntime(params: {
         ]),
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
-    void Promise.allSettled([primeRemoteSkillsCache(), ensureContextWindowCacheLoaded()]);
+    // Prime remote skills cache in background (non-blocking)
+    void primeRemoteSkillsCache();
+    // Await context window cache warming so first /status is deterministic
+    await ensureContextWindowCacheLoaded();
     // Task registry maintenance is authoritative in the Gateway process so
     // restart-blocker counts reflect the same cron store as runtime execution.
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
