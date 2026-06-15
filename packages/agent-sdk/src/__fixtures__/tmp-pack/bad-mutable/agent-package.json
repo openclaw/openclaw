@@ -1,0 +1,1 @@
+{"name":"bad-mutable","version":"1.0.0","description":"Mutable overlaps instruction file.","files":{"copy":[],"mutable":[{"dest":"AGENTS.md","description":"Should fail."}]},"policy":{"denyMutableInstructionFiles":true}}

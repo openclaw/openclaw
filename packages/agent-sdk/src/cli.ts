@@ -2,6 +2,8 @@
 // @openclaw/agent-sdk CLI — Entry point for pack, validate, enable, disable.
 
 import { Command } from "commander";
+import { disableCommand } from "./commands/disable.js";
+import { enableCommand } from "./commands/enable.js";
 import { packCommand } from "./commands/pack.js";
 import { validateCommand } from "./commands/validate.js";
 
@@ -10,5 +12,7 @@ program.name("openclaw-agent").description("Agent SDK packaging CLI").version("0
 
 program.addCommand(packCommand);
 program.addCommand(validateCommand);
+program.addCommand(enableCommand);
+program.addCommand(disableCommand);
 
 program.parse();

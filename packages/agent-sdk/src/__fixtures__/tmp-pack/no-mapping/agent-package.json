@@ -1,0 +1,1 @@
+{"name":"no-mapping","version":"1.0.0","description":"Missing secret mapping.","files":{"copy":[],"mutable":[]},"secrets":{"consumer":[{"name":"API_KEY","required":true}],"mapping":{}}}

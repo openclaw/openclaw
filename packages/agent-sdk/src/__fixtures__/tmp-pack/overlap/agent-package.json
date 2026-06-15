@@ -1,0 +1,1 @@
+{"name":"overlap","version":"1.0.0","description":"Mutable overlaps copy dest.","files":{"copy":[{"src":"files/test.md","dest":"test.md"}],"mutable":[{"dest":"test.md","description":"Should fail."}]}}

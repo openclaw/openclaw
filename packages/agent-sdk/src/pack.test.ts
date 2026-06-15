@@ -8,7 +8,11 @@ import { describe, expect, it, beforeAll } from "vitest";
 const PKG_DIST = resolve(import.meta.dirname, "..", "dist");
 const FIXTURES = resolve(import.meta.dirname, "__fixtures__");
 const VALID_PACK = resolve(FIXTURES, "valid-pack");
-const TMP = resolve(FIXTURES, "tmp");
+const TMP = resolve(FIXTURES, "tmp-pack");
+
+function ensureTmp() {
+  if (!existsSync(TMP)) mkdirSync(TMP, { recursive: true });
+}
 
 // ── hash utility ────────────────────────────────────────────────────
 

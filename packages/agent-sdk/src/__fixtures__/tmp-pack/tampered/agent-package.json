@@ -1,0 +1,1 @@
+{"name":"tampered","version":"1.0.0","description":"Tampered file test.","files":{"copy":[{"src":"files/AGENTS.md","dest":"AGENTS.md"}],"mutable":[]}}
