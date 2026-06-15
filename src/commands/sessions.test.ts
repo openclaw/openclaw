@@ -14,6 +14,15 @@ import {
 // Disable colors for deterministic snapshots.
 process.env.FORCE_COLOR = "0";
 
+vi.mock("../infra/state-migrations.js", () => ({
+  autoMigrateLegacyState: vi.fn(async () => ({
+    migrated: false,
+    skipped: true,
+    changes: [],
+    warnings: [],
+  })),
+}));
+
 mockSessionsConfig();
 
 import { sessionsCommand, testing } from "./sessions.js";
