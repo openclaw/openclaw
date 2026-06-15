@@ -114,6 +114,26 @@ export function isShortWindowRateLimitMessage(message: string | undefined): bool
   return resolveShortWindowRateLimitRetry(message) !== null;
 }
 
+function resolveAssistantFailoverRawErrorText(params: {
+  lastAssistant: AssistantMessage | undefined;
+  config: OpenClawConfig | undefined;
+  sessionKey?: string;
+  activeErrorContext: { provider: string; model: string };
+}): string | undefined {
+  const rawError = params.lastAssistant?.errorMessage?.trim();
+  if (rawError) {
+    return rawError;
+  }
+  return params.lastAssistant
+    ? formatAssistantErrorText(params.lastAssistant, {
+        cfg: params.config,
+        sessionKey: params.sessionKey,
+        provider: params.activeErrorContext.provider,
+        model: params.activeErrorContext.model,
+      })?.trim()
+    : undefined;
+}
+
 /**
  * Applies an assistant-stage failover decision and returns the next run action.
  * It owns auth-profile rotation, overload/rate-limit escalation, same-model
@@ -169,6 +189,7 @@ export async function handleAssistantFailover(params: {
 }): Promise<AssistantFailoverOutcome> {
   let overloadProfileRotations = params.overloadProfileRotations;
   let decision = params.initialDecision;
+  const assistantFailoverRawErrorText = resolveAssistantFailoverRawErrorText(params);
   const sameModelIdleTimeoutRetry = (): AssistantFailoverOutcome => {
     params.warn(
       `[llm-idle-timeout] ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} produced no reply before the idle watchdog; retrying same model`,
@@ -237,7 +258,7 @@ export async function handleAssistantFailover(params: {
               model: params.activeErrorContext.model,
               profileId: params.lastProfileId,
               status,
-              rawError: params.lastAssistant?.errorMessage?.trim(),
+              rawError: assistantFailoverRawErrorText,
             },
           ),
         };
@@ -248,7 +269,7 @@ export async function handleAssistantFailover(params: {
       // Minute-scale RPM windows can clear without spending a profile rotation
       // or model fallback. Keep the retry bounded; once exhausted, continue
       // through the existing rate-limit escalation path.
-      const shortWindowRetry = resolveShortWindowRateLimitRetry(params.lastAssistant?.errorMessage);
+      const shortWindowRetry = resolveShortWindowRateLimitRetry(assistantFailoverRawErrorText);
       if (
         params.allowSameModelRateLimitRetry &&
         shortWindowRetry &&
@@ -332,7 +353,7 @@ export async function handleAssistantFailover(params: {
         model: params.activeErrorContext.model,
         profileId: params.lastProfileId,
         status,
-        rawError: params.lastAssistant?.errorMessage?.trim(),
+        rawError: assistantFailoverRawErrorText,
         suspend: shouldSuspend,
       }),
     };
@@ -363,7 +384,7 @@ export async function handleAssistantFailover(params: {
           model: params.activeErrorContext.model,
           profileId: params.lastProfileId,
           status,
-          rawError: params.lastAssistant?.errorMessage?.trim(),
+          rawError: assistantFailoverRawErrorText,
           suspend: shouldSuspend,
         }),
       };
@@ -388,6 +409,7 @@ function resolveAssistantFailoverErrorMessage(params: {
   authFailure: boolean;
 }): string {
   const timeoutFailure = params.timedOut || params.idleTimedOut;
+  const assistantRawErrorText = resolveAssistantFailoverRawErrorText(params);
   return (
     (params.lastAssistant
       ? formatAssistantErrorText(params.lastAssistant, {
@@ -397,7 +419,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           model: params.activeErrorContext.model,
         })
       : undefined) ||
-    params.lastAssistant?.errorMessage?.trim() ||
+    assistantRawErrorText ||
     (timeoutFailure
       ? "LLM request timed out."
       : params.rateLimitFailure
