@@ -859,5 +859,8 @@ function normalizeRemotePath(remotePath: string): string {
 
 function isRemotePathInside(root: string, candidate: string): boolean {
   const relative = path.posix.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.posix.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith("../") && !path.posix.isAbsolute(relative))
+  );
 }

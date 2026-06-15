@@ -116,8 +116,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
-    await fsPromises.mkdir(hostPath, { recursive: true });
     await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
+    await fsPromises.mkdir(hostPath, { recursive: true });
   }
 
   async remove(params: {
@@ -136,14 +136,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: params.force !== false,
       allowFinalSymlinkForUnlink: true,
     });
-    await fsPromises.rm(hostPath, {
-      recursive: params.recursive ?? false,
-      force: params.force !== false,
-    });
     await this.backend.removeRemotePath(target.containerPath, {
       recursive: params.recursive ?? false,
       signal: params.signal,
       allowFailure: params.force !== false,
+    });
+    await fsPromises.rm(hostPath, {
+      recursive: params.recursive ?? false,
+      force: params.force !== false,
     });
   }
 
@@ -168,9 +168,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
+    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
     await fsPromises.mkdir(path.dirname(toHostPath), { recursive: true });
     await movePathWithCopyFallback({ from: fromHostPath, to: toHostPath });
-    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
   }
 
   async stat(params: {

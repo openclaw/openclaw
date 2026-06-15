@@ -558,6 +558,9 @@ describe("openshell fs bridges", () => {
       expect(runPinnedMutation(["mkdirp", remoteRoot, "safe/nested"]).status).toBe(0);
       await expect(fs.stat(path.join(remoteRoot, "safe", "nested"))).resolves.toBeDefined();
 
+      expect(runPinnedMutation(["mkdirp", remoteRoot, "..cache/file"]).status).toBe(0);
+      await expect(fs.stat(path.join(remoteRoot, "..cache", "file"))).resolves.toBeDefined();
+
       expect(runPinnedMutation(["mkdirp", remoteRoot, "alias/escaped"]).status).not.toBe(0);
       await expectPathMissing(path.join(outsideDir, "escaped"));
 
@@ -688,6 +691,76 @@ describe("openshell fs bridges", () => {
       allowFailure: true,
     });
     expect(backend["runRemoteShellScript"]).not.toHaveBeenCalled();
+  });
+
+  it("keeps local mirror state unchanged when remote pinned mkdir is rejected", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const backend = createMirrorBackendMock();
+    backend["mkdirpRemotePath"] = vi.fn().mockRejectedValue(new Error("remote rejected"));
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.mkdirp({ filePath: "alias/escaped" })).rejects.toThrow("remote rejected");
+    await expectPathMissing(path.join(workspaceDir, "alias"));
+  });
+
+  it("keeps local mirror state unchanged when remote pinned remove is rejected", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const targetPath = path.join(workspaceDir, "target.txt");
+    await fs.writeFile(targetPath, "payload", "utf8");
+    const backend = createMirrorBackendMock();
+    backend["removeRemotePath"] = vi.fn().mockRejectedValue(new Error("remote rejected"));
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.remove({ filePath: "target.txt", force: true })).rejects.toThrow(
+      "remote rejected",
+    );
+    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("payload");
+  });
+
+  it("keeps local mirror state unchanged when remote pinned rename is rejected", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const sourcePath = path.join(workspaceDir, "source.txt");
+    const targetPath = path.join(workspaceDir, "nested", "target.txt");
+    await fs.writeFile(sourcePath, "payload", "utf8");
+    const backend = createMirrorBackendMock();
+    backend["renameRemotePath"] = vi.fn().mockRejectedValue(new Error("remote rejected"));
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.rename({ from: "source.txt", to: "nested/target.txt" })).rejects.toThrow(
+      "remote rejected",
+    );
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("payload");
+    await expectPathMissing(targetPath);
   });
 
   it("rejects symlink-parent writes instead of escaping the local mount root", async () => {
