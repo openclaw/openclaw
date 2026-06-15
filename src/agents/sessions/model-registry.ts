@@ -21,6 +21,7 @@ import type {
 } from "../../llm/types.js";
 import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
@@ -37,6 +38,8 @@ import {
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+
+const log = createSubsystemLogger("agents/model-registry");
 
 // Schema for OpenRouter routing preferences
 const PercentileCutoffsSchema = Type.Object({
@@ -371,7 +374,9 @@ export class ModelRegistry {
 
     if (error) {
       this.loadError = error;
-      // Keep the prior empty/default registry shape when models.json failed to load.
+      // Surface the cause here: nothing on the failure path reads getError(),
+      // so without this warn the user only sees "Unknown model" downstream.
+      log.warn(`models.json load error: ${error}`);
     }
 
     let combined = customModels;
@@ -444,6 +449,7 @@ export class ModelRegistry {
       }
 
       const models = this.parseModels(configForUse);
+      const pluginCatalogErrors: string[] = [];
       if (options.includePluginCatalogs !== false) {
         for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
           const pluginResult = this.loadCustomModels(pluginCatalog.path, {
@@ -452,13 +458,20 @@ export class ModelRegistry {
             requireGeneratedCatalog: true,
           });
           if (pluginResult.error) {
-            return pluginResult;
+            // One stale or invalid plugin shard must not wipe models.json and
+            // every other catalog; collect the error so it still surfaces via
+            // getError() and skip just this shard.
+            pluginCatalogErrors.push(pluginResult.error);
+            continue;
           }
           models.push(...pluginResult.models);
         }
       }
 
-      return { models, error: undefined };
+      return {
+        models,
+        error: pluginCatalogErrors.length > 0 ? pluginCatalogErrors.join("\n\n") : undefined,
+      };
     } catch (error) {
       if (error instanceof SyntaxError) {
         if (options.requireGeneratedCatalog === true) {

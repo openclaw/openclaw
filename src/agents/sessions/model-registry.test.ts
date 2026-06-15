@@ -145,6 +145,36 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
   });
 
+  it("keeps models.json models when a generated plugin catalog shard is invalid", () => {
+    // One stale or invalid plugin shard must not wipe models.json and every
+    // other catalog; the shard error still surfaces via getError().
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            apiKey: "CUSTOM_API_KEY",
+            models: [{ id: "example-model", name: "Example Model" }],
+          },
+        },
+      },
+      pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: "not-an-object",
+      },
+    });
+
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({ custom: { type: "api_key", key: "sk-test" } }),
+      modelsPath,
+    );
+
+    expect(registry.find("custom", "example-model")?.name).toBe("Example Model");
+    expect(registry.getError()).toContain("Invalid models.json schema");
+  });
+
   it("preserves model params from generated plugin catalog shards", () => {
     const modelsPath = writeModelsJsonWithPluginCatalog({
       root: { providers: {} },
