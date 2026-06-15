@@ -124,4 +124,17 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("channel=telegram");
     expect(prompt).not.toContain("### message tool");
   });
+
+  it("requires an explicit message target when the CLI turn policy requires one", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [{ name: "message" } as never],
+      modelDisplay: "test/model",
+      sourceReplyDeliveryMode: "message_tool_only",
+      requireExplicitMessageTarget: true,
+    });
+
+    expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
+    expect(prompt).not.toContain("The target defaults to the current source channel");
+  });
 });

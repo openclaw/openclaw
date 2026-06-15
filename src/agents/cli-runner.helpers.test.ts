@@ -562,6 +562,33 @@ describe("resolveCliRunQueueKey", () => {
       }),
     ).toBe("claude-cli:run-4");
   });
+
+  it("keeps Claude live sessions serialized when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        liveSession: "claude-stdio",
+        serialize: false,
+        runId: "run-live",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "abcd1234",
+      }),
+    ).toBe("claude-cli:owner:abcd1234");
+  });
+
+  it("keeps resumed Claude live sessions on the owner lane", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        liveSession: "claude-stdio",
+        serialize: true,
+        runId: "run-live-resumed",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "claude-session-123",
+        ownerKey: "abcd1234",
+      }),
+    ).toBe("claude-cli:owner:abcd1234");
+  });
 });
 
 describe("buildClaudeOwnerKey", () => {

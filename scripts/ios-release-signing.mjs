@@ -130,7 +130,12 @@ function runAscJson(args) {
   try {
     return JSON.parse(trimmed);
   } catch (error) {
-    throw new Error(`asc returned non-JSON output for ${args.join(" ")}: ${trimmed.slice(0, 500)}`);
+    throw new Error(
+      `asc returned non-JSON output for ${args.join(" ")}: ${trimmed.slice(0, 500)}`,
+      {
+        cause: error,
+      },
+    );
   }
 }
 
@@ -219,7 +224,9 @@ function ensureAscAvailable() {
   try {
     run("asc", ["--help"]);
   } catch (error) {
-    throw new Error(`asc CLI is required for iOS release signing setup: ${error.message}`);
+    throw new Error(`asc CLI is required for iOS release signing setup: ${error.message}`, {
+      cause: error,
+    });
   }
 }
 
@@ -458,7 +465,7 @@ function localDistributionIdentityFingerprints(manifest) {
     return new Set();
   }
 
-  let output = "";
+  let output;
   try {
     output = run("security", ["find-identity", "-p", "codesigning", "-v"]);
   } catch {

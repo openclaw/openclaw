@@ -15,7 +15,6 @@ import { redactSecrets } from "../../logging/redact.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   appendJsonlEntry,
-  serializeJsonlEntry,
   serializeJsonlLine,
   writeJsonlEntry,
   writeJsonlLines,
@@ -335,12 +334,7 @@ async function appendSessionTranscriptEventLocked(
   params: AppendSessionTranscriptEventParams,
 ): Promise<void> {
   await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
-  const handle = await fs.open(params.transcriptPath, "a", 0o600);
-  try {
-    await handle.appendFile(serializeJsonlEntry(params.event), "utf-8");
-  } finally {
-    await handle.close();
-  }
+  await appendJsonlEntry(params.transcriptPath, params.event);
 }
 
 async function appendSessionTranscriptMessageLocked<TMessage>(

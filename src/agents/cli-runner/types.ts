@@ -188,6 +188,8 @@ export type PreparedCliRunContext = {
   authEpoch?: string;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   cwdHash?: string;
+  mcpDeliveryCapture?: true;
 };

@@ -9,7 +9,10 @@ import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.j
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { updateSessionStoreEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { appendSessionTranscriptMessage } from "./transcript-append.js";
+import {
+  appendSessionTranscriptEvent,
+  appendSessionTranscriptMessage,
+} from "./transcript-append.js";
 import {
   bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
@@ -1189,6 +1192,82 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     for (let index = 1; index < records.length; index += 1) {
       expect(records[index]?.parentId).toBe(records[index - 1]?.id);
     }
+  });
+
+  it("separates message and event appends from an unterminated transcript entry", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "existing",
+          parentId: null,
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "user", content: "existing" },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "appended message" },
+    });
+    fs.writeFileSync(sessionFile, fs.readFileSync(sessionFile, "utf8").trimEnd(), "utf8");
+    await appendSessionTranscriptEvent({
+      transcriptPath: sessionFile,
+      event: { type: "custom", id: "event", parentId: null },
+    });
+
+    const entries = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string });
+    expect(entries.map((entry) => entry.type)).toEqual(["session", "message", "message", "custom"]);
+  });
+
+  it("serializes transcript events before inspecting the append separator", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    const replacementHeader = JSON.stringify({
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: "2026-06-15T00:00:00.000Z",
+      cwd: fixture.sessionsDir(),
+    });
+    fs.writeFileSync(sessionFile, `${replacementHeader}\n`, "utf8");
+
+    await appendSessionTranscriptEvent({
+      transcriptPath: sessionFile,
+      event: {
+        type: "custom",
+        toJSON() {
+          fs.writeFileSync(sessionFile, replacementHeader, "utf8");
+          return { type: "custom", id: "serialized-first", parentId: null };
+        },
+      },
+    });
+
+    const entries = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; id?: string });
+    expect(entries).toEqual([
+      expect.objectContaining({ type: "session", id: sessionId }),
+      { type: "custom", id: "serialized-first", parentId: null },
+    ]);
   });
 
   it("requires explicit idempotency scanning for direct transcript appends", async () => {

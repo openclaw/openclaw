@@ -14,13 +14,21 @@ import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
+  markMcpLoopbackRequestClassified,
+  markMcpLoopbackRequestFinished,
+  markMcpLoopbackRequestStarted,
+  markMcpLoopbackToolCallFinished,
+  markMcpLoopbackToolCallStarted,
+  recordMcpLoopbackToolCallResult,
   setActiveMcpLoopbackRuntime,
+  updateMcpLoopbackToolCallCapture,
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
   isMcpHttpBodyTooLargeError,
   isMcpHttpBodyTimeoutError,
   readMcpHttpBody,
+  resolveMcpCliCaptureKey,
   resolveMcpHttpBodyTimeoutMs,
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
@@ -180,12 +188,40 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
       return;
     }
 
+    // Bind the request before body parsing/tool resolution. A CLI may exit while
+    // an accepted request is still uploading, and retries must not outrun it.
+    const cliRequestCaptureHandle = markMcpLoopbackRequestStarted(resolveMcpCliCaptureKey(req));
     const requestAbort = createRequestAbortSignal(req, res);
     void (async () => {
       let parsed: JsonRpcRequest | JsonRpcRequest[] | undefined;
+      let cliCaptureHandles: Array<ReturnType<typeof markMcpLoopbackToolCallStarted>> = [];
       try {
         const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
         parsed = parseMcpJsonBody(body);
+        const messages = Array.isArray(parsed) ? parsed : [parsed];
+        cliCaptureHandles = messages.map((message) => {
+          if (
+            !cliRequestCaptureHandle ||
+            !isJsonRpcRequest(message) ||
+            message.method !== "tools/call"
+          ) {
+            return undefined;
+          }
+          const admittedToolName =
+            isRecord(message.params) && typeof message.params.name === "string"
+              ? message.params.name
+              : "";
+          const toolArgs =
+            isRecord(message.params) && isRecord(message.params.arguments)
+              ? message.params.arguments
+              : {};
+          return markMcpLoopbackToolCallStarted({
+            requestCaptureHandle: cliRequestCaptureHandle,
+            toolName: admittedToolName,
+            args: toolArgs,
+          });
+        });
+        markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const scopedTools = toolCache.resolve({
@@ -203,7 +239,6 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           senderIsOwner: requestContext.senderIsOwner,
         });
 
-        const messages = Array.isArray(parsed) ? parsed : [parsed];
         logMcpLoopbackTraffic("request", {
           batchSize: messages.length,
           methods: messages.map((message) =>
@@ -216,24 +251,49 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
         });
         const responses: object[] = [];
-        for (const message of messages) {
+        for (const [messageIndex, message] of messages.entries()) {
           if (!isJsonRpcRequest(message)) {
             responses.push(jsonRpcError(readJsonRpcRequestId(message), -32600, "Invalid Request"));
             continue;
           }
-          const response = await handleMcpJsonRpc({
-            message,
-            tools: scopedTools.tools,
-            toolSchema: scopedTools.toolSchema,
-            hookContext: {
-              agentId: scopedTools.agentId,
-              config: cfg,
-              sessionKey: requestContext.sessionKey,
-            },
-            signal: requestAbort.signal,
-          });
+          const cliCaptureHandle = cliCaptureHandles[messageIndex];
+          let response: object | null;
+          try {
+            response = await handleMcpJsonRpc({
+              message,
+              tools: scopedTools.tools,
+              toolSchema: scopedTools.toolSchema,
+              hookContext: {
+                agentId: scopedTools.agentId,
+                config: cfg,
+                sessionKey: requestContext.sessionKey,
+              },
+              signal: requestAbort.signal,
+              onToolCallPrepared: cliCaptureHandle
+                ? ({ toolName: preparedToolName, args }) => {
+                    updateMcpLoopbackToolCallCapture(cliCaptureHandle, {
+                      toolName: preparedToolName,
+                      args,
+                    });
+                  }
+                : undefined,
+              onToolCallResult: cliCaptureHandle
+                ? ({ toolName: resultToolName, args, result, isError }) => {
+                    recordMcpLoopbackToolCallResult({
+                      captureHandle: cliCaptureHandle,
+                      toolName: resultToolName,
+                      args,
+                      result,
+                      isError,
+                    });
+                  }
+                : undefined,
+            });
+          } finally {
+            markMcpLoopbackToolCallFinished(cliCaptureHandle);
+          }
           if (response !== null) {
-            const toolName =
+            const responseToolName =
               message.method === "tools/call" && isRecord(message.params)
                 ? message.params.name
                 : undefined;
@@ -241,7 +301,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
               isRecord(response) && isRecord(response.result) && response.result.isError === true;
             logMcpLoopbackTraffic("response", {
               method: message.method,
-              toolName: typeof toolName === "string" ? toolName : undefined,
+              toolName: typeof responseToolName === "string" ? responseToolName : undefined,
               isError,
             });
             responses.push(response);
@@ -285,6 +345,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         }
       } finally {
         requestAbort.cleanup();
+        for (const captureHandle of cliCaptureHandles) {
+          markMcpLoopbackToolCallFinished(captureHandle);
+        }
+        markMcpLoopbackRequestFinished(cliRequestCaptureHandle);
       }
     })();
   });

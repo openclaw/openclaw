@@ -721,6 +721,7 @@ export function createSessionsSendTool(opts?: {
             runId,
             status: "timeout",
             error: result.error,
+            sentBeforeError: true,
             sessionKey: displayKey,
             delivery,
           });
@@ -738,6 +739,7 @@ export function createSessionsSendTool(opts?: {
           runId,
           status: "timeout",
           error: result.error,
+          sentBeforeError: true,
           sessionKey: displayKey,
         });
       }
@@ -746,6 +748,7 @@ export function createSessionsSendTool(opts?: {
           runId,
           status: "error",
           error: result.error ?? "agent error",
+          sentBeforeError: true,
           sessionKey: displayKey,
         });
       }

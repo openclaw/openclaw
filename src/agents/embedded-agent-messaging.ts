@@ -3,6 +3,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/types.public.js";
 
 const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message"]);
 const MESSAGE_TOOL_SEND_ACTIONS = new Set([
@@ -12,6 +13,27 @@ const MESSAGE_TOOL_SEND_ACTIONS = new Set([
   "sendAttachment",
   "upload-file",
 ]);
+const MESSAGE_TOOL_READ_ONLY_ACTIONS = new Set([
+  "read",
+  "reactions",
+  "list-pins",
+  "permissions",
+  "thread-list",
+  "search",
+  "sticker-search",
+  "member-info",
+  "role-info",
+  "emoji-list",
+  "channel-info",
+  "channel-list",
+  "voice-status",
+  "event-list",
+  "download-file",
+]);
+const MESSAGE_TOOL_MUTATION_ACTIONS = new Set<string>(
+  CHANNEL_MESSAGE_ACTION_NAMES.filter((action) => !MESSAGE_TOOL_READ_ONLY_ACTIONS.has(action)),
+);
+const MESSAGE_TOOL_MUTATION_ALIASES = new Set(["threadCreate", "createForumTopic"]);
 
 /** Return true when a message action sends or uploads user-visible content. */
 export function isMessageToolSendActionName(action: unknown): boolean {
@@ -42,12 +64,23 @@ export function isMessagingToolSendAction(
     return isMessageToolSendActionName(action);
   }
   const providerId = normalizeChannelId(toolName);
-  if (!providerId) {
-    return false;
+  return Boolean(
+    providerId && getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args })?.to,
+  );
+}
+
+/** Return true when a messaging invocation can create visible outbound delivery. */
+export function isMessagingToolDeliveryAction(
+  toolName: string,
+  args: Record<string, unknown>,
+): boolean {
+  if (toolName === "message") {
+    const action = normalizeOptionalString(args.action) ?? "";
+    return MESSAGE_TOOL_MUTATION_ACTIONS.has(action) || MESSAGE_TOOL_MUTATION_ALIASES.has(action);
   }
-  const plugin = getChannelPlugin(providerId);
-  if (!plugin?.actions?.extractToolSend) {
-    return false;
+  const providerId = normalizeChannelId(toolName);
+  if (providerId && getChannelPlugin(providerId)?.actions?.isToolDeliveryAction?.({ args })) {
+    return true;
   }
-  return Boolean(plugin.actions.extractToolSend({ args })?.to);
+  return isMessagingToolSendAction(toolName, args);
 }
