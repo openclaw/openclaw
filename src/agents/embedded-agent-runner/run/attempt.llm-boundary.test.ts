@@ -191,6 +191,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
       seq: 12,
       embeddingInput: "Stored ask with index metadata",
     });
+    expect(output[0]?.["__openclaw"]).toBe(input[0]?.["__openclaw"]);
     expect(input[0]?.content).toEqual([{ type: "text", text: "Stored ask with index metadata" }]);
     expect(input[0]?.["__openclaw"]).toEqual({
       seq: 12,
