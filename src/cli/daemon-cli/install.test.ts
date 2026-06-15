@@ -721,7 +721,9 @@ describe("runDaemonInstall", () => {
     } as never);
 
     const previous = process.env.OPENAI_API_KEY;
+    const previousNodeOptions = process.env.NODE_OPTIONS;
     delete process.env.OPENAI_API_KEY;
+    process.env.NODE_OPTIONS = "--require /tmp/untrusted.js";
     try {
       await runDaemonInstall({ json: true, force: true });
 
@@ -740,6 +742,11 @@ describe("runDaemonInstall", () => {
         delete process.env.OPENAI_API_KEY;
       } else {
         process.env.OPENAI_API_KEY = previous;
+      }
+      if (previousNodeOptions === undefined) {
+        delete process.env.NODE_OPTIONS;
+      } else {
+        process.env.NODE_OPTIONS = previousNodeOptions;
       }
     }
   });

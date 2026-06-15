@@ -638,9 +638,24 @@ function rememberAppendedSessionEntry(
 
   const cached = sessionEntriesCache.get(resolvedPath);
   const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
+  const cachedPrefixMatchesFile = (beforeSnapshot: SessionFileSnapshot): boolean => {
+    if (!cached) {
+      return false;
+    }
+    const expectedPrefix = `${cached.entries.map((entry) => serializeJsonlEntry(entry)).join("")}${
+      cached.endsWithNewline ? "" : "\n"
+    }`;
+    if (BigInt(Buffer.byteLength(expectedPrefix, "utf8")) !== beforeSnapshot.size) {
+      return false;
+    }
+    const filePrefix = readFileSync(resolvedPath).subarray(0, Number(beforeSnapshot.size));
+    return filePrefix.equals(Buffer.from(expectedPrefix, "utf8"));
+  };
   // Owned transcript writes serialize appenders under the session lock. Full
-  // rewrites refresh the cache explicitly, so identity and size are sufficient
-  // to advance this append-only snapshot without reading the whole file.
+  // rewrites refresh the cache explicitly. Still validate the serialized prefix
+  // before advancing the warm cache: user-provided custom-entry serializers can
+  // rewrite the transcript just before the append, and fast filesystems may not
+  // expose that same-size rewrite through snapshot metadata reliably enough.
   const expectedSize =
     beforeAppendSnapshot.size + BigInt(Buffer.byteLength(serializedAppend, "utf8"));
   if (
@@ -651,7 +666,8 @@ function rememberAppendedSessionEntry(
     snapshot.dev !== beforeAppendSnapshot.dev ||
     snapshot.ino !== beforeAppendSnapshot.ino ||
     snapshot.size !== expectedSize ||
-    !isSameSessionFileSnapshot(cached.snapshot, previousSnapshot)
+    !isSameSessionFileSnapshot(cached.snapshot, previousSnapshot) ||
+    !cachedPrefixMatchesFile(beforeAppendSnapshot)
   ) {
     sessionEntriesCache.delete(resolvedPath);
     invalidateSessionFileRepairCache(resolvedPath);
