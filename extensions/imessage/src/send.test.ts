@@ -331,6 +331,132 @@ describe("sendMessageIMessage receipts", () => {
     ]);
   });
 
+  it("honors applescript transport for plain image attachments", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "p:0/media-guid", transferGuid: "transfer-1" });
+
+    await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: {
+        channels: {
+          imessage: {
+            sendTransport: "auto",
+            accounts: { work: { sendTransport: "applescript" } },
+          },
+        },
+      },
+      accountId: "work",
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    // A plain image attachment is fully supported by AppleScript automation, so
+    // the configured transport is honored as-is.
+    expect(client["request"]).not.toHaveBeenCalled();
+    expect(runCliJson.mock.calls).toEqual([
+      [
+        [
+          "send-attachment",
+          "--chat",
+          "chat-1",
+          "--file",
+          "/tmp/image.png",
+          "--transport",
+          "applescript",
+        ],
+      ],
+    ]);
+  });
+
+  it("falls back to auto transport for applescript voice/audio attachments", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/voice-guid" });
+
+    await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: {
+        channels: {
+          imessage: {
+            sendTransport: "auto",
+            accounts: { work: { sendTransport: "applescript" } },
+          },
+        },
+      },
+      accountId: "work",
+      client,
+      mediaUrl: "/tmp/voice.caf",
+      audioAsVoice: true,
+      resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
+      runCliJson,
+    });
+
+    // The send-attachment CLI rejects `--transport applescript` together with
+    // `--audio`. This send was hardcoded to `auto` before sendTransport was
+    // honored on the media path, so it narrowly falls back to `auto` to avoid
+    // regressing existing AppleScript-configured users.
+    expect(client["request"]).not.toHaveBeenCalled();
+    expect(runCliJson.mock.calls).toEqual([
+      [
+        [
+          "send-attachment",
+          "--chat",
+          "chat-1",
+          "--file",
+          "/tmp/voice.caf",
+          "--audio",
+          "--transport",
+          "auto",
+        ],
+      ],
+    ]);
+  });
+
+  it("falls back to auto transport for applescript threaded voice reply attachments", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/voice-guid" });
+
+    await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: {
+        channels: {
+          imessage: {
+            sendTransport: "auto",
+            actions: { reply: true },
+            accounts: { work: { sendTransport: "applescript" } },
+          },
+        },
+      },
+      accountId: "work",
+      client,
+      mediaUrl: "/tmp/voice.caf",
+      audioAsVoice: true,
+      replyToId: "p:0/reply-guid",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
+      runCliJson,
+    });
+
+    // Both --audio and --reply-to are unsupported under applescript, so the
+    // transport narrowly falls back to `auto` while still carrying the flags.
+    expect(client["request"]).not.toHaveBeenCalled();
+    expect(runCliJson.mock.calls).toEqual([
+      [
+        [
+          "send-attachment",
+          "--chat",
+          "chat-1",
+          "--file",
+          "/tmp/voice.caf",
+          "--audio",
+          "--reply-to",
+          "p:0/reply-guid",
+          "--transport",
+          "auto",
+        ],
+      ],
+    ]);
+  });
+
   it("sends audioAsVoice media through send-attachment audio transport", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/voice-guid" });

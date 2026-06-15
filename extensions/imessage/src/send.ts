@@ -55,8 +55,32 @@ type IMessageSendTransport = "auto" | "bridge" | "applescript";
 // pass through unchanged.
 type IMessageAttachmentTransport = "auto" | "dylib" | "applescript";
 
+// Map an OpenClaw transport token to the one the `send-attachment` CLI accepts.
+// The OpenClaw `bridge` token is the IMCore bridge, which the CLI exposes as
+// `dylib` (the injected helper dylib); `auto` and `applescript` are accepted
+// verbatim.
 function toAttachmentTransport(transport: IMessageSendTransport): IMessageAttachmentTransport {
   return transport === "bridge" ? "dylib" : transport;
+}
+
+// Resolve the `--transport` value for a `send-attachment` invocation, honoring
+// the configured transport where the CLI supports it. The `applescript`
+// transport cannot carry `--audio` (voice notes) or `--reply-to` (threaded
+// replies) — the CLI rejects those combinations. Before this fix the attachment
+// path was hardcoded to `auto`, so those sends already went out via `auto`;
+// to avoid regressing existing AppleScript-configured users we narrowly fall
+// back to `auto` for exactly those incompatible modes. Plain AppleScript image
+// attachments still honor `applescript`, and `bridge` always maps to `dylib`.
+function resolveAttachmentTransport(params: {
+  transport?: IMessageSendTransport;
+  audioAsVoice?: boolean;
+  replyToId?: string;
+}): IMessageAttachmentTransport {
+  const transport = params.transport ?? "auto";
+  if (transport === "applescript" && (params.audioAsVoice || params.replyToId)) {
+    return "auto";
+  }
+  return toAttachmentTransport(transport);
 }
 
 type IMessageSendOpts = {
@@ -817,7 +841,11 @@ async function trySendAttachmentForTarget(params: {
       ...(params.audioAsVoice ? ["--audio"] : []),
       ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
-      toAttachmentTransport(params.transport ?? "auto"),
+      resolveAttachmentTransport({
+        transport: params.transport,
+        audioAsVoice: params.audioAsVoice,
+        replyToId: params.replyToId,
+      }),
     ]);
   } catch (error) {
     forgetPersistedIMessageEchoKey(pendingEchoKey);
