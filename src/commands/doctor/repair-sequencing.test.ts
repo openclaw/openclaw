@@ -461,6 +461,56 @@ describe("doctor repair sequencing", () => {
     expect(result.authProfilesRepaired).toBe(true);
   });
 
+  it("threads the retained legacy Codex migration plan through auth repairs", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5" }],
+          },
+          "openai-codex": {
+            baseUrl: "https://chatgpt.example.invalid",
+            models: [
+              {
+                id: "gpt-5.5",
+                contextWindow: 1050000,
+              },
+            ],
+          },
+        },
+      },
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:default"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await runDoctorRepairSequence({
+      state: {
+        cfg,
+        candidate: cfg,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    const authConfigOptions = mocks.maybeRepairOpenAICodexAuthConfig.mock.calls[0]?.[1];
+    const authStoreOptions = mocks.maybeRepairOpenAICodexAuthProfileStores.mock.calls[0]?.[0];
+    expect(authConfigOptions?.migrationPlan?.providerStatus).toBe("retained");
+    expect(authConfigOptions?.migrationPlan?.providerReasons).toContain(
+      "legacy Codex auth profiles are configured",
+    );
+    expect(authStoreOptions?.migrationPlan).toBe(authConfigOptions?.migrationPlan);
+  });
+
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {
     const result = await runDoctorRepairSequence({
       state: {

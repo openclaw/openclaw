@@ -2906,7 +2906,12 @@ export function maybeRepairCodexRoutes(params: {
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
   codexRuntimeReady?: boolean;
-}): { cfg: OpenClawConfig; warnings: string[]; changes: string[] } {
+}): {
+  cfg: OpenClawConfig;
+  warnings: string[];
+  changes: string[];
+  migrationPlan: LegacyOpenAICodexMigrationPlan;
+} {
   const migrationPlan = buildLegacyOpenAICodexMigrationPlan(params.cfg);
   const hits = collectConfigModelRefs(params.cfg, migrationPlan);
   const migrationPlanWarning = formatLegacyOpenAICodexMigrationPlanWarning(migrationPlan);
@@ -2927,13 +2932,14 @@ export function maybeRepairCodexRoutes(params: {
     legacyLosslessCompactionConfigs.length === 0 &&
     !migrationPlanWarning
   ) {
-    return { cfg: params.cfg, warnings: [], changes: [] };
+    return { cfg: params.cfg, warnings: [], changes: [], migrationPlan };
   }
   if (!params.shouldRepair) {
     return {
       cfg: params.cfg,
       warnings: collectCodexRouteWarnings({ cfg: params.cfg, env: params.env }),
       changes: [],
+      migrationPlan,
     };
   }
   const repaired = rewriteConfigModelRefs({
@@ -2956,6 +2962,7 @@ export function maybeRepairCodexRoutes(params: {
   return {
     cfg: codexPluginRepair.cfg,
     warnings,
+    migrationPlan,
     changes: [
       ...changes,
       ...repaired.runtimePolicyChanges,

@@ -21,8 +21,19 @@ import {
   maybeRepairOpenAICodexAuthProfileStores,
 } from "./doctor-auth-flat-profiles.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import type { LegacyOpenAICodexMigrationPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
 
 const states: OpenClawTestState[] = [];
+
+const retainedOpenAICodexMigrationPlan: LegacyOpenAICodexMigrationPlan = {
+  canonicalProviderPresent: true,
+  legacyProviderPresent: true,
+  legacyProviderKey: "openai-codex",
+  canonicalProviderKey: "openai",
+  providerStatus: "retained",
+  providerReasons: ["legacy Codex auth profiles are configured"],
+  modelEntries: [],
+};
 
 function makePrompter(shouldRepair: boolean): DoctorPrompter {
   return {
@@ -557,6 +568,46 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
 });
 
 describe("maybeRepairOpenAICodexAuthConfig", () => {
+  it("preserves legacy OpenAI Codex auth config when the migration plan is retained", () => {
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+            email: "chatgpt@example.com",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:default"],
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.5": {
+              agentRuntime: {
+                id: "codex",
+                authProfileId: "openai-codex:default",
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = maybeRepairOpenAICodexAuthConfig(cfg, {
+      migrationPlan: retainedOpenAICodexMigrationPlan,
+      profileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
+    });
+
+    expect(result).toEqual({
+      config: cfg,
+      changes: [],
+      warnings: [],
+    });
+  });
+
   it("renames legacy OpenAI Codex config profiles and merges auth order", () => {
     const cfg = {
       auth: {
@@ -966,5 +1017,40 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
     expect(
       JSON.parse(fs.readFileSync(`${authPath}.openai-provider-unification.789.bak`, "utf8")),
     ).toEqual(legacy);
+  });
+
+  it("preserves legacy OpenAI Codex auth store profiles when the migration plan is retained", async () => {
+    const state = await makeTestState();
+    const legacy = {
+      version: 1,
+      profiles: {
+        "openai-codex:work": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: 9999999999999,
+        },
+      },
+      order: {
+        "openai-codex": ["openai-codex:work"],
+      },
+    };
+    const authPath = await writeLegacyAuthProfilesJson(state, legacy);
+
+    const result = await maybeRepairOpenAICodexAuthProfileStores({
+      cfg: {},
+      env: state.env,
+      now: () => 789,
+      migrationPlan: retainedOpenAICodexMigrationPlan,
+    });
+
+    expect(result).toEqual({
+      detected: [],
+      changes: [],
+      warnings: [],
+    });
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(legacy);
+    expect(fs.existsSync(`${authPath}.openai-provider-unification.789.bak`)).toBe(false);
   });
 });

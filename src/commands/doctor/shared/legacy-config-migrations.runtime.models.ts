@@ -1345,6 +1345,18 @@ export function shouldMigrateLegacyOpenAICodexModelRef(
   return shouldMigrateLegacyOpenAICodexModelId(plan, modelId);
 }
 
+export function shouldMigrateLegacyOpenAICodexAuth(
+  plan: LegacyOpenAICodexMigrationPlan | undefined,
+): boolean {
+  if (!plan) {
+    return true;
+  }
+  return (
+    plan.providerStatus === "migrated" &&
+    plan.modelEntries.every((entry) => entry.status === "migrated")
+  );
+}
+
 export function formatLegacyOpenAICodexMigrationPlanWarning(
   plan: LegacyOpenAICodexMigrationPlan,
 ): string | undefined {

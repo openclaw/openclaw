@@ -34,6 +34,10 @@ import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFile } from "../infra/json-file.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  shouldMigrateLegacyOpenAICodexAuth,
+  type LegacyOpenAICodexMigrationPlan,
+} from "./doctor/shared/legacy-config-migrations.runtime.models.js";
 
 type AuthProfileRepairCandidate = {
   agentDir?: string;
@@ -1303,12 +1307,18 @@ function canonicalizeOpenAILastGood(
  */
 export function maybeRepairOpenAICodexAuthConfig(
   cfg: OpenClawConfig,
-  options?: { profileIdMap?: ReadonlyMap<string, string> },
+  options?: {
+    profileIdMap?: ReadonlyMap<string, string>;
+    migrationPlan?: LegacyOpenAICodexMigrationPlan;
+  },
 ): {
   config: OpenClawConfig;
   changes: string[];
   warnings: string[];
 } {
+  if (!shouldMigrateLegacyOpenAICodexAuth(options?.migrationPlan)) {
+    return { config: cfg, changes: [], warnings: [] };
+  }
   const config = structuredClone(cfg);
   const root = config as Record<string, unknown>;
   const auth = isRecord(root.auth) ? root.auth : undefined;
@@ -1422,9 +1432,17 @@ export async function maybeRepairOpenAICodexAuthProfileStores(params: {
   cfg: OpenClawConfig;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): Promise<LegacyFlatAuthProfileRepairResult> {
   const now = params.now ?? Date.now;
   const env = params.env ?? process.env;
+  if (!shouldMigrateLegacyOpenAICodexAuth(params.migrationPlan)) {
+    return {
+      detected: [],
+      changes: [],
+      warnings: [],
+    };
+  }
   const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: params.cfg, env });
   const repairs = listAuthProfileRepairCandidates(params.cfg, env)
     .map((candidate) => resolveOpenAICodexAuthStoreRepair(candidate, profileIdMap))
