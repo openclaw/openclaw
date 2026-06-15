@@ -2357,6 +2357,64 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("archives the rollback-journal sidecar when migrating a task registry sidecar", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath } = writeLegacyTaskStateSidecars(root);
+    // Simulate an NFS-backed legacy store left under journal_mode=DELETE: after
+    // a committed transaction SQLite truncates the rollback-journal to an empty
+    // sidecar (rather than deleting it on some NFS mounts), so a 0-byte
+    // -journal lingers next to the retired .sqlite.
+    const journalPath = `${taskRunsPath}-journal`;
+    fs.writeFileSync(journalPath, "");
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 task registry sidecar row → shared SQLite state");
+    // The journal sidecar must be archived alongside the database and its
+    // -wal/-shm siblings instead of being stranded at the legacy path.
+    expect(fs.existsSync(journalPath)).toBe(false);
+    expect(fs.existsSync(`${journalPath}.migrated`)).toBe(true);
+    expect(fs.statSync(`${journalPath}.migrated`).size).toBe(0);
+    expect(fs.existsSync(`${taskRunsPath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      expect(loadTaskRegistryStateFromSqlite().tasks.has("legacy-task")).toBe(true);
+    });
+  });
+
+  it("archives the rollback-journal sidecar when migrating a plugin-state sidecar", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = writeLegacyPluginStateSidecar(root);
+    // Simulate the NFS journal_mode=DELETE rollback-journal sidecar left as a
+    // 0-byte file after the last committed transaction.
+    const journalPath = `${sourcePath}-journal`;
+    fs.writeFileSync(journalPath, "");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 plugin-state sidecar entry → shared SQLite state");
+    expect(fs.existsSync(journalPath)).toBe(false);
+    expect(fs.existsSync(`${journalPath}.migrated`)).toBe(true);
+    expect(fs.statSync(`${journalPath}.migrated`).size).toBe(0);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
+        namespace: "components",
+        maxEntries: 10,
+      });
+      await expect(store.lookup("interaction:1")).resolves.toEqual({ ok: true });
+    });
+  });
+
   it("auto-migrates task sidecars without config-dependent state moves", async () => {
     const root = await makeTempRoot();
     const { taskRunsPath, flowRunsPath } = writeLegacyTaskStateSidecars(root);

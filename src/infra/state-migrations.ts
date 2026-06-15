@@ -175,8 +175,14 @@ type DetectedPluginDoctorStateMigrationPlan = {
   preview: string[];
 };
 
-const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+// SQLite keeps -shm/-wal sidecars under journal_mode=WAL, but NFS-backed state
+// volumes fall back to journal_mode=DELETE and leave a rollback-journal
+// (-journal) sidecar instead (see avoid-sqlite-wal-on-nfs handling). Archiving
+// the legacy source must cover all three so migration never strands a stale
+// -journal next to the retired .sqlite, which would trigger an erroneous
+// rollback if anything reopened the legacy database path afterwards.
+const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
+const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 const LEGACY_DELIVERY_QUEUE_DIRS = [
   { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
   { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
