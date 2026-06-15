@@ -21,6 +21,9 @@ type CodexStatusProbes = {
   skills: SafeValue<JsonValue | undefined>;
 };
 
+// Status rows are intentional layout, not GFM soft-wrapped prose.
+const CODEX_STATUS_LINE_BREAK = "  \n";
+
 /** Formats the combined `/codex status` probe result. */
 export function formatCodexStatus(probes: CodexStatusProbes): string {
   const connected =
@@ -66,7 +69,7 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
         : formatCodexDisplayText(probes.skills.error)
     }`,
   );
-  return lines.join("\n");
+  return lines.flatMap((line) => line.split("\n")).join(CODEX_STATUS_LINE_BREAK);
 }
 
 /** Formats Codex model-list results for `/codex models`. */

@@ -69,6 +69,9 @@ type AgentConfig = Partial<AgentDefaults> & {
   model?: AgentDefaults["model"] | string;
 };
 
+// Status rows are intentional layout, not GFM soft-wrapped prose.
+const STATUS_MARKDOWN_LINE_BREAK = "  \n";
+
 export const formatTokenCount = formatTokenCountShared;
 
 type QueueStatus = {
@@ -873,7 +876,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Context: ${contextUsageLabel}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
-    .filter(Boolean)
+    .filter((line): line is string => Boolean(line))
     .join(" · ");
 
   const queueMode = args.queue?.mode ?? "unknown";
@@ -1049,6 +1052,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     voiceLine,
     activationLine,
   ]
-    .filter(Boolean)
-    .join("\n");
+    .filter((line): line is string => Boolean(line))
+    .flatMap((line) => line.split("\n"))
+    .join(STATUS_MARKDOWN_LINE_BREAK);
 }

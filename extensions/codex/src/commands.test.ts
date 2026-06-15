@@ -878,7 +878,7 @@ describe("codex command", () => {
         "Rate limits: offline",
         "MCP servers: offline",
         "Skills: offline",
-      ].join("\n"),
+      ].join("  \n"),
     });
     expect(deps.readCodexStatusProbes).toHaveBeenCalledWith(undefined, config);
   });
