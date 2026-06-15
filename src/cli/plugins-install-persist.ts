@@ -49,6 +49,8 @@ function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): O
     ...cfg,
     plugins: {
       ...cfg.plugins,
+      // Preserve authored allowlist order so env-backed entries remain aligned
+      // with the write-time env restoration snapshot.
       allow: [...allow, pluginId],
     },
   };
@@ -95,7 +97,7 @@ export type ConfigMutationPreflight =
 
 const CONFIG_MUTATION_ALLOWED = { mode: "allowed" } as const;
 
-function containsConfigIncludeDirective(value: unknown): boolean {
+export function containsConfigIncludeDirective(value: unknown): boolean {
   if (Array.isArray(value)) {
     return value.some((entry) => containsConfigIncludeDirective(entry));
   }
@@ -262,6 +264,31 @@ export function resolveInstallConfigMutationPreflights(params: {
     return { hookMutation: blocked, pluginMutation: blocked };
   }
   return { hookMutation, pluginMutation };
+}
+
+export function resolveCombinedPluginAndHookConfigMutationPreflight(params: {
+  parsed: Record<string, unknown>;
+  snapshotPath: string;
+}): ConfigMutationPreflight {
+  const pluginIncludePath = resolveSingleTopLevelIncludePath(
+    params.parsed,
+    params.snapshotPath,
+    "plugins",
+  );
+  const hookIncludePath = resolveSingleTopLevelIncludePath(
+    params.parsed,
+    params.snapshotPath,
+    "hooks",
+  );
+  if (!pluginIncludePath && !hookIncludePath) {
+    return CONFIG_MUTATION_ALLOWED;
+  }
+  return {
+    mode: "blocked",
+    scope: "config",
+    reason:
+      "Config plugins and hooks cannot be updated together while either section uses a top-level $include; update them separately.",
+  };
 }
 
 export function selectInstallMutationWriteOptions(

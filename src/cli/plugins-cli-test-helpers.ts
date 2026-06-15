@@ -492,18 +492,22 @@ vi.mock("../plugins/uninstall.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/update.js", () => ({
-  updateNpmInstalledPlugins: ((
-    ...args: Parameters<(typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"]>,
-      ReturnType<(typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"]>
-    >(
-      updateNpmInstalledPlugins,
-      ...args,
-    )) as (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"],
-}));
+vi.mock("../plugins/update.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/update.js")>();
+  return {
+    ...actual,
+    updateNpmInstalledPlugins: ((
+      ...args: Parameters<(typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"]>
+    ) =>
+      invokeMock<
+        Parameters<(typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"]>,
+        ReturnType<(typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"]>
+      >(
+        updateNpmInstalledPlugins,
+        ...args,
+      )) as (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"],
+  };
+});
 
 vi.mock("../hooks/update.js", () => ({
   updateNpmInstalledHookPacks: ((

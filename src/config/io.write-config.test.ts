@@ -334,6 +334,49 @@ describe("config io write", () => {
     });
   });
 
+  it("retains included shipped plugin install records in write snapshots", async () => {
+    await withSuiteHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const pluginsPath = path.join(configDir, "plugins.json5");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ plugins: { $include: "./plugins.json5" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        pluginsPath,
+        `${JSON.stringify(
+          {
+            installs: {
+              demo: {
+                source: "npm",
+                spec: "demo@1.0.0",
+                installPath: "/tmp/demo",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const prepared = await createFastConfigIO(home).readConfigFileSnapshotForWrite();
+
+      expect(prepared.snapshot.valid).toBe(true);
+      expect(prepared.snapshot.parsed).toEqual({
+        plugins: { $include: "./plugins.json5" },
+      });
+      expectInstallRecord(prepared.snapshot.sourceConfig.plugins?.installs?.demo, {
+        source: "npm",
+        spec: "demo@1.0.0",
+        installPath: "/tmp/demo",
+      });
+    });
+  });
+
   it("migrates shipped plugin install config records into the plugin index during explicit writes", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
