@@ -28,6 +28,15 @@ type Artifact = {
   size_in_bytes?: number;
 };
 
+type ExistingComment = {
+  body?: string;
+  id: number;
+  user?: {
+    login?: string;
+    type?: string;
+  };
+};
+
 function commenterScript(): string {
   const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as Workflow;
   const step = workflow.jobs?.comment?.steps?.find(
@@ -40,7 +49,15 @@ function commenterScript(): string {
   return script;
 }
 
-async function runCommenter(artifact: Artifact, archiveData: Buffer) {
+async function runCommenter(
+  artifact: Artifact,
+  archiveData: Buffer,
+  options: {
+    existingComments?: ExistingComment[];
+    liveHeadSha?: string;
+    runHeadSha?: string;
+  } = {},
+) {
   const script = commenterScript();
   const artifactName = "ios-periphery-dead-code-12345";
   const core = {
@@ -54,6 +71,9 @@ async function runCommenter(artifact: Artifact, archiveData: Buffer) {
     },
   };
   let downloadCount = 0;
+  let artifactListCount = 0;
+  const createdBodies: string[] = [];
+  const updatedBodies: string[] = [];
   const github = {
     rest: {
       actions: {
@@ -65,15 +85,19 @@ async function runCommenter(artifact: Artifact, archiveData: Buffer) {
       },
       issues: {
         listComments() {},
-        async createComment() {},
-        async updateComment() {},
+        async createComment(params: { body: string }) {
+          createdBodies.push(params.body);
+        },
+        async updateComment(params: { body: string }) {
+          updatedBodies.push(params.body);
+        },
       },
       pulls: {
         async get() {
           return {
             data: {
               base: { repo: { full_name: "openclaw/openclaw" } },
-              head: { sha: "head-sha" },
+              head: { sha: options.liveHeadSha ?? "head-sha" },
               number: 123,
               state: "open",
             },
@@ -83,10 +107,11 @@ async function runCommenter(artifact: Artifact, archiveData: Buffer) {
     },
     async paginate(_request: unknown, params: Record<string, unknown>) {
       if (params.run_id === 12345) {
+        artifactListCount += 1;
         return [{ ...artifact, name: artifact.name || artifactName }];
       }
       if (params.issue_number === 123) {
-        return [];
+        return options.existingComments ?? [];
       }
       throw new Error(`unexpected paginate call: ${JSON.stringify(params)}`);
     },
@@ -95,7 +120,7 @@ async function runCommenter(artifact: Artifact, archiveData: Buffer) {
     payload: {
       workflow_run: {
         event: "pull_request",
-        head_sha: "head-sha",
+        head_sha: options.runHeadSha ?? "head-sha",
         id: 12345,
         name: "iOS Periphery Dead Code",
         pull_requests: [{ number: 123 }],
@@ -122,7 +147,13 @@ async function runCommenter(artifact: Artifact, archiveData: Buffer) {
 
   await execute(createRequire(import.meta.url), context, core, github);
 
-  return { core, downloadCount };
+  return {
+    artifactListCount,
+    core,
+    createdBodies,
+    downloadCount,
+    updatedBodies,
+  };
 }
 
 function crc32(input: Buffer): number {
@@ -213,6 +244,16 @@ function makeZip(files: Record<string, string>): Buffer {
   return Buffer.concat([localData, centralDirectory, endOfCentralDirectory]);
 }
 
+function markFirstCentralDirectoryEntryEncrypted(archive: Buffer): Buffer {
+  const result = Buffer.from(archive);
+  const offset = result.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  if (offset < 0) {
+    throw new Error("missing ZIP central directory entry");
+  }
+  result.writeUInt16LE(1, offset + 8);
+  return result;
+}
+
 describe("iOS Periphery comment workflow", () => {
   it("parses the workflow YAML and embedded github-script JavaScript", () => {
     expect(() => commenterScript()).not.toThrow();
@@ -262,5 +303,129 @@ describe("iOS Periphery comment workflow", () => {
     expect(result.core.warnings).toEqual([
       "Skipping ios-periphery-dead-code-12345; compressed artifact size 1048577 exceeds the 1048576 byte limit.",
     ]);
+  });
+
+  it("rejects unexpected artifact paths", async () => {
+    const archive = makeZip({
+      "../periphery.json": "[]\n",
+      "periphery.status": "0\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: "ios-periphery-dead-code-12345",
+        size_in_bytes: archive.length,
+      },
+      archive,
+    );
+
+    expect(result.createdBodies).toEqual([]);
+    expect(result.core.warnings).toEqual([
+      "Skipping ios-periphery-dead-code-12345; unexpected artifact entry ../periphery.json.",
+    ]);
+  });
+
+  it("rejects encrypted artifact entries", async () => {
+    const archive = markFirstCentralDirectoryEntryEncrypted(
+      makeZip({
+        "periphery.json": "[]\n",
+        "periphery.status": "0\n",
+      }),
+    );
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: "ios-periphery-dead-code-12345",
+        size_in_bytes: archive.length,
+      },
+      archive,
+    );
+
+    expect(result.createdBodies).toEqual([]);
+    expect(result.core.warnings).toEqual([
+      "Skipping ios-periphery-dead-code-12345; periphery.json is encrypted.",
+    ]);
+  });
+
+  it("does not read artifacts from a stale workflow run", async () => {
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: "ios-periphery-dead-code-12345",
+        size_in_bytes: 1,
+      },
+      Buffer.alloc(0),
+      {
+        liveHeadSha: "new-head",
+        runHeadSha: "old-head",
+      },
+    );
+
+    expect(result.artifactListCount).toBe(0);
+    expect(result.downloadCount).toBe(0);
+  });
+
+  it("escapes finding text before creating a PR comment", async () => {
+    const archive = makeZip({
+      "periphery.json": JSON.stringify([
+        {
+          kind: "<script>",
+          location: "Sources/Test.swift:12",
+          name: "bad|name\nnext",
+        },
+      ]),
+      "periphery.status": "1\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: "ios-periphery-dead-code-12345",
+        size_in_bytes: archive.length,
+      },
+      archive,
+    );
+
+    expect(result.createdBodies).toHaveLength(1);
+    expect(result.createdBodies[0]).toContain("&lt;script&gt;");
+    expect(result.createdBodies[0]).toContain("bad\\|name next");
+    expect(result.createdBodies[0]).not.toContain("<script>");
+  });
+
+  it("does not overwrite a marker comment owned by another bot", async () => {
+    const archive = makeZip({
+      "periphery.json": JSON.stringify([
+        {
+          kind: "function",
+          location: "Sources/Test.swift:12",
+          name: "unused",
+        },
+      ]),
+      "periphery.status": "1\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: "ios-periphery-dead-code-12345",
+        size_in_bytes: archive.length,
+      },
+      archive,
+      {
+        existingComments: [
+          {
+            body: "<!-- openclaw-ios-periphery-dead-code -->",
+            id: 99,
+            user: { login: "another-app[bot]", type: "Bot" },
+          },
+        ],
+      },
+    );
+
+    expect(result.updatedBodies).toEqual([]);
+    expect(result.createdBodies).toHaveLength(1);
   });
 });
