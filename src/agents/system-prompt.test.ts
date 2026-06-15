@@ -1244,6 +1244,34 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("thinking=low");
   });
 
+  it("prefers identityName over agentId in runtime line", () => {
+    const line = buildRuntimeLine({
+      agentId: "main",
+      identityName: "Runt",
+      host: "host",
+      os: "linux",
+      arch: "x64",
+      node: "v22",
+      model: "anthropic/claude",
+    });
+
+    expect(line).toContain("agent=Runt");
+    expect(line).not.toContain("agent=main");
+  });
+
+  it("falls back to agentId when identityName is not set", () => {
+    const line = buildRuntimeLine({
+      agentId: "main",
+      host: "host",
+      os: "linux",
+      arch: "x64",
+      node: "v22",
+      model: "anthropic/claude",
+    });
+
+    expect(line).toContain("agent=main");
+  });
+
   it("renders extra system prompt exactly once", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

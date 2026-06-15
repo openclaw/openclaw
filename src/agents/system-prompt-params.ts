@@ -9,6 +9,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { resolveAgentConfig } from "./agent-scope.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
@@ -19,6 +20,7 @@ import {
 
 type RuntimeInfoInput = {
   agentId?: string;
+  identityName?: string;
   sessionKey?: string;
   sessionId?: string;
   host: string;
@@ -56,12 +58,16 @@ export function buildSystemPromptParams(params: {
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
   });
+  const agentConfig =
+    params.config && params.agentId ? resolveAgentConfig(params.config, params.agentId) : undefined;
+  const identityName = agentConfig?.identity?.name || undefined;
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
   const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
   return {
     runtimeInfo: {
       agentId: params.agentId,
+      identityName,
       ...params.runtime,
       repoRoot,
     },
