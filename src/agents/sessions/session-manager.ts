@@ -1328,13 +1328,16 @@ export class SessionManager {
       // prefix state that immediately precedes the exact bytes being appended.
       const serializedEntry = serializeJsonlEntry(entry);
       const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
-      const cacheOwnedAppend = Boolean(
-        beforeAppendSnapshot &&
+      // Custom entry serialization can run extension toJSON code after this
+      // manager built its prefix. Re-read next time instead of advancing a cache
+      // that may still describe the pre-serialization bytes.
+      const cacheOwnedAppend =
+        entry.type !== "custom" &&
+        beforeAppendSnapshot !== undefined &&
         canAdvanceOwnedSessionEntryCache({
           sessionFile: this.sessionFile,
           snapshot: beforeAppendSnapshot,
-        }),
-      );
+        });
       const serializedAppend = appendSerializedJsonlEntrySync(this.sessionFile, serializedEntry, {
         prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
       });
