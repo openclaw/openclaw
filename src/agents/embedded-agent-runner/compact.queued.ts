@@ -502,7 +502,6 @@ export async function compactEmbeddedAgentSession(
         }
         if (
           result.ok &&
-          result.compacted &&
           hookRunner?.hasHooks?.("after_compaction") &&
           hookRunner.runAfterCompaction
         ) {
@@ -512,12 +511,23 @@ export async function compactEmbeddedAgentSession(
               sessionId: postCompactionSessionId,
             };
             await hookRunner.runAfterCompaction(
-              {
-                messageCount: -1,
-                compactedCount: -1,
-                tokenCount: result.result?.tokensAfter,
-                sessionFile: postCompactionSessionFile,
-              },
+              result.compacted
+                ? {
+                    messageCount: -1,
+                    compactedCount: -1,
+                    tokenCount: result.result?.tokensAfter,
+                    sessionFile: postCompactionSessionFile,
+                  }
+                : {
+                    messageCount: -1,
+                    compactedCount: 0,
+                    tokenCount: result.result?.tokensAfter,
+                    sessionFile: postCompactionSessionFile,
+                    reason:
+                      typeof result.reason === "string" && result.reason.trim()
+                        ? result.reason
+                        : "policy_skipped",
+                  },
               afterHookCtx,
             );
           } catch (err) {

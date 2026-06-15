@@ -937,7 +937,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
         firstStringParam(err?.params?.additionalProperties);
       if (additionalProperty) {
         const where = instancePath ? `at ${instancePath}` : "at root";
-        parts.push(`${where}: unexpected property '${additionalProperty}'`);
+        parts.push(`${where}: unexpected property "${additionalProperty}"`);
         continue;
       }
     }
@@ -947,7 +947,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
         firstStringParam(err?.params?.requiredProperties);
       if (missingProperty) {
         const where = instancePath ? `at ${instancePath}: ` : "";
-        parts.push(`${where}must have required property '${missingProperty}'`);
+        parts.push(`${where}must have required property "${missingProperty}"`);
         continue;
       }
     }

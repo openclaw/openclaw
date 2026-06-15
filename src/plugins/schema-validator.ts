@@ -274,7 +274,7 @@ function formatRequiredMessage(error: TypeBoxValidationError): string | null {
   if (!missingProperty) {
     return null;
   }
-  return `must have required property '${missingProperty}'`;
+  return `must have required property "${missingProperty}"`;
 }
 
 function formatAdditionalPropertiesMessage(error: TypeBoxValidationError): string | null {
