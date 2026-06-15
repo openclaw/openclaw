@@ -149,10 +149,16 @@ function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | nul
 
 function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOptions {
   const getConfig = () => ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+  const config = getConfig();
+  const agentId =
+    ctx.agentId ??
+    (config
+      ? resolveSessionAgentIds({ sessionKey: ctx.sessionKey, config }).sessionAgentId
+      : undefined);
   return {
-    config: getConfig(),
+    config,
     getConfig,
-    agentId: ctx.agentId,
+    agentId,
     agentSessionKey: ctx.sessionKey,
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
