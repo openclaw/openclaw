@@ -8,8 +8,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 invocation_root="$(pwd)"
 
-if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish] <package-dir>" >&2
+if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" && "${mode}" != "--pack" ]]; then
+  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>" >&2
   exit 2
 fi
 
@@ -119,6 +119,21 @@ if [[ ! -f "${pack_path}" ]]; then
   exit 1
 fi
 
+echo "Resolved ClawPack: ${pack_path}"
+
+if [[ "${mode}" == "--pack" ]]; then
+  output_dir="${OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR:-}"
+  if [[ -z "${output_dir}" ]]; then
+    echo "OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR is required for --pack" >&2
+    exit 2
+  fi
+  mkdir -p "${output_dir}"
+  output_path="${output_dir}/$(basename "${pack_path}")"
+  cp "${pack_path}" "${output_path}"
+  echo "Packed ClawPack: ${output_path}"
+  exit 0
+fi
+
 publish_cmd=(
   clawhub
   --workdir
@@ -142,8 +157,6 @@ if [[ -n "${source_ref}" ]]; then
     "${source_ref}"
   )
 fi
-
-echo "Resolved ClawPack: ${pack_path}"
 
 printf 'Publish command: CLAWHUB_WORKDIR=%q' "${clawhub_workdir}"
 printf ' %q' "${publish_cmd[@]}"

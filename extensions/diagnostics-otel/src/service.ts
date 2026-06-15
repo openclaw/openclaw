@@ -109,6 +109,11 @@ type OtelModelCallContent = {
   toolDefinitions?: unknown;
 };
 
+type OtelToolCallContent = {
+  toolInput?: unknown;
+  toolOutput?: unknown;
+};
+
 type MessageDeliveryDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   {
@@ -910,14 +915,14 @@ function assignOtelModelContentAttributes(
 
 function assignOtelToolContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  event: Record<string, unknown>,
+  content: OtelToolCallContent | undefined,
   policy: OtelContentCapturePolicy,
 ): void {
   if (policy.toolInputs) {
-    assignOtelContentAttribute(attributes, "openclaw.content.tool_input", event.toolInput);
+    assignOtelContentAttribute(attributes, "openclaw.content.tool_input", content?.toolInput);
   }
   if (policy.toolOutputs) {
-    assignOtelContentAttribute(attributes, "openclaw.content.tool_output", event.toolOutput);
+    assignOtelContentAttribute(attributes, "openclaw.content.tool_output", content?.toolOutput);
   }
 }
 
@@ -1464,8 +1469,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         "openclaw.model_call.response_bytes",
         {
           unit: "By",
-          description:
-            "UTF-8 byte size of streamed model response events excluding accumulated partial snapshots",
+          description: "UTF-8 byte size of bounded streamed model response payloads",
         },
       );
       const modelCallTimeToFirstByteHistogram = meter.createHistogram(
@@ -3046,6 +3050,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordToolExecutionCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.completed" }>,
         metadata: DiagnosticEventMetadata,
+        toolContent?: OtelToolCallContent,
       ) => {
         const attrs = toolExecutionBaseAttrs(evt);
         toolExecutionDurationHistogram.record(evt.durationMs, attrs);
@@ -3056,11 +3061,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           ...toolExecutionBaseAttrs(evt),
         };
         addRunAttrs(spanAttrs, evt);
-        assignOtelToolContentAttributes(
-          spanAttrs,
-          evt as unknown as Record<string, unknown>,
-          contentCapturePolicy,
-        );
+        assignOtelToolContentAttributes(spanAttrs, toolContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
           spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
@@ -3074,6 +3075,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordToolExecutionError = (
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.error" }>,
         metadata: DiagnosticEventMetadata,
+        toolContent?: OtelToolCallContent,
       ) => {
         const attrs = {
           ...toolExecutionBaseAttrs(evt),
@@ -3091,11 +3093,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.errorCode) {
           spanAttrs["openclaw.errorCode"] = lowCardinalityAttr(evt.errorCode, "other");
         }
-        assignOtelToolContentAttributes(
-          spanAttrs,
-          evt as unknown as Record<string, unknown>,
-          contentCapturePolicy,
-        );
+        assignOtelToolContentAttributes(spanAttrs, toolContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
           spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
@@ -3426,10 +3424,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordToolExecutionStarted(evt, metadata);
               return;
             case "tool.execution.completed":
-              recordToolExecutionCompleted(evt, metadata);
+              recordToolExecutionCompleted(evt, metadata, privateData.toolContent);
               return;
             case "tool.execution.error":
-              recordToolExecutionError(evt, metadata);
+              recordToolExecutionError(evt, metadata, privateData.toolContent);
               return;
             case "tool.execution.blocked":
               recordToolExecutionBlocked(evt, metadata);

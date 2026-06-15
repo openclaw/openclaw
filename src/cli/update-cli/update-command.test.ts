@@ -675,7 +675,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
           "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
         guidance: [
           "Run `openclaw doctor` to inspect the config validation errors.",
-          "Once the config parses, rerun `openclaw update`.",
+          "Once the config parses, rerun `openclaw update repair`.",
         ],
       },
     ]);
@@ -694,7 +694,7 @@ describe("buildInvalidConfigPostCoreUpdateResult", () => {
     const built = buildInvalidConfigPostCoreUpdateResult();
     expect(built.guidance).toStrictEqual([
       "Run `openclaw doctor` to inspect the config validation errors.",
-      "Once the config parses, rerun `openclaw update`.",
+      "Once the config parses, rerun `openclaw update repair`.",
     ]);
     expect(built.result.warnings).toStrictEqual([
       {

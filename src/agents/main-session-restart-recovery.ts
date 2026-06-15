@@ -30,6 +30,10 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import {
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
+} from "./embedded-agent-runner/run-state.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -63,6 +67,22 @@ function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
     }
   }
   return normalized;
+}
+
+function normalizeFiniteTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function hasCurrentProcessOwner(params: {
+  activeSessionIds: Set<string>;
+  activeSessionKeys: Set<string>;
+  entry: SessionEntry;
+  sessionKey: string;
+}): boolean {
+  if (params.activeSessionIds.has(params.entry.sessionId)) {
+    return true;
+  }
+  return params.activeSessionIds.size === 0 && params.activeSessionKeys.has(params.sessionKey);
 }
 
 function normalizeTranscriptLockPath(lockPath: string): string | undefined {
@@ -193,6 +213,72 @@ export async function markRestartAbortedMainSessions(params: {
         params.reason ? ` (${params.reason})` : ""
       }`,
     );
+  }
+  return result;
+}
+
+export async function markStartupOrphanedMainSessionsForRecovery(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+  activeSessionIds?: Iterable<string>;
+  activeSessionKeys?: Iterable<string>;
+  updatedBeforeMs?: number;
+}): Promise<{ marked: number; skipped: number }> {
+  const result = { marked: 0, skipped: 0 };
+  const providedActiveSessionIds =
+    params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
+  const providedActiveSessionKeys =
+    params.activeSessionKeys === undefined
+      ? undefined
+      : normalizeStringSet(params.activeSessionKeys);
+  const updatedBeforeMs = normalizeFiniteTimestamp(params.updatedBeforeMs);
+  const resolveActiveSessionIds = () =>
+    providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
+  const resolveActiveSessionKeys = () =>
+    providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
+
+  for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        for (const [sessionKey, entry] of Object.entries(store)) {
+          if (!entry || entry.status !== "running" || entry.abortedLastRun === true) {
+            continue;
+          }
+          if (shouldSkipMainRecovery(entry, sessionKey)) {
+            result.skipped++;
+            continue;
+          }
+          const updatedAt = normalizeFiniteTimestamp(entry.updatedAt);
+          if (
+            updatedBeforeMs !== undefined &&
+            updatedAt !== undefined &&
+            updatedAt > updatedBeforeMs
+          ) {
+            continue;
+          }
+          if (
+            hasCurrentProcessOwner({
+              activeSessionIds: resolveActiveSessionIds(),
+              activeSessionKeys: resolveActiveSessionKeys(),
+              entry,
+              sessionKey,
+            })
+          ) {
+            continue;
+          }
+          entry.abortedLastRun = true;
+          entry.updatedAt = Date.now();
+          store[sessionKey] = entry;
+          result.marked++;
+        }
+      },
+      { skipMaintenance: true },
+    );
+  }
+
+  if (result.marked > 0) {
+    log.warn(`marked ${result.marked} startup-orphaned main session(s) for restart recovery`);
   }
   return result;
 }
@@ -504,12 +590,48 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   return result;
 }
 
+function isRoutableRecoveryStore(params: {
+  cfg?: OpenClawConfig;
+  sessionKey: string;
+  storePath: string;
+}): boolean {
+  if (!params.cfg) {
+    return true;
+  }
+  if (!params.cfg.session?.store) {
+    return true;
+  }
+  try {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.sessionKey,
+      scanLegacyKeys: true,
+    });
+    return path.resolve(target.storePath) === path.resolve(params.storePath);
+  } catch (err) {
+    log.warn(`failed to resolve recovery store for ${params.sessionKey}: ${String(err)}`);
+    return false;
+  }
+}
+
 async function recoverStore(params: {
   cfg?: OpenClawConfig;
   storePath: string;
   resumedSessionKeys: Set<string>;
+  activeSessionIds?: Iterable<string>;
+  activeSessionKeys?: Iterable<string>;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
+  const providedActiveSessionIds =
+    params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
+  const providedActiveSessionKeys =
+    params.activeSessionKeys === undefined
+      ? undefined
+      : normalizeStringSet(params.activeSessionKeys);
+  const resolveActiveSessionIds = () =>
+    providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
+  const resolveActiveSessionKeys = () =>
+    providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
   let store: Record<string, SessionEntry>;
   try {
     store = loadSessionStore(params.storePath);
@@ -529,8 +651,47 @@ async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    if (params.resumedSessionKeys.has(sessionKey)) {
+    if (
+      !isRoutableRecoveryStore({
+        cfg: params.cfg,
+        sessionKey,
+        storePath: params.storePath,
+      })
+    ) {
       result.skipped++;
+      continue;
+    }
+    if (
+      hasCurrentProcessOwner({
+        activeSessionIds: resolveActiveSessionIds(),
+        activeSessionKeys: resolveActiveSessionKeys(),
+        entry,
+        sessionKey,
+      })
+    ) {
+      result.skipped++;
+      continue;
+    }
+    const resumeDedupeKey = sessionKey;
+    if (params.resumedSessionKeys.has(resumeDedupeKey)) {
+      result.skipped++;
+      continue;
+    }
+
+    if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+      const resumed = await resumeMainSession({
+        cfg: params.cfg,
+        entry,
+        storePath: params.storePath,
+        sessionKey,
+        pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+      });
+      if (resumed) {
+        params.resumedSessionKeys.add(resumeDedupeKey);
+        result.recovered++;
+      } else {
+        result.failed++;
+      }
       continue;
     }
 
@@ -577,7 +738,7 @@ async function recoverStore(params: {
       pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
     });
     if (resumed) {
-      params.resumedSessionKeys.add(sessionKey);
+      params.resumedSessionKeys.add(resumeDedupeKey);
       result.recovered++;
     } else {
       result.failed++;
@@ -610,6 +771,8 @@ export async function recoverRestartAbortedMainSessions(
     cfg?: OpenClawConfig;
     stateDir?: string;
     resumedSessionKeys?: Set<string>;
+    activeSessionIds?: Iterable<string>;
+    activeSessionKeys?: Iterable<string>;
   } = {},
 ): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
@@ -620,6 +783,8 @@ export async function recoverRestartAbortedMainSessions(
       cfg: params.cfg,
       storePath,
       resumedSessionKeys,
+      activeSessionIds: params.activeSessionIds,
+      activeSessionKeys: params.activeSessionKeys,
     });
     result.recovered += storeResult.recovered;
     result.failed += storeResult.failed;
@@ -634,6 +799,39 @@ export async function recoverRestartAbortedMainSessions(
   return result;
 }
 
+export async function recoverStartupOrphanedMainSessions(
+  params: {
+    cfg?: OpenClawConfig;
+    stateDir?: string;
+    activeSessionIds?: Iterable<string>;
+    activeSessionKeys?: Iterable<string>;
+    updatedBeforeMs?: number;
+    resumedSessionKeys?: Set<string>;
+  } = {},
+): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
+  const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
+  const marked = await markStartupOrphanedMainSessionsForRecovery({
+    cfg: params.cfg,
+    stateDir: params.stateDir,
+    activeSessionIds: params.activeSessionIds,
+    activeSessionKeys: params.activeSessionKeys,
+    updatedBeforeMs: startupRecoveryCutoffMs,
+  });
+  const recovered = await recoverRestartAbortedMainSessions({
+    cfg: params.cfg,
+    stateDir: params.stateDir,
+    resumedSessionKeys: params.resumedSessionKeys,
+    activeSessionIds: params.activeSessionIds,
+    activeSessionKeys: params.activeSessionKeys,
+  });
+  return {
+    marked: marked.marked,
+    recovered: recovered.recovered,
+    failed: recovered.failed,
+    skipped: marked.skipped + recovered.skipped,
+  };
+}
+
 export function scheduleRestartAbortedMainSessionRecovery(
   params: {
     cfg?: OpenClawConfig;
@@ -645,29 +843,41 @@ export function scheduleRestartAbortedMainSessionRecovery(
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
   const resumedSessionKeys = new Set<string>();
+  // Only reconcile rows that existed before this startup recovery was scheduled.
+  // Fresh runs started by this gateway are protected again by the active-run check.
+  const startupRecoveryCutoffMs = Date.now();
 
-  const attemptRecovery = (attempt: number, delay: number) => {
-    setTimeout(() => {
-      void recoverRestartAbortedMainSessions({
-        cfg: params.cfg,
-        stateDir: params.stateDir,
-        resumedSessionKeys,
+  const runRecoveryAttempt = (attempt: number, delay: number) => {
+    void recoverStartupOrphanedMainSessions({
+      cfg: params.cfg,
+      stateDir: params.stateDir,
+      resumedSessionKeys,
+      updatedBeforeMs: startupRecoveryCutoffMs,
+    })
+      .then((result) => {
+        if (result.failed > 0 && attempt < maxRetries) {
+          scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+        }
       })
-        .then((result) => {
-          if (result.failed > 0 && attempt < maxRetries) {
-            attemptRecovery(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
-          }
-        })
-        .catch((err: unknown) => {
-          if (attempt < maxRetries) {
-            log.warn(`main-session restart recovery failed: ${String(err)}`);
-            attemptRecovery(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
-          } else {
-            log.warn(`main-session restart recovery gave up: ${String(err)}`);
-          }
-        });
+      .catch((err: unknown) => {
+        if (attempt < maxRetries) {
+          log.warn(`main-session restart recovery failed: ${String(err)}`);
+          scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+        } else {
+          log.warn(`main-session restart recovery gave up: ${String(err)}`);
+        }
+      });
+  };
+
+  const scheduleAttempt = (attempt: number, delay: number) => {
+    if (delay <= 0) {
+      runRecoveryAttempt(attempt, delay);
+      return;
+    }
+    setTimeout(() => {
+      runRecoveryAttempt(attempt, delay);
     }, delay).unref?.();
   };
 
-  attemptRecovery(1, initialDelay);
+  scheduleAttempt(1, initialDelay);
 }

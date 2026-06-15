@@ -24,6 +24,7 @@ import {
   clearEmbeddedRunAbandonment,
   consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunHandleActive,
   isEmbeddedRunAbandoned,
   formatEmbeddedAgentQueueFailureSummary,
@@ -89,6 +90,20 @@ describe("embedded-agent runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortCompacting).toHaveBeenCalledTimes(1);
     expect(abortNormal).not.toHaveBeenCalled();
+  });
+
+  it("keeps queued reply operations out of compact abort checks", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-reply-run",
+      resetTriggered: false,
+    });
+
+    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(false);
+
+    operation.setPhase("running");
+
+    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(true);
   });
 
   it("aborts every active run in all mode", () => {

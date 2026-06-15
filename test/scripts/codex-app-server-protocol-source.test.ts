@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexProtocolExportArgs,
+  canonicalizeCodexAppServerProtocolJson,
+  formatCodexAppServerProtocolJsonText,
   resolveCodexAppServerProtocolSource,
   resolveCodexProtocolCargoTargetDir,
   resolveCodexProtocolMinFreeBytes,
@@ -158,6 +160,81 @@ describe("codex app-server protocol source resolver", () => {
     await expect(resolveCodexAppServerProtocolSource(worktreeRoot)).resolves.toEqual({
       codexRepo,
       sourceRoot: path.join(codexRepo, "codex-rs/app-server-protocol/schema"),
+    });
+  });
+});
+
+describe("Codex app-server protocol JSON canonicalizer", () => {
+  it("sorts object keys recursively before formatting", () => {
+    const source = JSON.stringify({
+      z: {
+        d: 1,
+        b: {
+          y: 2,
+          x: 3,
+        },
+      },
+      a: [
+        {
+          z: 4,
+          a: {
+            c: 5,
+            b: 6,
+          },
+        },
+      ],
+    });
+
+    expect(formatCodexAppServerProtocolJsonText(source)).toBe(`{
+  "a": [
+    {
+      "a": {
+        "b": 6,
+        "c": 5
+      },
+      "z": 4
+    }
+  ],
+  "z": {
+    "b": {
+      "x": 3,
+      "y": 2
+    },
+    "d": 1
+  }
+}
+`);
+  });
+
+  it("sorts arrays only when plain object items expose top-level type values", () => {
+    expect(
+      canonicalizeCodexAppServerProtocolJson({
+        enum: ["z", "a"],
+        mixed: [{ type: "b" }, "item", { type: "a" }],
+        oneOf: [
+          { title: "Second", z: true },
+          { a: true, title: "First" },
+        ],
+        required: ["z", "a"],
+        typed: [
+          { type: "beta", z: 1 },
+          { type: "alpha", z: 2 },
+          { type: "beta", z: 3 },
+        ],
+      }),
+    ).toEqual({
+      enum: ["z", "a"],
+      mixed: [{ type: "b" }, "item", { type: "a" }],
+      oneOf: [
+        { title: "Second", z: true },
+        { a: true, title: "First" },
+      ],
+      required: ["z", "a"],
+      typed: [
+        { type: "alpha", z: 2 },
+        { type: "beta", z: 1 },
+        { type: "beta", z: 3 },
+      ],
     });
   });
 });

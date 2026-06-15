@@ -67,10 +67,17 @@ automatically re-embedding everything. Rebuild when you are ready with
 `openclaw memory index --force --agent <id>`.
 </Warning>
 
-If OpenAI embeddings are unreachable from your network, memory recall fails open
-instead of blocking the turn. Set the existing `memorySearch.provider` field to a
-reachable local, Ollama, regional, or OpenAI-compatible provider to restore
-semantic ranking.
+When `provider` is unset, legacy `provider: "auto"` is present, or
+`provider: "none"` intentionally selects FTS-only mode, memory recall can still
+use lexical FTS ranking when embeddings are unavailable.
+
+Explicit non-local providers fail closed. If you set `memorySearch.provider` to
+a concrete remote-backed provider such as OpenAI, Gemini, Voyage, Mistral,
+Bedrock, GitHub Copilot, DeepInfra, Ollama, LM Studio, or an OpenAI-compatible
+custom provider, and that provider is unavailable at runtime, `memory_search`
+returns an unavailable result instead of silently using FTS-only recall. Fix the
+provider/auth configuration, switch to a reachable provider, or set
+`provider: "none"` if you want deliberate FTS-only recall.
 
 ### Custom provider ids
 
@@ -267,13 +274,14 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     ```
 
   </Accordion>
-  <Accordion title="Local (GGUF + node-llama-cpp)">
+  <Accordion title="Local (GGUF + llama.cpp)">
     | Key                   | Type               | Default                | Description                                                                                                                                                                                                                                                                                                          |
     | --------------------- | ------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
     | `local.modelPath`     | `string`           | auto-downloaded        | Path to GGUF model file                                                                                                                                                                                                                                                                                              |
     | `local.modelCacheDir` | `string`           | node-llama-cpp default | Cache dir for downloaded models                                                                                                                                                                                                                                                                                      |
     | `local.contextSize`   | `number \| "auto"` | `4096`                 | Context window size for the embedding context. 4096 covers typical chunks (128–512 tokens) while bounding non-weight VRAM. Lower to 1024–2048 on constrained hosts. `"auto"` uses the model's trained maximum — not recommended for 8B+ models (Qwen3-Embedding-8B: 40 960 tokens → ~32 GB VRAM vs ~8.8 GB at 4096). |
 
+    Install the official llama.cpp provider first: `openclaw plugins install @openclaw/llama-cpp-provider`.
     Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded). Source checkouts still require native build approval: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
 
     Use the standalone CLI to verify the same provider path the Gateway uses:
@@ -490,8 +498,8 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | ------------------------- | --------- | ------- | ------------------------------------- |
     | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
     | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; also gates opt-in startup refresh |
-    | `update.startup`          | `string`  | `off`   | Optional gateway-start refresh: `off`, `idle`, or `immediate` |
+    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; set false to skip the immediate boot update |
+    | `update.startup`          | `string`  | `off`   | Optional gateway-start QMD initialization: `off`, `idle`, or `immediate` |
     | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
     | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
     | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
@@ -540,7 +548,7 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
   </Accordion>
 </AccordionGroup>
 
-QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager still owns the regular file watcher and interval timers when memory search is opened for interactive use.
+When gateway-start QMD initialization is enabled, OpenClaw starts QMD only for eligible agents. If `update.onBoot` is true and no interval/embed maintenance is configured, startup uses a one-shot manager for the boot refresh and closes it. If an update or embed interval is configured, startup opens the long-lived QMD manager so it can own the watcher and interval timers; `update.onBoot: false` skips only the immediate boot refresh.
 
 ### Full QMD example
 

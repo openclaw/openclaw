@@ -579,6 +579,16 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
   return container;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("chat compaction divider", () => {
   it("renders checkpoint recovery copy and action", () => {
     const onOpenSessionCheckpoints = vi.fn();
@@ -1438,6 +1448,55 @@ describe("chat slash menu accessibility", () => {
 
     expect(onDraftChange).toHaveBeenCalledWith("plain first message");
     expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests slash command hydration only after slash intent", () => {
+    const onSlashIntent = vi.fn(async () => undefined);
+    const container = renderChatView({ onSlashIntent });
+
+    inputDraft(container, "plain first message");
+
+    expect(onSlashIntent).not.toHaveBeenCalled();
+
+    inputDraft(container, "/");
+
+    expect(onSlashIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reopen slash suggestions when command hydration finishes after plain typing", async () => {
+    let draft = "";
+    const hydration = createDeferred<void>();
+    const onSlashIntent = vi.fn(() => hydration.promise);
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onRequestUpdate: renderCurrent,
+            onSlashIntent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+
+    inputDraft(container, "/");
+    expect(container.querySelector(".slash-menu")).not.toBeNull();
+
+    inputDraft(container, "plain first message");
+    expect(container.querySelector(".slash-menu")).toBeNull();
+    hydration.resolve();
+    await hydration.promise;
+    await Promise.resolve();
+
+    expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
   it("clears the visible local draft immediately when send clears the host draft", () => {

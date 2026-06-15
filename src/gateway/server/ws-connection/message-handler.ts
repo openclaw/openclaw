@@ -180,7 +180,7 @@ class NodePairingRateLimitError extends Error {
   }
 }
 
-/** Match production release versions (YYYY.M.D or YYYY.M.D-beta.N). */
+/** Match production release versions (YYYY.M.PATCH or YYYY.M.PATCH-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
 
 function isReleasedVersion(version: string): boolean {
@@ -1725,6 +1725,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
         const isTrustedApprovalRuntime =
+          pairingLocality !== "remote" &&
           scopes.includes(APPROVALS_SCOPE) &&
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
           connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&

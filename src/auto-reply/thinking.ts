@@ -1,3 +1,7 @@
+import {
+  CLAUDE_FABLE_5_THINKING_PROFILE,
+  resolveClaudeFable5ModelIdentity,
+} from "@openclaw/llm-core";
 // Thinking/reasoning level catalog helpers for auto-reply model controls.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
@@ -95,7 +99,9 @@ function resolveThinkingPolicyContext(params: {
     normalizedProvider,
     modelId,
     modelKey,
+    api: candidate?.api,
     reasoning: candidate?.reasoning,
+    ...(candidate?.params ? { params: candidate.params } : {}),
     compat: candidate?.compat,
   };
 }
@@ -188,12 +194,22 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     modelId: context.modelId,
     reasoning: context.reasoning,
+    ...(context.params ? { params: context.params } : {}),
     compat: context.compat,
   };
-  const pluginProfile = resolveProviderThinkingProfile({
+  const providerProfile = resolveProviderThinkingProfile({
     provider: context.normalizedProvider,
     context: providerContext,
   });
+  const fableProfile =
+    context.api === "anthropic-messages" &&
+    resolveClaudeFable5ModelIdentity({
+      id: context.modelId,
+      params: context.params,
+    })
+      ? CLAUDE_FABLE_5_THINKING_PROFILE
+      : undefined;
+  const pluginProfile = providerProfile ?? fableProfile;
   if (pluginProfile) {
     const normalized = normalizeThinkingProfile(pluginProfile);
     if (

@@ -6,6 +6,7 @@ import {
   registerWhatsAppConnectionController,
   unregisterWhatsAppConnectionController,
 } from "./connection-controller-registry.js";
+import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
 import {
@@ -368,6 +369,30 @@ export class WhatsAppConnectionController {
 
   getActiveListener(): ActiveWebListener | null {
     return this.current?.listener ?? null;
+  }
+
+  getCurrentSock(): WASocket | null {
+    return this.socketRef.current;
+  }
+
+  getSelfIdentity(): WhatsAppSelfIdentity | null {
+    const user = this.socketRef.current?.user as
+      | { id?: string | null; lid?: string | null }
+      | undefined;
+    if (!user) {
+      return null;
+    }
+    const jid = user.id ?? null;
+    const lid = user.lid ?? null;
+    if (!jid && !lid) {
+      return null;
+    }
+    // Pre-resolve via the controller's authDir so e164 is populated from the
+    // auth-state PN<->LID mapping. That lets `identitiesOverlap()` recognize a
+    // successor logged into the same account even when the original socket
+    // exposes only the PN form and the successor exposes only the LID form.
+    const resolved = resolveComparableIdentity({ jid, lid }, this.authDir);
+    return { jid: resolved.jid, lid: resolved.lid, e164: resolved.e164 };
   }
 
   getReconnectAttempts(): number {

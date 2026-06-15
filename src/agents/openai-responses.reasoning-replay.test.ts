@@ -37,7 +37,8 @@ function extractInputMessages(input: unknown[]) {
     (item): item is Record<string, unknown> =>
       Boolean(item) &&
       typeof item === "object" &&
-      (item as Record<string, unknown>).type === "message",
+      (item as Record<string, unknown>).type === "message" &&
+      (item as Record<string, unknown>).role === "assistant",
   );
 }
 
