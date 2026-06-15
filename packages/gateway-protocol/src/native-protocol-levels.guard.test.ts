@@ -186,11 +186,12 @@ describe("native Gateway protocol levels", () => {
     const swiftGenerated = await readRepoFile(swiftGeneratedPath);
 
     for (const [name, schema] of Object.entries(ProtocolSchemas)) {
-      const branches = schema.anyOf ?? schema.oneOf;
+      const branches =
+        (schema as { anyOf?: unknown[] }).anyOf ?? (schema as { oneOf?: unknown[] }).oneOf;
       if (!branches || branches.length < 2) {
         continue;
       }
-      const values = branches.map((branch) => branch.const);
+      const values = (branches as Array<{ const?: unknown }>).map((branch) => branch.const);
       if (values.some((value) => typeof value !== "string")) {
         continue;
       }
