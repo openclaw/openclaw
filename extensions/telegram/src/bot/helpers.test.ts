@@ -522,7 +522,7 @@ describe("describeReplyTarget", () => {
     } as any);
 
     expect(result?.body).toBe("[unsupported Telegram rich_message received]");
-    expect(result?.quoteSourceText).toBe("[unsupported Telegram rich_message received]");
+    expect(result?.quoteSourceText).toBeUndefined();
   });
 
   it("drops binary reply captions with no safe fallback", () => {
@@ -728,15 +728,12 @@ describe("isBinaryContent", () => {
 });
 
 describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
-  it("uses a sanitized placeholder for rich-message-only updates", () => {
+  it("keeps rich-message-only updates out of canonical text", () => {
     const result = getTelegramTextParts({
       rich_message: { blocks: [{ type: "paragraph" }] },
     });
 
-    expect(result).toEqual({
-      text: "[unsupported Telegram rich_message received]",
-      entities: [],
-    });
+    expect(result).toEqual({ text: "", entities: [] });
   });
 
   it("keeps normal text when Telegram also supplies a rich message", () => {

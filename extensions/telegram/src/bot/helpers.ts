@@ -40,6 +40,7 @@ import {
   renderTelegramTextEntities,
   resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
+  resolveTelegramRichMessagePlaceholder,
   type TelegramForwardedContext,
   type TelegramTextEntity,
 } from "./body-helpers.js";
@@ -56,6 +57,7 @@ export {
   normalizeForwardedContext,
   renderTelegramTextEntities,
   resolveTelegramMediaPlaceholder,
+  resolveTelegramRichMessagePlaceholder,
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -623,7 +625,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = safeReplyText.trim();
+    const replyBody =
+      safeReplyText.trim() || resolveTelegramRichMessagePlaceholder(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {

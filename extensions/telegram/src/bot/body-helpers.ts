@@ -103,6 +103,12 @@ function hasTelegramRichMessage(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export function resolveTelegramRichMessagePlaceholder(msg: {
+  rich_message?: unknown;
+}): string | undefined {
+  return hasTelegramRichMessage(msg.rich_message) ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
+}
+
 export function isBinaryContent(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
@@ -122,9 +128,7 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
   text: string;
   entities: TelegramTextEntity[];
 } {
-  const text =
-    resolveTelegramTextContent(msg.text, msg.caption) ||
-    (hasTelegramRichMessage(msg.rich_message) ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : "");
+  const text = resolveTelegramTextContent(msg.text, msg.caption);
   const entities = text ? (msg.entities ?? msg.caption_entities ?? []) : [];
   return { text, entities };
 }
