@@ -32,7 +32,6 @@ describe("doctor empty allowlist policy scan", () => {
     );
 
     expect(warnings).toEqual([
-      '- channels.signal.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
       '- channels.signal.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
     ]);
   });
@@ -57,6 +56,33 @@ describe("doctor empty allowlist policy scan", () => {
       '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
       "extra:channels.telegram",
     ]);
+  });
+
+  it("does not warn top-level empty groupAllowFrom when active accounts have their own lists", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            // top-level empty — should not warn because accounts have own lists
+            accounts: {
+              work: {
+                groupAllowFrom: ["+15551234567"],
+                dmPolicy: "open",
+              },
+              personal: {
+                groupAllowFrom: ["+15557654321"],
+                dmPolicy: "open",
+              },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // No warnings: top-level parent skipped, accounts have non-empty groupAllowFrom
+    expect(warnings).toEqual([]);
   });
 
   it("skips disabled channel and account entries", () => {

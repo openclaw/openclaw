@@ -88,12 +88,12 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
-
     const accounts = asObjectRecord(channelConfig.accounts);
     if (!accounts) {
+      checkAccount(channelConfig, `channels.${channelName}`, channelName);
       continue;
     }
+    let hasActiveAccount = false;
     for (const [accountId, account] of Object.entries(accounts)) {
       if (!account || typeof account !== "object") {
         continue;
@@ -101,12 +101,20 @@ export function scanEmptyAllowlistPolicyWarnings(
       if (isDisabledRecord(account)) {
         continue;
       }
+      hasActiveAccount = true;
       checkAccount(
         account as DoctorAccountRecord,
         `channels.${channelName}.accounts.${accountId}`,
         channelName,
         channelConfig,
       );
+    }
+    // When active per-account scopes exist, the top-level channel config acts only
+    // as a parent fallback for allowlist resolution, not as its own standalone record.
+    // Avoid false "empty allowlist" warnings for the parent when every active account
+    // supplies its own populated list.
+    if (!hasActiveAccount) {
+      checkAccount(channelConfig, `channels.${channelName}`, channelName);
     }
   }
 
