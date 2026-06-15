@@ -322,6 +322,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const ctxPayload = await buildChannelInboundEventContext({
     channel: "discord",
     resolveSupplementalMedia: true,
+    suppressSelfQuoteBody: false,
     contextVisibility: contextVisibilityMode,
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,

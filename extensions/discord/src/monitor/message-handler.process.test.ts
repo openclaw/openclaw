@@ -1350,7 +1350,7 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
-  it("does not inject the bot's previous message body when users reply to it", async () => {
+  it("injects the bot's previous message body when users reply to it", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("self-reply media should not be fetched");
     });
@@ -1404,8 +1404,9 @@ describe("processDiscordMessage session routing", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
     expect(dispatchCtx.ReplyToSender).toBe("Spartacus");
-    expect(dispatchCtx.ReplyToBody).toBeUndefined();
-    expect(JSON.stringify(dispatchCtx)).not.toContain("The same stale bot response keeps looping.");
+    expect(dispatchCtx.ReplyToBody).toBe("The same stale bot response keeps looping.");
+    expect(dispatchCtx.MediaPath).toBeUndefined();
+    expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
