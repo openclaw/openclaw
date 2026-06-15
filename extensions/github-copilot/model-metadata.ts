@@ -13,7 +13,6 @@ const COPILOT_CHAT_COMPLETIONS_COMPAT: ModelDefinitionConfig["compat"] = {
   supportsDeveloperRole: false,
   supportsUsageInStreaming: false,
   maxTokensField: "max_tokens",
-  requiresToolResultName: true,
 };
 const COPILOT_XHIGH_MODEL_IDS = new Set(["gpt-5.4", "gpt-5.3-codex"]);
 

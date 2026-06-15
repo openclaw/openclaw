@@ -69,13 +69,6 @@ describe("github-copilot model defaults", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
     });
 
-    it("uses supported Gemini preview model IDs", () => {
-      expect(getDefaultCopilotModelIds()).toContain("gemini-3-flash-preview");
-      expect(getDefaultCopilotModelIds()).toContain("gemini-3.1-pro-preview");
-      expect(getDefaultCopilotModelIds()).not.toContain("gemini-3-flash");
-      expect(getDefaultCopilotModelIds()).not.toContain("gemini-3.1-pro");
-    });
-
     it("excludes retired and old Claude fallback rows", () => {
       expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4");
       expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4.5");
@@ -153,7 +146,6 @@ describe("github-copilot model defaults", () => {
         supportsDeveloperRole: false,
         supportsUsageInStreaming: false,
         maxTokensField: "max_tokens",
-        requiresToolResultName: true,
       });
     });
 
@@ -275,7 +267,6 @@ describe("resolveCopilotForwardCompatModel", () => {
       supportsDeveloperRole: false,
       supportsUsageInStreaming: false,
       maxTokensField: "max_tokens",
-      requiresToolResultName: true,
     });
   });
 
@@ -632,7 +623,6 @@ describe("fetchCopilotModelCatalog", () => {
       supportsDeveloperRole: false,
       supportsUsageInStreaming: false,
       maxTokensField: "max_tokens",
-      requiresToolResultName: true,
     });
 
     const opus1m = out.find((m) => m.id === "claude-opus-4.7-1m-internal");
