@@ -1230,7 +1230,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const { target, storePath, store, entry } = loadSessionEntriesForTarget({ key, cfg });
+    const requestedAgent = resolveRequestedGlobalAgentId(
+      cfg,
+      key,
+      normalizeOptionalString(p.agentId),
+    );
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const { target, storePath, store, entry } = loadSessionEntriesForTarget({
+      key,
+      cfg,
+      agentId: requestedAgent.agentId,
+    });
     if (!entry) {
       respond(true, { session: null }, undefined);
       return;
