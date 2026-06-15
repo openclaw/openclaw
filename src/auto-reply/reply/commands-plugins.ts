@@ -41,6 +41,7 @@ import {
 } from "../../plugins/status.js";
 import { resolveUserPath } from "../../utils.js";
 import {
+  rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
@@ -140,6 +141,10 @@ function formatPluginsList(report: PluginStatusReport): string {
 
 function isPluginsWriteAction(action: string): boolean {
   return action === "install" || action === "enable" || action === "disable";
+}
+
+function hasGatewayAdminScope(params: Parameters<CommandHandler>[0]): boolean {
+  return params.ctx.GatewayClientScopes?.includes("operator.admin") === true;
 }
 
 function rejectNixModePluginWrite(): {
@@ -441,6 +446,12 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     });
     if (missingAdminScope) {
       return missingAdminScope;
+    }
+    if (!params.command.senderIsOwner && !hasGatewayAdminScope(params)) {
+      const nonOwner = rejectNonOwnerCommand(params, "/plugins write");
+      if (nonOwner) {
+        return nonOwner;
+      }
     }
     const nixModeWrite = rejectNixModePluginWrite();
     if (nixModeWrite) {
