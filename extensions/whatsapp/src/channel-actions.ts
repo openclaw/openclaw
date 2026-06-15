@@ -1,9 +1,11 @@
 // Whatsapp plugin module implements channel actions behavior.
+import { Type } from "typebox";
 import {
   listWhatsAppAccountIds,
   resolveWhatsAppAccount,
   createActionGate,
   type ChannelMessageActionName,
+  type ChannelMessageToolDiscovery,
   type OpenClawConfig,
   resolveWhatsAppReactionLevel,
 } from "./channel-actions.runtime.js";
@@ -62,7 +64,7 @@ export function resolveWhatsAppAgentReactionGuidance(params: {
 export function describeWhatsAppMessageActions(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-}): { actions: ChannelMessageActionName[] } | null {
+}): ChannelMessageToolDiscovery | null {
   if (!params.cfg.channels?.whatsapp) {
     return null;
   }
@@ -81,6 +83,44 @@ export function describeWhatsAppMessageActions(params: {
   if (gate("polls")) {
     actions.add("poll");
   }
+  if (gate("sendMessage")) {
+    actions.add("list-reply");
+  }
   actions.add("upload-file");
-  return { actions: Array.from(actions) };
+  const schema = actions.has("list-reply")
+    ? {
+        actions: ["list-reply"] as const,
+        properties: {
+          selectedRowId: Type.Optional(
+            Type.String({
+              description: "WhatsApp list row id captured from inbound list context.",
+            }),
+          ),
+          title: Type.Optional(
+            Type.String({
+              description: "Visible title for the selected WhatsApp list row.",
+            }),
+          ),
+          description: Type.Optional(
+            Type.String({
+              description: "Visible description for the selected WhatsApp list row.",
+            }),
+          ),
+          messageId: Type.Optional(
+            Type.String({
+              description: "Inbound WhatsApp list message id to quote when replying.",
+            }),
+          ),
+          chatJid: Type.Optional(
+            Type.String({
+              description: "WhatsApp chat JID or phone target for the list reply.",
+            }),
+          ),
+        },
+      }
+    : undefined;
+  return {
+    actions: Array.from(actions),
+    ...(schema ? { schema } : {}),
+  };
 }

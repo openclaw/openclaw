@@ -34,6 +34,15 @@ export type ActiveWebListener = {
     options?: ActiveWebSendOptions,
   ) => Promise<WhatsAppSendResult>;
   sendPoll: (to: string, poll: PollInput) => Promise<WhatsAppSendResult>;
+  sendListReply: (
+    to: string,
+    reply: {
+      title: string;
+      selectedRowId: string;
+      description?: string;
+    },
+    options?: ActiveWebSendOptions,
+  ) => Promise<WhatsAppSendResult>;
   sendReaction: (
     chatJid: string,
     messageId: string,
@@ -52,6 +61,22 @@ export type WhatsAppStructuredContactContext = {
     name?: string;
     phones?: string[];
   }>;
+};
+
+export type WhatsAppInteractiveListRow = {
+  sectionTitle?: string;
+  rowId: string;
+  title?: string;
+  description?: string;
+};
+
+export type WhatsAppInteractiveListContext = {
+  kind: "list";
+  title?: string;
+  description?: string;
+  buttonText?: string;
+  footerText?: string;
+  rows: WhatsAppInteractiveListRow[];
 };
 
 export type WhatsAppInboundEvent = {
