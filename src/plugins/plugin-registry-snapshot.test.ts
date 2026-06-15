@@ -91,6 +91,20 @@ function writeBundledPlugin(rootDir: string, pluginId: string, entryPath: string
   );
 }
 
+function mockLinuxMountInfo(mountPoints: readonly string[]) {
+  const originalReadFileSync = fs.readFileSync;
+  return vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+    if (filePath === "/proc/self/mountinfo") {
+      return mountPoints
+        .map(
+          (mountPoint, index) => `${100 + index} 99 0:${index} / ${mountPoint} rw - tmpfs tmpfs rw`,
+        )
+        .join("\n");
+    }
+    return originalReadFileSync(filePath, options as never) as never;
+  });
+}
+
 function createCandidate(rootDir: string, pluginId = "demo"): PluginCandidate {
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, "index.ts"), "export default { register() {} };\n", "utf8");
@@ -843,6 +857,39 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
     expect(result.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([
       fs.realpathSync(path.join(bundledRoot, "whatsapp")),
+    ]);
+  });
+
+  it("keeps a persisted bind-mounted source overlay when its built peer exists", () => {
+    const tempRoot = makeTempDir();
+    const packageRoot = path.join(tempRoot, "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const sourcePluginDir = path.join(packageRoot, "extensions", "whatsapp");
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.26",
+      VITEST: "true",
+    };
+
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(bundledRoot, { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
+    writeBundledPlugin(sourcePluginDir, "whatsapp", "index.ts");
+
+    const sourceIndex = loadInstalledPluginIndex({ config: {}, env, stateDir });
+    writePersistedInstalledPluginIndexSync(sourceIndex, { stateDir });
+    writeBundledPlugin(path.join(bundledRoot, "whatsapp"), "whatsapp", "index.js");
+    mockLinuxMountInfo([sourcePluginDir]);
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toStrictEqual([]);
+    expect(result.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([
+      fs.realpathSync(sourcePluginDir),
     ]);
   });
 

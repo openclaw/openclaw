@@ -6,6 +6,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
+import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
@@ -329,18 +330,32 @@ function hasMismatchedPersistedBundledPluginRoot(
   if (!bundledPluginsDir) {
     return false;
   }
-  return index.plugins.some(
-    (plugin) =>
-      plugin.origin === "bundled" &&
-      !isAllowedPersistedBundledPluginRoot(plugin.rootDir, bundledPluginsDir),
-  );
+  let sourceOverlayDirs: string[] | undefined;
+  return index.plugins.some((plugin) => {
+    if (plugin.origin !== "bundled" || isPathInsideOrEqual(plugin.rootDir, bundledPluginsDir)) {
+      return false;
+    }
+    sourceOverlayDirs ??= listBundledSourceOverlayDirs({
+      bundledRoot: bundledPluginsDir,
+      env,
+    });
+    return !isAllowedPersistedBundledPluginRoot(
+      plugin.rootDir,
+      bundledPluginsDir,
+      sourceOverlayDirs,
+    );
+  });
 }
 
 function isAllowedPersistedBundledPluginRoot(
   pluginRootDir: string,
   bundledPluginsDir: string,
+  sourceOverlayDirs: readonly string[],
 ): boolean {
   if (isPathInsideOrEqual(pluginRootDir, bundledPluginsDir)) {
+    return true;
+  }
+  if (sourceOverlayDirs.some((overlayDir) => isPathInsideOrEqual(pluginRootDir, overlayDir))) {
     return true;
   }
   const legacyRoot = buildLegacyBundledRootPath(bundledPluginsDir);
