@@ -57,6 +57,7 @@ export async function prepareSessionManagerForRun(params: {
     labelsById?: Map<string, unknown>;
     leafId?: string | null;
     wasRecoveredFromCorruptHeader?: () => boolean;
+    syncSnapshotAfterHeaderRewrite?: () => void;
   };
 
   const header = sm.fileEntries.find((e): e is SessionHeaderEntry => e.type === "session");
@@ -82,6 +83,7 @@ export async function prepareSessionManagerForRun(params: {
         mode: 0o600,
       });
       sm.flushed = true;
+      sm.syncSnapshotAfterHeaderRewrite?.();
       return;
     }
 
@@ -109,5 +111,6 @@ export async function prepareSessionManagerForRun(params: {
       mode: 0o600,
     });
     sm.flushed = true;
+    sm.syncSnapshotAfterHeaderRewrite?.();
   }
 }

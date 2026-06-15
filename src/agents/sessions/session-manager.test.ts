@@ -393,6 +393,62 @@ describe("SessionManager.open", () => {
       JSON.parse = originalParse;
     }
   });
+
+  it("keeps the warm cache after prepareSessionManagerForRun rewrites then appends", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "assistant", content: "carried context" },
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir, "original-session"))}\n${JSON.stringify(
+        assistantEntry,
+      )}\n`,
+      "utf8",
+    );
+
+    // Warm the process-level entry cache, then open the manager the embedded
+    // runner will normalize.
+    expect(SessionManager.open(sessionFile, dir, dir).getSessionId()).toBe("original-session");
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "run-session",
+      cwd: dir,
+    });
+
+    // First append after the embedded header rewrite. Before the fix the stale
+    // snapshot made this drop the warm cache.
+    sessionManager.appendMessage(buildAssistantMessage("after rewrite"));
+
+    const originalParse = JSON.parse;
+    let parseCount = 0;
+    JSON.parse = function countedParse(...args: Parameters<typeof JSON.parse>) {
+      parseCount += 1;
+      return originalParse.apply(originalParse, args);
+    } as typeof JSON.parse;
+
+    try {
+      const reopened = SessionManager.open(sessionFile, dir, dir);
+      expect(reopened.getEntries().map((entry) => readMessageContent(entry))).toEqual([
+        "carried context",
+        "after rewrite",
+      ]);
+      // The next warm open must hit the cache instead of reparsing the whole
+      // transcript that the embedded header rewrite produced.
+      expect(parseCount).toBe(0);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
 });
 
 function readMessageContent(entry: SessionEntry): unknown {

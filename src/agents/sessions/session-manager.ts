@@ -1126,6 +1126,22 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Resync the in-memory snapshot/cache after the transcript file was rewritten
+   * out-of-band (for example the embedded-run header normalization in
+   * prepareSessionManagerForRun). Without this the cached sessionFileSnapshot
+   * still describes the pre-rewrite file, so the first append takes the
+   * snapshot-mismatch branch in rememberAppendedSessionEntry, drops the warm
+   * cache, and the next open reparses the whole transcript.
+   */
+  syncSnapshotAfterHeaderRewrite(): void {
+    if (!this.sessionFile) {
+      return;
+    }
+    rememberWrittenSessionEntries(this.sessionFile, this.fileEntries);
+    this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
+  }
+
   private appendEntry(entry: SessionEntry): void {
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
