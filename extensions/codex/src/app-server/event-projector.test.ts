@@ -2708,7 +2708,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
   });
 
-  it("retains blocked dynamic tool outcomes until the same tool recovers", async () => {
+  it("clears a blocked dynamic tool outcome after the next successful tool", async () => {
     const projector = await createProjector();
 
     projector.recordDynamicToolResult({
@@ -2725,11 +2725,11 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     projector.recordDynamicToolResult({
-      callId: "call-cron-recovered",
-      tool: "cron",
+      callId: "call-web-fetch-recovered",
+      tool: "web_fetch",
       success: true,
       terminalType: "completed",
-      contentItems: [{ type: "inputText", text: "status ok" }],
+      contentItems: [{ type: "inputText", text: "fetch ok" }],
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();

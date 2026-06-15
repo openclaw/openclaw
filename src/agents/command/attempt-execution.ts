@@ -460,6 +460,8 @@ export function runAgentAttempt(params: {
     data?: Record<string, unknown>;
     sessionKey?: string;
   }) => void;
+  deferTerminalLifecycle?: boolean;
+  /** @deprecated Use deferTerminalLifecycle. */
   deferTerminalLifecycleEnd?: boolean;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -757,6 +759,7 @@ export function runAgentAttempt(params: {
     promptMode: params.opts.promptMode,
     disableTools: params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
+    deferTerminalLifecycle: params.deferTerminalLifecycle,
     deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     onUserMessagePersisted: params.onUserMessagePersisted,

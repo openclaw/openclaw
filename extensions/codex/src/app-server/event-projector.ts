@@ -457,7 +457,7 @@ export class CodexAppServerEventProjector {
       };
     } else if (
       params.success &&
-      this.lastNativeToolError?.toolName === params.tool &&
+      this.lastNativeToolError &&
       !this.lastNativeToolError.mutatingAction
     ) {
       this.lastNativeToolError = undefined;

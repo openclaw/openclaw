@@ -41,6 +41,64 @@ function flushDiagnosticEvents() {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
+  it.each([
+    { label: "completed", status: "completed" as const, error: undefined, legacy: false },
+    { label: "failed", status: "failed" as const, error: "codex exploded", legacy: false },
+    {
+      label: "completed legacy alias",
+      status: "completed" as const,
+      error: undefined,
+      legacy: true,
+    },
+  ])("defers $label lifecycle terminal ownership", async ({ status, error, legacy }) => {
+    const onRunAgentEvent = vi.fn();
+    const sessionFile = path.join(tempDir, `deferred-${status}.jsonl`);
+    const workspaceDir = path.join(tempDir, `workspace-${status}`);
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    if (legacy) {
+      params.deferTerminalLifecycleEnd = true;
+    } else {
+      params.deferTerminalLifecycle = true;
+    }
+    params.onAgentEvent = onRunAgentEvent;
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    if (status === "completed") {
+      await harness.notify({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "msg-1",
+          delta: "hello back",
+        },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    } else {
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status,
+            error: { message: error },
+          },
+        },
+      });
+    }
+    await run;
+
+    const lifecycleEvents = onRunAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents.map((event) => event.data.phase)).toEqual(["start", "finishing"]);
+    expect(lifecycleEvents[1]?.data.error).toBe(error);
+  });
+
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
     const llmInput = vi.fn();
     const llmOutput = vi.fn();

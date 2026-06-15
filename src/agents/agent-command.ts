@@ -86,7 +86,10 @@ import {
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
-import { createAgentAttemptLifecycleCallbacks } from "./command/attempt-callbacks.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "./command/attempt-callbacks.js";
 import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
@@ -1655,7 +1658,7 @@ async function agentCommandInternal(
       : sessionFile;
 
     const startedAt = Date.now();
-    const attemptLifecycleState = {
+    const attemptLifecycleState: AgentAttemptLifecycleState = {
       currentTurnUserMessagePersisted: false,
       lifecycleFinishing: false,
       lifecycleEnded: false,
@@ -1706,6 +1709,52 @@ async function agentCommandInternal(
           aborted: runResult.meta.aborted ?? false,
           stopReason,
           ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
+        },
+      });
+    };
+    const resolveLifecycleResultError = (
+      runResult: AgentAttemptResult,
+      includeErrorPayload: boolean,
+    ) =>
+      attemptLifecycleState.lifecycleError ??
+      (includeErrorPayload
+        ? runResult.payloads?.find(
+            (payload) => payload.isError === true && typeof payload.text === "string",
+          )?.text
+        : undefined) ??
+      (runResult.meta.error ? "Agent run failed" : undefined);
+    const emitLifecycleResultError = (
+      runResult: AgentAttemptResult,
+      fallbackExhausted: boolean,
+    ) => {
+      if (attemptLifecycleState.lifecycleEnded) {
+        return;
+      }
+      attemptLifecycleState.lifecycleEnded = true;
+      const error =
+        resolveLifecycleResultError(runResult, fallbackExhausted) ??
+        (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
+      emitAgentEvent({
+        runId,
+        lifecycleGeneration,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt,
+          endedAt: Date.now(),
+          error,
+          ...(runResult.meta.stopReason ? { stopReason: runResult.meta.stopReason } : {}),
+          ...(runResult.meta.livenessState ? { livenessState: runResult.meta.livenessState } : {}),
+          ...(runResult.meta.timeoutPhase ? { timeoutPhase: runResult.meta.timeoutPhase } : {}),
+          ...(typeof runResult.meta.providerStarted === "boolean"
+            ? { providerStarted: runResult.meta.providerStarted }
+            : {}),
+          ...(typeof runResult.meta.aborted === "boolean"
+            ? { aborted: runResult.meta.aborted }
+            : {}),
+          ...(runResult.meta.replayInvalid === true ? { replayInvalid: true } : {}),
+          ...(runResult.meta.yielded === true ? { yielded: true } : {}),
+          ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
         },
       });
     };
@@ -1805,6 +1854,9 @@ async function agentCommandInternal(
           mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
+            attemptLifecycleState.lifecycleError = undefined;
+            attemptLifecycleState.lifecycleFinishing = false;
+            attemptLifecycleState.lifecycleEnded = false;
             const isAutoFallbackPrimaryProbeCandidate =
               autoFallbackPrimaryProbe &&
               providerOverride === autoFallbackPrimaryProbe.provider &&
@@ -1878,7 +1930,7 @@ async function agentCommandInternal(
                 lifecycleGeneration = nextLifecycleGeneration;
               },
               onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
-              deferTerminalLifecycleEnd: true,
+              deferTerminalLifecycle: true,
             });
           },
         });
@@ -1947,7 +1999,9 @@ async function agentCommandInternal(
             },
           };
         }
-        emitLifecycleFinishing(result);
+        if (!fallbackExhausted) {
+          emitLifecycleFinishing(result);
+        }
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
@@ -2269,7 +2323,11 @@ async function agentCommandInternal(
         }
       }
 
-      emitLifecycleEnd(result);
+      if (fallbackExhausted || resolveLifecycleResultError(result, false)) {
+        emitLifecycleResultError(result, fallbackExhausted);
+      } else {
+        emitLifecycleEnd(result);
+      }
       return deliveryResult;
     } catch (error) {
       emitLifecyclePostTurnError(error);

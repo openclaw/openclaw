@@ -3453,7 +3453,10 @@ export async function runEmbeddedAttempt(
           onAssistantMessageStart: params.onAssistantMessageStart,
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
-          terminalLifecyclePhase: params.deferTerminalLifecycleEnd ? "finishing" : "end",
+          terminalLifecyclePhase:
+            (params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
+              ? "finishing"
+              : "end",
           isTerminalAborted: () => aborted,
           resolveTerminalStopReason: () =>
             isAgentRunRestartAbortReason(runAbortController.signal.reason)

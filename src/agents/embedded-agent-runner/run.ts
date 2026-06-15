@@ -1838,6 +1838,10 @@ async function runEmbeddedAgentInternal(
             onToolResult: params.onToolResult,
             onAgentToolResult: params.onAgentToolResult,
             onAgentEvent: params.onAgentEvent,
+            deferTerminalLifecycle:
+              params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
+            deferTerminalLifecycleEnd:
+              params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
             onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

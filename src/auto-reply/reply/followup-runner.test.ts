@@ -40,6 +40,7 @@ let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowup
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
 let abortActiveReplyRunsForTest: typeof import("./reply-run-registry.js").abortActiveReplyRuns;
+let replyRunRegistryForTest: typeof import("./reply-run-registry.js").replyRunRegistry;
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
@@ -469,6 +470,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({
     abortActiveReplyRuns: abortActiveReplyRunsForTest,
     createReplyOperation: createReplyOperationForTest,
+    replyRunRegistry: replyRunRegistryForTest,
     testing: replyRunTestingForTest,
   } = await import("./reply-run-registry.js"));
   ({ setReplyPayloadMetadata: setReplyPayloadMetadataForTest } =
@@ -1596,22 +1598,38 @@ describe("createFollowupRunner runtime config", () => {
       },
     );
     runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
-    runEmbeddedAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: Date.now() },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "lifecycle",
-        data: { phase: "end", endedAt: Date.now() },
-      });
-      return {
-        payloads: [{ text: "fallback ok" }],
-        meta: {},
-      };
-    });
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        deferTerminalLifecycle?: boolean;
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        expect(params.deferTerminalLifecycle).toBe(true);
+        const startedAt = Date.now();
+        const startEvent = {
+          stream: "lifecycle",
+          data: { phase: "start", startedAt },
+        };
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          ...startEvent,
+        });
+        await params.onAgentEvent?.(startEvent);
+        const finishingEvent = {
+          stream: "lifecycle",
+          data: { phase: "finishing", endedAt: Date.now() },
+        };
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          ...finishingEvent,
+        });
+        await params.onAgentEvent?.(finishingEvent);
+        return {
+          payloads: [{ text: "fallback ok" }],
+          meta: {},
+        };
+      },
+    );
 
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
@@ -1641,7 +1659,206 @@ describe("createFollowupRunner runtime config", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const embeddedCall = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
-    expect(lifecyclePhases).toEqual(["start", "start", "end"]);
+    expect(lifecyclePhases).toEqual(["start", "start", "finishing", "end"]);
+  });
+
+  it("delivers an exhausted embedded followup as a failed lifecycle", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecycleEvents: Array<Record<string, unknown>> = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        lifecycleEvents.push(evt.data);
+      }
+    });
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        outcome: "exhausted",
+        result: await params.run("anthropic", "claude-opus-4-7"),
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: {
+        deferTerminalLifecycle?: boolean;
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        expect(params.deferTerminalLifecycle).toBe(true);
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 1_000 },
+        });
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "finishing", endedAt: 1_500 },
+        });
+        return {
+          payloads: [{ text: "Terminal tool summary", isError: true }],
+          meta: {
+            error: {
+              kind: "incomplete_turn",
+              message: "raw exhausted provider detail should stay private",
+            },
+          },
+        };
+      },
+    );
+    let operationResultDuringCompletion:
+      | import("./reply-run-registry.js").ReplyOperation["result"]
+      | undefined;
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          queuedLifecycle: {
+            onComplete: () => {
+              operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
+            },
+          },
+          run: {
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "Terminal tool summary", isError: true }),
+      }),
+    );
+    expect(operationResultDuringCompletion).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+    });
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "error",
+          startedAt: 1_000,
+          fallbackExhaustedFailure: true,
+        }),
+      ]),
+    );
+    expect(lifecycleEvents.some((event) => event.phase === "end")).toBe(false);
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("raw exhausted provider detail");
+  });
+
+  it("delivers a completed non-fallbackable error followup as a failed lifecycle", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecycleEvents: Array<Record<string, unknown>> = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        lifecycleEvents.push(evt.data);
+      }
+    });
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        outcome: "completed",
+        result: await params.run("anthropic", "claude-opus-4-7"),
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: {
+            phase: "finishing",
+            error: "Command may have changed state",
+            replayInvalid: true,
+          },
+        });
+        return {
+          payloads: [{ text: "Command may have changed state", isError: true }],
+          meta: {
+            replayInvalid: true,
+            error: {
+              kind: "incomplete_turn",
+              message: "raw provider detail should stay private",
+              fallbackSafe: false,
+            },
+          },
+        };
+      },
+    );
+    let operationResultDuringCompletion:
+      | import("./reply-run-registry.js").ReplyOperation["result"]
+      | undefined;
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          queuedLifecycle: {
+            onComplete: () => {
+              operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
+            },
+          },
+          run: {
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "Command may have changed state",
+          isError: true,
+        }),
+      }),
+    );
+    expect(operationResultDuringCompletion).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+    });
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "error",
+          error: "Command may have changed state",
+          replayInvalid: true,
+        }),
+      ]),
+    );
+    expect(
+      lifecycleEvents.some(
+        (event) => event.phase === "end" || event.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
   });
 
   it("suppresses deferred CLI success after restart cancellation", async () => {
@@ -1715,7 +1932,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(lifecycleEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          phase: "error",
+          phase: "end",
           aborted: true,
           stopReason: "restart",
         }),

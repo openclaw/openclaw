@@ -1513,6 +1513,9 @@ export async function runCodexAppServerAttempt(
         startedAt: attemptStartedAt,
         endedAt: Date.now(),
         ...data,
+        ...((params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
+          ? { phase: "finishing" }
+          : {}),
       },
     });
     lifecycleTerminalEmitted = true;
