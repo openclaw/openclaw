@@ -116,6 +116,25 @@ describe("setAssistantAvatarOverride", () => {
     expect(loadLocalAssistantIdentity("agent-1").avatar).toBeNull();
   });
 
+  it("falls back to the legacy flat key when no agent-scoped override exists", () => {
+    const storage = createStorageMock();
+    storage.setItem(
+      "openclaw.control.assistant.v1",
+      JSON.stringify({ avatar: "data:image/png;base64,bGVnYWN5" }),
+    );
+    vi.stubGlobal("localStorage", storage);
+
+    expect(loadLocalAssistantIdentity("agent-1").avatar).toBe("data:image/png;base64,bGVnYWN5");
+    expect(loadLocalAssistantIdentity("agent-2").avatar).toBe("data:image/png;base64,bGVnYWN5");
+    // Scoped key still takes precedence over the flat key.
+    storage.setItem(
+      "openclaw.control.assistant.v1:agent-1",
+      JSON.stringify({ avatar: "data:image/png;base64,c2NvcGVk" }),
+    );
+    expect(loadLocalAssistantIdentity("agent-1").avatar).toBe("data:image/png;base64,c2NvcGVk");
+    expect(loadLocalAssistantIdentity("agent-2").avatar).toBe("data:image/png;base64,bGVnYWN5");
+  });
+
   it("applies the agent-scoped local override when loading identity", async () => {
     const request = vi
       .fn()

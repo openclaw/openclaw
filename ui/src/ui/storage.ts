@@ -360,7 +360,13 @@ function localAssistantIdentityKey(agentId?: string | null): string {
 export function loadLocalAssistantIdentity(agentId?: string | null): LocalAssistantIdentity {
   const storage = getSafeLocalStorage();
   try {
-    const raw = storage?.getItem(localAssistantIdentityKey(agentId));
+    let raw = storage?.getItem(localAssistantIdentityKey(agentId));
+    // Preserve legacy flat assistant avatar overrides for users upgrading from
+    // the unscoped key. When no agent-scoped value exists, fall back to the
+    // flat key so the visible override is not silently lost after upgrade.
+    if (!raw && agentId) {
+      raw = storage?.getItem(localAssistantIdentityKey());
+    }
     if (!raw) {
       return { avatar: null };
     }
