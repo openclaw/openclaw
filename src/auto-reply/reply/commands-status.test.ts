@@ -665,6 +665,7 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).toContain("Model: ollama-cloud/deepseek-v4-pro");
     expect(normalized).toContain("Context: 0/1.0m");
     expect(normalized).not.toContain("Context: 0/262k");
+    expect(normalized).not.toContain("/262k");
   });
 
   it("shows gateway and system uptime in /status output", async () => {
