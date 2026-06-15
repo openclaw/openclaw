@@ -8,6 +8,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -530,11 +531,13 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
+  const config = paramsInput.config ?? getRuntimeConfig();
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal({
       ...paramsInput,
+      config,
       lifecycleGeneration,
     }),
   );
@@ -750,17 +753,17 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
+      const requestedProvider = normalizeOptionalString(params.provider);
+      const requestedModel = normalizeOptionalString(params.model);
       const configuredDefault =
-        !params.provider && !params.model
+        !requestedProvider && !requestedModel
           ? resolveDefaultModelForAgent({
               cfg: params.config ?? {},
               agentId: workspaceResolution.agentId,
             })
           : undefined;
-      let provider = (params.provider ?? configuredDefault?.provider ?? DEFAULT_PROVIDER).trim();
-      let modelId = (params.model ?? configuredDefault?.model ?? DEFAULT_MODEL).trim();
-      provider ||= DEFAULT_PROVIDER;
-      modelId ||= DEFAULT_MODEL;
+      let provider = requestedProvider ?? configuredDefault?.provider ?? DEFAULT_PROVIDER;
+      let modelId = requestedModel ?? configuredDefault?.model ?? DEFAULT_MODEL;
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
