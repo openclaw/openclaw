@@ -46,6 +46,17 @@ public enum NodePresenceAliveReason: String, Codable, Sendable {
     case connect = "connect"
 }
 
+public enum SessionFileKind: String, Codable, Sendable {
+    case modified = "modified"
+    case read = "read"
+}
+
+public enum SessionFileRelevance: String, Codable, Sendable {
+    case modified = "modified"
+    case read = "read"
+    case mixed = "mixed"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int

@@ -35,6 +35,15 @@ struct OpenClawWatchApp: App {
                 },
                 onRefreshExecApprovalReview: {
                     self.refreshExecApprovalReview(force: true)
+                },
+                onRefreshAppSnapshot: {
+                    self.refreshAppSnapshot()
+                },
+                onAppCommand: { command in
+                    self.sendAppCommand(command)
+                },
+                onSendChatMessage: { text in
+                    self.sendChatMessage(text)
                 })
                 .task {
                     if self.receiver == nil {
@@ -42,17 +51,67 @@ struct OpenClawWatchApp: App {
                         receiver.activate()
                         self.receiver = receiver
                     }
+                    self.refreshAppSnapshot()
                     self.refreshExecApprovalReview()
                 }
                 .onChange(of: self.scenePhase) { _, newPhase in
                     guard newPhase == .active else { return }
+                    self.refreshAppSnapshot()
                     self.refreshExecApprovalReview()
                 }
         }
     }
 
+    private func refreshAppSnapshot() {
+        guard let receiver else { return }
+        self.inboxStore.markAppSnapshotRequestStarted()
+        Task { @MainActor in
+            let result = await receiver.requestAppSnapshot()
+            self.inboxStore.markAppSnapshotRequestResult(result)
+        }
+    }
+
+    private func sendQuickCheckIn() {
+        guard let receiver else { return }
+        let draft = self.inboxStore.makeQuickCheckInDraft(
+            label: "Check in",
+            note: "Give me the shortest useful update for what needs my attention from the watch.")
+        self.inboxStore.markReplySending(actionLabel: "Check in")
+        Task { @MainActor in
+            self.refreshAppSnapshot()
+            let result = await receiver.sendReply(draft)
+            self.inboxStore.markReplyResult(result, actionLabel: "Check in")
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            self.refreshAppSnapshot()
+        }
+    }
+
+    private func sendAppCommand(_ command: WatchAppCommand) {
+        guard let receiver else { return }
+        let message = self.inboxStore.makeAppCommand(command)
+        self.inboxStore.markAppCommandSending(command)
+        Task { @MainActor in
+            let result = await receiver.sendAppCommand(message)
+            self.inboxStore.markAppCommandResult(result, command: command)
+        }
+    }
+
+    private func sendChatMessage(_ text: String) {
+        guard let receiver else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let message = self.inboxStore.makeAppCommand(.sendChat, text: trimmed)
+        self.inboxStore.markAppCommandSending(.sendChat)
+        Task { @MainActor in
+            let result = await receiver.sendAppCommand(message)
+            self.inboxStore.markAppCommandResult(result, command: .sendChat)
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            self.refreshAppSnapshot()
+        }
+    }
+
     private func refreshExecApprovalReview(force: Bool = false) {
-        guard let receiver = self.receiver else { return }
+        guard let receiver else { return }
         guard force || self.inboxStore.shouldAutoRequestExecApprovalSnapshot else { return }
 
         self.execApprovalRefreshTask?.cancel()
