@@ -78,6 +78,13 @@ export function resolveCurrentSessionClientAlias(params: {
   if (!requesterKey) {
     return undefined;
   }
+  // "current" is a well-known alias for the caller's own session, promoted by
+  // the system prompt.  Resolve it locally so we never send the literal string
+  // "current" to the gateway sessions.resolve action (which rejects it with
+  // INVALID_REQUEST and logs a noisy error line) (#78424).
+  if (params.key.trim().toLowerCase() === "current") {
+    return requesterKey;
+  }
   const clientId = normalizeGatewayClientId(params.key);
   if (!clientId || !CURRENT_SESSION_CLIENT_ALIAS_IDS.has(clientId)) {
     return undefined;
