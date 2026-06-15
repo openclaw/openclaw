@@ -1,6 +1,10 @@
+// Terminal Core module implements health style behavior.
 import { normalizeLowercaseStringOrEmpty } from "./string.js";
 import { theme } from "./theme.js";
 
+// Styles the status word in health output lines.
+
+/** Highlight known health status prefixes in a "label: detail" line. */
 export function styleHealthChannelLine(line: string, rich: boolean): string {
   if (!rich) {
     return line;

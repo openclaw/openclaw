@@ -1,3 +1,4 @@
+// Loads, validates, migrates, snapshots, and writes OpenClaw config files.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,7 +20,7 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
-import { createConfigValidationMetadataPluginIdScope } from "../plugins/channel-plugin-ids.js";
+import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-ids.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecordsSync,
@@ -41,6 +42,7 @@ import {
 import { applyConfigEnvVars } from "./env-vars.js";
 import {
   ConfigIncludeError,
+  INCLUDE_KEY,
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
@@ -57,6 +59,8 @@ import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js"
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
+  maybeRecoverSuspiciousConfigRead as maybeRecoverSuspiciousConfigReadWithDeps,
+  maybeRecoverSuspiciousConfigReadSync as maybeRecoverSuspiciousConfigReadSyncWithDeps,
   promoteConfigSnapshotToLastKnownGood as promoteConfigSnapshotToLastKnownGoodWithDeps,
   recoverConfigFromLastKnownGood as recoverConfigFromLastKnownGoodWithDeps,
 } from "./io.observe-recovery.js";
@@ -66,7 +70,6 @@ import {
   createMergePatch,
   formatConfigValidationFailure,
   applyUnsetPathsForWrite,
-  projectSourceOntoRuntimeShape,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveManagedUnsetPathsForWrite,
@@ -106,6 +109,7 @@ import {
   type RuntimeConfigSnapshotRefreshOptions,
   type RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
+export { projectConfigOntoRuntimeSourceSnapshot } from "./runtime-source-projection.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -420,6 +424,19 @@ function collectEnvRefPaths(value: unknown, pathLocal: string, output: Map<strin
       collectEnvRefPaths(child, childPath, output);
     }
   }
+}
+
+function containsConfigIncludeDirective(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => containsConfigIncludeDirective(item));
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (INCLUDE_KEY in value) {
+    return true;
+  }
+  return Object.values(value).some((item) => containsConfigIncludeDirective(item));
 }
 
 function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => string): string {
@@ -950,6 +967,7 @@ export type ConfigIoDeps = {
 export type ConfigSnapshotReadOptions = {
   measure?: ConfigSnapshotReadMeasure;
   observe?: boolean;
+  recoverSuspicious?: boolean;
   skipPluginValidation?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   suppressFutureVersionWarning?: boolean;
@@ -1286,6 +1304,11 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
+export type BestEffortConfigSnapshot = {
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+};
+
 function createConfigFileSnapshot(params: {
   path: string;
   exists: boolean;
@@ -1550,9 +1573,59 @@ export function createConfigIO(
     return false;
   }
 
-  function loadConfigLocal(): OpenClawConfig {
+  function validateSuspiciousRecoveryBackup(parsed: unknown): boolean {
+    try {
+      const candidateEnv = { ...deps.env } as NodeJS.ProcessEnv;
+      const candidateDeps = { ...deps, env: candidateEnv };
+      const resolved = resolveConfigIncludesForRead(parsed, configPath, candidateDeps);
+      const readResolution = resolveConfigForRead(resolved, candidateEnv);
+      const installMigration = migrateAndStripShippedPluginInstallConfigRecords(
+        readResolution.resolvedConfigRaw,
+        {
+          persist: false,
+          rootConfigRaw: parsed,
+        },
+      );
+      const effectiveConfigRaw = installMigration.config;
+      const validationConfigRaw = installMigration.validationConfig ?? effectiveConfigRaw;
+      let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+      const loadValidationPluginMetadataSnapshot = (config: OpenClawConfig) => {
+        if (pluginMetadataSnapshot) {
+          return pluginMetadataSnapshot;
+        }
+        const metadataConfig = retainRuntimeOnlyShippedPluginInstallConfigRecords(
+          config,
+          effectiveConfigRaw,
+        );
+        const defaultAgentId = resolveDefaultAgentId(metadataConfig);
+        pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
+          config: metadataConfig,
+          workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
+          env: candidateEnv,
+          allowWorkspaceScopedCurrent: true,
+          pluginIdScope: createConfigValidationMetadataPluginIdScope({
+            config: metadataConfig,
+            env: candidateEnv,
+          }),
+        });
+        return pluginMetadataSnapshot;
+      };
+      return validateConfigObjectWithPlugins(validationConfigRaw, {
+        env: candidateEnv,
+        pluginValidation: overrides.pluginValidation,
+        loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
+        sourceRaw: parsed,
+        preservedLegacyRootKeys: overrides.preservedLegacyRootKeys,
+      }).ok;
+    } catch {
+      return false;
+    }
+  }
+
+  function loadConfigLocal(options: { skipSuspiciousRecovery?: boolean } = {}): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
+      const envBeforeRead = snapshotEnv(deps.env);
       if (!deps.fs.existsSync(configPath)) {
         if (
           overrides.shellEnvFallback !== "defer" &&
@@ -1683,6 +1756,27 @@ export function createConfigIO(
       if (!deps.suppressFutureVersionWarning) {
         warnIfConfigFromFuture(validated.config, deps.logger);
       }
+      if (
+        deps.observe &&
+        !options.skipSuspiciousRecovery &&
+        !containsConfigIncludeDirective(parsed)
+      ) {
+        const recovery = maybeRecoverSuspiciousConfigReadSyncWithDeps({
+          deps,
+          configPath,
+          raw,
+          parsed,
+          validateBackupSync: (backup) => validateSuspiciousRecoveryBackup(backup.parsed),
+        });
+        if (recovery.raw !== raw) {
+          restoreEnvChangesIfUnchanged({
+            env: deps.env,
+            before: envBeforeRead,
+            after: snapshotEnv(deps.env),
+          });
+          return loadConfigLocal({ skipSuspiciousRecovery: true });
+        }
+      }
       const cfg = retainRuntimeOnlyShippedPluginInstallConfigRecords(
         materializeRuntimeConfig(validated.config, "load", {
           manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
@@ -1720,8 +1814,11 @@ export function createConfigIO(
     }
   }
 
-  async function readConfigFileSnapshotInternal(): Promise<ReadConfigFileSnapshotInternalResult> {
+  async function readConfigFileSnapshotInternal(
+    options: { recoverSuspicious?: boolean; skipSuspiciousRecovery?: boolean } = {},
+  ): Promise<ReadConfigFileSnapshotInternalResult> {
     maybeLoadDotEnvForConfig(deps.env);
+    const envBeforeRead = snapshotEnv(deps.env);
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const hash = hashConfigRaw(null);
@@ -1898,6 +1995,33 @@ export function createConfigIO(
       if (!deps.suppressFutureVersionWarning) {
         warnIfConfigFromFuture(validated.config, deps.logger);
       }
+      if (
+        options.recoverSuspicious === true &&
+        deps.observe &&
+        !options.skipSuspiciousRecovery &&
+        !containsConfigIncludeDirective(effectiveParsed)
+      ) {
+        const recovery = await deps.measure("config.snapshot.read.recover-suspicious", () =>
+          maybeRecoverSuspiciousConfigReadWithDeps({
+            deps,
+            configPath,
+            raw,
+            parsed: effectiveParsed,
+            validateBackup: async (backup) => validateSuspiciousRecoveryBackup(backup.parsed),
+          }),
+        );
+        if (recovery.raw !== raw) {
+          restoreEnvChangesIfUnchanged({
+            env: deps.env,
+            before: envBeforeRead,
+            after: snapshotEnv(deps.env),
+          });
+          return await readConfigFileSnapshotInternal({
+            recoverSuspicious: options.recoverSuspicious,
+            skipSuspiciousRecovery: true,
+          });
+        }
+      }
       const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
         retainRuntimeOnlyShippedPluginInstallConfigRecords(
           materializeRuntimeConfig(validated.config, "snapshot", {
@@ -1965,13 +2089,21 @@ export function createConfigIO(
     }
   }
 
-  async function readConfigFileSnapshotLocal(): Promise<ConfigFileSnapshot> {
-    const result = await readConfigFileSnapshotInternal();
+  async function readConfigFileSnapshotLocal(
+    options: ConfigSnapshotReadOptions = {},
+  ): Promise<ConfigFileSnapshot> {
+    const result = await readConfigFileSnapshotInternal({
+      recoverSuspicious: options.recoverSuspicious === true,
+    });
     return result.snapshot;
   }
 
-  async function readConfigFileSnapshotWithPluginMetadataLocal(): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
-    const result = await readConfigFileSnapshotInternal();
+  async function readConfigFileSnapshotWithPluginMetadataLocal(
+    options: ConfigSnapshotReadOptions = {},
+  ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
+    const result = await readConfigFileSnapshotInternal({
+      recoverSuspicious: options.recoverSuspicious === true,
+    });
     return {
       snapshot: result.snapshot,
       ...(result.pluginMetadataSnapshot
@@ -2024,16 +2156,26 @@ export function createConfigIO(
     };
   }
 
-  async function readBestEffortConfigLocal(): Promise<OpenClawConfig> {
+  async function readBestEffortConfigSnapshotLocal(): Promise<BestEffortConfigSnapshot> {
     const result = await readConfigFileSnapshotInternal();
     if (!result.snapshot.valid) {
-      return result.snapshot.config;
+      return {
+        config: result.snapshot.config,
+        sourceConfig: result.snapshot.sourceConfig,
+      };
     }
-    return finalizeLoadedRuntimeConfig(
-      materializeRuntimeConfig(result.snapshot.sourceConfig, "load", {
-        manifestRegistry: result.pluginMetadataSnapshot?.manifestRegistry,
-      }),
-    );
+    return {
+      config: finalizeLoadedRuntimeConfig(
+        materializeRuntimeConfig(result.snapshot.sourceConfig, "load", {
+          manifestRegistry: result.pluginMetadataSnapshot?.manifestRegistry,
+        }),
+      ),
+      sourceConfig: result.snapshot.sourceConfig,
+    };
+  }
+
+  async function readBestEffortConfigLocal(): Promise<OpenClawConfig> {
+    return (await readBestEffortConfigSnapshotLocal()).config;
   }
 
   async function readSourceConfigBestEffortLocal(): Promise<OpenClawConfig> {
@@ -2393,6 +2535,7 @@ export function createConfigIO(
     env: deps.env,
     loadConfig: loadConfigLocal,
     readBestEffortConfig: readBestEffortConfigLocal,
+    readBestEffortConfigSnapshot: readBestEffortConfigSnapshotLocal,
     readSourceConfigBestEffort: readSourceConfigBestEffortLocal,
     readConfigFileSnapshot: readConfigFileSnapshotLocal,
     readConfigFileSnapshotWithPluginMetadata: readConfigFileSnapshotWithPluginMetadataLocal,
@@ -2416,63 +2559,6 @@ export function registerConfigWriteListener(
   listener: (event: ConfigWriteNotification) => void,
 ): () => void {
   return registerRuntimeConfigWriteListener(listener);
-}
-
-function isCompatibleTopLevelRuntimeProjectionShape(params: {
-  runtimeSnapshot: OpenClawConfig;
-  candidate: OpenClawConfig;
-}): boolean {
-  const runtime = params.runtimeSnapshot as Record<string, unknown>;
-  const candidate = params.candidate as Record<string, unknown>;
-  for (const key of Object.keys(runtime)) {
-    if (!Object.hasOwn(candidate, key)) {
-      return false;
-    }
-    const runtimeValue = runtime[key];
-    const candidateValue = candidate[key];
-    const runtimeType = Array.isArray(runtimeValue)
-      ? "array"
-      : runtimeValue === null
-        ? "null"
-        : typeof runtimeValue;
-    const candidateType = Array.isArray(candidateValue)
-      ? "array"
-      : candidateValue === null
-        ? "null"
-        : typeof candidateValue;
-    if (runtimeType !== candidateType) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
-  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
-  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();
-  if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
-    return config;
-  }
-  if (config === runtimeConfigSnapshot) {
-    return runtimeConfigSourceSnapshot;
-  }
-  // This projection expects callers to pass config objects derived from the
-  // active runtime snapshot (for example shallow/deep clones with targeted edits).
-  // For structurally unrelated configs, skip projection to avoid accidental
-  // merge-patch deletions or reintroducing resolved values into source refs.
-  if (
-    !isCompatibleTopLevelRuntimeProjectionShape({
-      runtimeSnapshot: runtimeConfigSnapshot,
-      candidate: config,
-    })
-  ) {
-    return config;
-  }
-  const projectedSource = coerceConfig(
-    projectSourceOntoRuntimeShape(runtimeConfigSourceSnapshot, runtimeConfigSnapshot),
-  );
-  const runtimePatch = createMergePatch(runtimeConfigSnapshot, config);
-  return coerceConfig(applyMergePatch(projectedSource, runtimePatch));
 }
 
 export function loadConfig(options?: {
@@ -2510,6 +2596,14 @@ export async function readBestEffortConfig(options?: {
   ).readBestEffortConfig();
 }
 
+export async function readBestEffortConfigSnapshot(options?: {
+  skipPluginValidation?: boolean;
+}): Promise<BestEffortConfigSnapshot> {
+  return await createConfigIO(
+    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
+  ).readBestEffortConfigSnapshot();
+}
+
 export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
   return await createConfigIO().readSourceConfigBestEffort();
 }
@@ -2525,15 +2619,20 @@ export async function readConfigFileSnapshot(
     ...(options.preservedLegacyRootKeys
       ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
       : {}),
-  }).readConfigFileSnapshot();
+  }).readConfigFileSnapshot({
+    recoverSuspicious: options.recoverSuspicious === true,
+  });
 }
 
 export async function readConfigFileSnapshotWithPluginMetadata(options?: {
   measure?: ConfigSnapshotReadMeasure;
+  recoverSuspicious?: boolean;
 }): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   return await createConfigIO(
     options?.measure ? { measure: options.measure } : {},
-  ).readConfigFileSnapshotWithPluginMetadata();
+  ).readConfigFileSnapshotWithPluginMetadata({
+    recoverSuspicious: options?.recoverSuspicious === true,
+  });
 }
 
 export async function promoteConfigSnapshotToLastKnownGood(

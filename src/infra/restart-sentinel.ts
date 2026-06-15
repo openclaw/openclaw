@@ -1,3 +1,4 @@
+// Persists restart sentinel files that coordinate deferred restarts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
@@ -123,6 +124,9 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
     }
     const stats = payload.stats ? { ...payload.stats } : {};
     const after = isPlainRecord(stats.after) ? { ...stats.after } : {};
+    if (after.version === version) {
+      return null;
+    }
     after.version = version;
     stats.after = after;
     return {

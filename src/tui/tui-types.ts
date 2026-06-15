@@ -1,3 +1,4 @@
+// Defines shared TUI state, backend, and event types.
 import type { SessionGoal } from "../config/sessions/types.js";
 
 export type TuiOptions = {
@@ -138,6 +139,7 @@ export type TuiStateAccess = {
   activeChatRunId: string | null;
   pendingOptimisticUserMessage?: boolean;
   pendingChatRunId?: string | null;
+  pendingSubmitDraft?: { runId: string; text: string } | null;
   queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;

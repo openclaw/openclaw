@@ -1,3 +1,4 @@
+// Tests trajectory export command output and filesystem writes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -88,7 +89,11 @@ function makeTempDir(): string {
 
 function makeParams(workspaceDir = makeTempDir()): HandleCommandsParams {
   return {
-    cfg: {},
+    cfg: {
+      session: {
+        store: "/tmp/openclaw-sessions.json",
+      },
+    },
     ctx: {
       SessionKey: "agent:main:slash-session",
       AccountId: "account-1",
@@ -369,6 +374,9 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(execCall.defaults.security).toBe("allowlist");
     expect(execCall.defaults.ask).toBe("always");
     expect(execCall.defaults.trigger).toBe("export-trajectory");
+    expect(execCall.defaults.approvalFollowupMode).toBe("agent");
+    expect(execCall.defaults.sessionId).toBe("session-1");
+    expect(execCall.defaults.sessionStore).toBe("/tmp/openclaw-sessions.json");
     expect(execCall.defaults.currentChannelId).toBe("bot");
     expect(execCall.defaults.accountId).toBe("account-1");
     expect(execCall.params.security).toBe("allowlist");

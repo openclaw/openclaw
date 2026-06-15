@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Linux Smoke script supports OpenClaw repository automation.
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -6,10 +7,12 @@ import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
+  currentRunningSnapshotInfo,
   makeTempDir,
   parseBoolEnv,
   parseMode,
   parseProvider,
+  readPositiveIntEnv,
   modelProviderConfigBatchJson,
   posixProviderOnlyPluginIsolationScript,
   repoRoot,
@@ -19,8 +22,11 @@ import {
   resolveSnapshot,
   run,
   say,
+  shouldSkipSnapshotRestore,
   shellQuote,
+  validateSnapshotRestoreMode,
   warn,
+  withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
   type Mode,
@@ -234,6 +240,10 @@ function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
 class LinuxSmoke extends SmokeRunController<LinuxOptions> {
   private auth: ProviderAuth;
   private disableBonjour = parseBoolEnv(process.env.OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR);
+  private agentTimeoutSeconds = readPositiveIntEnv(
+    "OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S",
+    1500,
+  );
   private artifact: PackageArtifact | null = null;
   private latestVersion = "";
   private snapshot!: SnapshotInfo;
@@ -268,7 +278,10 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     this.tgzDir = await makeTempDir("openclaw-parallels-linux-tgz.");
     try {
       this.options.vmName = this.resolveVmName();
-      this.snapshot = resolveSnapshot(this.options.vmName, this.options.snapshotHint);
+      validateSnapshotRestoreMode(this.options.mode, "Linux smoke");
+      this.snapshot = shouldSkipSnapshotRestore()
+        ? currentRunningSnapshotInfo(this.options.vmName)
+        : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.guest = new LinuxGuest(this.options.vmName, this.phases);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       await this.prepareHost(
@@ -320,10 +333,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     await this.phase("fresh.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.freshGateway = "pass";
-    await this.phase(
-      "fresh.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
-      () => this.verifyLocalTurn(),
+    await this.phase("fresh.first-local-agent-turn", this.agentTimeoutSeconds, () =>
+      this.verifyLocalTurn(),
     );
     this.status.freshAgent = "pass";
   }
@@ -352,10 +363,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     await this.phase("upgrade.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.upgradeGateway = "pass";
-    await this.phase(
-      "upgrade.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
-      () => this.verifyLocalTurn(),
+    await this.phase("upgrade.first-local-agent-turn", this.agentTimeoutSeconds, () =>
+      this.verifyLocalTurn(),
     );
     this.status.upgradeAgent = "pass";
   }
@@ -404,6 +413,11 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
   }
 
   private restoreSnapshot(): void {
+    if (shouldSkipSnapshotRestore()) {
+      say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
+      this.waitForGuestReady();
+      return;
+    }
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     run("prlctl", ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id], {
       quiet: true,
@@ -827,5 +841,6 @@ fi`,
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const options = parseArgs(process.argv.slice(2));
   await mkdir(repoRoot, { recursive: true });
-  await new LinuxSmoke(options).run();
+  const runSmoke = () => new LinuxSmoke(options).run();
+  await (options.json ? withProgressOnStderr(runSmoke) : runSmoke());
 }

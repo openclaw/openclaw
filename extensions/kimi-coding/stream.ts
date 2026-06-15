@@ -1,3 +1,4 @@
+// Kimi Coding plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   streamSimple,
@@ -394,7 +395,49 @@ export function createKimiThinkingWrapper(
       delete payloadObj.reasoning;
       delete payloadObj.reasoning_effort;
       delete payloadObj.reasoningEffort;
+      stripAnthropicCacheControlMarkers(payloadObj);
     });
+}
+
+function stripContentBlockCacheControl(block: unknown): void {
+  if (!block || typeof block !== "object") {
+    return;
+  }
+
+  const record = block as Record<string, unknown>;
+  delete record.cache_control;
+
+  if (record.type === "tool_result" && Array.isArray(record.content)) {
+    for (const nestedBlock of record.content) {
+      stripContentBlockCacheControl(nestedBlock);
+    }
+  }
+}
+
+function stripContentArrayCacheControl(value: unknown): void {
+  if (!Array.isArray(value)) {
+    return;
+  }
+
+  for (const block of value) {
+    stripContentBlockCacheControl(block);
+  }
+}
+
+function stripAnthropicCacheControlMarkers(payloadObj: Record<string, unknown>): void {
+  stripContentArrayCacheControl(payloadObj.system);
+
+  if (!Array.isArray(payloadObj.messages)) {
+    return;
+  }
+
+  for (const message of payloadObj.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+
+    stripContentArrayCacheControl((message as Record<string, unknown>).content);
+  }
 }
 
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {

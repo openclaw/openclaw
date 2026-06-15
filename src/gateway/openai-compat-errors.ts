@@ -1,3 +1,5 @@
+// OpenAI-compatible error helpers.
+// Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 
@@ -50,6 +52,7 @@ function messageForReason(params: {
   return params.rawError?.trim() || params.message.trim() || "request failed";
 }
 
+/** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
   const described = describeFailoverError(err);
   const reason = described.reason;
@@ -76,6 +79,7 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   };
 }
 
+/** Validates OpenAI-compatible sampling parameters before provider dispatch. */
 export function validateOpenAiSamplingParams(params: {
   temperature?: unknown;
   topP?: unknown;

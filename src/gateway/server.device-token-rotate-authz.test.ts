@@ -1,3 +1,5 @@
+// Device token rotation tests cover pairing-scoped operators, admin rotation
+// rights, approved node reconnects, and invoke continuity after token changes.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -27,6 +29,10 @@ import {
   startServer,
   startServerWithClient,
 } from "./test-helpers.js";
+import {
+  acknowledgeNodeInvokeRequestForTest,
+  getConnectedNodeIdForTest,
+} from "./test-helpers.node-invoke.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -76,22 +82,12 @@ async function connectApprovedNode(params: {
     commands: ["system.run"],
     deviceIdentity: paired.identity,
     onHelloOk: () => readyResolve?.(),
-    onEvent: (event) => {
-      if (event.event !== "node.invoke.request") {
-        return;
-      }
-      params.onInvoke(event.payload);
-      const payload = event.payload as { id?: string; nodeId?: string };
-      if (!payload.id || !payload.nodeId) {
-        return;
-      }
-      void client.request("node.invoke.result", {
-        id: payload.id,
-        nodeId: payload.nodeId,
-        ok: true,
-        payloadJSON: JSON.stringify({ ok: true }),
-      });
-    },
+    onEvent: (event) =>
+      acknowledgeNodeInvokeRequestForTest({
+        client,
+        event,
+        onInvoke: params.onInvoke,
+      }),
   });
   client.start();
   let timer: NodeJS.Timeout | undefined;
@@ -108,20 +104,6 @@ async function connectApprovedNode(params: {
     }
   }
   return client;
-}
-
-async function getConnectedNodeId(ws: WebSocket): Promise<string> {
-  const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
-    ws,
-    "node.list",
-    {},
-  );
-  expect(nodes.ok).toBe(true);
-  const nodeId = nodes.payload?.nodes?.find((node) => node.connected)?.nodeId ?? "";
-  if (!nodeId) {
-    throw new Error("expected connected node id");
-  }
-  return nodeId;
 }
 
 async function waitForMacrotasks(): Promise<void> {
@@ -686,7 +668,7 @@ describe("gateway device.token.rotate/revoke caller scope guard", () => {
           sawInvoke = true;
         },
       });
-      await getConnectedNodeId(started.ws);
+      await getConnectedNodeIdForTest(started.ws);
 
       pairingWs = await connectPairingScopedIssuedOperator(started.port, attacker);
 

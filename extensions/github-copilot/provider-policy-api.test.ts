@@ -1,3 +1,4 @@
+// Github Copilot tests cover provider policy api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
@@ -31,6 +32,36 @@ describe("github-copilot provider-policy-api", () => {
         compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
       })?.levels.map((level) => level.id),
     ).toContain("xhigh");
+  });
+
+  it("appends max when catalog compat advertises it", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "github-copilot",
+        modelId: "claude-fable-5",
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+      })?.levels.map((level) => level.id),
+    ).toContain("max");
+  });
+
+  it("does not expose max for non-Anthropic Copilot transports", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "github-copilot",
+        modelId: "future-copilot-model",
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+      })?.levels.map((level) => level.id),
+    ).not.toContain("max");
+  });
+
+  it("does not expose adaptive effort for older Claude models", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "github-copilot",
+        modelId: "claude-opus-4-5",
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+      })?.levels.map((level) => level.id),
+    ).not.toContain("max");
   });
 
   it("appends xhigh for static Copilot metadata overrides", () => {

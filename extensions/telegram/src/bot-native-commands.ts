@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot native commands behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Bot, Context } from "grammy";
@@ -64,6 +65,7 @@ import {
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
+import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
@@ -443,7 +445,7 @@ export type RegisterTelegramHandlerParams = {
     replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
     promptContext?: import("./bot-message-context.types.js").TelegramPromptContextEntry[],
     lifecycle?: import("./bot-message.js").TelegramMessageProcessorLifecycle,
-  ) => Promise<boolean>;
+  ) => Promise<TelegramMessageProcessingResult>;
   logger: ReturnType<typeof getChildLogger>;
 };
 

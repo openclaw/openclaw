@@ -1,3 +1,4 @@
+/** Tests CLI runner process spawning, logging, diagnostics, and live-session paths. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -84,9 +85,12 @@ function buildPreparedCliRunContext(params: {
   mcpConfigHash?: string;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
+  executionMode?: PreparedCliRunContext["params"]["executionMode"];
   workspaceDir?: string;
   timeoutMs?: number;
 }): PreparedCliRunContext {
+  // Produces a prepared context without invoking prepare.runtime, keeping spawn
+  // assertions focused on execute/runtime behavior.
   const workspaceDir = params.workspaceDir ?? "/tmp";
   const baseBackend =
     params.provider === "claude-cli"
@@ -129,6 +133,7 @@ function buildPreparedCliRunContext(params: {
       provider: params.provider,
       model: params.model,
       thinkLevel: params.thinkLevel,
+      executionMode: params.executionMode,
       timeoutMs: params.timeoutMs ?? 1_000,
       runId: params.runId,
       skillsSnapshot: params.skillsSnapshot,
@@ -198,6 +203,8 @@ async function expectRejectsWithFields(
   promise: Promise<unknown>,
   expected: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  // Failover errors carry structured fields; this helper verifies them while
+  // preserving the original object for deeper assertions.
   try {
     await promise;
   } catch (error) {
@@ -463,6 +470,30 @@ describe("runCliAgent spawn path", () => {
     expect(input.argv).not.toContain("hi");
   });
 
+  it("does not pass a Claude session id for side-question runs", async () => {
+    mockSuccessfulCliRun();
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--max-turns", "1"]);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-side-question",
+        executionMode: "side-question",
+        backend: { sessionMode: "none" },
+        resolveExecutionArgs,
+      }),
+    );
+
+    const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
+    expect(resolveArgsInput.executionMode).toBe("side-question");
+    expect(resolveArgsInput.useResume).toBe(false);
+    const input = mockCallArg(supervisorSpawnMock) as { argv?: string[]; input?: string };
+    expect(input.argv).not.toContain("--session-id");
+    expect(input.argv).toContain("--max-turns");
+    expect(input.input).toContain("hi");
+  });
+
   it("applies backend-owned per-run args before spawning", async () => {
     mockSuccessfulCliRun();
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--effort", "high"]);
@@ -649,6 +680,11 @@ describe("runCliAgent spawn path", () => {
       currentChannelId: "telegram:-100123:topic:42",
       currentThreadTs: "42",
       currentMessageId: "reply-message-1",
+      senderId: "sender-1",
+      senderIsOwner: true,
+      persistAssistantTranscript: true,
+      storePath: "/tmp/sessions.json",
+      currentInboundEventKind: "room_event",
     });
 
     expect(params.messageChannel).toBe("telegram");
@@ -656,7 +692,12 @@ describe("runCliAgent spawn path", () => {
     expect(params.currentChannelId).toBe("telegram:-100123:topic:42");
     expect(params.currentThreadTs).toBe("42");
     expect(params.currentMessageId).toBe("reply-message-1");
+    expect(params.senderId).toBe("sender-1");
+    expect(params.senderIsOwner).toBe(true);
     expect(params.cwd).toBe("/tmp/task-repo");
+    expect(params.persistAssistantTranscript).toBe(true);
+    expect(params.storePath).toBe("/tmp/sessions.json");
+    expect(params.currentInboundEventKind).toBe("room_event");
   });
 
   it("forwards static extra system prompt through the compat wrapper", () => {
@@ -909,6 +950,61 @@ describe("runCliAgent spawn path", () => {
         { stream: "assistant", text: "Hello", delta: "Hello" },
         { stream: "assistant", text: "Hello world", delta: " world" },
       ]);
+    } finally {
+      stop();
+    }
+  });
+
+  it("suppresses Claude text delta events for side-question runs", async () => {
+    const agentEvents: Array<{ stream: string; text?: string; delta?: string }> = [];
+    const stop = onAgentEvent((evt) => {
+      agentEvents.push({
+        stream: evt.stream,
+        text: typeof evt.data.text === "string" ? evt.data.text : undefined,
+        delta: typeof evt.data.delta === "string" ? evt.data.delta : undefined,
+      });
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      input.onStdout?.(
+        [
+          JSON.stringify({ type: "init", session_id: "session-123" }),
+          JSON.stringify({
+            type: "stream_event",
+            event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hello" } },
+          }),
+          JSON.stringify({
+            type: "result",
+            session_id: "session-123",
+            result: "Hello",
+          }),
+        ].join("\n") + "\n",
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      const result = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-claude-side-question-stream-json",
+          executionMode: "side-question",
+          backend: { sessionMode: "none" },
+        }),
+      );
+
+      expect(result.text).toBe("Hello");
+      expect(agentEvents).toEqual([]);
     } finally {
       stop();
     }

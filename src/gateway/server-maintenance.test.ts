@@ -1,8 +1,10 @@
+// Gateway maintenance tests cover periodic cleanup for media, dedupe records,
+// stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import { createChatRunState } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
+import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
 
@@ -33,24 +35,7 @@ function createActiveRun(
 }
 
 function createMaintenanceTimerDeps() {
-  const chatRunState = createChatRunState();
-  return {
-    broadcast: () => {},
-    nodeSendToAllSubscribed: () => {},
-    getPresenceVersion: () => 1,
-    getHealthVersion: () => 1,
-    refreshGatewayHealthSnapshot: async () => ({ ok: true }) as HealthSummary,
-    logHealth: { error: () => {} },
-    dedupe: new Map(),
-    chatAbortControllers: new Map(),
-    chatRunState,
-    chatRunBuffers: chatRunState.buffers,
-    chatDeltaSentAt: chatRunState.deltaSentAt,
-    chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
-    removeChatRun: () => undefined,
-    agentRunSeq: new Map(),
-    nodeSendToSession: () => {},
-  };
+  return createGatewayMaintenanceStateForTest();
 }
 
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;
@@ -438,6 +423,55 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(activeRun.controller.signal.aborted).toBe(true);
     expect(deps.chatAbortControllers.has(runId)).toBe(false);
 
+    stopMaintenanceTimers(timers);
+  });
+
+  it("converts expired stalled terminal persistence into a recovery candidate", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-terminal-persistence";
+    const terminalRun = createActiveRun("main");
+    terminalRun.expiresAtMs = Date.now() - 1;
+    terminalRun.projectSessionActive = false;
+    terminalRun.lifecycleGeneration = "generation-1";
+    terminalRun.projectSessionTerminalObservedAt = Date.now() - 500;
+    terminalRun.projectSessionTerminalPersistence = new Promise<void>(() => {});
+    deps.chatAbortControllers.set(runId, terminalRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(terminalRun.controller.signal.aborted).toBe(false);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    expect(deps.restartRecoveryCandidates.get(runId)).toEqual({
+      runId,
+      lifecycleGeneration: "generation-1",
+      sessionKey: "main",
+      sessionId: "sess-1",
+      observedAt: Date.now() - 60_500,
+    });
+    stopMaintenanceTimers(timers);
+  });
+
+  it("reaps expired inactive registrations without emitting a timeout abort", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-terminal-persisted";
+    const terminalRun = createActiveRun("main");
+    terminalRun.expiresAtMs = Date.now() - 1;
+    terminalRun.projectSessionActive = false;
+    terminalRun.projectSessionTerminalPersisted = true;
+    deps.chatAbortControllers.set(runId, terminalRun);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(terminalRun.controller.signal.aborted).toBe(false);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
     stopMaintenanceTimers(timers);
   });
 

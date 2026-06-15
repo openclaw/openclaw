@@ -1,5 +1,9 @@
+// Voice Call API module exposes the plugin public contract.
 import { fetchWithSsrFGuard } from "../../../api.js";
 
+// Shared guarded JSON API client for voice-call providers.
+
+/** Parameters for an SSRF-guarded provider JSON request. */
 type GuardedJsonApiRequestParams = {
   url: string;
   method: "GET" | "POST" | "DELETE" | "PUT" | "PATCH";
@@ -11,6 +15,7 @@ type GuardedJsonApiRequestParams = {
   errorPrefix: string;
 };
 
+/** Send a provider JSON request through the SSRF guard and parse bounded JSON responses. */
 export async function guardedJsonApiRequest<T = unknown>(
   params: GuardedJsonApiRequestParams,
 ): Promise<T> {

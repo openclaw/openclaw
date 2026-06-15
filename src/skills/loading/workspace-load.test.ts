@@ -1,3 +1,4 @@
+// Workspace load tests cover loading skills from workspace directories and manifests.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -458,6 +459,34 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(entries.map((entry) => entry.skill.name)).toEqual(["remote-only"]);
+  });
+
+  it("filters remote-ineligible skills when no agent skill filter is active", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "local-only"),
+      name: "local-only",
+      description: "Always available",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "remote-only"),
+      name: "remote-only",
+      description: "Needs a remote bin",
+      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
+    });
+
+    const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: "sandbox",
+        },
+      },
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toEqual(["local-only"]);
   });
 
   it.runIf(process.platform !== "win32")(

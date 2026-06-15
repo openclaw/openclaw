@@ -1,3 +1,8 @@
+/**
+ * OpenClaw built-in and plugin tool assembly.
+ *
+ * Creates the per-run tool inventory from config, channel context, sandbox policy, auth stores, and plugin tools.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
@@ -106,10 +111,14 @@ export function createOpenClawTools(
     pluginToolDenylist?: string[];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
+    /** Routable target for the current conversation when it differs from the native channel ID. */
+    currentMessagingTarget?: string;
     /** Current thread timestamp for auto-threading. */
     currentThreadTs?: string;
     /** Current inbound message id for action fallbacks. */
     currentMessageId?: string | number;
+    /** True when the current inbound turn carried audio media. */
+    currentInboundAudio?: boolean;
     /** Reply-to mode for auto-threading. */
     replyToMode?: "off" | "first" | "all" | "batched";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -157,6 +166,11 @@ export function createOpenClawTools(
     authProfileStore?: AuthProfileStore;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
+    /**
+     * Explicit one-shot local CLI runs should not keep plugin-owned process
+     * resources alive after emitting their result.
+     */
+    oneShotCliRun?: boolean;
     /**
      * Workspace directory to pass to spawned subagents for inheritance.
      * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
@@ -331,8 +345,10 @@ export function createOpenClawTools(
         sessionId: options?.sessionId,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
+        currentMessagingTarget: options?.currentMessagingTarget,
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
+        currentInboundAudio: options?.currentInboundAudio,
         agentThreadId: options?.agentThreadId,
         currentMessageId: options?.currentMessageId,
         replyToMode: options?.replyToMode,

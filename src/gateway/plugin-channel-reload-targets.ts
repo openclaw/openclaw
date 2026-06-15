@@ -1,3 +1,5 @@
+// Gateway channel plugin reload targeting.
+// Maps channel/plugin ids and aliases to config path prefixes for hot reload.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/index.js";
 
@@ -14,6 +16,7 @@ function addNormalizedTarget(targets: Set<string>, value: string | null | undefi
   }
 }
 
+/** Lists all config ids that should trigger reload for a channel plugin target. */
 export function listChannelPluginConfigTargetIds(
   target: ChannelPluginReloadTarget,
 ): ReadonlySet<string> {
@@ -26,6 +29,7 @@ export function listChannelPluginConfigTargetIds(
   return targets;
 }
 
+/** Returns true when changed config paths affect any target plugin/channel id. */
 export function pluginConfigTargetsChanged(
   targetIds: Iterable<string>,
   changedPaths: readonly string[],

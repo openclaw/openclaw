@@ -1,3 +1,5 @@
+// MCP HTTP tests cover gateway-scoped tool listing and invocation over the
+// JSON-RPC surface, including hook filtering and context propagation.
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
@@ -26,6 +28,7 @@ type ScopedToolsCall = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  currentInboundAudio?: boolean;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
   senderIsOwner?: boolean;
@@ -102,11 +105,13 @@ import {
   ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
+import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
 let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
 
 const MAIN_SESSION_HEADER = { "x-session-key": "agent:main:main" };
 const ANGLE_NUMBER_PROPERTY = { type: "number" };
+const SSE_TEST_READ_TIMEOUT_MS = 100;
 
 async function sendRaw(params: {
   port: number;
@@ -122,6 +127,97 @@ async function sendRaw(params: {
     },
     body: params.body,
   });
+}
+
+async function readStreamChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const timeoutResult = Symbol("sse-read-timeout");
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      reader.read(),
+      new Promise<typeof timeoutResult>((resolve) => {
+        timeout = setTimeout(() => resolve(timeoutResult), SSE_TEST_READ_TIMEOUT_MS);
+      }),
+    ]);
+    if (result === timeoutResult) {
+      throw new Error("timed out waiting for SSE response body");
+    }
+    return result;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function expectPromiseResolvesWithin<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function readUntilInitialSseCommentFrame(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let bodyPrefix = "";
+  while (!bodyPrefix.includes(":\n\n")) {
+    const chunk = await readStreamChunkWithTimeout(reader);
+    expect(chunk.done).toBe(false);
+    bodyPrefix += decoder.decode(chunk.value, { stream: true });
+    if (bodyPrefix.length > 64) {
+      throw new Error(`SSE response did not start with a comment frame: ${bodyPrefix}`);
+    }
+  }
+  expect(bodyPrefix.startsWith(":\n\n")).toBe(true);
+}
+
+async function expectInitialSseCommentFrame(res: Response): Promise<void> {
+  expect(res.body).toBeTruthy();
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("expected SSE response body");
+  }
+  let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+  let closeTimeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await readUntilInitialSseCommentFrame(reader);
+
+    pendingRead = reader.read();
+    const immediateClose = Symbol("immediate-close");
+    const result = await Promise.race([
+      pendingRead,
+      new Promise<typeof immediateClose>((resolve) => {
+        closeTimeout = setTimeout(() => resolve(immediateClose), SSE_TEST_READ_TIMEOUT_MS);
+      }),
+    ]);
+    expect(result).toBe(immediateClose);
+  } finally {
+    if (closeTimeout) {
+      clearTimeout(closeTimeout);
+    }
+    await reader.cancel();
+    await pendingRead?.catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 async function sendChunkedOversizedBody(params: {
@@ -178,6 +274,75 @@ async function sendChunkedOversizedBody(params: {
     setTimeout(() => {
       req.write("x");
     }, 10).unref();
+  });
+}
+
+async function sendStalledBody(params: {
+  port: number;
+  token: string;
+}): Promise<{ status: number | undefined; body: string; closed: boolean }> {
+  return await new Promise((resolve, reject) => {
+    let sawResponse = false;
+    let closed = false;
+    let settled = false;
+    const req = request(
+      {
+        hostname: "127.0.0.1",
+        port: params.port,
+        path: "/mcp",
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${params.token}`,
+          "content-type": "application/json",
+          "transfer-encoding": "chunked",
+        },
+      },
+      (res) => {
+        sawResponse = true;
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          const waitForClose = new Promise<void>((closeResolve) => {
+            if (closed) {
+              closeResolve();
+              return;
+            }
+            req.once("close", () => closeResolve());
+            setTimeout(closeResolve, 250).unref();
+          });
+          void waitForClose.then(() => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            clearTimeout(timeout);
+            resolve({ status: res.statusCode, body, closed });
+          });
+        });
+      },
+    );
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      req.destroy();
+      reject(new Error("stalled body test timed out"));
+    }, 2_000);
+    req.on("close", () => {
+      closed = true;
+    });
+    req.on("error", (error) => {
+      if (!sawResponse && !settled) {
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      }
+    });
+    req.write("{");
   });
 }
 
@@ -512,6 +677,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-current-channel-id": "telegram:chat123",
         "x-openclaw-current-thread-ts": "42",
         "x-openclaw-current-message-id": "reply-message-1",
+        "x-openclaw-current-inbound-audio": "true",
         "x-openclaw-inbound-event-kind": "room_event",
         "x-openclaw-source-reply-delivery-mode": "message_tool_only",
       }),
@@ -526,6 +692,7 @@ describe("mcp loopback server", () => {
     expect(call.currentChannelId).toBe("telegram:chat123");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-message-1");
+    expect(call.currentInboundAudio).toBe(true);
     expect(call.inboundEventKind).toBe("room_event");
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call.surface).toBe("loopback");
@@ -539,9 +706,13 @@ describe("mcp loopback server", () => {
     ]);
   });
 
-  it("keeps loopback tool cache entries separate by inbound event kind and delivery mode", async () => {
+  it("keeps loopback tool cache entries separate by inbound event kind, delivery mode, and inbound audio", async () => {
     const { runtime } = await startLoopbackServerForTest();
-    const sendToolsList = async (inboundEventKind: string, sourceReplyDeliveryMode?: string) =>
+    const sendToolsList = async (
+      inboundEventKind: string,
+      sourceReplyDeliveryMode?: string,
+      currentInboundAudio?: boolean,
+    ) =>
       await sendLoopbackToolsList({
         token: runtime?.ownerToken,
         headers: {
@@ -551,17 +722,96 @@ describe("mcp loopback server", () => {
           ...(sourceReplyDeliveryMode
             ? { "x-openclaw-source-reply-delivery-mode": sourceReplyDeliveryMode }
             : {}),
+          ...(currentInboundAudio ? { "x-openclaw-current-inbound-audio": "true" } : {}),
         },
       });
 
     expect((await sendToolsList("user_request")).status).toBe(200);
     expect((await sendToolsList("room_event")).status).toBe(200);
     expect((await sendToolsList("room_event", "message_tool_only")).status).toBe(200);
+    expect((await sendToolsList("room_event", "message_tool_only", true)).status).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
     expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
     expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
     expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(getScopedToolsCall(3).currentInboundAudio).toBe(true);
+  });
+
+  it("keeps explicit non-owner and unknown-owner loopback cache entries separate", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: "telegram:chat123",
+      currentInboundAudio: undefined,
+      currentMessageId: "message-1",
+      currentThreadTs: "thread-1",
+      inboundEventKind: "room_event",
+      messageProvider: "telegram",
+      sessionKey: "agent:main:telegram:group:chat123",
+      sourceReplyDeliveryMode: "message_tool_only",
+    } satisfies Omit<Parameters<McpLoopbackToolCache["resolve"]>[0], "senderIsOwner">;
+    resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
+      const params = input as { senderIsOwner?: boolean };
+      return {
+        agentId: "main",
+        tools:
+          params.senderIsOwner === false
+            ? [makeMessageTool()]
+            : [makeMessageTool(), makeCronTool()],
+      };
+    });
+
+    const unknownFirst = cache.resolve({ ...baseParams, senderIsOwner: undefined });
+    const nonOwnerSecond = cache.resolve({ ...baseParams, senderIsOwner: false });
+    expect(unknownFirst.toolSchema.map((tool) => tool.name)).toContain("cron");
+    expect(nonOwnerSecond.toolSchema.map((tool) => tool.name)).not.toContain("cron");
+
+    const secondCache = new McpLoopbackToolCache();
+    const nonOwnerFirst = secondCache.resolve({ ...baseParams, senderIsOwner: false });
+    const unknownSecond = secondCache.resolve({ ...baseParams, senderIsOwner: undefined });
+    expect(nonOwnerFirst.toolSchema.map((tool) => tool.name)).not.toContain("cron");
+    expect(unknownSecond.toolSchema.map((tool) => tool.name)).toContain("cron");
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("caps loopback tool cache cardinality by evicting oldest contexts", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: "telegram:chat123",
+      currentInboundAudio: undefined,
+      currentMessageId: undefined,
+      currentThreadTs: "thread-1",
+      inboundEventKind: "room_event",
+      messageProvider: "telegram",
+      senderIsOwner: true,
+      sessionKey: "agent:main:telegram:group:chat123",
+      sourceReplyDeliveryMode: "message_tool_only",
+    } satisfies Parameters<McpLoopbackToolCache["resolve"]>[0];
+
+    for (let index = 0; index < 257; index += 1) {
+      cache.resolve({
+        ...baseParams,
+        currentMessageId: `message-${index}`,
+      });
+    }
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(257);
+
+    cache.resolve({
+      ...baseParams,
+      currentMessageId: "message-0",
+    });
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
+
+    cache.resolve({
+      ...baseParams,
+      currentMessageId: "message-256",
+    });
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {
@@ -816,6 +1066,81 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(415);
   });
 
+  it("returns JSON-RPC parse errors only for invalid JSON", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: "{",
+    });
+    const payload = (await response.json()) as {
+      id?: unknown;
+      error?: { code?: number; message?: string };
+    };
+
+    expect(response.status).toBe(400);
+    expect(payload.id).toBeNull();
+    expect(payload.error).toMatchObject({
+      code: -32700,
+      message: "Parse error",
+    });
+  });
+
+  it("returns internal errors for valid JSON when gateway tool resolution fails", async () => {
+    resolveGatewayScopedToolsMock.mockImplementationOnce(() => {
+      throw new Error("tool resolution exploded");
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: mcpToolsListBody(42),
+    });
+    const payload = (await response.json()) as {
+      id?: unknown;
+      error?: { code?: number; message?: string };
+    };
+
+    expect(response.status).toBe(500);
+    expect(payload.id).toBe(42);
+    expect(payload.error).toMatchObject({
+      code: -32603,
+      message: "Internal error",
+    });
+  });
+
+  it("returns invalid request errors for malformed batch entries without resetting the request", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: `[null,${mcpToolsListBody(7)}]`,
+    });
+    const payload = (await response.json()) as Array<{
+      id?: unknown;
+      error?: { code?: number; message?: string };
+      result?: { tools?: Array<{ name: string }> };
+    }>;
+
+    expect(response.status).toBe(200);
+    expect(payload).toHaveLength(2);
+    expect(payload[0]).toMatchObject({
+      id: null,
+      error: {
+        code: -32600,
+        message: "Invalid Request",
+      },
+    });
+    expect(payload[1]?.id).toBe(7);
+    expect(payload[1]?.result?.tools?.map((tool) => tool.name)).toContain("message");
+  });
+
   it("returns 413 instead of resetting oversized request bodies", async () => {
     server = await startMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
@@ -847,6 +1172,35 @@ describe("mcp loopback server", () => {
       body: '{"error":"payload_too_large"}',
       closed: true,
     });
+  });
+
+  it("times out stalled request bodies and closes uploads after flushing 408", async () => {
+    const previousTimeout = process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
+    process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = "20";
+    try {
+      server = await startMcpLoopbackServer(0);
+      const runtime = getActiveMcpLoopbackRuntime();
+      if (!runtime) {
+        throw new Error("expected active MCP loopback runtime");
+      }
+
+      const response = await sendStalledBody({
+        port: server.port,
+        token: runtime.ownerToken,
+      });
+
+      expect(response).toEqual({
+        status: 408,
+        body: '{"error":"request_body_timeout"}',
+        closed: true,
+      });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = previousTimeout;
+      }
+    }
   });
 
   it("rejects cross-origin browser requests before auth", async () => {
@@ -917,9 +1271,137 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-message-id"]).toBe(
       "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
     );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-inbound-audio"]).toBe(
+      "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
+    );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
       "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
     );
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
+  });
+
+  it("opens an auth-gated SSE stream on GET (Streamable HTTP notification channel)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    await expectInitialSseCommentFrame(res);
+  });
+
+  it("closes active GET notification streams during loopback shutdown", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body?.getReader();
+    if (!reader) {
+      throw new Error("expected SSE response body");
+    }
+
+    try {
+      await readUntilInitialSseCommentFrame(reader);
+      const closePromise = server.close();
+      server = undefined;
+      await expectPromiseResolvesWithin(closePromise, 500, "MCP loopback server close");
+      const closed = await readStreamChunkWithTimeout(reader);
+      expect(closed.done).toBe(true);
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  });
+
+  it("rejects a GET notification channel without a bearer token (401)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "GET" });
+    expect(res.status).toBe(401);
+    await res.body?.cancel();
+  });
+
+  it("rejects a GET notification channel from a browser Origin (403)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        origin: "https://evil.example",
+      },
+    });
+    expect(res.status).toBe(403);
+    await res.body?.cancel();
+  });
+
+  it("acknowledges DELETE session teardown with 200 (stateless no-op)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "DELETE",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("ignores Mcp-Session-Id on DELETE because loopback teardown is stateless", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "DELETE",
+      headers: token
+        ? { authorization: `Bearer ${token}`, "mcp-session-id": "ignored-loopback-session" }
+        : { "mcp-session-id": "ignored-loopback-session" },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects DELETE without a bearer token (401)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "DELETE" });
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects unsupported methods with 405 advertising GET, POST, DELETE", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, { method: "PUT" });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, POST, DELETE");
+  });
+
+  it("stays stateless: POST responses advertise no Mcp-Session-Id", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await sendRaw({
+      port: server.port,
+      token: getActiveMcpLoopbackRuntime()?.ownerToken,
+      headers: { "content-type": "application/json", "x-session-key": "agent:main:main" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("mcp-session-id")).toBeNull();
+  });
+
+  it("rejects a browser-Origin GET before auth (403, no bearer)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: { origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
+    await res.body?.cancel();
+  });
+
+  it("rejects a browser-Origin DELETE before auth (403, no bearer)", async () => {
+    server = await startMcpLoopbackServer(0);
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "DELETE",
+      headers: { origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
   });
 });

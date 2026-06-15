@@ -1,3 +1,6 @@
+/**
+ * Gateway session preview resolve tests.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
@@ -213,6 +216,19 @@ test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns
 
   expect(resolved.ok).toBe(true);
   expect(resolved.payload?.key).toBe("agent:main:subagent:target");
+});
+
+test("sessions.resolve can probe a missing selector without returning an RPC error", async () => {
+  await createSessionStoreDir();
+  const { ws } = await openClient();
+
+  const resolved = await rpcReq<{ ok: false }>(ws, "sessions.resolve", {
+    key: "agent:main:missing",
+    allowMissing: true,
+  });
+
+  expect(resolved.ok).toBe(true);
+  expect(resolved.payload).toEqual({ ok: false });
 });
 
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {

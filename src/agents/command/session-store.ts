@@ -1,3 +1,6 @@
+/**
+ * Updates persisted session metadata after agent command runs.
+ */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -52,6 +55,7 @@ function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntr
   return next;
 }
 
+/** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
   contextTokensOverride?: number;
@@ -108,15 +112,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const contextTokens =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
-      : typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
-        ? params.contextTokensOverride
-        : ((await getContextModule()).resolveContextTokensForModel({
-            cfg,
-            provider: providerUsed,
-            model: modelUsed,
-            fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-            allowAsyncLoad: false,
-          }) ?? DEFAULT_CONTEXT_TOKENS);
+      : ((await getContextModule()).resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          contextTokensOverride: params.contextTokensOverride,
+          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
@@ -311,6 +314,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
 }
 
+/** Clears a stored CLI session binding after a failed or invalidated run. */
 export async function clearCliSessionInStore(params: {
   provider: string;
   sessionKey: string;
@@ -336,6 +340,7 @@ export async function clearCliSessionInStore(params: {
   return persisted;
 }
 
+/** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
   provider: string;
   sessionKey: string;

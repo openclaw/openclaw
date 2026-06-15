@@ -1,4 +1,7 @@
+// Memory Host SDK helper module supports fs utils behavior.
 import { configureFsSafePython } from "@openclaw/fs-safe/config";
+// fs-safe facade with Python validation disabled by default for this package's
+// host-side memory file operations.
 export { root } from "@openclaw/fs-safe/root";
 export { isPathInside, isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
 export {
@@ -16,6 +19,7 @@ if (!hasPythonModeOverride) {
   configureFsSafePython({ mode: "off" });
 }
 
+/** True for missing-file errors emitted by Node or fs-safe. */
 export function isFileMissingError(
   err: unknown,
 ): err is NodeJS.ErrnoException & { code: "ENOENT" | "ENOTDIR" | "not-found" } {

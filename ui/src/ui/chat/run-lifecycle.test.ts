@@ -1,3 +1,4 @@
+// Control UI tests cover run lifecycle behavior.
 import { describe, expect, it } from "vitest";
 import { isSessionRunActive } from "../session-run-state.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -32,6 +33,25 @@ function rowActive(host: ReconcileHost): boolean {
 }
 
 describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875)", () => {
+  it("keeps a local run active when the gateway registry overrides a terminal snapshot", () => {
+    const host = makeHost({
+      chatRunId: "run-before-finalize",
+      chatStream: "final answer",
+    });
+
+    expect(
+      reconcileChatRunFromSessionRow(host, {
+        key: "s1",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: true,
+        status: "done",
+      }),
+    ).toBe(false);
+    expect(host.chatRunId).toBe("run-before-finalize");
+    expect(host.chatStream).toBe("final answer");
+  });
+
   it("suppresses a stale active row after a recent local completion", () => {
     const host = makeHost({
       lastLocalTerminalReconcile: {

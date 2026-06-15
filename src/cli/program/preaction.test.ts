@@ -1,3 +1,4 @@
+// Preaction tests cover CLI preaction hooks and command context setup.
 import { Command } from "commander";
 import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -351,6 +352,18 @@ describe("registerPreActionHooks", () => {
     await runPreAction({
       parseArgv: ["plugins", "install", "@openclaw/discord"],
       processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/discord"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/discord@2026.5.22"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/discord@2026.5.22"],
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({

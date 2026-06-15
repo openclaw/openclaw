@@ -1,3 +1,6 @@
+/**
+ * Gemini CLI bundle MCP adapter that writes temporary system settings files.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +25,8 @@ function resolveEnvPlaceholder(
   value: string,
   inheritedEnv: Record<string, string> | undefined,
 ): string {
+  // Gemini settings need concrete header values; resolve placeholders from the
+  // inherited run env first, then the process env.
   const decoded = decodeHeaderEnvPlaceholder(value);
   if (!decoded) {
     return value;
@@ -54,6 +59,7 @@ function normalizeGeminiServerConfig(
   return next;
 }
 
+/** Writes merged Gemini system settings and returns env plus cleanup hook. */
 export async function writeGeminiSystemSettings(
   mergedConfig: BundleMcpConfig,
   inheritedEnv: Record<string, string> | undefined,
@@ -90,6 +96,7 @@ export async function writeGeminiSystemSettings(
       GEMINI_CLI_SYSTEM_SETTINGS_PATH: settingsPath,
     },
     cleanup: async () => {
+      // Temp settings are per-run and must disappear with the prepared CLI run.
       await fs.rm(tempDir, { recursive: true, force: true });
     },
   };

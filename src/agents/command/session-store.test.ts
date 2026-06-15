@@ -1,3 +1,5 @@
+// Covers command-session store updates after agent runs, CLI compaction, and
+// runtime metadata persistence.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -99,6 +101,8 @@ vi.mock("../../config/sessions.js", async () => {
           .map(([key, entry]) => [key, entry.acp]),
       );
       const result = await mutator(store);
+      // The mocked store keeps ACP metadata sticky to preserve the production
+      // merge behavior that protects persistent ACP session handles.
       for (const [key, acp] of previousAcpByKey) {
         const next = store[key];
         if (next && !next.acp) {
@@ -155,6 +159,8 @@ function acpMeta() {
 async function withTempSessionStore<T>(
   run: (params: { dir: string; storePath: string }) => Promise<T>,
 ): Promise<T> {
+  // Session-store tests exercise real JSON persistence, but each case gets an
+  // isolated file so mutation order remains deterministic.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
   try {
     return await run({ dir, storePath: path.join(dir, "sessions.json") });
@@ -206,6 +212,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result,
       });
 
+      // The gateway write takes cache ownership and supplies single-entry
+      // persistence so large stores are not rewritten unnecessarily.
       const updateOptions = sessionStoreMocks.updateSessionStore.mock.calls.at(-1)?.[2];
       expect(updateOptions).toMatchObject({
         takeCacheOwnership: true,
@@ -357,6 +365,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
       expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(400_000);
+    });
+  });
+
+  it("caps configured context override by the resolved runtime model window", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.5", contextWindow: 272_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-capped-context-override";
+      const sessionId = "test-capped-context-override-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
+      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(272_000);
     });
   });
 

@@ -1,3 +1,4 @@
+// Lobster tests cover lobster runner plugin behavior.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -133,6 +134,46 @@ describe("createEmbeddedLobsterRunner", () => {
     });
   });
 
+  it.each([
+    "exec --json=true cat data.json",
+    "exec --json=true cat config.yaml",
+    "exec --json=true cat flow.lobster",
+    "exec --json=true cat /tmp/missing.json",
+    "http.fetch https://example.test/workflows/flow.lobster",
+    "exec --json=true echo nested/path",
+  ])("keeps inline pipeline with file-like args as a pipeline: %s", async (pipeline) => {
+    const runtime = {
+      runToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+    });
+
+    await runner.run({
+      action: "run",
+      pipeline,
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(runtime.runToolRequest).toHaveBeenCalledOnce();
+    const request = requireRecord(
+      requireFirstCallParam(runtime.runToolRequest.mock.calls, "inline run tool request"),
+      "inline run tool request",
+    );
+    expect(request.pipeline).toBe(pipeline);
+    expect(request.filePath).toBeUndefined();
+  });
+
   it("detects workflow files and parses argsJson", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
     const workflowPath = path.join(tempDir, "workflow.lobster");
@@ -171,6 +212,80 @@ describe("createEmbeddedLobsterRunner", () => {
       expect(request.filePath).toBe(workflowPath);
       expect(request.args).toEqual({ limit: 3 });
       expectToolContext(request.ctx, { cwd: tempDir, mode: "tool" });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects existing workflow file paths that contain spaces", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
+    const workflowPath = path.join(tempDir, "daily inbox.lobster");
+    await fs.writeFile(workflowPath, "steps: []\n", "utf8");
+
+    try {
+      const runtime = {
+        runToolRequest: vi.fn().mockResolvedValue({
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: [],
+          requiresApproval: null,
+        }),
+        resumeToolRequest: vi.fn(),
+      };
+
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await runner.run({
+        action: "run",
+        pipeline: "daily inbox.lobster",
+        cwd: tempDir,
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      });
+
+      expect(runtime.runToolRequest).toHaveBeenCalledOnce();
+      const request = requireRecord(
+        requireFirstCallParam(runtime.runToolRequest.mock.calls, "workflow file with spaces"),
+        "workflow file with spaces",
+      );
+      expect(request.filePath).toBe(workflowPath);
+      expect(request.pipeline).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["missing.lobster", "missing.lobster"],
+    ["nested/missing.yaml", path.join("nested", "missing.yaml")],
+  ])("surfaces missing workflow path errors for %s", async (pipeline, expectedRelativePath) => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
+
+    try {
+      const runtime = {
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      };
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await expect(
+        runner.run({
+          action: "run",
+          pipeline,
+          cwd: tempDir,
+          timeoutMs: 2000,
+          maxStdoutBytes: 4096,
+        }),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+        path: path.join(tempDir, expectedRelativePath),
+      });
+      expect(runtime.runToolRequest).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

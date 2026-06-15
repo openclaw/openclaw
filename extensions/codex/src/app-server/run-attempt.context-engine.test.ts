@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.context engine plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1281,7 +1282,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-fresh");
     expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
-    expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-before");
+    expect(savedBinding?.contextEngine?.projection).toBeUndefined();
   });
 
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
