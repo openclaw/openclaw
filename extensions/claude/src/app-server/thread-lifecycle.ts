@@ -46,6 +46,7 @@ import type { ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { assertThreadStartResponse } from "./protocol-validators.js";
 import {
   readClaudeAppServerBinding,
+  withClaudeAppServerBindingLock,
   writeClaudeAppServerBinding,
   type ClaudeAppServerBinding,
 } from "./thread-store.js";
@@ -101,6 +102,14 @@ export type ThreadLifecycleOutcome = {
  * server call. Caller does not need to know the binding internals.
  */
 export async function startOrResumeClaudeThread(
+  args: StartOrResumeClaudeThreadParams,
+): Promise<ThreadLifecycleOutcome> {
+  const sessionFile = args.params.sessionFile;
+  const run = async () => await startOrResumeClaudeThreadLocked(args);
+  return sessionFile ? await withClaudeAppServerBindingLock(sessionFile, run) : await run();
+}
+
+async function startOrResumeClaudeThreadLocked(
   args: StartOrResumeClaudeThreadParams,
 ): Promise<ThreadLifecycleOutcome> {
   const {

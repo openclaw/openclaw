@@ -432,6 +432,72 @@ describe("startOrResumeClaudeThread", () => {
     expect(updated?.developerInstructionsFingerprint).toBe(STABLE_DEVINSTRUCTIONS_FP);
   });
 
+  it("serializes same-session binding compare-and-mutate operations", async () => {
+    await seedBinding(sessionFile, {
+      threadId: "thr_serialized",
+      cwd: "/tmp/old-ws",
+      approvalPolicy: "on-request",
+      developerInstructionsFingerprint: "fp-OLD-instructions",
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+    });
+
+    let resolveFirstResume!: () => void;
+    const firstResumeCanFinish = new Promise<void>((resolve) => {
+      resolveFirstResume = resolve;
+    });
+    let firstResumeStarted!: () => void;
+    const firstResumeDidStart = new Promise<void>((resolve) => {
+      firstResumeStarted = () => {
+        resolve();
+      };
+    });
+    const firstRequest = vi.fn(async (_method: string, _params?: unknown) => {
+      firstResumeStarted();
+      await firstResumeCanFinish;
+      return { thread: { id: "thr_serialized" } };
+    });
+    const secondRequest = vi.fn(async (_method: string, _params?: unknown) => ({
+      thread: { id: "thr_serialized" },
+    }));
+
+    const first = startOrResumeClaudeThread({
+      client: { request: firstRequest } as unknown as ClaudeAppServerClient,
+      params: makeParams(sessionFile),
+      cfg: BASE_CFG,
+      bridge: makeBridge(),
+      developerInstructions: "fresh",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+      effectiveWorkspace: "/tmp/new-ws",
+      nativeDisallowedTools: [],
+    });
+    await firstResumeDidStart;
+
+    const second = startOrResumeClaudeThread({
+      client: { request: secondRequest } as unknown as ClaudeAppServerClient,
+      params: makeParams(sessionFile),
+      cfg: BASE_CFG,
+      bridge: makeBridge(),
+      developerInstructions: "fresh",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+      effectiveWorkspace: "/tmp/new-ws",
+      nativeDisallowedTools: [],
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(secondRequest).not.toHaveBeenCalled();
+
+    resolveFirstResume();
+    await Promise.all([first, second]);
+
+    expect(secondRequest).toHaveBeenCalledWith("thread/resume", {
+      threadId: "thr_serialized",
+    });
+  });
+
   it("skips the patch envelope when nothing diverged", async () => {
     await seedBinding(sessionFile, {
       threadId: "thr_no_patch",
