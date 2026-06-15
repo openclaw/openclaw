@@ -1394,6 +1394,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (parentSessionKey) {
       const parentBoundaryCheck = assertGatewaySessionStewardBoundary({
         sessionKey: parentSessionKey,
+        requestedAgentId: agentId,
         surface: "sessions.create",
         action: "parent",
       });

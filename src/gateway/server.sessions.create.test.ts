@@ -512,13 +512,28 @@ test("sessions.create rejects unknown parentSessionKey", async () => {
 
   const created = await directSessionReq("sessions.create", {
     agentId: "ops",
-    parentSessionKey: "agent:main:missing",
+    parentSessionKey: "agent:ops:missing",
   });
 
   expect(created.ok).toBe(false);
   expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
     "unknown parent session",
   );
+});
+
+test("sessions.create rejects cross-agent parentSessionKey before loading parent", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "worker",
+    parentSessionKey: "agent:main:direct:user-1",
+  });
+
+  expect(created.ok).toBe(false);
+  const serialized = JSON.stringify(created);
+  expect(serialized).toContain("session key agent does not match agentId");
+  expect(serialized).toContain("agent:main:REDACTED");
+  expect(serialized).not.toContain("user-1");
 });
 
 test("sessions.create can start the first agent turn from an initial task", async () => {
