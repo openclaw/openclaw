@@ -217,6 +217,12 @@ function isCronToolWarning(text: string | undefined): boolean {
   return normalizeOptionalString(text)?.startsWith("⚠️ 🛠️ ") === true;
 }
 
+/** Detects canned model self-debug output from repeated unavailable-tool attempts. */
+const UNAVAILABLE_TOOL_SELF_DEBUG_RE = /I can't use the tool/i;
+function isUnavailableToolSelfDebugText(text: string | undefined): boolean {
+  return UNAVAILABLE_TOOL_SELF_DEBUG_RE.test(normalizeOptionalString(text) ?? "");
+}
+
 function isNonTerminalToolErrorWarning(payload: object | undefined): boolean {
   return Boolean(payload && getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning);
 }
@@ -294,6 +300,16 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+  // Self-debug text about unavailable tools (e.g. "I can't use the tool 'process'
+  // here because it isn't available") should not be delivered as normal cron output.
+  // Treat repeated unavailable-tool errors followed only by self-debug text as fatal.
+  const hasFatalUnavailableToolSelfDebug =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    errorPayloads.length > 0 &&
+    normalizedFinalAssistantVisibleText !== undefined &&
+    isUnavailableToolSelfDebugText(normalizedFinalAssistantVisibleText) &&
+    !hasSuccessfulPayloadAfterLastError;
   // Structured error payloads are fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =
@@ -330,7 +346,10 @@ export function resolveCronPayloadOutcome(params: {
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload || failureSignal !== undefined || runLevelError !== undefined;
+    hasFatalStructuredErrorPayload ||
+    failureSignal !== undefined ||
+    runLevelError !== undefined ||
+    hasFatalUnavailableToolSelfDebug;
   const structuredErrorText = hasFatalStructuredErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
@@ -339,7 +358,8 @@ export function resolveCronPayloadOutcome(params: {
   const fatalDeliveryText =
     structuredErrorText ??
     failureSignal?.message ??
-    (shouldUseRunLevelErrorPayload ? runLevelError : undefined);
+    (shouldUseRunLevelErrorPayload ? runLevelError : undefined) ??
+    (hasFatalUnavailableToolSelfDebug ? normalizedFinalAssistantVisibleText : undefined);
   const fatalDeliveryPayload = fatalDeliveryText
     ? ({ text: fatalDeliveryText, isError: true } satisfies DeliveryPayload)
     : undefined;
@@ -358,7 +378,9 @@ export function resolveCronPayloadOutcome(params: {
       ? structuredErrorText
       : failureSignal
         ? formatCronFailureSignal(failureSignal)
-        : runLevelError,
+        : hasFatalUnavailableToolSelfDebug
+          ? `cron classifier: unavailable-tool self-debug: ${normalizedFinalAssistantVisibleText}`
+          : runLevelError,
     pendingPresentationWarningError: hasPendingPresentationWarning
       ? lastErrorPayloadText
       : undefined,

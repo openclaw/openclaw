@@ -6,6 +6,7 @@ import {
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
+  resolveCronPayloadOutcome,
 } from "./helpers.js";
 
 type TextPayload = { text?: string | undefined; isError?: boolean | undefined };
@@ -226,5 +227,47 @@ describe("isHeartbeatOnlyResponse", () => {
         ACK_MAX,
       ),
     ).toBe(false);
+  });
+});
+
+describe("resolveCronPayloadOutcome unavailable-tool self-debug", () => {
+  it("marks fatal when final visible text apologises about an unavailable tool", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [{ text: "Tool process not found", isError: true }],
+      finalAssistantVisibleText:
+        "I can't use the tool \"process\" here because it isn't available. I need to stop retrying it and answer without that tool.",
+    });
+    expect(outcome.hasFatalErrorPayload).toBe(true);
+    // The error text uses the last error payload, not the self-debug apology.
+    expect(outcome.embeddedRunError).toContain("Tool process not found");
+    expect(outcome.outputText).toContain("Tool process not found");
+  });
+
+  it("does not mark fatal for normal deliverable assistant text", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [{ text: "Here is the summary you asked for.", isError: false }],
+      finalAssistantVisibleText: "Here is the summary you asked for.",
+    });
+    expect(outcome.hasFatalErrorPayload).toBe(false);
+  });
+
+  it("does not mark fatal when there are no tool error payloads", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [{ text: "Some output from a successful action" }],
+      finalAssistantVisibleText:
+        "I can't use the tool \"process\" here because it isn't available.",
+    });
+    expect(outcome.hasFatalErrorPayload).toBe(false);
+  });
+
+  it("does not mark fatal when successful payload exists after the last error", () => {
+    const outcome = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Tool process not found", isError: true },
+        { text: "Here is the real answer after recovering.", isError: false },
+      ],
+      finalAssistantVisibleText: "Here is the real answer after recovering.",
+    });
+    expect(outcome.hasFatalErrorPayload).toBe(false);
   });
 });
