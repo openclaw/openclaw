@@ -274,15 +274,23 @@ export function getMatchingMessagingToolReplyTargets(params: {
   if (sentTargets.length === 0) {
     return [];
   }
-  const originThreadId = resolveOriginThreadIdForPayload({
-    provider,
-    config: params.config,
-    accountId: originAccount,
-    originatingThreadId: params.originatingThreadId,
-    replyToId: params.replyToId,
-    replyToIsExplicit: params.replyToIsExplicit,
-    replyDelivery: params.replyDelivery,
-  });
+  let originThreadId: string | undefined;
+  let didResolveOriginThreadId = false;
+  const getOriginThreadId = () => {
+    if (!didResolveOriginThreadId) {
+      originThreadId = resolveOriginThreadIdForPayload({
+        provider,
+        config: params.config,
+        accountId: originAccount,
+        originatingThreadId: params.originatingThreadId,
+        replyToId: params.replyToId,
+        replyToIsExplicit: params.replyToIsExplicit,
+        replyDelivery: params.replyDelivery,
+      });
+      didResolveOriginThreadId = true;
+    }
+    return originThreadId;
+  };
   return sentTargets.filter((target) => {
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
@@ -297,6 +305,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
     }
     const targetRaw = normalizeOptionalString(target.to);
     const routeAccount = originAccount ?? targetAccount;
+    const originThreadId = getOriginThreadId();
     const originRoute = normalizeRouteTargetForDedupe({
       provider,
       rawTarget: originRawTarget,

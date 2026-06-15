@@ -1,5 +1,5 @@
 // Tests reply payload construction and metadata propagation from agent runs.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -13,6 +13,37 @@ import {
 } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+
+const getBundledChannelPluginMock = vi.hoisted(() => {
+  const targetsMatchTelegramReplySuppression = (params: {
+    originTarget: string;
+    targetKey: string;
+    targetThreadId?: string;
+  }): boolean => {
+    const baseTarget = (value: string) =>
+      value
+        .replace(/^telegram:(group|channel):/u, "")
+        .replace(/^telegram:/u, "")
+        .replace(/:topic:.*$/u, "");
+    const originTopic = params.originTarget.match(/:topic:([^:]+)$/u)?.[1];
+    return (
+      baseTarget(params.originTarget) === baseTarget(params.targetKey) &&
+      (originTopic === undefined || originTopic === params.targetThreadId)
+    );
+  };
+  return (channel: string) =>
+    channel === "telegram"
+      ? {
+          outbound: {
+            targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
+          },
+        }
+      : undefined;
+});
+
+vi.mock("../../channels/plugins/bundled.js", () => ({
+  getBundledChannelPlugin: getBundledChannelPluginMock,
+}));
 
 const baseParams = {
   isHeartbeat: false,
