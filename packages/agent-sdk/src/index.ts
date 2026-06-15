@@ -207,3 +207,16 @@ export type { EgressCheckResult } from "./policy/network.js";
 
 export { compileManifest, validateRoundTrip } from "./compiler/compiler.js";
 export type { ConfigDiff, CompilerOptions } from "./compiler/compiler.js";
+
+// ── Mutation detection + quarantine ─────────────────────────────────
+
+export {
+  checkMutation,
+  quarantinePackage,
+  isQuarantined,
+  getQuarantineRecord,
+  liftQuarantine,
+  isToolAllowedInQuarantine,
+  getQuarantineToolAllowlist,
+} from "./quarantine/mutation.js";
+export type { MutationCheckResult, MutatedFile, QuarantineRecord } from "./quarantine/mutation.js";
