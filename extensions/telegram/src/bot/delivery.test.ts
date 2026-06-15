@@ -166,6 +166,10 @@ function firstSendText(mock: ReturnType<typeof vi.fn>) {
   return text as string;
 }
 
+function rawSendRichMessageMock(bot: Bot): ReturnType<typeof vi.fn> {
+  return (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage;
+}
+
 function createSendMessageHarness(messageId = 4) {
   const runtime = createRuntime();
   const sendMessage = vi.fn().mockResolvedValue({
@@ -831,6 +835,98 @@ describe("deliverReplies", () => {
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     firstSendText(sendMessage);
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { skip_entity_detection: true });
+  });
+
+  it("uses Bot API sendMessage instead of rich messages for group replies", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 63,
+      chat: { id: "-1001234567890" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      ...baseDeliveryParams,
+      chatId: "-1001234567890",
+      replies: [{ text: "hi Mason" }],
+      runtime,
+      bot,
+      thread: { id: 456, scope: "forum" },
+    });
+
+    expect(rawSendRichMessageMock(bot)).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith("-1001234567890", "hi Mason", {
+      parse_mode: "HTML",
+      message_thread_id: 456,
+    });
+  });
+
+  it("treats mirrored group replies as group sends even when Telegram uses a positive chat id", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 64,
+      chat: { id: "584667058" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      ...baseDeliveryParams,
+      chatId: "584667058",
+      mirrorIsGroup: true,
+      mirrorGroupId: "-5278454993",
+      replies: [
+        {
+          text: "hi Mason",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "UPDATE", web_app: { url: "https://example.com/update" } }]],
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+      thread: { scope: "none" },
+    });
+
+    expect(rawSendRichMessageMock(bot)).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith("584667058", "hi Mason", {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "UPDATE", url: "https://example.com/update" }]],
+      },
+    });
+  });
+
+  it("chunks mirrored group replies for the Bot API sendMessage limit", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 65, chat: { id: "584667058" } })
+      .mockResolvedValueOnce({ message_id: 66, chat: { id: "584667058" } });
+    const bot = createBot({ sendMessage });
+    const longText = "a".repeat(4100);
+
+    await deliverReplies({
+      ...baseDeliveryParams,
+      chatId: "584667058",
+      mirrorIsGroup: true,
+      mirrorGroupId: "-5278454993",
+      replies: [{ text: longText }],
+      runtime,
+      bot,
+      thread: { scope: "none" },
+      textLimit: 100_000,
+    });
+
+    expect(rawSendRichMessageMock(bot)).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    const firstText = firstSendText(sendMessage);
+    const secondText = mockCallArg(sendMessage, 1, 1);
+    expect(typeof secondText).toBe("string");
+    expect(firstText.length).toBeLessThanOrEqual(4096);
+    expect((secondText as string).length).toBeLessThanOrEqual(4096);
+    expect(`${firstText}${secondText as string}`).toBe(longText);
   });
 
   it("includes message_thread_id for DM topics", async () => {

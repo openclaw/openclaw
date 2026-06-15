@@ -5,6 +5,7 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
+import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "../format.js";
 import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
 import {
   buildTelegramSendParams,
@@ -23,6 +24,7 @@ import type { TelegramThreadSpec } from "./helpers.js";
 export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -31,6 +33,13 @@ function isTelegramQuoteParamError(err: unknown): boolean {
     return QUOTE_PARAM_RE.test(err.description);
   }
   return QUOTE_PARAM_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramHtmlParseError(err: unknown): boolean {
+  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
+    return PARSE_ERR_RE.test(err.description);
+  }
+  return PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
 function createTelegramDeliverySendRetry() {
@@ -104,6 +113,7 @@ export async function sendTelegramText(
     tableMode?: MarkdownTableMode;
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
+    chatType?: "direct" | "group";
   },
 ): Promise<number> {
   const baseParams = buildTelegramSendParams({
@@ -117,15 +127,70 @@ export async function sendTelegramText(
   });
   const richParams = toTelegramRichMessageContextParams(baseParams);
   const textMode = opts?.textMode ?? "markdown";
+  const normalizedChatId = chatId.trim();
+  const shouldUseRichText =
+    opts?.chatType !== "group" &&
+    (opts?.thread?.scope === "dm" || (!opts?.thread && !normalizedChatId.startsWith("-")));
+
+  if (!text.trim()) {
+    throw new Error("Message must be non-empty for Telegram sends");
+  }
+  if (!shouldUseRichText) {
+    const htmlText = renderTelegramHtmlText(text, {
+      textMode,
+      tableMode: opts?.tableMode,
+    });
+    const htmlParams: Record<string, unknown> = {
+      parse_mode: "HTML",
+      ...(opts?.linkPreview === false ? { link_preview_options: { is_disabled: true } } : {}),
+      ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+      ...baseParams,
+    };
+    const plainParams = { ...htmlParams };
+    delete plainParams.parse_mode;
+    const sendLegacy = async (
+      operation: string,
+      body: string,
+      requestParams: Record<string, unknown>,
+    ) =>
+      await sendTelegramWithThreadFallback({
+        operation,
+        runtime,
+        thread: opts?.thread,
+        requestParams,
+        send: (effectiveParams) =>
+          bot.api.sendMessage(chatId, body, {
+            ...effectiveParams,
+          }),
+      });
+    let res: Awaited<ReturnType<typeof sendLegacy>>;
+    try {
+      res = await sendLegacy("sendMessage", htmlText, htmlParams);
+    } catch (err) {
+      if (!isTelegramHtmlParseError(err)) {
+        throw err;
+      }
+      runtime.log?.(
+        `telegram sendMessage failed with HTML parse error; retrying as plain text: ${formatErrorMessage(
+          err,
+        )}`,
+      );
+      res = await sendLegacy(
+        "sendMessage (plain)",
+        telegramHtmlToPlainTextFallback(htmlText),
+        plainParams,
+      );
+    }
+    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
+    return res.message_id;
+  }
+
   const richMessage = buildTelegramRichMessage(text, textMode, {
     skipEntityDetection: opts?.linkPreview === false,
     tableMode: opts?.tableMode,
   });
   const richRawApi = getTelegramRichRawApi(bot.api);
 
-  if (!text.trim()) {
-    throw new Error("Message must be non-empty for Telegram sends");
-  }
   const res = await sendTelegramWithThreadFallback({
     operation: "sendRichMessage",
     runtime,

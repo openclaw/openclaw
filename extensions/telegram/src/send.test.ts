@@ -53,6 +53,7 @@ const {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -1357,6 +1358,127 @@ describe("sendMessageTelegram", () => {
     expect(chunks.join("")).toContain("<figure>");
   });
 
+  it("uses Bot API sendMessage for group text so Telegram clients can render it", async () => {
+    botApi.sendMessage.mockResolvedValue({
+      message_id: 61,
+      chat: { id: "-1001234567890" },
+    });
+
+    await sendMessageTelegram("telegram:group:-1001234567890:topic:456", "hi Mason", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).toHaveBeenCalledWith("-1001234567890", "hi Mason", {
+      parse_mode: "HTML",
+      message_thread_id: 456,
+    });
+  });
+
+  it("falls back private-chat web app buttons to url buttons for group sends", async () => {
+    botApi.sendMessage.mockResolvedValue({
+      message_id: 61,
+      chat: { id: "-1001234567890" },
+    });
+
+    await sendMessageTelegram("telegram:group:-1001234567890:topic:456", "OpenClaw status", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      buttons: [[{ text: "UPDATE", web_app: { url: "https://example.com/update" } }]],
+    });
+
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).toHaveBeenCalledWith("-1001234567890", "OpenClaw status", {
+      parse_mode: "HTML",
+      message_thread_id: 456,
+      reply_markup: {
+        inline_keyboard: [[{ text: "UPDATE", url: "https://example.com/update" }]],
+      },
+    });
+  });
+
+  it("keeps private-chat web app buttons after resolving a nonnumeric target to a direct chat", async () => {
+    const getChat = vi.fn().mockResolvedValue({ id: 123 });
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 62,
+      chat: { id: "123" },
+    });
+    const sendMessage = vi.fn();
+    const api = {
+      getChat,
+      sendMessage,
+      raw: { sendRichMessage },
+    } as unknown as TelegramApiOverride;
+
+    await sendMessageTelegram("https://t.me/direct_user", "OpenClaw status", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      buttons: [[{ text: "UPDATE", web_app: { url: "https://example.com/update" } }]],
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(getChat).toHaveBeenCalledWith("@direct_user");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendRichMessage).toHaveBeenCalledWith({
+      chat_id: "123",
+      rich_message: { html: "OpenClaw status" },
+      reply_markup: {
+        inline_keyboard: [[{ text: "UPDATE", web_app: { url: "https://example.com/update" } }]],
+      },
+    });
+  });
+
+  it("keeps private-chat web app buttons for direct rich sends", async () => {
+    botApi.sendMessage.mockResolvedValue({
+      message_id: 62,
+      chat: { id: "123" },
+    });
+
+    await sendMessageTelegram("123", "OpenClaw status", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      buttons: [[{ text: "UPDATE", web_app: { url: "https://example.com/update" } }]],
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(richSendCallParams()[0]?.reply_markup).toEqual({
+      inline_keyboard: [[{ text: "UPDATE", web_app: { url: "https://example.com/update" } }]],
+    });
+  });
+
+  it("falls back private-chat web app buttons to url buttons after resolving a group target", async () => {
+    const getChat = vi.fn().mockResolvedValue({ id: -1001234567890 });
+    const sendRichMessage = vi.fn();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 63,
+      chat: { id: "-1001234567890" },
+    });
+    const api = {
+      getChat,
+      sendMessage,
+      raw: { sendRichMessage },
+    } as unknown as TelegramApiOverride;
+
+    await sendMessageTelegram("https://t.me/mychannel", "OpenClaw status", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      buttons: [[{ text: "UPDATE", web_app: { url: "https://example.com/update" } }]],
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(getChat).toHaveBeenCalledWith("@mychannel");
+    expect(sendRichMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith("-1001234567890", "OpenClaw status", {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [[{ text: "UPDATE", url: "https://example.com/update" }]],
+      },
+    });
+  });
+
   it("fails when Telegram text send returns no message_id", async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       chat: { id: "123" },
@@ -2593,7 +2715,7 @@ describe("sendMessageTelegram", () => {
     expect(logs).toContain("accountId=ops");
     expect(logs).toContain(`chatId=${chatId}`);
     expect(logs).toContain("messageId=321");
-    expect(logs).toContain("operation=sendRichMessage");
+    expect(logs).toContain("operation=sendMessage");
     expect(logs).toContain("threadId=271");
     expect(logs).toContain("replyToMessageId=123");
     expect(logs).toContain("silent=true");
@@ -3497,6 +3619,63 @@ describe("editMessageTelegram", () => {
       rich_message: {
         html: "https://example.com",
         skip_entity_detection: true,
+      },
+    });
+  });
+
+  it("falls back private-chat web app buttons to url buttons when editing resolved group text", async () => {
+    const api = {
+      getChat: vi.fn().mockResolvedValue({ id: -1001234567890 }),
+      raw: {
+        editMessageText: vi.fn().mockResolvedValue({ message_id: 1, chat: { id: -1001234567890 } }),
+      },
+    } as unknown as TelegramApiOverride;
+
+    await editMessageTelegram("https://t.me/mychannel", 1, "Updated", {
+      token: "tok",
+      cfg: TELEGRAM_TEST_CFG,
+      api,
+      buttons: [[{ text: "UPDATE", web_app: { url: "https://example.com/update" } }]],
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(api.getChat).toHaveBeenCalledWith("@mychannel");
+    expect(api.raw?.editMessageText).toHaveBeenCalledWith({
+      chat_id: "-1001234567890",
+      message_id: 1,
+      rich_message: { html: "Updated" },
+      reply_markup: {
+        inline_keyboard: [[{ text: "UPDATE", url: "https://example.com/update" }]],
+      },
+    });
+  });
+});
+
+describe("editMessageReplyMarkupTelegram", () => {
+  it("falls back private-chat web app buttons to url buttons when editing resolved group markup", async () => {
+    const api = {
+      getChat: vi.fn().mockResolvedValue({ id: -1001234567890 }),
+      editMessageReplyMarkup: vi
+        .fn()
+        .mockResolvedValue({ message_id: 1, chat: { id: -1001234567890 } }),
+    } as unknown as TelegramApiOverride;
+
+    await editMessageReplyMarkupTelegram(
+      "https://t.me/mychannel",
+      1,
+      [[{ text: "UPDATE", web_app: { url: "https://example.com/update" } }]],
+      {
+        token: "tok",
+        cfg: TELEGRAM_TEST_CFG,
+        api,
+        gatewayClientScopes: ["operator.write"],
+      },
+    );
+
+    expect(api.getChat).toHaveBeenCalledWith("@mychannel");
+    expect(api.editMessageReplyMarkup).toHaveBeenCalledWith("-1001234567890", 1, {
+      reply_markup: {
+        inline_keyboard: [[{ text: "UPDATE", url: "https://example.com/update" }]],
       },
     });
   });

@@ -31,7 +31,11 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
-import { renderTelegramHtmlText } from "../format.js";
+import {
+  renderTelegramHtmlText,
+  splitTelegramHtmlChunks,
+  telegramHtmlToPlainTextFallback,
+} from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import {
   splitTelegramRichMessageTextChunks,
@@ -56,6 +60,7 @@ import {
 
 const VOICE_FORBIDDEN_MARKER = "VOICE_MESSAGES_FORBIDDEN";
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
+const TELEGRAM_LEGACY_TEXT_LIMIT = 4096;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -82,8 +87,19 @@ function buildChunkTextResolver(params: {
   chunkMode: ChunkMode;
   tableMode?: MarkdownTableMode;
   skipEntityDetection?: boolean;
+  chatType: "direct" | "group";
 }): ChunkTextFn {
   return (markdown: string) => {
+    if (params.chatType === "group") {
+      return splitTelegramHtmlChunks(
+        renderTelegramHtmlText(markdown, { tableMode: params.tableMode }),
+        Math.min(params.textLimit, TELEGRAM_LEGACY_TEXT_LIMIT),
+      ).map((text) => ({
+        text,
+        textMode: "html",
+        plainText: telegramHtmlToPlainTextFallback(text),
+      }));
+    }
     return splitTelegramRichMessageTextChunks({
       text: markdown,
       textLimit: params.textLimit,
@@ -93,6 +109,23 @@ function buildChunkTextResolver(params: {
       skipEntityDetection: params.skipEntityDetection,
     });
   };
+}
+
+function resolveReplyChatType(params: {
+  chatId: string;
+  thread?: TelegramThreadSpec | null;
+  isGroup?: boolean;
+}) {
+  if (params.isGroup === true) {
+    return "group";
+  }
+  if (params.thread?.scope === "dm") {
+    return "direct";
+  }
+  if (params.thread) {
+    return "group";
+  }
+  return params.chatId.trim().startsWith("-") ? "group" : "direct";
 }
 
 function markDelivered(progress: DeliveryProgress): void {
@@ -161,6 +194,7 @@ async function deliverTextReply(params: {
   linkPreview?: boolean;
   silent?: boolean;
   tableMode?: MarkdownTableMode;
+  chatType?: "direct" | "group";
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
@@ -193,6 +227,7 @@ async function deliverTextReply(params: {
           tableMode: params.tableMode,
           silent: params.silent,
           replyMarkup,
+          chatType: params.chatType,
         },
       );
       if (firstDeliveredMessageId == null) {
@@ -214,6 +249,7 @@ async function sendPendingFollowUpText(params: {
   linkPreview?: boolean;
   silent?: boolean;
   tableMode?: MarkdownTableMode;
+  chatType?: "direct" | "group";
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
@@ -235,6 +271,7 @@ async function sendPendingFollowUpText(params: {
         tableMode: params.tableMode,
         silent: params.silent,
         replyMarkup,
+        chatType: params.chatType,
       });
     },
   });
@@ -280,6 +317,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   tableMode?: MarkdownTableMode;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
+  chatType?: "direct" | "group";
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(opts.chunkText(opts.text));
@@ -300,6 +338,7 @@ async function sendTelegramVoiceFallbackText(opts: {
       tableMode: opts.tableMode,
       silent: opts.silent,
       replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
+      chatType: opts.chatType,
     });
     if (firstDeliveredMessageId == null) {
       firstDeliveredMessageId = messageId;
@@ -334,6 +373,7 @@ async function deliverMediaReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
+  chatType?: "direct" | "group";
 }): Promise<{ firstDeliveredMessageId?: number; visibleFallbackText?: string }> {
   let firstDeliveredMessageId: number | undefined;
   let visibleFallbackText: string | undefined;
@@ -484,6 +524,7 @@ async function deliverMediaReply(params: {
               silent: params.silent,
               replyMarkup: params.replyMarkup,
               replyQuoteText: params.replyQuoteText,
+              chatType: params.chatType,
             });
             if (firstDeliveredMessageId == null) {
               firstDeliveredMessageId = fallbackMessageId;
@@ -514,6 +555,7 @@ async function deliverMediaReply(params: {
                 linkPreview: params.linkPreview,
                 silent: params.silent,
                 replyMarkup: params.replyMarkup,
+                chatType: params.chatType,
               });
               visibleFallbackText = fallbackText;
             }
@@ -563,6 +605,7 @@ async function deliverMediaReply(params: {
         linkPreview: params.linkPreview,
         silent: params.silent,
         tableMode: params.tableMode,
+        chatType: params.chatType,
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
         progress: params.progress,
@@ -722,6 +765,11 @@ export async function deliverReplies(params: {
   const transcriptMirror = params.transcriptMirror;
   const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
   const hookRunner = getGlobalHookRunner();
+  const replyChatType = resolveReplyChatType({
+    chatId: params.chatId,
+    thread: params.thread,
+    isGroup: params.mirrorIsGroup,
+  });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
   const chunkText = buildChunkTextResolver({
@@ -729,6 +777,7 @@ export async function deliverReplies(params: {
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
     skipEntityDetection: params.linkPreview === false,
+    chatType: replyChatType,
   });
   const candidateReplies: ReplyPayload[] = [];
   for (const reply of params.replies) {
@@ -832,6 +881,9 @@ export async function deliverReplies(params: {
           presentation,
           interactive,
         }),
+        {
+          chatType: replyChatType,
+        },
       );
       let firstDeliveredMessageId: number | undefined;
       if (mediaList.length === 0) {
@@ -850,6 +902,7 @@ export async function deliverReplies(params: {
           linkPreview: params.linkPreview,
           silent: params.silent,
           tableMode: params.tableMode,
+          chatType: replyChatType,
           replyToId,
           replyToMode: params.replyToMode,
           progress,
@@ -870,6 +923,7 @@ export async function deliverReplies(params: {
           onVoiceRecording: params.onVoiceRecording,
           linkPreview: params.linkPreview,
           silent: params.silent,
+          chatType: replyChatType,
           replyQuoteMessageId: replyQuote.messageId,
           replyQuoteText: replyQuote.text,
           replyQuotePosition: replyQuote.position,

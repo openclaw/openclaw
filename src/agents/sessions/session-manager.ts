@@ -607,6 +607,46 @@ function rememberWrittenSessionEntries(
   };
 }
 
+function refreshSessionEntriesCacheFromCurrentFile(filePath: string): {
+  snapshot: SessionFileSnapshot | undefined;
+  cacheRefreshed: boolean;
+} {
+  const resolvedPath = resolve(filePath);
+  let beforeReadSnapshot: SessionFileSnapshot;
+  try {
+    beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
+  } catch {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: undefined, cacheRefreshed: false };
+  }
+  if (beforeReadSnapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: beforeReadSnapshot, cacheRefreshed: false };
+  }
+
+  let content: string;
+  let afterReadSnapshot: SessionFileSnapshot;
+  try {
+    content = readFileSync(resolvedPath, "utf8");
+    afterReadSnapshot = readSessionFileSnapshot(resolvedPath);
+  } catch {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: undefined, cacheRefreshed: false };
+  }
+  if (!isSameSessionFileSnapshot(beforeReadSnapshot, afterReadSnapshot)) {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: afterReadSnapshot, cacheRefreshed: false };
+  }
+
+  rememberSessionEntries(
+    resolvedPath,
+    afterReadSnapshot,
+    parseJsonlEntries(content),
+    content.endsWith("\n"),
+  );
+  return { snapshot: afterReadSnapshot, cacheRefreshed: true };
+}
+
 function rememberAppendedSessionEntry(
   filePath: string,
   previousSnapshot: SessionFileSnapshot | undefined,
@@ -672,6 +712,15 @@ function rememberAppendedSessionEntry(
   sessionEntriesCache.set(resolvedPath, cached);
   trimSessionEntriesCache();
   return { snapshot, cacheAdvanced: true };
+}
+
+function shouldRefreshSessionPrefixAfterSerialization(entry: SessionEntry): boolean {
+  return (
+    entry.type === "custom" ||
+    entry.type === "custom_message" ||
+    entry.type === "compaction" ||
+    entry.type === "branch_summary"
+  );
 }
 
 function publishRememberedSessionFileSnapshot(
@@ -1327,7 +1376,13 @@ export class SessionManager {
       // user code and can mutate the transcript; the cache must validate the
       // prefix state that immediately precedes the exact bytes being appended.
       const serializedEntry = serializeJsonlEntry(entry);
-      const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
+      let beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
+      let previousSnapshot = this.sessionFileSnapshot;
+      if (shouldRefreshSessionPrefixAfterSerialization(entry)) {
+        const refreshedPrefix = refreshSessionEntriesCacheFromCurrentFile(this.sessionFile);
+        beforeAppendSnapshot = refreshedPrefix.snapshot;
+        previousSnapshot = refreshedPrefix.cacheRefreshed ? refreshedPrefix.snapshot : undefined;
+      }
       const cacheOwnedAppend = Boolean(
         beforeAppendSnapshot &&
         canAdvanceOwnedSessionEntryCache({
@@ -1340,7 +1395,7 @@ export class SessionManager {
       });
       const rememberedAppend = rememberAppendedSessionEntry(
         this.sessionFile,
-        this.sessionFileSnapshot,
+        previousSnapshot,
         beforeAppendSnapshot,
         serializedAppend,
         cacheOwnedAppend,
