@@ -2154,12 +2154,14 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("streams Discord tool progress for coding-profile message-tool-only guild replies", async () => {
+  it("keeps Discord tool progress private for coding-profile message-tool-only guild replies", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       expect(params?.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(params?.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+      expect(
+        params?.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed,
+      ).toBeUndefined();
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       return createNoQueuedDispatchResult();
@@ -2179,7 +2181,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(draftStream.update).toHaveBeenCalledWith("Pinching\n\n🛠️ Exec\n• exec done");
+    expect(draftStream.update).not.toHaveBeenCalled();
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
