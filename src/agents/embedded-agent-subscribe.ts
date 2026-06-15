@@ -704,13 +704,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     try {
+      const replaceableByTerminalToolErrorWarning =
+        options?.replaceableByTerminalToolErrorWarning === true;
       const payload = {
         text: parsed.text,
         mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+        ...(replaceableByTerminalToolErrorWarning ? { isError: true } : {}),
         ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
       };
       void params.onToolResult(
-        options?.replaceableByTerminalToolErrorWarning === true
+        replaceableByTerminalToolErrorWarning
           ? setReplyPayloadMetadata(payload, { replaceableByTerminalToolErrorWarning: true })
           : payload,
       );

@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
@@ -384,6 +385,33 @@ describe("subscribeEmbeddedAgentSession", () => {
     const payload = latestMockCallArg(onToolResult) as { text?: string; mediaUrls?: string[] };
     expect(payload.text ?? "").toContain("Fetched page");
     expect(payload.mediaUrls).toBeUndefined();
+  });
+
+  it("marks replaceable mutating tool error output as an error payload", async () => {
+    const onToolResult = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      verboseLevel: "full",
+      builtinToolNames: new Set(["write"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "write",
+      toolCallId: "tool-1",
+      args: { path: "/tmp/demo.txt", content: "next" },
+      isError: true,
+      result: { content: [{ type: "text", text: "disk full" }] },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalledTimes(2);
+    });
+    const payload = latestMockCallArg(onToolResult) as { text?: string; isError?: boolean };
+    expect(payload.text ?? "").toContain("disk full");
+    expect(payload.isError).toBe(true);
+    expect(getReplyPayloadMetadata(payload)?.replaceableByTerminalToolErrorWarning).toBe(true);
   });
 
   it("delivers generated image media once in markdown verbose output", async () => {
