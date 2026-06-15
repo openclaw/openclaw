@@ -507,16 +507,45 @@ export function syncTelegramMenuCommands(params: {
     if (cachedHash === currentHash) {
       // The local hash matches, but the remote Telegram state may have been
       // cleared (e.g. after an interrupted sync or gateway restart).  Verify
-      // every scope we write (default, all_group_chats) with getMyCommands
-      // before skipping.  See #92944.
+      // every scope and language variant we write before skipping.  See #92944.
+      // Localized command menus (setMyCommands with language_code) must also
+      // be checked — a stale hash can leave those variants empty.  See #92945.
       try {
+        // Collect supported language codes from command localizations.
+        const languageCodes = new Set<string>();
+        for (const cmd of commandsToRegister) {
+          if (cmd.descriptionLocalizations) {
+            for (const lang of Object.keys(cmd.descriptionLocalizations)) {
+              const normalized = normalizeTelegramLanguageCode(lang);
+              if (normalized) {
+                languageCodes.add(normalized);
+              }
+            }
+          }
+        }
+
         let allScopesPopulated = true;
         for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
-          const remoteCommands = await bot.api.getMyCommands(
+          // Check base scope (no language_code).
+          const baseCommands = await bot.api.getMyCommands(
             scope.options ?? {},
           );
-          if (!remoteCommands || remoteCommands.length === 0) {
+          if (!baseCommands || baseCommands.length === 0) {
             allScopesPopulated = false;
+            break;
+          }
+          // Check each localized variant for this scope.
+          for (const langCode of languageCodes) {
+            const langCommands = await bot.api.getMyCommands({
+              ...(scope.options ?? {}),
+              language_code: langCode as LanguageCode,
+            });
+            if (!langCommands || langCommands.length === 0) {
+              allScopesPopulated = false;
+              break;
+            }
+          }
+          if (!allScopesPopulated) {
             break;
           }
         }
@@ -524,7 +553,7 @@ export function syncTelegramMenuCommands(params: {
           logVerbose("telegram: command menu unchanged; skipping sync");
           return;
         }
-        logVerbose("telegram: command menu hash matches but remote is empty in at least one scope; re-syncing");
+        logVerbose("telegram: command menu hash matches but remote is empty in at least one scope or language variant; re-syncing");
       } catch {
         // If getMyCommands fails (network, rate limit, etc.), fall through to
         // re-sync rather than trusting the stale hash.
