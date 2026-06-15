@@ -739,7 +739,7 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
-  it("allows session control entries while the prompt lock is released", async () => {
+  it("allows globally resolved session metadata while the prompt lock is released", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
     const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
@@ -753,25 +753,10 @@ describe("embedded attempt session lock lifecycle", () => {
       sessionFile,
       [
         JSON.stringify({
-          type: "model_change",
-          id: "model-change",
-          parentId: null,
-          timestamp: new Date().toISOString(),
-          provider: "openai",
-          modelId: "gpt-5.1",
-        }),
-        JSON.stringify({
-          type: "thinking_level_change",
-          id: "thinking-change",
-          parentId: "model-change",
-          timestamp: new Date().toISOString(),
-          thinkingLevel: "high",
-        }),
-        JSON.stringify({
           type: "custom",
           customType: "model-snapshot",
           id: "model-snapshot",
-          parentId: "thinking-change",
+          parentId: null,
           timestamp: new Date().toISOString(),
           data: { provider: "openai", modelId: "gpt-5.1" },
         }),
@@ -790,6 +775,12 @@ describe("embedded attempt session lock lifecycle", () => {
           timestamp: new Date().toISOString(),
           name: "session title",
         }),
+        JSON.stringify({
+          type: "session_info",
+          id: "session-info-clear",
+          parentId: "session-info",
+          timestamp: new Date().toISOString(),
+        }),
       ].join("\n") + "\n",
       "utf8",
     );
@@ -801,9 +792,90 @@ describe("embedded attempt session lock lifecycle", () => {
     await cleanupLock.release();
   });
 
+  it("preserves globally resolved metadata when a stale manager appends the reply branch", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-metadata-"));
+    tempDirs.push(dir);
+    const initialManager = SessionManager.create(dir, dir);
+    initialManager.appendMessage({
+      role: "user",
+      content: "question",
+      timestamp: 1,
+    });
+    const rootId = initialManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "first answer" }],
+      api: "messages",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const sessionFile = initialManager.getSessionFile();
+    if (!sessionFile) {
+      throw new Error("expected persisted session file");
+    }
+    const staleManager = SessionManager.open(sessionFile, dir, dir);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    const metadataManager = SessionManager.open(sessionFile, dir, dir);
+    const customId = metadataManager.appendCustomEntry("model-snapshot", {
+      provider: "openai",
+      modelId: "gpt-5.1",
+    });
+    metadataManager.appendLabelChange(rootId, "runtime setting");
+    metadataManager.appendSessionInfo("session title");
+
+    await controller.withSessionWriteLock(() => {
+      staleManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        api: "messages",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 3,
+      });
+    });
+
+    const reopened = SessionManager.open(sessionFile, dir, dir);
+    expect(reopened.getSessionName()).toBe("session title");
+    expect(reopened.getLabel(rootId)).toBe("runtime setting");
+    expect(reopened.getEntry(customId)).toMatchObject({
+      type: "custom",
+      customType: "model-snapshot",
+    });
+    expect(reopened.buildSessionContext().messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+    ]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+  });
+
   it.each([
-    ["model_change without provider", { type: "model_change", modelId: "gpt-5.1" }],
-    ["thinking_level_change without thinkingLevel", { type: "thinking_level_change" }],
     ["custom without customType", { type: "custom", data: { provider: "openai" } }],
     ["custom with empty customType", { type: "custom", customType: "" }],
     ["label without targetId", { type: "label", label: "runtime setting" }],
@@ -843,6 +915,21 @@ describe("embedded attempt session lock lifecycle", () => {
   );
 
   it.each([
+    [
+      "model_change",
+      {
+        type: "model_change",
+        provider: "openai",
+        modelId: "gpt-5.1",
+      },
+    ],
+    [
+      "thinking_level_change",
+      {
+        type: "thinking_level_change",
+        thinkingLevel: "high",
+      },
+    ],
     [
       "message",
       {

@@ -141,7 +141,7 @@ function isTranscriptOnlyOpenClawAssistantLine(line: string): boolean {
   }
 }
 
-function hasSessionControlEntryBase(record: Record<string, unknown>): boolean {
+function hasSessionEntryBase(record: Record<string, unknown>): boolean {
   return (
     typeof record.id === "string" &&
     record.id.trim().length > 0 &&
@@ -151,21 +151,16 @@ function hasSessionControlEntryBase(record: Record<string, unknown>): boolean {
   );
 }
 
-function isPromptReleasedSessionControlLine(line: string): boolean {
+function isPromptReleasedGlobalMetadataLine(line: string): boolean {
   try {
     const parsed = JSON.parse(line) as unknown;
-    if (!isJsonRecord(parsed) || !hasSessionControlEntryBase(parsed)) {
+    if (!isJsonRecord(parsed) || !hasSessionEntryBase(parsed)) {
       return false;
     }
-    // These records are out-of-band session metadata/settings. They do not add
-    // user/assistant/tool content to the prompt transcript, so accepting their
-    // append while the provider lock is released keeps an in-flight reply alive
-    // without masking real conversational takeovers.
+    // These records are resolved globally rather than through the active branch.
+    // Accepting them keeps an in-flight reply alive without losing branch-scoped
+    // model or thinking state when the active SessionManager is stale.
     switch (parsed.type) {
-      case "model_change":
-        return typeof parsed.provider === "string" && typeof parsed.modelId === "string";
-      case "thinking_level_change":
-        return typeof parsed.thinkingLevel === "string";
       case "custom":
         return typeof parsed.customType === "string" && parsed.customType.trim().length > 0;
       case "label":
@@ -185,7 +180,7 @@ function isPromptReleasedSessionControlLine(line: string): boolean {
 }
 
 function isBenignPromptReleasedSessionLine(line: string): boolean {
-  return isTranscriptOnlyOpenClawAssistantLine(line) || isPromptReleasedSessionControlLine(line);
+  return isTranscriptOnlyOpenClawAssistantLine(line) || isPromptReleasedGlobalMetadataLine(line);
 }
 
 function normalizeTranscriptEntryId(value: unknown): string | undefined {
