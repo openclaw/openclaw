@@ -699,6 +699,33 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as AgentEvent;
     syncSessionKey();
+    // System-injected runs (bridge-notify, webhook, cron) never go through the
+    // TUI submit path, so no active/pending run id exists when their lifecycle
+    // "start" arrives — leaving the status bar idle until the response lands.
+    // Adopt such a run for the current session (lifecycle events always carry
+    // sessionKey) so the activity indicator shows work is happening, mirroring
+    // how chat deltas adopt runs in handleChatEvent. Only claim the active slot
+    // when none is held, so a concurrent user run keeps the indicator.
+    const isUntrackedRun =
+      evt.runId !== state.activeChatRunId &&
+      evt.runId !== state.pendingChatRunId &&
+      !sessionRuns.has(evt.runId) &&
+      !finalizedRuns.has(evt.runId);
+    if (
+      isUntrackedRun &&
+      evt.stream === "lifecycle" &&
+      asString(evt.data?.phase, "") === "start" &&
+      !(isLocalBtwRunId?.(evt.runId) ?? false) &&
+      isSameSessionKey(evt.sessionKey, state.currentSessionKey) &&
+      isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)
+    ) {
+      noteSessionRun(evt.runId);
+      // Mirror handleChatEvent: side-question (btw) runs never claim the active
+      // slot, so a concurrent btw run cannot hijack the main activity indicator.
+      if (!state.activeChatRunId) {
+        state.activeChatRunId = evt.runId;
+      }
+    }
     // Agent events (tool streaming, lifecycle) are emitted per-run. Filter against the
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
