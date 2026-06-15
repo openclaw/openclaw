@@ -1427,7 +1427,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     lab,
     mock,
     gateway,
-    // Markdown scenarios should see the full staged gateway config, not just
+    // YAML scenarios should see the full staged gateway config, not just
     // the transport fragment. Routing/session/plugin assertions depend on it.
     cfg: gateway.cfg,
     transport,

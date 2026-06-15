@@ -1,12 +1,16 @@
 import { type FSWatcher, readFileSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import type { UsageBarTemplate } from "./translator.js";
 
 export type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
 type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
 const fileCache = new Map<string, CacheEntry>();
+const warnedTemplateOverrides = new Set<string>();
+const usageTemplateLog = createSubsystemLogger("usage-template");
 
 function expandPath(p: string): string {
   if (p === "~") {
@@ -18,36 +22,118 @@ function expandPath(p: string): string {
   return isAbsolute(p) ? p : resolve(p);
 }
 
-function isUsableTemplate(value: unknown): value is UsageBarTemplate {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const obj = value as Record<string, unknown>;
-  const hasOutput = typeof obj.output === "object" && obj.output !== null;
-  return hasOutput || Array.isArray(obj.segments);
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readTemplateFile(path: string): UsageBarTemplate | undefined {
+function hasPieces(value: unknown): boolean {
+  return Array.isArray(value) && value.some(isPlainObject);
+}
+
+function hasOutputPieces(output: unknown): boolean {
+  if (!isPlainObject(output)) {
+    return false;
+  }
+  if (hasPieces(output.default)) {
+    return true;
+  }
+  const surfaces = output.surfaces;
+  return (
+    isPlainObject(surfaces) &&
+    Object.values(surfaces).some((surfacePieces) => hasPieces(surfacePieces))
+  );
+}
+
+function isEmptyTemplate(value: unknown): boolean {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if (Object.keys(value).length === 0) {
+    return true;
+  }
+  if ("segments" in value && Array.isArray(value.segments)) {
+    return value.segments.length === 0;
+  }
+  const output = value.output;
+  return isPlainObject(output) && !hasOutputPieces(output);
+}
+
+function isUsableTemplate(value: unknown): value is UsageBarTemplate {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if (hasOutputPieces(value.output) || hasPieces(value.segments)) {
+    return true;
+  }
+  const surfaces = value.surfaces;
+  return (
+    isPlainObject(surfaces) &&
+    Object.values(surfaces).some((surface) => isPlainObject(surface) && hasPieces(surface.segments))
+  );
+}
+
+type InvalidTemplateReason = "invalid-json" | "unreadable" | "unsupported-shape";
+type TemplateReadResult = { template?: UsageBarTemplate; reason?: InvalidTemplateReason };
+
+function getErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  const code = error.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function warnInvalidUsageTemplate(source: "inline" | "file", reason: string, path?: string): void {
+  const key = `${source}:${reason}:${path ?? ""}`;
+  if (warnedTemplateOverrides.has(key)) {
+    return;
+  }
+  warnedTemplateOverrides.add(key);
+  usageTemplateLog.warn("configured usage template could not be used; using built-in footer", {
+    source,
+    reason,
+    ...(path ? { path } : {}),
+  });
+}
+
+function parseTemplate(value: unknown): TemplateReadResult {
+  if (isUsableTemplate(value)) {
+    return { template: value };
+  }
+  return isEmptyTemplate(value) ? {} : { reason: "unsupported-shape" };
+}
+
+function readTemplateFile(path: string): TemplateReadResult {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
-  } catch {
-    return undefined;
+  } catch (error) {
+    return getErrorCode(error) === "ENOENT" ? {} : { reason: "unreadable" };
+  }
+  if (raw.trim().length === 0) {
+    return {};
   }
   try {
-    const parsed: unknown = JSON.parse(raw);
-    return isUsableTemplate(parsed) ? parsed : undefined;
+    return parseTemplate(JSON.parse(raw));
   } catch {
-    return undefined;
+    return { reason: "invalid-json" };
   }
 }
 
 function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
-  const entry: CacheEntry = { template: readTemplateFile(path) };
+  const result = readTemplateFile(path);
+  if (result.reason) {
+    warnInvalidUsageTemplate("file", result.reason, path);
+  }
+  const entry: CacheEntry = { template: result.template };
   if (entry.template) {
     try {
       const watcher = watch(path, { persistent: false }, () => {
-        entry.template = readTemplateFile(path);
+        const next = readTemplateFile(path);
+        if (next.reason) {
+          warnInvalidUsageTemplate("file", next.reason, path);
+        }
+        entry.template = next.template;
       });
       watcher.on("error", () => {
         watcher.close();
@@ -61,21 +147,24 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
   return entry.template;
 }
 
-export function loadUsageBarTemplate(
-  configured: UsageTemplateConfig,
-): UsageBarTemplate | undefined {
+export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarTemplate {
   if (!configured) {
-    return undefined;
+    return DEFAULT_USAGE_BAR_TEMPLATE;
   }
   if (typeof configured === "object") {
-    return isUsableTemplate(configured) ? configured : undefined;
+    const result = parseTemplate(configured);
+    if (result.reason) {
+      warnInvalidUsageTemplate("inline", result.reason);
+    }
+    return result.template ?? DEFAULT_USAGE_BAR_TEMPLATE;
   }
   const path = expandPath(configured);
   const cached = fileCache.get(path);
-  if (cached) {
-    return cached.template ?? (cached.watcher ? undefined : cacheTemplateFile(path));
-  }
-  return cacheTemplateFile(path);
+  return (
+    (cached
+      ? (cached.template ?? (cached.watcher ? undefined : cacheTemplateFile(path)))
+      : cacheTemplateFile(path)) ?? DEFAULT_USAGE_BAR_TEMPLATE
+  );
 }
 
 export function clearUsageBarTemplateCacheForTest(): void {
@@ -83,4 +172,5 @@ export function clearUsageBarTemplateCacheForTest(): void {
     entry.watcher?.close();
   }
   fileCache.clear();
+  warnedTemplateOverrides.clear();
 }

@@ -97,6 +97,7 @@ import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   toClientToolDefinitions,
+  toToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
 import {
   createOpenClawCodingTools,
@@ -169,6 +170,11 @@ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import {
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  createAgentRunRestartAbortError,
+  isAgentRunRestartAbortReason,
+} from "../../run-termination.js";
 import { collectRuntimeChannelCapabilities } from "../../runtime-capabilities.js";
 import {
   logAgentRuntimeToolDiagnostics,
@@ -182,6 +188,7 @@ import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js"
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { createAgentSession, SessionManager } from "../../sessions/index.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
 import {
@@ -210,11 +217,18 @@ import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
   addClientToolsToToolSearchCatalog,
+  applyToolSchemaDirectoryCatalog,
   applyToolSearchCatalog,
+  buildToolSchemaDirectoryPrompt,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
+  estimateToolSchemaDirectoryToolNames,
   projectToolSearchTargetTranscriptMessages,
+  resolveToolSearchCatalogTool,
   resolveToolSearchConfig,
+  TOOL_CALL_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
@@ -444,6 +458,7 @@ import {
 import { detectAndLoadPromptImages } from "./images.js";
 import {
   buildAttemptReplayMetadata,
+  hasAttemptTerminalState,
   resolveSilentToolResultReplyPayload,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn.js";
@@ -1165,6 +1180,7 @@ export async function runEmbeddedAttempt(
           agentId: sessionAgentId,
           sessionKey: sandboxSessionKey,
         });
+    const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
     const codeModeControlsEnabledForRun =
       toolsEnabled &&
       params.disableTools !== true &&
@@ -1177,7 +1193,7 @@ export async function runEmbeddedAttempt(
       !isRawModelRun &&
       params.toolsAllow?.length !== 0 &&
       !codeModeControlsEnabledForRun &&
-      resolveToolSearchConfig(toolSearchRuntimeConfig).enabled;
+      toolSearchConfig.enabled;
     const effectiveToolsAllow =
       toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
         ? [
@@ -1239,6 +1255,7 @@ export async function runEmbeddedAttempt(
                 : undefined,
             sessionId: params.sessionId,
             runId: params.runId,
+            oneShotCliRun: params.oneShotCliRun,
             toolSearchCatalogRef,
             agentDir,
             cwd: effectiveCwd,
@@ -1263,6 +1280,7 @@ export async function runEmbeddedAttempt(
               workspaceDir: effectiveWorkspace,
             }),
             currentChannelId: params.currentChannelId,
+            currentMessagingTarget: params.currentMessagingTarget,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,
@@ -1625,6 +1643,28 @@ export async function runEmbeddedAttempt(
           },
         })
       : [];
+    const directoryRequiredToolNames =
+      params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only"
+        ? ["message"]
+        : [];
+    const directoryHydratedToolNames =
+      toolSearchControlsEnabledForRun && toolSearchConfig.mode === "directory"
+        ? (() => {
+            try {
+              return estimateToolSchemaDirectoryToolNames({
+                tools: effectiveTools,
+                query: params.prompt,
+                maxTools: 4,
+                requiredToolNames: directoryRequiredToolNames,
+              });
+            } catch (err) {
+              log.warn(
+                `tool-search: directory schema estimation failed; continuing with deferred schemas only (${String(err)})`,
+              );
+              return directoryRequiredToolNames;
+            }
+          })()
+        : [];
     const toolSearch = codeModeControlsEnabledForRun
       ? applyCodeModeCatalog({
           tools: [...codeModeTools, ...effectiveTools],
@@ -1636,16 +1676,28 @@ export async function runEmbeddedAttempt(
           catalogRef: toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
         })
-      : applyToolSearchCatalog({
-          tools: effectiveTools,
-          config: toolSearchRuntimeConfig,
-          sessionId: params.sessionId,
-          sessionKey: sandboxSessionKey,
-          agentId: sessionAgentId,
-          runId: params.runId,
-          catalogRef: toolSearchCatalogRef,
-          toolHookContext: catalogToolHookContext,
-        });
+      : toolSearchConfig.mode === "directory"
+        ? applyToolSchemaDirectoryCatalog({
+            tools: effectiveTools,
+            config: toolSearchRuntimeConfig,
+            sessionId: params.sessionId,
+            sessionKey: sandboxSessionKey,
+            agentId: sessionAgentId,
+            runId: params.runId,
+            catalogRef: toolSearchCatalogRef,
+            toolHookContext: catalogToolHookContext,
+            hydrateToolNames: directoryHydratedToolNames,
+          })
+        : applyToolSearchCatalog({
+            tools: effectiveTools,
+            config: toolSearchRuntimeConfig,
+            sessionId: params.sessionId,
+            sessionKey: sandboxSessionKey,
+            agentId: sessionAgentId,
+            runId: params.runId,
+            catalogRef: toolSearchCatalogRef,
+            toolHookContext: catalogToolHookContext,
+          });
     const projectedToolSearchTools = filterLocalModelLeanTools({
       tools: toolSearch.tools,
       config: params.config,
@@ -1666,9 +1718,15 @@ export async function runEmbeddedAttempt(
       log.info(
         codeModeControlsEnabledForRun
           ? `code-mode: cataloged ${toolSearch.catalogToolCount} tools behind exec/wait`
-          : `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
+          : toolSearchConfig.mode === "directory"
+            ? `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact directory surface`
+            : `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
       );
     }
+    const deferredDirectoryToolsCallable =
+      toolSearchControlsEnabledForRun &&
+      toolSearchConfig.mode === "directory" &&
+      toolSearch.catalogRegistered;
     prepStages.mark("bundle-tools");
     const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
       config: params.config,
@@ -1694,16 +1752,22 @@ export async function runEmbeddedAttempt(
       visibleTools: effectiveTools,
       uncompactedTools: uncompactedEffectiveTools,
       clientTools,
-      catalogRegistered: toolSearch.catalogRegistered,
+      clientToolsCataloged:
+        toolSearch.catalogRegistered &&
+        (codeModeControlsEnabledForRun || toolSearchConfig.mode !== "directory"),
       catalogToolCount: toolSearch.catalogToolCount,
       controlsEnabled: toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun,
+      deferredToolsCallable: deferredDirectoryToolsCallable,
       controlNames: codeModeControlsEnabledForRun
         ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
-        : undefined,
+        : toolSearchConfig.mode === "directory"
+          ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
+          : undefined,
       explicitAllowlistSources: explicitToolAllowlistSources,
     });
-    const allowedToolNames = toolSearchRunPlan.visibleAllowedToolNames;
     const replayAllowedToolNames = toolSearchRunPlan.replayAllowedToolNames;
+    const liveAllowedToolNames = toolSearchRunPlan.liveAllowedToolNames;
+    const capabilityToolNames = toolSearchRunPlan.capabilityToolNames;
     const emptyExplicitToolAllowlistError = buildEmptyExplicitToolAllowlistError({
       sources: explicitToolAllowlistSources,
       callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
@@ -1782,6 +1846,17 @@ export async function runEmbeddedAttempt(
           cfg: params.config,
           channel: runtimeChannel,
           accountId: params.agentAccountId,
+        })
+      : undefined;
+    const toolSchemaDirectoryPrompt = deferredDirectoryToolsCallable
+      ? buildToolSchemaDirectoryPrompt({
+          config: params.config,
+          runtimeConfig: params.config,
+          agentId: sessionAgentId,
+          sessionKey: sandboxSessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
+          catalogRef: toolSearchCatalogRef,
         })
       : undefined;
 
@@ -1906,7 +1981,9 @@ export async function runEmbeddedAttempt(
         }),
         runtimeInfo,
         messageToolHints,
+        toolSchemaDirectoryPrompt,
         sandboxInfo,
+        capabilityToolNames: [...capabilityToolNames].toSorted(),
         tools: effectiveTools,
         userTimezone,
         userTime,
@@ -2185,18 +2262,19 @@ export async function runEmbeddedAttempt(
           return name ? [name] : [];
         }),
       );
-      // Admission-time conflict check only against non-plugin core tools, to
-      // preserve prior behavior where client tools may coexist with unrelated
-      // plugin tool names. MEDIA passthrough is still gated by the raw-name
-      // set above, so a client tool that normalize-collides with a plugin
-      // tool cannot inherit the plugin's local-media trust.
       const coreBuiltinToolNames = collectCoreBuiltinToolNames(uncompactedEffectiveTools, {
         isPluginTool: (tool) =>
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
       });
+      // Directory exact-name hydration cannot distinguish a hidden catalog tool
+      // from a visible client tool that shadows it. Other modes preserve the
+      // existing client/plugin coexistence behavior and use core conflicts only.
+      const clientConflictToolNames = deferredDirectoryToolsCallable
+        ? builtinToolNames
+        : coreBuiltinToolNames;
       const clientToolNameConflicts = findClientToolNameConflicts({
         tools: clientTools ?? [],
-        existingToolNames: [...coreBuiltinToolNames, ...AGENT_RESERVED_TOOL_NAMES],
+        existingToolNames: [...clientConflictToolNames, ...AGENT_RESERVED_TOOL_NAMES],
       });
       if (clientToolNameConflicts.length > 0) {
         throw createClientToolNameConflictError(clientToolNameConflicts);
@@ -2296,6 +2374,30 @@ export async function runEmbeddedAttempt(
           sessionManager,
           settingsManager,
           resourceLoader,
+          resolveDeferredTool: deferredDirectoryToolsCallable
+            ? ({ toolCall }) => {
+                const tool = resolveToolSearchCatalogTool(
+                  {
+                    config: params.config,
+                    runtimeConfig: params.config,
+                    agentId: sessionAgentId,
+                    sessionKey: sandboxSessionKey,
+                    sessionId: params.sessionId,
+                    runId: params.runId,
+                    catalogRef: toolSearchCatalogRef,
+                    abortSignal: runAbortController.signal,
+                  },
+                  toolCall.name,
+                );
+                // Catalog entries already own before_tool_call wrapping.
+                const definition = tool ? toToolDefinitions([tool])[0] : undefined;
+                const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
+                if (hydratedTool) {
+                  log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
+                }
+                return hydratedTool;
+              }
+            : undefined,
           withSessionWriteLock: (operation) =>
             sessionLockController.withSessionWriteLock(operation),
         },
@@ -2831,17 +2933,17 @@ export async function runEmbeddedAttempt(
       // names on the live response stream before tool execution.
       activeSession.agent.streamFn = wrapStreamFnSanitizeMalformedToolCalls(
         activeSession.agent.streamFn,
-        allowedToolNames,
+        replayAllowedToolNames,
         transcriptPolicy,
         params.provider,
       );
       activeSession.agent.streamFn = wrapStreamFnPromoteStandaloneTextToolCalls(
         activeSession.agent.streamFn,
-        allowedToolNames,
+        liveAllowedToolNames,
       );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
-        allowedToolNames,
+        liveAllowedToolNames,
         {
           unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
         },
@@ -3013,10 +3115,12 @@ export async function runEmbeddedAttempt(
           }
 
           if (params.sessionKey && params.config && !isRawModelRun) {
+            // Capability guidance must include deferred OpenClaw tools without
+            // interpreting arbitrary client tool names as native capabilities.
             const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
               cfg: params.config,
               controllerSessionKey: params.sessionKey,
-              hasSessionsYield: effectiveTools.some((tool) => tool.name === "sessions_yield"),
+              hasSessionsYield: capabilityToolNames.has("sessions_yield"),
             });
             if (activeSubagentPromptAddition) {
               setActiveSessionSystemPrompt(
@@ -3066,7 +3170,7 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
-              availableTools: new Set(effectiveTools.map((tool) => tool.name)),
+              availableTools: new Set(capabilityToolNames),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
@@ -3303,6 +3407,7 @@ export async function runEmbeddedAttempt(
         buildEmbeddedSubscriptionParams({
           session: activeSession,
           runId: params.runId,
+          lifecycleGeneration: params.lifecycleGeneration,
           messageChannel: runtimeChannel,
           initialReplayState: params.initialReplayState,
           hookRunner: getGlobalHookRunner() ?? undefined,
@@ -3314,6 +3419,7 @@ export async function runEmbeddedAttempt(
           shouldEmitToolOutput: params.shouldEmitToolOutput,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           hasDeliveredMessageToolOnlySourceReply: () => didDeliverSourceReplyViaMessageTool,
+          onAgentToolResult: params.onAgentToolResult,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
@@ -3328,6 +3434,10 @@ export async function runEmbeddedAttempt(
           onAgentEvent: params.onAgentEvent,
           terminalLifecyclePhase: params.deferTerminalLifecycleEnd ? "finishing" : "end",
           isTerminalAborted: () => aborted,
+          resolveTerminalStopReason: () =>
+            isAgentRunRestartAbortReason(runAbortController.signal.reason)
+              ? AGENT_RUN_RESTART_ABORT_STOP_REASON
+              : undefined,
           onBeforeLifecycleTerminal: () => {
             if (
               requiresCompletionRequiredAsyncTaskWait({
@@ -3350,6 +3460,12 @@ export async function runEmbeddedAttempt(
           silentExpected: params.silentExpected,
           config: params.config,
           sessionKey: sandboxSessionKey,
+          currentChannelId: params.currentChannelId,
+          currentMessagingTarget: params.currentMessagingTarget,
+          currentThreadId: params.currentThreadTs,
+          currentMessageId: params.currentMessageId,
+          replyToMode: params.replyToMode,
+          hasRepliedRef: params.hasRepliedRef,
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           builtinToolNames,
@@ -3373,6 +3489,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSourceReplyPayloads,
         getHeartbeatToolResponse,
         getPendingToolMediaReply,
+        hasToolMediaBlockReply,
         getVisibleBlockReplyCount,
         getSuccessfulCronAdds,
         getReplayState,
@@ -3430,9 +3547,9 @@ export async function runEmbeddedAttempt(
         }
       };
 
-      const abortActiveRunExternally = () => {
+      const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
         externalAbort = true;
-        abortRun();
+        abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
@@ -3450,7 +3567,7 @@ export async function runEmbeddedAttempt(
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         cancel: abortActiveRunExternally,
-        abort: abortActiveRunExternally,
+        abort: (reason) => abortActiveRunExternally(reason),
       };
       let lastAssistant: AssistantMessage | undefined;
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
@@ -5126,6 +5243,26 @@ export async function runEmbeddedAttempt(
       const lastToolError = getLastToolError?.();
       const heartbeatToolResponse = getHeartbeatToolResponse();
       const messagingToolSourceReplyPayloads = getMessagingToolSourceReplyPayloads();
+      const hasToolMediaBlockReplyNow = hasToolMediaBlockReply();
+      const hasTerminalOutput = hasAttemptTerminalState({
+        clientToolCalls: completedClientToolCallsForAttempt,
+        yieldDetected,
+        didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
+        heartbeatToolResponse,
+        lastToolError,
+        toolMediaUrls: pendingToolMediaReply?.mediaUrls,
+        toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
+        toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
+        hasToolMediaBlockReply: hasToolMediaBlockReplyNow,
+        didDeliverSourceReplyViaMessageTool,
+        messagingToolSourceReplyPayloads,
+        messagingToolSentTexts: getMessagingToolSentTexts(),
+        messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+        messagingToolSentTargets: getMessagingToolSentTargets(),
+        acceptedSessionSpawns,
+        successfulCronAdds: getSuccessfulCronAdds(),
+        toolMetas: toolMetasNormalized,
+      });
       const pendingToolMediaPayloadCount = hasVisiblePendingToolMediaReply(pendingToolMediaReply)
         ? 1
         : 0;
@@ -5201,6 +5338,7 @@ export async function runEmbeddedAttempt(
         silentExpected: params.silentExpected,
         emptyAssistantReplyIsSilent,
         lastAssistantStopReason: lastAssistant?.stopReason,
+        hasTerminalOutput,
       });
       trajectoryRecorder?.recordEvent("model.completed", {
         aborted,
@@ -5300,6 +5438,7 @@ export async function runEmbeddedAttempt(
         toolMediaUrls: pendingToolMediaReply?.mediaUrls,
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
         toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
+        hasToolMediaBlockReply: hasToolMediaBlockReplyNow,
         successfulCronAdds: getSuccessfulCronAdds(),
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),

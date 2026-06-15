@@ -70,7 +70,9 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
   const statusAlreadyTimeoutAttributed = status === "timeout" || status === "timed_out";
   const hardTimeout =
     !pendingError &&
-    ((record.providerStarted === true && statusAlreadyTimeoutAttributed) ||
+    ((stopReason !== "restart" &&
+      record.providerStarted === true &&
+      statusAlreadyTimeoutAttributed) ||
       timeoutPhase === "preflight" ||
       timeoutPhase === "provider" ||
       timeoutPhase === "post_turn");
@@ -93,6 +95,7 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
     stopReason === "canceled" ||
     stopReason === "killed" ||
     stopReason === "auth-revoked" ||
+    stopReason === "restart" ||
     stopReason === "rpc" ||
     stopReason === "user" ||
     (record.aborted === true && stopReason === "stop")

@@ -1,4 +1,5 @@
 // Telegram plugin module implements bot handlers behavior.
+import { randomUUID } from "node:crypto";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -36,9 +37,9 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  updateSessionStore,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
@@ -103,6 +104,7 @@ import {
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import { getTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
 import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
 import {
   resolveTelegramConversationBaseSessionKey,
@@ -665,7 +667,7 @@ export const registerTelegramHandlers = ({
     runtimeCfg?: OpenClawConfig;
   }): {
     agentId: string;
-    sessionEntry: ReturnType<typeof resolveSessionStoreEntry>["existing"];
+    sessionEntry: ReturnType<typeof getSessionEntry>;
     sessionKey: string;
     model?: string;
   } => {
@@ -707,8 +709,12 @@ export const registerTelegramHandlers = ({
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath);
-    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    const entry = (telegramDeps.getSessionEntry ?? getSessionEntry)({ storePath, sessionKey });
+    const store = Object.fromEntries(
+      (telegramDeps.listSessionEntries ?? listSessionEntries)({ storePath }).map(
+        ({ sessionKey: key, entry: value }) => [key, value],
+      ),
+    );
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
       sessionStore: store,
@@ -2088,12 +2094,22 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
-    // Answer immediately to prevent Telegram from retrying while we process
-    await withTelegramApiErrorLogging({
-      operation: "answerCallbackQuery",
-      runtime,
-      fn: () => bot.api.answerCallbackQuery(callback.id),
-    }).catch(() => {});
+    const answerCallbackQuery = async () => {
+      // Answer immediately to prevent Telegram from retrying while we process.
+      // Pre-sequentialize middleware usually does this first; this remains the
+      // fallback for failed early answers and direct handler tests.
+      await withTelegramApiErrorLogging({
+        operation: "answerCallbackQuery",
+        runtime,
+        fn: () => bot.api.answerCallbackQuery(callback.id),
+      }).catch(() => {});
+    };
+    const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
+    if (earlyAnswerPromise) {
+      await earlyAnswerPromise.catch(answerCallbackQuery);
+    } else {
+      await answerCallbackQuery();
+    }
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
@@ -2170,7 +2186,9 @@ export const registerTelegramHandlers = ({
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
       const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(data);
-      const callbackCommandText = nativeCallbackCommand ?? (opaqueCallbackData ? "" : data);
+      const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
+      const callbackCommandText =
+        nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
       const pluginCallbackData = opaqueCallbackData ?? data;
       const approvalCallback = parseExecApprovalCommandText(
         nativeCallbackCommand ?? (opaqueCallbackData ? "" : data),
@@ -2703,18 +2721,25 @@ export const registerTelegramHandlers = ({
               selection.model === resolvedDefault.model;
 
             try {
-              await updateSessionStore(storePath, (store) => {
-                const sessionKey = sessionState.sessionKey;
-                const entry = store[sessionKey] ?? {};
-                store[sessionKey] = entry;
-                applyModelOverrideToSessionEntry({
-                  entry,
-                  selection: {
-                    provider: selection.provider,
-                    model: selection.model,
-                    isDefault: isDefaultSelection,
-                  },
-                });
+              await patchSessionEntry({
+                storePath,
+                sessionKey: sessionState.sessionKey,
+                fallbackEntry: {
+                  sessionId: randomUUID(),
+                  updatedAt: Date.now(),
+                },
+                replaceEntry: true,
+                update: (entry) => {
+                  applyModelOverrideToSessionEntry({
+                    entry,
+                    selection: {
+                      provider: selection.provider,
+                      model: selection.model,
+                      isDefault: isDefaultSelection,
+                    },
+                  });
+                  return entry;
+                },
               });
             } catch (err) {
               throw new TelegramRetryableCallbackError(err);

@@ -40,6 +40,7 @@ import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
+import { setTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
 import {
   asTelegramClientFetch,
   createTelegramClientFetch,
@@ -49,6 +50,7 @@ import {
 } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
+import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -248,6 +250,20 @@ export function createTelegramBotCore(
     }
   });
 
+  // Answer callback queries immediately before sequentialize queues them behind
+  // agent turns for the same chat/topic. Telegram has a ~15s server-side timeout
+  // for answerCallbackQuery; if an agent turn is already processing, sequentialize
+  // delays the answer beyond that window and the user sees a stuck loading spinner.
+  bot.use(async (ctx, next) => {
+    const callback = ctx.callbackQuery;
+    if (callback) {
+      const answerPromise = bot.api.answerCallbackQuery(callback.id);
+      setTelegramCallbackQueryAnswerPromise(ctx, answerPromise);
+      void answerPromise.catch(() => {});
+    }
+    await next();
+  });
+
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
@@ -274,7 +290,12 @@ export function createTelegramBotCore(
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
+  const textLimit = Math.min(
+    resolveTextChunkLimit(cfg, "telegram", account.accountId, {
+      fallbackLimit: TELEGRAM_RICH_TEXT_LIMIT,
+    }),
+    TELEGRAM_RICH_TEXT_LIMIT,
+  );
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
   const groupAllowFrom =
@@ -362,7 +383,7 @@ export function createTelegramBotCore(
     return resolveTelegramScopedGroupConfig(freshTelegramCfg, chatId, messageThreadId);
   };
 
-  // Global sendChatAction handler with 401 backoff / circuit breaker (issue #27092).
+  // Global sendChatAction handler with 401 backoff and transient cooldown.
   // Created BEFORE the message processor so it can be injected into every message context.
   // Shared across all message contexts for this account so that consecutive 401s
   // from ANY chat are tracked together — prevents infinite retry storms.

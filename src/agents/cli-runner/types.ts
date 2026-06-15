@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   PersistedUserTurnMessage,
@@ -43,6 +44,11 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  /**
+   * Execution mode for the generic CLI runner. Side questions are one-shot
+   * background answers and must not reuse or mutate normal agent sessions.
+   */
+  executionMode?: CliBackendExecutionMode;
   suppressNextUserMessagePersistence?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
@@ -63,6 +69,8 @@ export type RunCliAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Immutable lifecycle ownership captured when this execution was admitted. */
+  lifecycleGeneration?: string;
   lane?: string;
   jobId?: string;
   extraSystemPrompt?: string;
@@ -126,6 +134,8 @@ export type RunCliAgentParams = {
    * alive after the JSON response is emitted.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
 };
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */

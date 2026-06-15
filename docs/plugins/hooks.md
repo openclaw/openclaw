@@ -152,7 +152,8 @@ observation-only.
 - `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
 - `deactivate` - deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
-- **`before_install`** - inspect skill or plugin install context and optionally block
+- **`before_install`** - inspect staged skill or plugin install material from a loaded
+  plugin runtime
 
 ## Debug runtime hooks
 
@@ -462,11 +463,19 @@ Decision rules:
 
 ## Install hooks
 
-`before_install` runs after the operator-owned `security.installPolicy` check
-when one is configured. The `builtinScan` field remains in the event payload for
-compatibility, but OpenClaw no longer runs built-in install-time dangerous-code
-blocking, so it is an empty `ok` result. Return additional findings or
-`{ block: true, blockReason }` to stop the install.
+Use `security.installPolicy` for operator-owned allow/block decisions. That
+policy runs from OpenClaw config, covers CLI install and update paths, and fails
+closed when enabled but unavailable.
+
+`before_install` is a plugin-runtime lifecycle hook. It runs after
+`security.installPolicy` only in the OpenClaw process where plugin hooks have
+already been loaded, such as Gateway-backed install flows. It is useful for
+plugin-owned observations, warnings, and compatibility checks, but it is not the
+primary enterprise or host security boundary for installs. The `builtinScan`
+field remains in the event payload for compatibility, but OpenClaw no longer
+runs built-in install-time dangerous-code blocking, so it is an empty `ok`
+result. Return additional findings or `{ block: true, blockReason }` to stop the
+install in that process.
 
 `block: true` is terminal. `block: false` is treated as no decision.
 Handler failures block the install fail-closed.

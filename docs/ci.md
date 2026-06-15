@@ -200,13 +200,19 @@ from `release/YYYY.M.PATCH` or `main` after the release tag exists and after the
 OpenClaw npm preflight has succeeded. It verifies `pnpm plugins:sync:check`,
 dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
 `Plugin ClawHub Release` for the same release SHA, and only then dispatches
-`OpenClaw NPM Release` with the saved `preflight_run_id`.
+`OpenClaw NPM Release` with the saved `preflight_run_id`. Stable publish also
+requires an exact `windows_node_tag`; the workflow verifies the Windows source
+release and compares its x64/ARM64 installers with the candidate-approved
+`windows_node_installer_digests` input before any publish child, then promotes
+and verifies those same pinned installer digests plus the exact companion asset
+and checksum contract before publishing the GitHub release draft.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
   --ref release/YYYY.M.PATCH \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f npm_dist_tag=beta
 ```
 

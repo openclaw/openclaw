@@ -126,6 +126,35 @@ describe("memory embedding policy", () => {
     expect(isRetryableMemoryEmbeddingTransportError("embedding validation failed")).toBe(false);
   });
 
+  it("splits OpenAI 431 oversized embedding batches without retrying the same request", async () => {
+    const run = vi.fn(async (items: string[]) => {
+      if (items.length > 1) {
+        throw new Error(
+          "openai embeddings failed: 431 request_headers_too_large: Request Header Fields Too Large",
+        );
+      }
+      return items.map((item) => [item.charCodeAt(0)]);
+    });
+
+    const result = await runMemoryEmbeddingBatchRetryWithSplit({
+      items: ["a", "b", "c", "d"],
+      run,
+      isRetryable: isRetryableMemoryEmbeddingError,
+      isSplittable: isSplittableMemoryEmbeddingTransportError,
+      waitForRetry: async () => {},
+      maxAttempts: 3,
+      baseDelayMs: 500,
+    });
+
+    expect(result).toEqual([[97], [98], [99], [100]]);
+    expect(run.mock.calls.map(([items]) => items.length)).toEqual([4, 2, 1, 1, 2, 1, 1]);
+    expect(isRetryableMemoryEmbeddingError("431 request_headers_too_large")).toBe(false);
+    expect(isSplittableMemoryEmbeddingTransportError("431 request_headers_too_large")).toBe(true);
+    expect(
+      isSplittableMemoryEmbeddingTransportError("embedding validation failed at item 4312"),
+    ).toBe(false);
+  });
+
   it("retries too-many-tokens-per-day errors", async () => {
     let calls = 0;
     const waits: number[] = [];

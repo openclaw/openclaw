@@ -21,29 +21,43 @@ function expectCrossContextDecoration(
 }
 
 const mocks = vi.hoisted(() => ({
-  getChannelPlugin: vi.fn((channel: string) =>
-    channel === "richchat"
-      ? {
-          messaging: {
-            buildCrossContextPresentation: ({
-              originLabel,
-              message,
-            }: {
-              originLabel: string;
-              message: string;
-            }) => {
-              const trimmed = message.trim();
-              return {
-                blocks: [
-                  ...(trimmed ? [{ type: "text" as const, text: message }] : []),
-                  { type: "context" as const, text: `From ${originLabel}` },
-                ],
-              };
-            },
+  getChannelPlugin: vi.fn((channel: string) => {
+    if (channel === "slack") {
+      return {
+        threading: {
+          matchesToolContextTarget: ({
+            target,
+            toolContext,
+          }: {
+            target: string;
+            toolContext: { currentMessagingTarget?: string };
+          }) => target === "U123" && toolContext.currentMessagingTarget === "user:U123",
+        },
+      };
+    }
+    if (channel === "richchat") {
+      return {
+        messaging: {
+          buildCrossContextPresentation: ({
+            originLabel,
+            message,
+          }: {
+            originLabel: string;
+            message: string;
+          }) => {
+            const trimmed = message.trim();
+            return {
+              blocks: [
+                ...(trimmed ? [{ type: "text" as const, text: message }] : []),
+                { type: "context" as const, text: `From ${originLabel}` },
+              ],
+            };
           },
-        }
-      : undefined,
-  ),
+        },
+      };
+    }
+    return undefined;
+  }),
   normalizeTargetForProvider: vi.fn((channel: string, raw: string) => {
     const trimmed = raw.trim();
     if (!trimmed) {
@@ -213,6 +227,26 @@ describe("outbound policy helpers", () => {
     },
   ])("enforces cross-context policy for %j", (params) => {
     expectCrossContextPolicyResult(params);
+  });
+
+  it("allows a routable alias of the native current channel", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        channel: "slack",
+        action: "send",
+        args: { to: "U123" },
+        toolContext: {
+          currentChannelId: "D123",
+          currentMessagingTarget: "user:U123",
+          currentChannelProvider: "slack",
+        },
+        cfg: {
+          tools: {
+            message: { crossContext: { allowWithinProvider: false } },
+          },
+        },
+      }),
+    ).not.toThrow();
   });
 
   it("uses presentation when available and preferred", async () => {
