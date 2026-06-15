@@ -1150,6 +1150,10 @@ export async function runCodexAppServerAttempt(
       await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
     }
   };
+  const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
+    releaseSharedClientLeaseOnce();
+    await retireSharedCodexClientForOneShotCleanup();
+  };
   let sandboxExecEnvironmentAcquired = false;
   const releaseSandboxExecEnvironment = async () => {
     if (sandboxExecEnvironmentAcquired) {
@@ -2325,7 +2329,7 @@ export async function runCodexAppServerAttempt(
         },
       });
       params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-      releaseSharedClientLeaseOnce();
+      await releaseSharedClientLeaseAndRetireOneShotClient();
       if (usageLimitError) {
         await markCodexAuthProfileBlockedFromRateLimits({
           params,
@@ -2345,7 +2349,7 @@ export async function runCodexAppServerAttempt(
     }
   }
   if (!turn) {
-    releaseSharedClientLeaseOnce();
+    await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
   turnIdRef.current = turn.turn.id;
@@ -2795,8 +2799,7 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
-    releaseSharedClientLeaseOnce();
-    await retireSharedCodexClientForOneShotCleanup();
+    await releaseSharedClientLeaseAndRetireOneShotClient();
     if (nativeHookRelay) {
       if (shouldDelayNativeHookRelayUnregister) {
         // Codex hook subprocesses can outlive a completed app-server turn by a

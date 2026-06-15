@@ -1872,6 +1872,51 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("retires the shared Codex app-server client after one-shot turn start failures", async () => {
+    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
+    retireSpy.mockReturnValue({ activeLeases: 0, closed: true });
+    const events: string[] = [];
+    const closeAndWait = vi.fn(async () => {
+      events.push("closeAndWait");
+      return true;
+    });
+    let startedClient: unknown;
+    setCodexAppServerClientFactoryForTest(async () => {
+      const client = {
+        request: vi.fn(async (method: string) => {
+          events.push(`request:${method}`);
+          if (method === "thread/start") {
+            return threadStartResult();
+          }
+          if (method === "turn/start") {
+            throw new Error("turn start failed");
+          }
+          return {};
+        }),
+        addNotificationHandler: vi.fn(() => () => undefined),
+        addRequestHandler: vi.fn(() => () => undefined),
+        addCloseHandler: vi.fn(() => () => undefined),
+        closeAndWait,
+      };
+      startedClient = client;
+      return client as never;
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.cleanupBundleMcpOnRunEnd = true;
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start failed");
+
+    expect(retireSpy).toHaveBeenCalledWith(startedClient);
+    expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+    expect(events.indexOf("request:thread/unsubscribe")).toBeGreaterThan(-1);
+    expect(events.indexOf("closeAndWait")).toBeGreaterThan(
+      events.indexOf("request:thread/unsubscribe"),
+    );
+  });
+
   it("keeps the shared Codex app-server client warm without one-shot cleanup", async () => {
     const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
     const closeAndWait = vi.fn(async () => true);
