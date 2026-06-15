@@ -99,6 +99,7 @@ import {
   toClientToolDefinitions,
   toToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
+import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import {
   createOpenClawCodingTools,
   resolveProcessToolScopeKey,
@@ -2414,7 +2415,9 @@ export async function runEmbeddedAttempt(
                   toolCall.name,
                 );
                 // Catalog entries already own before_tool_call wrapping.
-                const definition = tool ? toToolDefinitions([tool])[0] : undefined;
+                const definition = tool
+                  ? toToolDefinitions([tool], catalogToolHookContext)[0]
+                  : undefined;
                 const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
                 if (hydratedTool) {
                   log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
@@ -3535,6 +3538,13 @@ export async function runEmbeddedAttempt(
       isCompactionInFlightForExternalSignal = () => activeSession.isCompacting;
       toolSearchCatalogExecutor = async (toolParams) => {
         try {
+          if (toolParams.source === "openclaw" && toolParams.sourceName === "core") {
+            recordStructuredReplayTrustForToolCall(
+              toolParams.toolCallId,
+              toolParams.tool as never,
+              params.runId,
+            );
+          }
           const result = await runToolLifecycle({
             toolName: toolParams.toolName,
             toolCallId: toolParams.toolCallId,

@@ -11,6 +11,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
+  recordStructuredReplayTrustForToolCall,
   testing as beforeToolCallTesting,
 } from "./agent-tools.before-tool-call.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
@@ -495,30 +496,72 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.lastToolError?.mutatingAction).toBe(true);
   });
 
-  it("records cron status as read-only", async () => {
+  it("records structured core read actions as replay-safe", async () => {
+    for (const [toolName, action] of [
+      ["cron", "status"],
+      ["gateway", "config.get"],
+      ["gateway", "config.schema.lookup"],
+      ["nodes", "status"],
+      ["nodes", "describe"],
+      ["nodes", "pending"],
+    ] as const) {
+      const { ctx } = createTestContext();
+      const toolCallId = `tool-${toolName}-${action}`;
+      recordStructuredReplayTrustForToolCall(
+        toolCallId,
+        { name: toolName, execute: vi.fn() } as never,
+        "run-test",
+      );
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName,
+          toolCallId,
+          args: { action },
+        } as never,
+      );
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName,
+          toolCallId,
+          isError: false,
+          result: { details: { ok: true } },
+        } as never,
+      );
+
+      expect(ctx.state.replayState.hadPotentialSideEffects, `${toolName}.${action}`).toBe(false);
+    }
+  });
+
+  it("does not trust replay-safe names without concrete instance provenance", async () => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(
       ctx as never,
       {
         type: "tool_execution_start",
-        toolName: "cron",
-        toolCallId: "tool-cron-status",
-        args: { action: "status" },
+        toolName: "search",
+        toolCallId: "tool-shadowed-search",
+        args: { query: "scheduler" },
       } as never,
     );
-
     await handleToolExecutionEnd(
       ctx as never,
       {
         type: "tool_execution_end",
-        toolName: "cron",
-        toolCallId: "tool-cron-status",
+        toolName: "search",
+        toolCallId: "tool-shadowed-search",
         isError: false,
-        result: { details: { enabled: true } },
+        result: { matches: [] },
       } as never,
     );
 
-    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(false);
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
   });
 });
 

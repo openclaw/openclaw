@@ -114,6 +114,8 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
 ]);
 
 const BROWSER_READ_ONLY_ACTIONS = new Set(["console", "profiles", "snapshot", "status", "tabs"]);
+const GATEWAY_REPLAY_SAFE_ACTIONS = new Set(["config.get", "config.schema.lookup"]);
+const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
 
 const READ_ONLY_SHELL_COMMANDS = new Set([
   "cat",
@@ -383,12 +385,13 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
       return action === "kill" || action === "steer";
     case "session_status":
       return typeof record?.model === "string" && record.model.trim().length > 0;
+    case "gateway":
+      return action == null || !GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "nodes":
+      return action == null || !NODES_REPLAY_SAFE_ACTIONS.has(action);
     default: {
-      if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
+      if (normalized === "cron" || normalized === "canvas") {
         return action == null || !READ_ONLY_ACTIONS.has(action);
-      }
-      if (normalized === "nodes") {
-        return action == null || action !== "list";
       }
       if (normalized.endsWith("_actions")) {
         return action == null || !READ_ONLY_ACTIONS.has(action);
@@ -418,7 +421,7 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
     case "message":
       return action != null && MESSAGE_READ_ONLY_ACTIONS.has(action);
     case "subagents":
-      return action === "list";
+      return action == null || action === "list";
     case "session_status":
       return !isMutatingToolCall(normalized, args);
     case "browser":
@@ -427,12 +430,13 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
       return action === "list" || action === "inspect";
     case "transcripts":
       return action === "status";
+    case "gateway":
+      return action != null && GATEWAY_REPLAY_SAFE_ACTIONS.has(action);
+    case "nodes":
+      return action != null && NODES_REPLAY_SAFE_ACTIONS.has(action);
     default: {
-      if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
+      if (normalized === "cron" || normalized === "canvas") {
         return action != null && READ_ONLY_ACTIONS.has(action);
-      }
-      if (normalized === "nodes") {
-        return action === "list";
       }
       return false;
     }

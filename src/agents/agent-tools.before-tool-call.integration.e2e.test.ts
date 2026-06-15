@@ -17,6 +17,7 @@ import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-hel
 import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -31,6 +32,7 @@ import { normalizeToolParameters } from "./agent-tools.schema.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { splitSdkTools } from "./embedded-agent-runner.js";
+import type { ExtensionContext } from "./sessions/index.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
@@ -92,6 +94,7 @@ describe("before_tool_call hook integration", () => {
     resetGlobalHookRunner();
     resetDiagnosticSessionStateForTest();
     beforeToolCallTesting.adjustedParamsByToolCallId.clear();
+    beforeToolCallTesting.structuredReplaySafeToolCallIds.clear();
     beforeToolCallHook = installBeforeToolCallHook();
   });
 
@@ -113,6 +116,54 @@ describe("before_tool_call hook integration", () => {
       undefined,
       extensionContext,
     );
+  });
+
+  it("records structured replay trust only for concrete core-owned tools", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({ enabled: false });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const coreTool = wrapToolWithBeforeToolCallHook({ name: "search", execute } as any, {
+      runId: "run-core",
+    });
+    const pluginSource = { name: "search", execute } as any;
+    setPluginToolMeta(pluginSource, { pluginId: "example", optional: false });
+    const pluginTool = wrapToolWithBeforeToolCallHook(pluginSource, {
+      runId: "run-plugin",
+    });
+
+    const [coreDefinition] = toToolDefinitions([coreTool], { runId: "run-core" });
+    const [pluginDefinition] = toToolDefinitions([pluginTool], { runId: "run-plugin" });
+    const extensionContext = {} as ExtensionContext;
+    await coreDefinition?.execute(
+      "call-core",
+      { query: "core" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    await pluginDefinition?.execute(
+      "call-plugin",
+      { query: "plugin" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(
+      beforeToolCallTesting.structuredReplaySafeToolCallIds.has(
+        beforeToolCallTesting.buildAdjustedParamsKey({
+          runId: "run-core",
+          toolCallId: "call-core",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      beforeToolCallTesting.structuredReplaySafeToolCallIds.has(
+        beforeToolCallTesting.buildAdjustedParamsKey({
+          runId: "run-plugin",
+          toolCallId: "call-plugin",
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("allows hook to modify parameters", async () => {

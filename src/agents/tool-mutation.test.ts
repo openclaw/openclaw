@@ -164,6 +164,14 @@ describe("tool mutation helpers", () => {
     }
     expect(buildToolMutationState("message", {}).mutatingAction).toBe(true);
     expect(buildToolMutationState("cron", { action: "runs" }).mutatingAction).toBe(false);
+    for (const action of ["config.get", "config.schema.lookup"]) {
+      expect(buildToolMutationState("gateway", { action }).mutatingAction, action).toBe(false);
+    }
+    for (const action of ["status", "describe", "pending"]) {
+      expect(buildToolMutationState("nodes", { action }).mutatingAction, action).toBe(false);
+    }
+    expect(buildToolMutationState("gateway", { action: "config.patch" }).mutatingAction).toBe(true);
+    expect(buildToolMutationState("nodes", { action: "approve" }).mutatingAction).toBe(true);
     expect(buildToolMutationState("get_goal", { sessionKey: "agent:main" }).mutatingAction).toBe(
       false,
     );
@@ -195,6 +203,13 @@ describe("tool mutation helpers", () => {
       }),
     ).toBe(true);
     expect(isReplaySafeToolCall("cron", { action: "status" })).toBe(true);
+    expect(isReplaySafeToolCall("gateway", { action: "config.get" })).toBe(true);
+    expect(isReplaySafeToolCall("gateway", { action: "config.schema.lookup" })).toBe(true);
+    expect(isReplaySafeToolCall("gateway", { action: "config.patch" })).toBe(false);
+    expect(isReplaySafeToolCall("nodes", { action: "status" })).toBe(true);
+    expect(isReplaySafeToolCall("nodes", { action: "describe" })).toBe(true);
+    expect(isReplaySafeToolCall("nodes", { action: "pending" })).toBe(true);
+    expect(isReplaySafeToolCall("nodes", { action: "approve" })).toBe(false);
     expect(isReplaySafeToolCall("exec", { command: "rg TODO src" })).toBe(false);
     expect(isReplaySafeToolCall("process", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("process", { action: "log", sessionId: "run-1" })).toBe(true);
@@ -209,6 +224,9 @@ describe("tool mutation helpers", () => {
     expect(isReplaySafeToolCall("skill_workshop", { action: "create" })).toBe(false);
     expect(isReplaySafeToolCall("transcripts", { action: "status" })).toBe(true);
     expect(isReplaySafeToolCall("transcripts", { action: "import" })).toBe(false);
+    expect(isReplaySafeToolCall("subagents", {})).toBe(true);
+    expect(isReplaySafeToolCall("subagents", { action: "list" })).toBe(true);
+    expect(isReplaySafeToolCall("subagents", { action: "kill" })).toBe(false);
     expect(isReplaySafeToolCall("tool_call", { id: "sessions_list" })).toBe(false);
     expect(isReplaySafeToolCall("tool_search_code", { code: "return 1" })).toBe(false);
     expect(isReplaySafeToolCall("unknown_plugin_tool", { action: "list" })).toBe(false);

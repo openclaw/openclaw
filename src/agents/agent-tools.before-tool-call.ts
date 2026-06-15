@@ -61,7 +61,15 @@ import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
   adjustedParamsByToolCallId,
+  buildAdjustedParamsKey,
   preExecutionBlockedToolCallIds,
+  recordStructuredReplaySafeToolCall,
+  structuredReplaySafeToolCallIds,
+} from "./agent-tools.before-tool-call.state.js";
+export {
+  consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
+  peekAdjustedParamsForToolCall,
 } from "./agent-tools.before-tool-call.state.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
@@ -352,6 +360,25 @@ export function recordAdjustedParamsForToolCall(
   }
 }
 
+/** Record that one concrete core-owned tool call may use structured replay classification. */
+export function recordStructuredReplayTrustForToolCall(
+  toolCallId: string | undefined,
+  tool: AnyAgentTool,
+  runId?: string,
+): void {
+  if (!toolCallId || getPluginToolMeta(tool) || getChannelAgentToolMeta(tool as never)) {
+    return;
+  }
+  recordStructuredReplaySafeToolCall(toolCallId, runId);
+  while (structuredReplaySafeToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
+    const oldest = structuredReplaySafeToolCallIds.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    structuredReplaySafeToolCallIds.delete(oldest);
+  }
+}
+
 /**
  * Returns true when an error represents an intentional before_tool_call veto.
  */
@@ -363,13 +390,6 @@ const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
   () => import("./agent-tools.before-tool-call.runtime.js"),
   ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
 );
-
-function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
-  if (params.runId && params.runId.trim()) {
-    return `${params.runId}:${params.toolCallId}`;
-  }
-  return params.toolCallId;
-}
 
 function mergeParamsWithApprovalOverrides(
   originalParams: unknown,
@@ -1538,29 +1558,6 @@ export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAg
   });
 }
 
-/** Consume and remove hook-adjusted params for a completed tool call. */
-export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
-  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  const params = adjustedParamsByToolCallId.get(adjustedParamsKey);
-  adjustedParamsByToolCallId.delete(adjustedParamsKey);
-  return params;
-}
-
-/** Snapshot hook-adjusted params without consuming later outcome bookkeeping. */
-export function peekAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
-  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  const params = adjustedParamsByToolCallId.get(adjustedParamsKey);
-  return params === undefined ? undefined : structuredClone(params);
-}
-
-/** Consume whether policy prevented the target tool from starting. */
-export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: string): boolean {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const blocked = preExecutionBlockedToolCallIds.has(key);
-  preExecutionBlockedToolCallIds.delete(key);
-  return blocked;
-}
-
 function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {
   if (!toolCallId) {
     return;
@@ -1584,6 +1581,7 @@ export const testing = {
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
   preExecutionBlockedToolCallIds,
+  structuredReplaySafeToolCallIds,
   runBeforeToolCallHook,
   mergeParamsWithApprovalOverrides,
   isPlainObject,

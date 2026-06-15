@@ -13,6 +13,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   isBeforeToolCallBlockedError,
   recordAdjustedParamsForToolCall,
+  recordStructuredReplayTrustForToolCall,
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import {
@@ -372,6 +373,7 @@ export function toToolDefinitions(
       executionMode: tool.executionMode,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        recordStructuredReplayTrustForToolCall(toolCallId, tool, hookContext?.runId);
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {

@@ -35,6 +35,11 @@ import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
+import {
+  consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
+  consumeStructuredReplaySafeToolCall,
+} from "./agent-tools.before-tool-call.state.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -70,7 +75,6 @@ import { normalizeToolName } from "./tool-policy.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
-type BeforeToolCallModule = typeof import("./agent-tools.before-tool-call.js");
 type ChannelToolProgress = {
   text: string;
 };
@@ -80,9 +84,6 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 );
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
-);
-const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
-  () => import("./agent-tools.before-tool-call.js"),
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
@@ -111,10 +112,6 @@ function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
 
 function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
-}
-
-function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
-  return beforeToolCallModuleLoader.load();
 }
 
 function getRequiredParamGroupsForTool(
@@ -234,13 +231,16 @@ function buildToolCallSummary(
   args: unknown,
   meta: string | undefined,
   instanceReplaySafe: boolean,
+  structuredReplaySafe: boolean,
 ): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
     meta,
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
-    replaySafe: instanceReplaySafe && mutation.replaySafe,
+    replaySafe:
+      (instanceReplaySafe && !mutation.mutatingAction) ||
+      (structuredReplaySafe && mutation.replaySafe),
     actionFingerprint: mutation.actionFingerprint,
     fileTarget: mutation.fileTarget,
   };
@@ -1019,7 +1019,7 @@ export function handleToolExecutionStart(
       ctx.params.replaySafeToolNames?.has(toolName) === true;
     ctx.state.toolMetaById.set(
       toolCallId,
-      buildToolCallSummary(toolName, args, meta, instanceReplaySafe),
+      buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false),
     );
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
@@ -1271,10 +1271,9 @@ export async function handleToolExecutionEnd(
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)
       : {};
-  const { consumeAdjustedParamsForToolCall, consumePreExecutionBlockedToolCall } =
-    await loadBeforeToolCall();
   const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
+  const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
   const startArgs =
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
@@ -1284,6 +1283,7 @@ export async function handleToolExecutionEnd(
     startArgs,
     initialCallSummary?.meta,
     initialCallSummary?.instanceReplaySafe === true,
+    structuredReplaySafe,
   );
   // Older/custom event producers omit executionStarted. Treat omission as
   // executed; only an explicit false can prove preparation stopped the call.
