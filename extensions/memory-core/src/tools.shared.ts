@@ -119,6 +119,12 @@ export function createMemoryTool(params: {
   };
 }
 
+const MEMORY_SEARCH_NODE_SQLITE_WARNING =
+  "Memory search is unavailable because node:sqlite is not available in this Node.js runtime.";
+const MEMORY_SEARCH_NODE_SQLITE_ACTION =
+  "Use OpenClaw with Node.js 22.19.0 or newer; " +
+  "Node.js 24 is recommended for memory search. See https://docs.openclaw.ai/cli/memory.";
+
 export function buildMemorySearchUnavailableResult(
   error: string | undefined,
   overrides?: {
@@ -127,17 +133,25 @@ export function buildMemorySearchUnavailableResult(
   },
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
-  const warning =
-    overrides?.warning ??
-    (isQuotaError
-      ? "Memory search is unavailable because the embedding provider quota is exhausted."
-      : "Memory search is unavailable due to an embedding/provider error.");
-  const action =
-    overrides?.action ??
-    (isQuotaError
-      ? "Top up or switch embedding provider, then retry memory_search."
-      : "Check embedding provider configuration and retry memory_search.");
+  const normalizedReason = normalizeLowercaseStringOrEmpty(reason);
+  const isQuotaError = /insufficient_quota|quota|429/.test(normalizedReason);
+  const isNodeSqliteUnavailable =
+    /node:sqlite/.test(normalizedReason) ||
+    /no such built-in module.*sqlite/.test(normalizedReason) ||
+    /sqlite support is unavailable/.test(normalizedReason);
+  let defaultWarning = "Memory search is unavailable due to an embedding/provider error.";
+  let defaultAction = "Check embedding provider configuration and retry memory_search.";
+  if (isNodeSqliteUnavailable) {
+    defaultWarning = MEMORY_SEARCH_NODE_SQLITE_WARNING;
+    defaultAction = MEMORY_SEARCH_NODE_SQLITE_ACTION;
+  }
+  if (isQuotaError) {
+    defaultWarning =
+      "Memory search is unavailable because the embedding provider quota is exhausted.";
+    defaultAction = "Top up or switch embedding provider, then retry memory_search.";
+  }
+  const warning = overrides?.warning ?? defaultWarning;
+  const action = overrides?.action ?? defaultAction;
   return {
     results: [],
     disabled: true,

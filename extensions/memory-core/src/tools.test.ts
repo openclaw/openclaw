@@ -13,7 +13,11 @@ import {
   setMemorySearchManagerImpl,
 } from "./memory-tool-manager-mock.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
-import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
+import {
+  buildMemorySearchUnavailableResult,
+  MemoryGetSchema,
+  MemorySearchSchema,
+} from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -120,6 +124,23 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
+  it("returns explicit unavailable metadata when node:sqlite is missing", async () => {
+    setMemorySearchImpl(async () => {
+      throw new Error("No such built-in module: node:sqlite");
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("missing-sqlite", { query: "hello" });
+    expectUnavailableMemorySearchDetails(result.details, {
+      error: "No such built-in module: node:sqlite",
+      warning:
+        "Memory search is unavailable because node:sqlite is not available in this Node.js runtime.",
+      action:
+        "Use OpenClaw with Node.js 22.19.0 or newer; " +
+        "Node.js 24 is recommended for memory search. See https://docs.openclaw.ai/cli/memory.",
+    });
+  });
+
   it("returns explicit unavailable metadata for non-quota failures", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("embedding provider timeout");
@@ -131,6 +152,27 @@ describe("memory_search unavailable payloads", () => {
       error: "embedding provider timeout",
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
+    });
+  });
+
+  it("preserves explicit unavailable overrides for node:sqlite errors", () => {
+    expect(
+      buildMemorySearchUnavailableResult("No such built-in module: node:sqlite", {
+        warning: "custom warning",
+        action: "custom action",
+      }),
+    ).toEqual({
+      results: [],
+      disabled: true,
+      unavailable: true,
+      error: "No such built-in module: node:sqlite",
+      warning: "custom warning",
+      action: "custom action",
+      debug: {
+        warning: "custom warning",
+        action: "custom action",
+        error: "No such built-in module: node:sqlite",
+      },
     });
   });
 
