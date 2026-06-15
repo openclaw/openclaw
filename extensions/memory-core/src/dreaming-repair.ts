@@ -132,6 +132,10 @@ async function moveToArchive(params: {
   return destination;
 }
 
+// Clears every dreaming ingestion namespace tracked by the SQLite migration so a
+// repair fully resets ingestion bookkeeping. The daily-ingestion namespace mirrors
+// the legacy daily-ingestion.json sidecar and must be cleared alongside the session
+// files/seen namespaces (the audit already treats all three as ingestion state).
 async function clearSessionIngestionState(workspaceDir: string): Promise<void> {
   await Promise.all([
     clearMemoryCoreWorkspaceNamespace({
@@ -140,6 +144,10 @@ async function clearSessionIngestionState(workspaceDir: string): Promise<void> {
     }),
     clearMemoryCoreWorkspaceNamespace({
       namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+      workspaceDir,
+    }),
+    clearMemoryCoreWorkspaceNamespace({
+      namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
       workspaceDir,
     }),
   ]);
