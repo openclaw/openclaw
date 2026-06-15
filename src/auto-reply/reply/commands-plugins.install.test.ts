@@ -60,12 +60,31 @@ vi.mock("../../cli/plugins-install-persist.js", async (importOriginal) => ({
 
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-plugins-install-");
 
-function buildPluginsParams(commandBodyNormalized: string, workspaceDir: string) {
-  return buildPluginsCommandParams({
+function buildPluginsParams(
+  commandBodyNormalized: string,
+  workspaceDir: string,
+  options: {
+    gatewayClientScopes?: string[];
+    omitGatewayClientScopes?: boolean;
+    senderIsOwner?: boolean;
+  } = {},
+) {
+  const params = buildPluginsCommandParams({
     commandBodyNormalized,
     workspaceDir,
-    gatewayClientScopes: ["operator.admin", "operator.write", "operator.pairing"],
+    gatewayClientScopes: options.gatewayClientScopes ?? [
+      "operator.admin",
+      "operator.write",
+      "operator.pairing",
+    ],
   });
+  if (options.senderIsOwner !== undefined) {
+    params.command.senderIsOwner = options.senderIsOwner;
+  }
+  if (options.omitGatewayClientScopes) {
+    delete params.ctx.GatewayClientScopes;
+  }
+  return params;
 }
 
 function expectPersistedInstall(pluginId: string, expectedInstall: Record<string, unknown>): void {
@@ -120,6 +139,66 @@ describe("handleCommands /plugins install", () => {
         source: "path",
         sourcePath: pluginDir,
         installPath: "/tmp/path-install-plugin",
+        version: "0.0.1",
+      });
+    });
+  });
+
+  it("blocks channel-authorized non-owner plugin installs before installer side effects", async () => {
+    await withTempHome("openclaw-command-plugins-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const pluginDir = path.join(workspaceDir, "fixtures", "channel-installed-plugin");
+      await fs.mkdir(pluginDir, { recursive: true });
+
+      const params = buildPluginsParams(`/plugins install ${pluginDir}`, workspaceDir, {
+        omitGatewayClientScopes: true,
+        senderIsOwner: false,
+      });
+      params.command.channel = "telegram";
+      params.command.channelId = "telegram";
+      params.command.surface = "telegram";
+      params.command.senderId = "telegram-user-3";
+      params.command.isAuthorizedSender = true;
+      params.ctx.Provider = "telegram";
+      params.ctx.Surface = "telegram";
+
+      const result = await handlePluginsCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+      expect(persistPluginInstallMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows gateway clients with operator.admin to install plugins", async () => {
+    installPluginFromPathMock.mockResolvedValue({
+      ok: true,
+      pluginId: "gateway-admin-plugin",
+      targetDir: "/tmp/gateway-admin-plugin",
+      version: "0.0.1",
+      extensions: ["index.js"],
+    });
+    persistPluginInstallMock.mockResolvedValue({});
+
+    await withTempHome("openclaw-command-plugins-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const pluginDir = path.join(workspaceDir, "fixtures", "gateway-admin-plugin");
+      await fs.mkdir(pluginDir, { recursive: true });
+
+      const params = buildPluginsParams(`/plugins install ${pluginDir}`, workspaceDir, {
+        gatewayClientScopes: ["operator.admin", "operator.write"],
+        senderIsOwner: false,
+      });
+
+      const result = await handlePluginsCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain('Installed plugin "gateway-admin-plugin"');
+      expect(mockFirstObjectArg(installPluginFromPathMock).path).toBe(pluginDir);
+      expectPersistedInstall("gateway-admin-plugin", {
+        source: "path",
+        sourcePath: pluginDir,
+        installPath: "/tmp/gateway-admin-plugin",
         version: "0.0.1",
       });
     });

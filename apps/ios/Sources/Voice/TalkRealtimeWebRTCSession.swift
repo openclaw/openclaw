@@ -17,7 +17,7 @@ protocol TalkRealtimeWebRTCSessionDelegate: AnyObject {
 
 @MainActor
 final class TalkRealtimeWebRTCSession: NSObject {
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "TalkRealtimeWebRTC")
+    private static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "TalkRealtimeWebRTC")
     private static let consultToolName = "openclaw_agent_consult"
     private static let controlToolName = "openclaw_agent_control"
     private static let defaultOfferURL = "https://api.openai.com/v1/realtime/calls"

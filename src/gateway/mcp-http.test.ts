@@ -106,6 +106,15 @@ import {
   ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
+import {
+  beginMcpLoopbackToolCallCapture,
+  clearMcpLoopbackToolCallCapture,
+  clearMcpLoopbackToolCallCapturesForTest,
+  markMcpLoopbackToolCallFinished,
+  markMcpLoopbackToolCallStarted,
+  recordMcpLoopbackToolCallResult,
+  waitForMcpLoopbackToolCallCaptureIdle,
+} from "./mcp-http.loopback-runtime.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
 let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
@@ -554,6 +563,7 @@ function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
 }
 
 beforeEach(() => {
+  clearMcpLoopbackToolCallCapturesForTest();
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
   runBeforeToolCallHookMock.mockImplementation(
@@ -938,6 +948,358 @@ describe("mcp loopback server", () => {
     expectMcpResultText(payload, "CRON_EXECUTED");
   });
 
+  it("captures only successful calls with an explicit CLI capture key", async () => {
+    const captureKey = "google-gemini-cli";
+    const captured: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+    const startedTargets: unknown[] = [];
+    const finishedTargets: unknown[] = [];
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallStart: ({ args }) => startedTargets.push(args.target),
+      onToolCallFinish: ({ args }) => finishedTargets.push(args.target),
+      onToolCallResult: ({ toolName, args }) => {
+        if (toolName === "message" && args.action === "send") {
+          captured.push({ toolName, args });
+        }
+      },
+    });
+    const { runtime } = await startLoopbackServerForTest();
+
+    expect(
+      (
+        await sendLoopbackToolCall({
+          token: runtime.ownerToken,
+          name: "message",
+          args: { action: "send", target: "chat123", message: "sent" },
+          headers: { "x-openclaw-cli-capture-key": captureKey },
+        })
+      ).status,
+    ).toBe(200);
+
+    runBeforeToolCallHookMock.mockResolvedValueOnce({
+      blocked: true,
+      reason: "blocked for test",
+    });
+    expect(
+      (
+        await sendLoopbackToolCall({
+          token: runtime.ownerToken,
+          name: "message",
+          args: { action: "send", target: "blocked", message: "not sent" },
+          headers: { "x-openclaw-cli-capture-key": captureKey },
+        })
+      ).status,
+    ).toBe(200);
+
+    expect(
+      (
+        await sendLoopbackToolCall({
+          token: runtime.ownerToken,
+          name: "message",
+          args: { action: "send", target: "implicit-main", message: "not captured" },
+        })
+      ).status,
+    ).toBe(200);
+
+    expect(captured).toEqual([
+      expect.objectContaining({
+        toolName: "message",
+        args: { action: "send", target: "chat123", message: "sent" },
+      }),
+    ]);
+    expect(startedTargets).toEqual(["chat123", "blocked"]);
+    expect(finishedTargets).toEqual(["chat123", "blocked"]);
+  });
+
+  it("updates capture accounting with hook-rewritten tool arguments", async () => {
+    const captureKey = "hook-rewritten-send";
+    const updatedCalls = vi.fn();
+    const finishedCalls = vi.fn();
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallUpdate: updatedCalls,
+      onToolCallFinish: finishedCalls,
+      onToolCallResult: vi.fn(),
+    });
+    runBeforeToolCallHookMock.mockResolvedValueOnce({
+      blocked: false,
+      params: {
+        action: "send",
+        target: "rewritten-target",
+        message: "rewritten send",
+      },
+    });
+    const { runtime } = await startLoopbackServerForTest();
+
+    await sendLoopbackToolCall({
+      token: runtime.ownerToken,
+      name: "message",
+      args: { action: "react", target: "original-target" },
+      headers: { "x-openclaw-cli-capture-key": captureKey },
+    });
+
+    expect(updatedCalls).toHaveBeenCalledWith({
+      previous: {
+        toolName: "message",
+        args: { action: "react", target: "original-target" },
+      },
+      current: {
+        toolName: "message",
+        args: {
+          action: "send",
+          target: "rewritten-target",
+          message: "rewritten send",
+        },
+      },
+    });
+    expect(finishedCalls).toHaveBeenCalledWith(
+      {
+        toolName: "message",
+        args: {
+          action: "send",
+          target: "rewritten-target",
+          message: "rewritten send",
+        },
+      },
+      { prepared: true },
+    );
+  });
+
+  it("reports oversized successful calls without retaining their payloads", () => {
+    const captureKey = "oversized-capture";
+    const captured = vi.fn();
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallResult: captured,
+    });
+
+    const captureHandle = markMcpLoopbackToolCallStarted({
+      captureKey,
+      toolName: "message",
+      args: { action: "send", target: "chat123" },
+    });
+    if (!captureHandle) {
+      throw new Error("Expected active MCP capture");
+    }
+    recordMcpLoopbackToolCallResult({
+      captureHandle,
+      toolName: "message",
+      args: { action: "send", target: "chat123" },
+      result: { content: "x".repeat(20 * 1024) },
+      isError: false,
+    });
+    markMcpLoopbackToolCallFinished(captureHandle);
+
+    expect(captured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        args: { action: "send", target: "chat123" },
+      }),
+    );
+  });
+
+  it("keeps admitted calls bound to their original capture generation", () => {
+    const captureKey = "generation-bound-capture";
+    const firstCapture = vi.fn();
+    const secondCapture = vi.fn();
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallResult: firstCapture,
+    });
+    const firstHandle = markMcpLoopbackToolCallStarted({
+      captureKey,
+      toolName: "message",
+      args: { action: "send", target: "first-turn" },
+    });
+    if (!firstHandle) {
+      throw new Error("Expected first MCP capture generation");
+    }
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallResult: secondCapture,
+    });
+
+    recordMcpLoopbackToolCallResult({
+      captureHandle: firstHandle,
+      toolName: "message",
+      args: { action: "send", target: "first-turn" },
+      result: { status: "sent" },
+      isError: false,
+    });
+    markMcpLoopbackToolCallFinished(firstHandle);
+
+    expect(firstCapture).toHaveBeenCalledOnce();
+    expect(secondCapture).not.toHaveBeenCalled();
+  });
+
+  it("binds slow request bodies to their capture generation at header acceptance", async () => {
+    const captureKey = "slow-request-generation";
+    const requestClassified = vi.fn();
+    const requestStarted = vi.fn();
+    const captured = vi.fn();
+    let resolveRequestStarted: (() => void) | undefined;
+    const requestStartedPromise = new Promise<void>((resolve) => {
+      resolveRequestStarted = resolve;
+    });
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onRequestStart: () => {
+        requestStarted();
+        resolveRequestStarted?.();
+      },
+      onRequestClassified: requestClassified,
+      onToolCallResult: captured,
+    });
+    const { runtime, port } = await startLoopbackServerForTest();
+    const responsePromise = new Promise<{ status: number | undefined; body: string }>(
+      (resolve, reject) => {
+        const req = request(
+          {
+            hostname: "127.0.0.1",
+            port,
+            path: "/mcp",
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${runtime.ownerToken}`,
+              "content-type": "application/json",
+              "transfer-encoding": "chunked",
+              "x-openclaw-cli-capture-key": captureKey,
+            },
+          },
+          (res) => {
+            let body = "";
+            res.setEncoding("utf8");
+            res.on("data", (chunk) => {
+              body += chunk;
+            });
+            res.on("end", () => resolve({ status: res.statusCode, body }));
+          },
+        );
+        req.on("error", reject);
+        req.flushHeaders();
+        void requestStartedPromise.then(() => {
+          clearMcpLoopbackToolCallCapture(captureKey);
+          req.end(mcpToolCallBody("message", { action: "send", target: "late-body" }));
+        });
+      },
+    );
+
+    await requestStartedPromise;
+    expect(requestStarted).toHaveBeenCalledOnce();
+    expect(requestClassified).not.toHaveBeenCalled();
+    const response = await responsePromise;
+
+    expect(response.status).toBe(200);
+    expect(requestClassified).toHaveBeenCalledOnce();
+    expect(captured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        args: { action: "send", target: "late-body" },
+        isError: false,
+      }),
+    );
+  });
+
+  it("waits through a quiet admission grace before clearing a failed-turn capture", async () => {
+    const captureKey = "admission-grace";
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallResult: vi.fn(),
+    });
+    const idlePromise = waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+      timeoutMs: 500,
+      admissionGraceMs: 40,
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    const captureHandle = markMcpLoopbackToolCallStarted({
+      captureKey,
+      toolName: "message",
+      args: { action: "send", target: "late-admission" },
+    });
+    if (!captureHandle) {
+      throw new Error("Expected late MCP capture admission");
+    }
+    setTimeout(() => markMcpLoopbackToolCallFinished(captureHandle), 10);
+
+    await expect(idlePromise).resolves.toBe(true);
+  });
+
+  it("keeps capture observer errors from changing tool success", async () => {
+    const captureKey = "throwing-observer";
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallResult: () => {
+        throw new Error("observer failed");
+      },
+    });
+    const { runtime } = await startLoopbackServerForTest();
+
+    const response = await sendLoopbackToolCall({
+      token: runtime.ownerToken,
+      name: "message",
+      args: { action: "send", target: "chat123", message: "sent" },
+      headers: { "x-openclaw-cli-capture-key": captureKey },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await readMcpPayload(response);
+    expect(payload.result?.isError).toBe(false);
+  });
+
+  it("captures partial-delivery errors before returning the tool failure", async () => {
+    const captureKey = "partial-delivery";
+    const captured = vi.fn();
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallResult: captured,
+    });
+    mockScopedTools([
+      makeMessageTool({
+        execute: async () => {
+          throw Object.assign(new Error("second chunk failed"), { sentBeforeError: true });
+        },
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    const response = await sendLoopbackToolCall({
+      token: runtime.ownerToken,
+      name: "message",
+      args: { action: "send", target: "chat123", message: "sent partly" },
+      headers: { "x-openclaw-cli-capture-key": captureKey },
+    });
+
+    const payload = await readMcpPayload(response);
+    expect(payload.result?.isError).toBe(true);
+    expect(captured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        isError: true,
+        result: expect.objectContaining({ sentBeforeError: true }),
+      }),
+    );
+  });
+
+  it("ignores calls after a capture is cleared", () => {
+    const captureKey = "cleared-capture";
+    const captured = vi.fn();
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallResult: captured,
+    });
+    clearMcpLoopbackToolCallCapturesForTest();
+    const captureHandle = markMcpLoopbackToolCallStarted({
+      captureKey,
+      toolName: "message",
+      args: { action: "send", target: "old-turn" },
+    });
+
+    expect(captureHandle).toBeUndefined();
+    expect(captured).not.toHaveBeenCalled();
+  });
+
   it("calls healthy tools when an earlier loopback tool name is unreadable", async () => {
     const messageExecute = vi.fn<MockGatewayTool["execute"]>(async () => ({
       content: [{ type: "text", text: "MESSAGE_EXECUTED" }],
@@ -1289,6 +1651,9 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(
       config.mcpServers?.openclaw?.headers?.["x-openclaw-require-explicit-message-target"],
     ).toBe("${OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET}");
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe(
+      "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
+    );
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
   });
 

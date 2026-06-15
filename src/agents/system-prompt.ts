@@ -492,6 +492,7 @@ function buildMessagingSection(params: {
   messageChannelOptions?: string;
   messageToolHints?: string[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
   if (params.isMinimal) {
@@ -539,7 +540,9 @@ function buildMessagingSection(params: {
             ? "- Discord group/thread etiquette: a mention plus message-tool-only delivery does not require visible output. For stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction or no channel message; post only when you have concrete value to add."
             : "",
           messageToolOnly
-            ? "- For `action=send`, include `message`. The target defaults to the current source channel; include `target` only when sending somewhere else."
+            ? params.requireExplicitMessageTarget
+              ? "- For `action=send`, include `target` and `message`; `target` is required for this turn."
+              : "- For `action=send`, include `message`. The target defaults to the current source channel; include `target` only when sending somewhere else."
             : "- For `action=send`, include `target` and `message`.",
           params.messageChannelOptions
             ? `- No current/default source channel: include \`channel\` for proactive sends; valid ids: ${params.messageChannelOptions}.`
@@ -704,6 +707,7 @@ export function buildAgentSystemPrompt(params: {
   /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
   silentReplyPromptMode?: SilentReplyPromptMode;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   /** Prompt-only strength for delegating non-trivial work through sub-agents. Defaults to "suggest". */
   subagentDelegationMode?: SubagentDelegationMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
@@ -1299,6 +1303,7 @@ export function buildAgentSystemPrompt(params: {
       messageChannelOptions,
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),

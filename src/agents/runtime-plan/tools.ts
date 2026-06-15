@@ -34,6 +34,10 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
   allowProviderRuntimePluginLoad?: boolean;
+  /**
+   * Invoked on every normalization, including with an empty list, so
+   * consumers can observe the all-clear and retire stale quarantine state.
+   */
   onPreNormalizationSchemaDiagnostics?: (
     diagnostics: readonly RuntimeToolSchemaDiagnostic[],
     tools: readonly AgentTool<TSchemaType, TResult>[],
@@ -102,12 +106,10 @@ export function normalizeAgentRuntimeTools<
 >(params: AgentRuntimeToolPolicyParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
   const planContext = runtimePlanToolContext(params);
   const normalizableToolProjection = filterProviderNormalizableTools(params.tools);
-  if (normalizableToolProjection.diagnostics.length > 0) {
-    params.onPreNormalizationSchemaDiagnostics?.(
-      normalizableToolProjection.diagnostics,
-      params.tools,
-    );
-  }
+  params.onPreNormalizationSchemaDiagnostics?.(
+    normalizableToolProjection.diagnostics,
+    params.tools,
+  );
   const normalizableTools = [...normalizableToolProjection.tools] as AgentTool<
     TSchemaType,
     TResult

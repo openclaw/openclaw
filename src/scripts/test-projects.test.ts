@@ -874,6 +874,7 @@ describe("test-projects args", () => {
           "src/scripts/docs-link-audit.test.ts",
           "src/scripts/sync-plugin-versions.test.ts",
           "test/helpers/temp-dir.test.ts",
+          "test/scripts/ios-configure-signing.test.ts",
           "test/scripts/ios-pin-version.test.ts",
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",

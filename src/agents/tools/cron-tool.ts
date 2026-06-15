@@ -24,6 +24,13 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
+import { isToolAllowedByPolicyName } from "../tool-policy-match.js";
+import {
+  buildPluginToolGroups,
+  expandPolicyWithPluginGroups,
+  expandToolGroups,
+  normalizeToolName,
+} from "../tool-policy.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import {
   type AnyAgentTool,
@@ -332,8 +339,46 @@ export const CronToolSchema = createCronToolSchema();
 type CronToolOptions = {
   agentSessionKey?: string;
   currentDeliveryContext?: DeliveryContext;
+  /**
+   * Effective tool surface visible to the caller that created or edited a cron job.
+   * Isolated cron runs use a fresh session, so agent-origin jobs need this cap
+   * persisted on agentTurn payloads before the original session policy is lost.
+   */
+  creatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
   selfRemoveOnlyJobId?: string;
 };
+
+export type CronCreatorToolAllowlistEntry =
+  | string
+  | {
+      name: string;
+      pluginId?: string;
+    };
+
+type NormalizedCronCreatorTool = {
+  name: string;
+  pluginId?: string;
+};
+
+export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
+  target: CronCreatorToolAllowlistEntry[],
+  tools: readonly T[],
+  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+): void {
+  target.length = 0;
+  const seen = new Set<string>();
+  for (const tool of tools) {
+    const name = normalizeToolName(tool.name);
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    const meta = toolMeta?.(tool);
+    const pluginId =
+      typeof meta?.pluginId === "string" ? normalizeToolName(meta.pluginId) : undefined;
+    target.push(pluginId ? { name, pluginId } : { name });
+  }
+}
 
 type GatewayToolCaller = typeof callGatewayTool;
 
@@ -364,6 +409,149 @@ function assertNoCronCommandPayload(value: unknown): void {
       "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );
   }
+}
+
+function normalizeCronToolsAllow(values: readonly string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of expandToolGroups([...values])) {
+    const toolName = normalizeToolName(entry);
+    if (!toolName || seen.has(toolName)) {
+      continue;
+    }
+    seen.add(toolName);
+    normalized.push(toolName);
+  }
+  return normalized;
+}
+
+function normalizeCronCreatorToolsAllow(
+  values: readonly CronCreatorToolAllowlistEntry[],
+): NormalizedCronCreatorTool[] {
+  const normalized: NormalizedCronCreatorTool[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    const name = normalizeToolName(typeof entry === "string" ? entry : entry.name);
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    const pluginId =
+      typeof entry === "string" || typeof entry.pluginId !== "string"
+        ? undefined
+        : normalizeToolName(entry.pluginId);
+    normalized.push(pluginId ? { name, pluginId } : { name });
+  }
+  return normalized;
+}
+
+function cronCreatorToolNames(tools: readonly NormalizedCronCreatorTool[]): string[] {
+  return tools.map((tool) => tool.name);
+}
+
+function capCronAgentTurnToolsAllow(params: {
+  payload: Record<string, unknown>;
+  creatorToolAllowlist: CronCreatorToolAllowlistEntry[];
+  defaultToolsAllow?: unknown;
+}): void {
+  if (params.payload.kind !== "agentTurn") {
+    return;
+  }
+  const creatorToolsAllow = normalizeCronCreatorToolsAllow(params.creatorToolAllowlist);
+  const creatorToolNames = cronCreatorToolNames(creatorToolsAllow);
+  const requestedRaw = Object.hasOwn(params.payload, "toolsAllow")
+    ? params.payload.toolsAllow
+    : params.defaultToolsAllow;
+  if (!Array.isArray(requestedRaw)) {
+    params.payload.toolsAllow = creatorToolNames;
+    return;
+  }
+  const requestedToolsAllow = normalizeCronToolsAllow(
+    requestedRaw.filter((entry): entry is string => typeof entry === "string"),
+  );
+  if (requestedToolsAllow.length === 0) {
+    params.payload.toolsAllow = [];
+    return;
+  }
+  if (requestedToolsAllow.includes("*")) {
+    params.payload.toolsAllow = creatorToolNames;
+    return;
+  }
+  const pluginGroups = buildPluginToolGroups({
+    tools: creatorToolsAllow,
+    toolMeta: (tool) => (tool.pluginId ? { pluginId: tool.pluginId } : undefined),
+  });
+  const requestedPolicy = expandPolicyWithPluginGroups(
+    { allow: requestedToolsAllow },
+    pluginGroups,
+  );
+  params.payload.toolsAllow = creatorToolNames.filter((toolName) =>
+    isToolAllowedByPolicyName(toolName, requestedPolicy),
+  );
+}
+
+function capCronAgentTurnJobToolsAllow(
+  value: unknown,
+  creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined,
+): void {
+  if (!creatorToolAllowlist || !isRecord(value) || !isRecord(value.payload)) {
+    return;
+  }
+  capCronAgentTurnToolsAllow({ payload: value.payload, creatorToolAllowlist });
+}
+
+function readCronPayloadKind(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.kind === "string" ? value.kind : undefined;
+}
+
+async function capCronAgentTurnUpdatePatchToolsAllow(params: {
+  id: string;
+  patch: Record<string, unknown>;
+  creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined;
+  gatewayOpts: GatewayCallOptions;
+  callGateway: GatewayToolCaller;
+}): Promise<void> {
+  if (!params.creatorToolAllowlist) {
+    return;
+  }
+  const payload = isRecord(params.patch.payload) ? params.patch.payload : undefined;
+  const patchPayloadKind = readCronPayloadKind(payload);
+  const patchRequestsAgentTurn = patchPayloadKind === "agentTurn";
+  if (patchPayloadKind === "agentTurn" && payload && Object.hasOwn(payload, "toolsAllow")) {
+    capCronAgentTurnToolsAllow({
+      payload,
+      creatorToolAllowlist: params.creatorToolAllowlist,
+    });
+    return;
+  }
+  if (
+    patchPayloadKind === "systemEvent" ||
+    patchPayloadKind === "command" ||
+    (patchPayloadKind && patchPayloadKind !== "agentTurn")
+  ) {
+    return;
+  }
+
+  const existing = await params.callGateway("cron.get", params.gatewayOpts, { id: params.id });
+  const existingPayload = isRecord(existing) ? existing.payload : undefined;
+  const existingPayloadKind = readCronPayloadKind(existingPayload);
+  if (!patchRequestsAgentTurn && existingPayloadKind !== "agentTurn") {
+    return;
+  }
+  const nextPayload: Record<string, unknown> = payload ?? {};
+  nextPayload.kind = "agentTurn";
+  params.patch.payload = nextPayload;
+  capCronAgentTurnToolsAllow({
+    payload: nextPayload,
+    creatorToolAllowlist: params.creatorToolAllowlist,
+    defaultToolsAllow:
+      existingPayloadKind === "agentTurn" && isRecord(existingPayload)
+        ? existingPayload.toolsAllow
+        : undefined,
+  });
 }
 
 function truncateText(input: string, maxLen: number) {
@@ -730,6 +918,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             normalizeCronJobCreate(canonicalJob, {
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? canonicalJob;
+          capCronAgentTurnJobToolsAllow(job, opts?.creatorToolAllowlist);
           const cfg = getRuntimeConfig();
           if (job && typeof job === "object") {
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -848,6 +1037,13 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
             throw new Error("patch required");
           }
+          await capCronAgentTurnUpdatePatchToolsAllow({
+            id,
+            patch,
+            creatorToolAllowlist: opts?.creatorToolAllowlist,
+            gatewayOpts,
+            callGateway,
+          });
           return jsonResult(
             await callGateway("cron.update", gatewayOpts, {
               id,

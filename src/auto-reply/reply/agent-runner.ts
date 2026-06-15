@@ -250,10 +250,12 @@ function hasSuccessfulSideEffectDelivery(params: {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
+  didSendViaMessagingTool?: boolean;
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
+    params.didSendViaMessagingTool === true ||
     hasSuccessfulSourceReplyDelivery(params) ||
     (params.successfulCronAdds ?? 0) > 0 ||
     params.didSendDeterministicApprovalPrompt === true
@@ -1953,6 +1955,7 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
+      didSendViaMessagingTool: runResult.didSendViaMessagingTool,
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });

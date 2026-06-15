@@ -6,6 +6,7 @@ import {
 } from "../../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "../control-ui-auth.ts";
+import { setUiTimeFormatPreference } from "../format.ts";
 import { normalizeBasePath } from "../navigation.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import { loadLocalAssistantIdentity } from "../storage.ts";
@@ -136,6 +137,7 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    setUiTimeFormatPreference(parsed.timeFormat);
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }

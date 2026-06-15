@@ -1365,6 +1365,8 @@ jobs:
             boundary_shard: 2/4,3/4,4/4
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
+          - check_name: check-session-transcript-reader-boundary
+            group: session-transcript-reader-boundary
           - check_name: check-additional-extension-channels
             group: extension-channels
           - check_name: check-additional-extension-bundled
@@ -1519,6 +1521,9 @@ jobs:
               else
                 run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
               fi
+              ;;
+            session-transcript-reader-boundary)
+              run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
               ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels
