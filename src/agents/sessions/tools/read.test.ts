@@ -1,5 +1,5 @@
-// Read tool tests cover bounded file reads, continuation hints, and shell-safe
-// fallback commands in agent sessions.
+// Read tool tests cover bounded file reads, continuation hints, shell-safe
+// fallback commands, and encoding fallback for Windows legacy code pages.
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -99,5 +99,65 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+  });
+
+  describe("read tool encoding fallback", () => {
+    // GBK-encoded Chinese text: "GBK 编码测试\n公司：深圳欧盛自动化"
+    const gbkChineseBytes = Buffer.from([
+      0x47, 0x42, 0x4b, 0x20, 0xb1, 0xe0, 0xc2, 0xeb, 0xb2, 0xe2,
+      0xca, 0xd4, 0x0a, 0xb9, 0xab, 0xcb, 0xbe, 0xa3, 0xba, 0xc9,
+      0xee, 0xdb, 0xda, 0xc5, 0xb7, 0xca, 0xa2, 0xd7, 0xd4, 0xb6,
+      0xaf, 0xbb, 0xaf,
+    ]);
+
+    // Valid UTF-8 Chinese: "你好世界"
+    const utf8ChineseBytes = Buffer.from("你好世界", "utf-8");
+
+    it("decodes UTF-8 text files correctly (no regression)", async () => {
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => utf8ChineseBytes,
+        },
+      });
+
+      const result = await tool.execute(
+        "call-1",
+        { path: "notes.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(textContent(result)).toBe("你好世界");
+    });
+
+    it("does not crash on non-UTF-8 files (produces output through fallback)", async () => {
+      // On non-Windows, decodeWindowsOutputBuffer falls back to UTF-8 with
+      // replacement characters (current behavior). The key property is that
+      // the read tool does not throw when encountering legacy-encoded bytes.
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => gbkChineseBytes,
+        },
+      });
+
+      const result = await tool.execute(
+        "call-1",
+        { path: "gbk-file.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      // Should not throw — the read tool handles non-UTF-8 gracefully.
+      expect(() => textContent(result)).not.toThrow();
+      const text = textContent(result);
+      // ASCII prefix "GBK " should survive any fallback path.
+      expect(text).toContain("GBK");
+    });
   });
 });

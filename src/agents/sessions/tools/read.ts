@@ -25,6 +25,7 @@ import type { AgentTool } from "../../runtime/index.js";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
+import { decodeWindowsOutputBuffer } from "../../../infra/windows-encoding.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { normalizePositiveLimit } from "./limits.js";
 import { resolveReadPath } from "./path-utils.js";
@@ -122,54 +123,22 @@ function quotePosixShellArg(value: string): string {
 }
 
 /**
- * Decodes a file buffer with automatic encoding detection.
+ * Decodes a file buffer for the read tool.
  *
- * Attempts strict UTF-8 first. If the buffer is not valid UTF-8, falls
- * back to common legacy encodings (gbk, shift_jis, big5, euc-kr) used
- * on CJK Windows systems, then to UTF-8 with replacement characters if
- * no legacy encoding produces a usable result.
+ * Reuses the existing Windows active-codepage decoder from
+ * `windows-encoding.ts` so the read tool follows the same policy as
+ * subprocess output decoding:
+ *   - Strict UTF-8 first (vast majority of files).
+ *   - On Windows, fall back to the active console code page (e.g. GBK for
+ *     Chinese Windows, Shift_JIS for Japanese Windows).
+ *   - On non-Windows, fall back to UTF-8 with replacement characters.
+ *
+ * This avoids a hard-coded cross-platform CJK encoding order that can
+ * silently misdecode legacy files (e.g. Shift_JIS through GBK) before
+ * the correct decoder is tried.
  */
 function decodeFileBuffer(buffer: Buffer): string {
-  // Try strict UTF-8 first — this covers the vast majority of files.
-  const utf8 = decodeStrictUtf8(buffer);
-  if (utf8 !== null) {
-    return utf8;
-  }
-
-  // Not valid UTF-8. Try common CJK legacy encodings (WHATWG labels).
-  // These are the encodings most likely to be encountered on CJK Windows
-  // systems where the system codepage produces non-UTF-8 text files.
-  const legacyEncodings = ["gbk", "gb18030", "shift_jis", "big5", "euc-kr"];
-  for (const enc of legacyEncodings) {
-    try {
-      const decoded = new TextDecoder(enc).decode(buffer);
-      // A successful decode produces a non-empty string. TextDecoder
-      // replaces unrepresentable bytes with U+FFFD, so a fully-garbled
-      // result will contain many replacement characters.
-      if (decoded.length > 0) {
-        return decoded;
-      }
-    } catch {
-      // TextDecoder constructor throws for unsupported encodings
-      // (e.g. when ICU data is not available).
-    }
-  }
-
-  // Fall back to UTF-8 with replacement characters (preserves current
-  // behavior for truly unknown encodings).
-  return buffer.toString("utf-8");
-}
-
-/**
- * Returns the UTF-8 string for `buffer`, or null when the buffer is not
- * valid UTF-8.
- */
-function decodeStrictUtf8(buffer: Buffer): string | null {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-  } catch {
-    return null;
-  }
+  return decodeWindowsOutputBuffer({ buffer });
 }
 
 function getOpenClawDocsClassification(
@@ -390,10 +359,9 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              // Decode the file buffer. Prefer strict UTF-8; fall back to
-              // legacy encodings (gbk, shift_jis, etc.) for Windows codepage
-              // files. This avoids garbled text for non-UTF-8 sources without
-              // adding a new model-facing API parameter.
+              // Decode the file buffer: strict UTF-8 first, then Windows
+              // active-codepage fallback on win32 (reuses the existing
+              // decodeWindowsOutputBuffer policy from windows-encoding.ts).
               const textContent = decodeFileBuffer(buffer);
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
