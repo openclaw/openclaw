@@ -2823,6 +2823,268 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.dispose();
   });
 
+  it("drains unawaited nested publications before publishing the parent fence", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergedIds: string[] = [];
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) => {
+        for (const entry of entries) {
+          if (entry.type !== "prompt_released_opaque") {
+            mergedIds.push(entry.id);
+          }
+        }
+      },
+    });
+    await controller.releaseForPrompt();
+
+    let releaseNestedWrite!: () => void;
+    const nestedWriteCanFinish = new Promise<void>((resolve) => {
+      releaseNestedWrite = resolve;
+    });
+    let markNestedWriteStarted!: () => void;
+    const nestedWriteStarted = new Promise<void>((resolve) => {
+      markNestedWriteStarted = resolve;
+    });
+    let parentSettled = false;
+    const parentWrite = controller
+      .withSessionWriteLock(
+        async () => {
+          await fs.appendFile(
+            sessionFile,
+            `${JSON.stringify({
+              type: "message",
+              id: "parent-publication",
+              parentId: null,
+              timestamp: new Date().toISOString(),
+              message: {
+                role: "assistant",
+                provider: "anthropic",
+                model: "sonnet-4.6",
+              },
+            })}\n`,
+            "utf8",
+          );
+          void controller.withSessionWriteLock(
+            async () => {
+              markNestedWriteStarted();
+              await nestedWriteCanFinish;
+              await controller.withSessionWriteLock(
+                async () => {
+                  await fs.appendFile(
+                    sessionFile,
+                    `${JSON.stringify({
+                      type: "message",
+                      id: "unawaited-nested",
+                      parentId: null,
+                      timestamp: new Date().toISOString(),
+                      message: {
+                        role: "assistant",
+                        provider: "anthropic",
+                        model: "sonnet-4.6",
+                      },
+                    })}\n`,
+                    "utf8",
+                  );
+                  return "unawaited-nested";
+                },
+                {
+                  publishOwnedWrite: true,
+                  resolvePublishedEntries: (id) => [{ kind: "id", id }],
+                },
+              );
+            },
+            { publishOwnedWrite: true },
+          );
+          await nestedWriteStarted;
+          return "parent-publication";
+        },
+        {
+          publishOwnedWrite: true,
+          resolvePublishedEntries: (id) => [{ kind: "id", id }],
+        },
+      )
+      .finally(() => {
+        parentSettled = true;
+      });
+
+    await nestedWriteStarted;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const settledBeforeNestedWrite = parentSettled;
+    releaseNestedWrite();
+    await parentWrite;
+
+    expect(settledBeforeNestedWrite).toBe(false);
+    expect(mergedIds).toEqual(["parent-publication", "unawaited-nested"]);
+    await expect(controller.withSessionWriteLock(() => "next write")).resolves.toBe("next write");
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
+  it("drains unawaited publications started from an ordinary lock scope", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergedIds: string[] = [];
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) => {
+        for (const entry of entries) {
+          if (entry.type !== "prompt_released_opaque") {
+            mergedIds.push(entry.id);
+          }
+        }
+      },
+    });
+    await controller.releaseForPrompt();
+
+    let releasePublication!: () => void;
+    const publicationCanFinish = new Promise<void>((resolve) => {
+      releasePublication = resolve;
+    });
+    let markPublicationStarted!: () => void;
+    const publicationStarted = new Promise<void>((resolve) => {
+      markPublicationStarted = resolve;
+    });
+    let outerSettled = false;
+    const outerWrite = controller
+      .withSessionWriteLock(async () => {
+        void controller.withSessionWriteLock(
+          async () => {
+            markPublicationStarted();
+            await publicationCanFinish;
+            await fs.appendFile(
+              sessionFile,
+              `${JSON.stringify({
+                type: "message",
+                id: "ordinary-scope-publication",
+                parentId: null,
+                timestamp: new Date().toISOString(),
+                message: {
+                  role: "assistant",
+                  provider: "anthropic",
+                  model: "sonnet-4.6",
+                },
+              })}\n`,
+              "utf8",
+            );
+            return "ordinary-scope-publication";
+          },
+          {
+            publishOwnedWrite: true,
+            resolvePublishedEntries: (id) => [{ kind: "id", id }],
+          },
+        );
+        await publicationStarted;
+      })
+      .finally(() => {
+        outerSettled = true;
+      });
+
+    await publicationStarted;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const settledBeforePublication = outerSettled;
+    releasePublication();
+    await outerWrite;
+
+    expect(settledBeforePublication).toBe(false);
+    expect(mergedIds).toEqual(["ordinary-scope-publication"]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
+  it("reacquires the lock for inherited publications that start during fence merge", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergedIds: string[] = [];
+    let markFirstMergeStarted!: () => void;
+    const firstMergeStarted = new Promise<void>((resolve) => {
+      markFirstMergeStarted = resolve;
+    });
+    let releaseFirstMerge!: () => void;
+    const firstMergeCanFinish = new Promise<void>((resolve) => {
+      releaseFirstMerge = resolve;
+    });
+    let mergeCount = 0;
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: async (entries) => {
+        mergeCount += 1;
+        if (mergeCount === 1) {
+          markFirstMergeStarted();
+          await firstMergeCanFinish;
+        }
+        for (const entry of entries) {
+          if (entry.type !== "prompt_released_opaque") {
+            mergedIds.push(entry.id);
+          }
+        }
+      },
+    });
+    await controller.releaseForPrompt();
+
+    const appendOwnedAssistant = async (id: string): Promise<string> => {
+      await fs.appendFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "message",
+          id,
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "sonnet-4.6",
+          },
+        })}\n`,
+        "utf8",
+      );
+      return id;
+    };
+
+    let lateWriteRan = false;
+    let lateWrite!: Promise<string>;
+    const parentWrite = controller.withSessionWriteLock(
+      async () => {
+        lateWrite = (async () => {
+          await firstMergeStarted;
+          return await controller.withSessionWriteLock(
+            async () => {
+              lateWriteRan = true;
+              return await appendOwnedAssistant("late-inherited");
+            },
+            {
+              publishOwnedWrite: true,
+              resolvePublishedEntries: (id) => [{ kind: "id", id }],
+            },
+          );
+        })();
+        return await appendOwnedAssistant("parent-publication");
+      },
+      {
+        publishOwnedWrite: true,
+        resolvePublishedEntries: (id) => [{ kind: "id", id }],
+      },
+    );
+
+    await firstMergeStarted;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(lateWriteRan).toBe(false);
+    releaseFirstMerge();
+    await expect(parentWrite).resolves.toBe("parent-publication");
+    await expect(lateWrite).resolves.toBe("late-inherited");
+
+    expect(mergedIds).toEqual(["parent-publication", "late-inherited"]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
   it("rejects interleaved assistant rows and stops already-queued publications", async () => {
     const sessionFile = await createTempSessionFile();
     const mergePromptReleasedSessionEntries = vi.fn();

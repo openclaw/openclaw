@@ -27,11 +27,72 @@ import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
-type ActiveWriteLockState = {
+type PhysicalWriteLockScope = {
   active: boolean;
-  publishingOwnedWrite: boolean;
-  publishedEntries?: OwnedSessionTranscriptPublishedEntry[];
+  completion: Promise<void>;
+  pendingOperations: Set<Promise<void>>;
 };
+type ActiveWriteLockState =
+  | {
+      active: boolean;
+      scope: PhysicalWriteLockScope;
+      publishingOwnedWrite: false;
+    }
+  | {
+      active: boolean;
+      scope: PhysicalWriteLockScope;
+      publishingOwnedWrite: true;
+      acceptingNestedPublications: boolean;
+      pendingNestedPublications: Set<Promise<void>>;
+      publishedEntries?: OwnedSessionTranscriptPublishedEntry[];
+    };
+type RootWriteLockState = Extract<ActiveWriteLockState, { publishingOwnedWrite: false }>;
+
+function createActiveWriteLockScope(): {
+  state: RootWriteLockState;
+  complete: () => void;
+} {
+  let complete!: () => void;
+  const completion = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  return {
+    state: {
+      active: true,
+      scope: {
+        active: true,
+        completion,
+        pendingOperations: new Set(),
+      },
+      publishingOwnedWrite: false,
+    },
+    complete,
+  };
+}
+
+function trackWriteLockOperation<T>(
+  scope: PhysicalWriteLockScope,
+  operation: Promise<T>,
+  additionalSet?: Set<Promise<void>>,
+): Promise<T> {
+  const settlement = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  scope.pendingOperations.add(settlement);
+  additionalSet?.add(settlement);
+  void settlement.finally(() => {
+    scope.pendingOperations.delete(settlement);
+    additionalSet?.delete(settlement);
+  });
+  return operation;
+}
+
+async function drainWriteLockScope(scope: PhysicalWriteLockScope): Promise<void> {
+  while (scope.pendingOperations.size > 0) {
+    await Promise.all(scope.pendingOperations);
+  }
+}
 
 type LockOptions = {
   sessionFile: string;
@@ -284,64 +345,96 @@ function classifyPromptReleasedSessionLines(
   }
   const entries: PromptReleasedSessionEntry[] = [];
   const publishedEntries: OwnedSessionTranscriptPublishedEntry[] = [];
+  const remainingExpectedEntries = options?.expectedPublishedEntries
+    ? [...options.expectedPublishedEntries]
+    : undefined;
   let hasGlobalMetadata = false;
   let hasOpaqueEntries = false;
   let expectedParentId = options?.initialParentId ?? null;
   for (const line of lines) {
-    const expectedPublishedEntry = options?.expectedPublishedEntries?.[publishedEntries.length];
-    if (expectedPublishedEntry?.kind === "serialized") {
-      if (expectedPublishedEntry.serialized === line) {
-        try {
-          const exactEntry = JSON.parse(line) as unknown;
-          if (isJsonRecord(exactEntry)) {
-            expectedParentId = normalizeTranscriptEntryId(exactEntry.id) ?? expectedParentId;
+    const matchExpectedEntry = (
+      id: string | undefined,
+    ): OwnedSessionTranscriptPublishedEntry | undefined => {
+      if (!remainingExpectedEntries) {
+        if (id) {
+          expectedParentId = id;
+          return { kind: "id", id };
+        }
+        return { kind: "serialized", serialized: line };
+      }
+      let matchIndex = remainingExpectedEntries.findIndex(
+        (entry) => entry.kind === "serialized" && entry.serialized === line,
+      );
+      let migratedParentId: string | undefined;
+      if (matchIndex < 0 && id) {
+        matchIndex = remainingExpectedEntries.findIndex(
+          (entry) => entry.kind === "id" && entry.id === id,
+        );
+      }
+      if (matchIndex < 0) {
+        matchIndex = remainingExpectedEntries.findIndex((entry) => {
+          if (entry.kind !== "serialized") {
+            return false;
           }
-        } catch {
-          return undefined;
-        }
-      } else {
-        const lineMatch = lineMatchesLinearTranscriptMigration({
-          previousLine: expectedPublishedEntry.serialized,
-          currentLine: line,
-          expectedParentId,
+          const lineMatch = lineMatchesLinearTranscriptMigration({
+            previousLine: entry.serialized,
+            currentLine: line,
+            expectedParentId,
+          });
+          if (!lineMatch.ok) {
+            return false;
+          }
+          migratedParentId = lineMatch.nextPreviousId;
+          return true;
         });
-        if (!lineMatch.ok) {
-          return undefined;
-        }
-        expectedParentId = lineMatch.nextPreviousId ?? expectedParentId;
       }
-    }
-    const publishIdentity = (id: string): OwnedSessionTranscriptPublishedEntry => {
-      if (expectedPublishedEntry?.kind === "serialized") {
-        return expectedPublishedEntry;
+      if (matchIndex < 0) {
+        return undefined;
       }
-      expectedParentId = id;
-      return { kind: "id", id };
+      const [matchedEntry] = remainingExpectedEntries.splice(matchIndex, 1);
+      if (migratedParentId) {
+        expectedParentId = migratedParentId;
+      } else if (id) {
+        expectedParentId = id;
+      }
+      return matchedEntry;
     };
     const transcriptEntry = parsePromptReleasedMessageLine(line, options);
     if (transcriptEntry) {
+      const publishedEntry = matchExpectedEntry(transcriptEntry.id);
+      if (!publishedEntry) {
+        return undefined;
+      }
       entries.push(transcriptEntry);
-      publishedEntries.push(publishIdentity(transcriptEntry.id));
+      publishedEntries.push(publishedEntry);
       continue;
     }
     const metadataEntry = parsePromptReleasedGlobalMetadataLine(line);
     if (metadataEntry) {
+      const publishedEntry = matchExpectedEntry(metadataEntry.id);
+      if (!publishedEntry) {
+        return undefined;
+      }
       entries.push(metadataEntry);
-      publishedEntries.push(publishIdentity(metadataEntry.id));
+      publishedEntries.push(publishedEntry);
       hasGlobalMetadata = true;
       continue;
     }
     const opaqueEntry = options?.allowAnyMessage ? parsePromptReleasedOpaqueLine(line) : undefined;
-    if (!opaqueEntry) {
+    const opaqueId =
+      opaqueEntry && isJsonRecord(opaqueEntry.record)
+        ? normalizeTranscriptEntryId(opaqueEntry.record.id)
+        : undefined;
+    const publishedEntry = opaqueEntry ? matchExpectedEntry(opaqueId) : undefined;
+    if (!opaqueEntry || !publishedEntry) {
       return undefined;
     }
     entries.push(opaqueEntry);
-    publishedEntries.push(
-      expectedPublishedEntry?.kind === "serialized"
-        ? expectedPublishedEntry
-        : { kind: "serialized", serialized: line },
-    );
+    publishedEntries.push(publishedEntry);
     hasOpaqueEntries = true;
+  }
+  if (remainingExpectedEntries?.length) {
+    return undefined;
   }
   if (hasOpaqueEntries) {
     return { kind: "opaque", entries, publishedEntries };
@@ -354,6 +447,24 @@ function classifyPromptReleasedSessionLines(
     entries: entries as SessionMessageEntry[],
     publishedEntries,
   };
+}
+
+function haveSamePublishedEntries(
+  actual: readonly OwnedSessionTranscriptPublishedEntry[],
+  expected: readonly OwnedSessionTranscriptPublishedEntry[],
+): boolean {
+  if (actual.length !== expected.length) {
+    return false;
+  }
+  const unmatched = [...expected];
+  for (const entry of actual) {
+    const matchIndex = unmatched.findIndex((candidate) => isDeepStrictEqual(candidate, entry));
+    if (matchIndex < 0) {
+      return false;
+    }
+    unmatched.splice(matchIndex, 1);
+  }
+  return true;
 }
 
 function normalizeTranscriptEntryId(value: unknown): string | undefined {
@@ -549,10 +660,7 @@ async function classifyOwnedSessionFileInitialization(params: {
     return undefined;
   }
   const lines = normalizeStringEntries(text.split("\n"));
-  const expectedHeader =
-    params.expectedPublishedEntries[0]?.kind === "header"
-      ? params.expectedPublishedEntries[0]
-      : undefined;
+  const expectedHeader = params.expectedPublishedEntries.find((entry) => entry.kind === "header");
   if (expectedHeader) {
     if (lines[0] !== expectedHeader.serialized) {
       return undefined;
@@ -560,7 +668,7 @@ async function classifyOwnedSessionFileInitialization(params: {
     lines.shift();
   }
   const remainingExpectedEntries = expectedHeader
-    ? params.expectedPublishedEntries.slice(1)
+    ? params.expectedPublishedEntries.filter((entry) => entry !== expectedHeader)
     : params.expectedPublishedEntries;
   const change = classifyPromptReleasedSessionLines(lines, {
     allowAnyMessage: true,
@@ -1110,7 +1218,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
     if (
       options?.expectedPublishedEntries &&
-      !isDeepStrictEqual(change.publishedEntries, [...options.expectedPublishedEntries])
+      !haveSamePublishedEntries(change.publishedEntries, options.expectedPublishedEntries)
     ) {
       return undefined;
     }
@@ -1154,7 +1262,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     if (retainedLockUseCount === 0) {
       return true;
     }
-    if (activeWriteLock.getStore()?.active === true) {
+    if (activeWriteLock.getStore()?.scope.active === true) {
       return false;
     }
     await new Promise<void>((resolve) => {
@@ -1503,18 +1611,18 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     run: () => Promise<T>,
     releaseRetainedUse: () => void,
   ): Promise<T> {
+    const scope = createActiveWriteLockScope();
     try {
-      const activeLockState: ActiveWriteLockState = {
-        active: true,
-        publishingOwnedWrite: false,
-      };
-      try {
-        return await activeWriteLock.run(activeLockState, run);
-      } finally {
-        activeLockState.active = false;
-      }
+      return await activeWriteLock.run(scope.state, run);
     } finally {
-      releaseRetainedUse();
+      await drainWriteLockScope(scope.state.scope);
+      scope.state.active = false;
+      scope.state.scope.active = false;
+      try {
+        releaseRetainedUse();
+      } finally {
+        scope.complete();
+      }
     }
   }
 
@@ -1524,71 +1632,161 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     resolvePublishedEntriesAfterFailure?: () => readonly OwnedSessionTranscriptPublishedEntry[],
   ): Promise<T> {
     const parentLockState = activeWriteLock.getStore();
-    if (parentLockState?.publishingOwnedWrite) {
-      let nestedEntries: readonly OwnedSessionTranscriptPublishedEntry[] | undefined;
-      try {
-        const result = await run();
-        nestedEntries = resolvePublishedEntries?.(result);
-        return result;
-      } catch (error) {
-        nestedEntries = resolvePublishedEntriesAfterFailure?.();
-        throw error;
-      } finally {
-        if (nestedEntries !== undefined) {
-          parentLockState.publishedEntries ??= [];
-          parentLockState.publishedEntries.push(...nestedEntries);
-        }
-      }
+    if (!parentLockState?.active || !parentLockState.scope.active) {
+      throw new Error("owned session publication requires an active session write lock");
     }
-    let releaseQueue!: () => void;
-    const currentQueueEntry = new Promise<void>((resolve) => {
-      releaseQueue = resolve;
-    });
-    const previousQueueEntry = ownedPublicationQueue.catch(() => undefined);
-    ownedPublicationQueue = previousQueueEntry.then(() => currentQueueEntry);
-    await previousQueueEntry;
-    try {
-      if (takeoverDetected) {
-        throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
-      }
-      const beforeWrite = await captureOwnedSessionFileWriteStart();
-      const publicationLockState: ActiveWriteLockState = {
-        active: parentLockState?.active ?? true,
-        publishingOwnedWrite: true,
-        publishedEntries: undefined,
-      };
-      try {
-        return await activeWriteLock.run(publicationLockState, async () => {
-          let ownEntries: readonly OwnedSessionTranscriptPublishedEntry[] | undefined;
-          try {
-            const result = await run();
-            ownEntries = resolvePublishedEntries?.(result);
-            return result;
-          } catch (error) {
-            ownEntries = resolvePublishedEntriesAfterFailure?.();
-            throw error;
-          } finally {
-            const nestedEntries = publicationLockState.publishedEntries;
-            const expectedPublishedEntries =
-              nestedEntries === undefined
-                ? ownEntries
-                : ownEntries === undefined
-                  ? nestedEntries
-                  : [...nestedEntries, ...ownEntries];
-            await publishOwnedSessionFileFence(beforeWrite, expectedPublishedEntries);
+    if (parentLockState?.publishingOwnedWrite && parentLockState.acceptingNestedPublications) {
+      const nestedPublication = (async () => {
+        let nestedEntries: readonly OwnedSessionTranscriptPublishedEntry[] | undefined;
+        try {
+          const result = await run();
+          nestedEntries = resolvePublishedEntries?.(result);
+          return result;
+        } catch (error) {
+          nestedEntries = resolvePublishedEntriesAfterFailure?.();
+          throw error;
+        } finally {
+          if (nestedEntries !== undefined) {
+            parentLockState.publishedEntries ??= [];
+            parentLockState.publishedEntries.push(...nestedEntries);
           }
-        });
+        }
+      })();
+      return await trackWriteLockOperation(
+        parentLockState.scope,
+        nestedPublication,
+        parentLockState.pendingNestedPublications,
+      );
+    }
+    const publication = (async () => {
+      let releaseQueue!: () => void;
+      const currentQueueEntry = new Promise<void>((resolve) => {
+        releaseQueue = resolve;
+      });
+      const previousQueueEntry = ownedPublicationQueue.catch(() => undefined);
+      ownedPublicationQueue = previousQueueEntry.then(() => currentQueueEntry);
+      await previousQueueEntry;
+      try {
+        if (takeoverDetected) {
+          throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+        }
+        const beforeWrite = await captureOwnedSessionFileWriteStart();
+        const publicationLockState: ActiveWriteLockState = {
+          active: true,
+          scope: parentLockState.scope,
+          publishingOwnedWrite: true,
+          acceptingNestedPublications: true,
+          pendingNestedPublications: new Set(),
+          publishedEntries: undefined,
+        };
+        try {
+          return await activeWriteLock.run(publicationLockState, async () => {
+            let ownEntries: readonly OwnedSessionTranscriptPublishedEntry[] | undefined;
+            try {
+              const result = await run();
+              ownEntries = resolvePublishedEntries?.(result);
+              return result;
+            } catch (error) {
+              ownEntries = resolvePublishedEntriesAfterFailure?.();
+              throw error;
+            } finally {
+              // Nested transcript callbacks inherit this publication owner.
+              // Drain them before freezing the expected fence entry set.
+              while (publicationLockState.pendingNestedPublications.size > 0) {
+                await Promise.all(publicationLockState.pendingNestedPublications);
+              }
+              publicationLockState.acceptingNestedPublications = false;
+              publicationLockState.active = false;
+              const nestedEntries = publicationLockState.publishedEntries;
+              const expectedPublishedEntries =
+                nestedEntries === undefined
+                  ? ownEntries
+                  : ownEntries === undefined
+                    ? nestedEntries
+                    : [...nestedEntries, ...ownEntries];
+              await publishOwnedSessionFileFence(beforeWrite, expectedPublishedEntries);
+            }
+          });
+        } finally {
+          publicationLockState.active = false;
+        }
       } finally {
-        publicationLockState.active = false;
+        releaseQueue();
       }
+    })();
+    return await trackWriteLockOperation(parentLockState.scope, publication);
+  }
+
+  async function runInheritedWriteLockOperation<T>(
+    state: ActiveWriteLockState,
+    run: () => Promise<T> | T,
+  ): Promise<T> {
+    const operation = (async () => await run())();
+    return await trackWriteLockOperation(state.scope, operation);
+  }
+
+  async function withSessionWriteLock<T>(
+    run: () => Promise<T> | T,
+    options?: OwnedSessionTranscriptWriteOptions<T>,
+  ): Promise<T> {
+    if (takeoverDetected) {
+      throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    }
+    const inheritedLockState = activeWriteLock.getStore();
+    if (inheritedLockState && (!inheritedLockState.active || !inheritedLockState.scope.active)) {
+      await inheritedLockState.scope.completion;
+      return await activeWriteLock.exit(() => withSessionWriteLock(run, options));
+    }
+    if (inheritedLockState?.active === true) {
+      if (options?.publishOwnedWrite !== true) {
+        return await runInheritedWriteLockOperation(inheritedLockState, run);
+      }
+      return await runPublishingOwnedSessionFileWrite(
+        run,
+        options.resolvePublishedEntries,
+        options.resolvePublishedEntriesAfterFailure,
+      );
+    }
+    const { lock, owned, releaseRetainedUse } = await acquireWriteLock();
+    const runLockedOperation = async () => {
+      await assertSessionFileFence();
+      if (options?.publishOwnedWrite === true) {
+        return await runPublishingOwnedSessionFileWrite(
+          run,
+          options.resolvePublishedEntries,
+          options.resolvePublishedEntriesAfterFailure,
+        );
+      }
+      const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      try {
+        return await run();
+      } finally {
+        await refreshSessionFileFence(beforeWrite);
+      }
+    };
+    if (!owned) {
+      return await runWithRetainedLock(runLockedOperation, releaseRetainedUse ?? (() => {}));
+    }
+
+    const scope = createActiveWriteLockScope();
+    try {
+      return await activeWriteLock.run(scope.state, runLockedOperation);
     } finally {
-      releaseQueue();
+      await drainWriteLockScope(scope.state.scope);
+      scope.state.active = false;
+      scope.state.scope.active = false;
+      try {
+        await lock.release();
+      } finally {
+        scope.complete();
+      }
     }
   }
 
   return {
     canAdvanceSessionEntryCache(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean {
-      if (takeoverDetected || activeWriteLock.getStore()?.active !== true) {
+      const state = activeWriteLock.getStore();
+      if (takeoverDetected || state?.active !== true || !state.scope.active) {
         return false;
       }
       const fingerprint: SessionFileFingerprint = { exists: true, ...snapshot };
@@ -1598,7 +1796,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       );
     },
     publishOwnedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean {
-      if (takeoverDetected || activeWriteLock.getStore()?.active !== true) {
+      const state = activeWriteLock.getStore();
+      if (takeoverDetected || state?.active !== true || !state.scope.active) {
         return false;
       }
       const fingerprint: SessionFileFingerprint = { exists: true, ...snapshot };
@@ -1697,62 +1896,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
     },
     waitForSessionEvents: waitForSessionEventQueue,
-    async withSessionWriteLock<T>(
-      run: () => Promise<T> | T,
-      options?: OwnedSessionTranscriptWriteOptions<T>,
-    ): Promise<T> {
-      if (takeoverDetected) {
-        throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
-      }
-      if (activeWriteLock.getStore()?.active === true) {
-        if (options?.publishOwnedWrite !== true) {
-          return await run();
-        }
-        return await runPublishingOwnedSessionFileWrite(
-          run,
-          options.resolvePublishedEntries,
-          options.resolvePublishedEntriesAfterFailure,
-        );
-      }
-      const { lock, owned, releaseRetainedUse } = await acquireWriteLock();
-      try {
-        const runLockedOperation = async () => {
-          await assertSessionFileFence();
-          const runWithLock = async () => {
-            if (options?.publishOwnedWrite === true) {
-              return await runPublishingOwnedSessionFileWrite(
-                run,
-                options.resolvePublishedEntries,
-                options.resolvePublishedEntriesAfterFailure,
-              );
-            }
-            const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-            try {
-              return await run();
-            } finally {
-              await refreshSessionFileFence(beforeWrite);
-            }
-          };
-          return await runWithLock();
-        };
-        if (owned) {
-          const activeLockState: ActiveWriteLockState = {
-            active: true,
-            publishingOwnedWrite: false,
-          };
-          try {
-            return await activeWriteLock.run(activeLockState, runLockedOperation);
-          } finally {
-            activeLockState.active = false;
-          }
-        }
-        return await runWithRetainedLock(runLockedOperation, releaseRetainedUse ?? (() => {}));
-      } finally {
-        if (owned) {
-          await lock.release();
-        }
-      }
-    },
+    withSessionWriteLock,
     async acquireForCleanup(cleanupParams?: { session?: unknown }): Promise<SessionLock> {
       if (cleanupParams?.session) {
         await waitForSessionEventQueue(cleanupParams.session);
