@@ -8,17 +8,23 @@ export const CONTROL_UI_DOCUMENT_TITLE = "OpenClaw Control";
 
 type DocumentTitleState = {
   sessionKey?: string | null;
+  chatSessionPickerResult?: SessionsListResult | null;
   sessionsResult?: SessionsListResult | null;
 };
+
+function findSessionTitleRow(state: DocumentTitleState, sessionKey: string) {
+  return [state.chatSessionPickerResult, state.sessionsResult]
+    .filter((result): result is SessionsListResult => Boolean(result))
+    .flatMap((result) => result.sessions)
+    .find((entry) => areUiSessionKeysEquivalent(entry.key, sessionKey));
+}
 
 export function resolveControlUiDocumentTitle(state: DocumentTitleState): string {
   const sessionKey = normalizeOptionalString(state.sessionKey);
   if (!sessionKey) {
     return CONTROL_UI_DOCUMENT_TITLE;
   }
-  const row = state.sessionsResult?.sessions.find((entry) =>
-    areUiSessionKeysEquivalent(entry.key, sessionKey),
-  );
+  const row = findSessionTitleRow(state, sessionKey);
   const sessionName = normalizeOptionalString(resolveSessionDisplayName(sessionKey, row));
   if (!sessionName || sessionName === CONTROL_UI_DOCUMENT_TITLE) {
     return CONTROL_UI_DOCUMENT_TITLE;

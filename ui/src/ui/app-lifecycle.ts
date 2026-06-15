@@ -233,7 +233,11 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
-  if (changed.has("sessionKey") || changed.has("sessionsResult")) {
+  if (
+    changed.has("sessionKey") ||
+    changed.has("sessionsResult") ||
+    changed.has("chatSessionPickerResult")
+  ) {
     syncControlUiDocumentTitle(host);
   }
   if (changed.has("chatQueue")) {

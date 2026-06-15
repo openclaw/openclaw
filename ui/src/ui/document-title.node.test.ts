@@ -47,6 +47,17 @@ describe("resolveControlUiDocumentTitle", () => {
     ).toBe("Release triage - OpenClaw Control");
   });
 
+  it("uses chat session picker metadata when the sessions tab has not loaded", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:alpha",
+        chatSessionPickerResult: sessionsResult([
+          sessionRow({ key: "agent:alpha", label: "Alpha planning" }),
+        ]),
+      }),
+    ).toBe("Alpha planning - OpenClaw Control");
+  });
+
   it("uses the display name when a custom label is not set", () => {
     expect(
       resolveControlUiDocumentTitle({
