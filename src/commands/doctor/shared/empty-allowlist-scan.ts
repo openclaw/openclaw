@@ -105,6 +105,10 @@ export function scanEmptyAllowlistPolicyWarnings(
           if (!acc || typeof acc !== "object") {
             return false;
           }
+          // Disabled accounts don't need to override — they're inactive.
+          if ((acc as { enabled?: unknown }).enabled === false) {
+            return true;
+          }
           const record = acc as DoctorAccountRecord;
           // Explicit groupAllowFrom always counts
           if (hasAllowFromEntries(record.groupAllowFrom as DoctorAllowFromList | undefined)) {

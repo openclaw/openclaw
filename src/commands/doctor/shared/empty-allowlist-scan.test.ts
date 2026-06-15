@@ -175,6 +175,35 @@ describe("doctor empty allowlist policy scan", () => {
     ]);
   });
 
+  it("suppresses parent warning when enabled accounts override and disabled account does not", () => {
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          signal: {
+            dmPolicy: "open",
+            groupPolicy: "allowlist",
+            accounts: {
+              work: {
+                groupPolicy: "allowlist",
+                groupAllowFrom: ["+1234567890"],
+              },
+              personal: {
+                enabled: false,
+                groupPolicy: "allowlist",
+                // No groupAllowFrom, but disabled — doesn't count against override
+              },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix" },
+    );
+
+    // Disabled accounts are excluded from the override check, so the parent
+    // warning is suppressed even though the disabled account has no allowlist.
+    expect(warnings).toStrictEqual([]);
+  });
+
   it("skips disabled channel and account entries", () => {
     const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
 
