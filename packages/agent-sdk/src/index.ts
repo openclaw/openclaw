@@ -225,3 +225,8 @@ export type { MutationCheckResult, MutatedFile, QuarantineRecord } from "./quara
 
 export { applyConfigDiff, rollbackConfig, enableWithLiveConfig } from "./compiler/live.js";
 export type { LiveConfigResult } from "./compiler/live.js";
+
+// ── Declarative upgrade ─────────────────────────────────────────────
+
+export { computeUpgrade, validateUpgrade } from "./compiler/upgrade.js";
+export type { UpgradeOptions, UpgradeResult } from "./compiler/upgrade.js";

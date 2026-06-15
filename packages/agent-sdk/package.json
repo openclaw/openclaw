@@ -21,7 +21,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/hash.ts src/commands/validate.ts src/commands/enable.ts src/commands/disable.ts src/policy/secrets.ts src/policy/network.ts src/compiler/compiler.ts src/compiler/live.ts src/quarantine/mutation.ts src/test.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/hash.ts src/commands/validate.ts src/commands/enable.ts src/commands/disable.ts src/policy/secrets.ts src/policy/network.ts src/compiler/compiler.ts src/compiler/live.ts src/compiler/upgrade.ts src/quarantine/mutation.ts src/test.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "@openclaw/agent-core": "workspace:*",
