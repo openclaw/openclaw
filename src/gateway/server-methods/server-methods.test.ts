@@ -1914,7 +1914,10 @@ describe("timestampOptsFromConfig", () => {
     expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
   });
 
-  it("keeps timestamp injection enabled for existing configs unless explicitly disabled", () => {
+  it("keeps timestamp injection enabled for upgraded configs unless explicitly disabled", () => {
+    // Existing user configs do not store envelopeTimestamp; omission remains
+    // the shipped default, so no config migration is needed for this broadened
+    // use of the setting.
     expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
     expect(
       timestampOptsFromConfig({
