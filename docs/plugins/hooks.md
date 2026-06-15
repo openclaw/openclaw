@@ -107,14 +107,14 @@ observation-only.
 - **`before_agent_run`** - inspect the final prompt and session messages before model submission and optionally block the run
 - **`before_agent_reply`** - short-circuit the model turn with a synthetic reply or silence
 - **`before_agent_finalize`** - inspect the natural final answer and request one more model pass
-- `agent_end` - observe final messages, success state, and run duration
+- `agent_end` - observe final messages, success state, run duration, and structured `toolUses` (tool name + input) extracted from current-turn assistant messages. Handles both OpenClaw-normalized `toolCall` blocks and raw provider `tool_use` blocks
 - `heartbeat_prompt_contribution` - add heartbeat-only context for background monitor and lifecycle plugins
 
 **Conversation observation**
 
 - `model_call_started` / `model_call_ended` - observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
 - `llm_input` - observe provider input (system prompt, prompt, history)
-- `llm_output` - observe provider output, usage, and the resolved `contextTokenBudget` when available
+- `llm_output` - observe provider output, usage, the resolved `contextTokenBudget` when available, and structured `toolUses` (tool name + input) extracted from current-turn assistant messages. Handles both OpenClaw-normalized `toolCall` blocks and raw provider `tool_use` blocks
 
 **Tools**
 

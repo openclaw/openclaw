@@ -530,6 +530,60 @@ export async function runPreparedCliAgent(
     }),
   ];
 
+  /**
+   * Extract tool-call blocks from ALL assistant messages for hook payloads.
+   * Scans both OpenClaw-normalized `toolCall` blocks (`arguments`) and raw
+   * provider `tool_use` blocks (`input`), mapping each to a common shape.
+   */
+  const extractToolUseBlocksForCliHook = (
+    messages: unknown[],
+  ): { id: string; name: string; input: unknown }[] => {
+    if (!Array.isArray(messages)) {
+      return [];
+    }
+    const extracted: { id: string; name: string; input: unknown }[] = [];
+    for (const message of messages) {
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      if ((message as { role?: unknown }).role !== "assistant") {
+        continue;
+      }
+      const content = (message as { content?: unknown }).content;
+      if (!Array.isArray(content)) {
+        continue;
+      }
+      for (const block of content) {
+        if (!block || typeof block !== "object") {
+          continue;
+        }
+        const typedBlock = block as { type?: unknown; id?: unknown; name?: unknown };
+        if (
+          typedBlock.type === "toolCall" &&
+          typeof typedBlock.id === "string" &&
+          typeof typedBlock.name === "string"
+        ) {
+          extracted.push({
+            id: typedBlock.id,
+            name: typedBlock.name,
+            input: (typedBlock as { arguments?: unknown }).arguments,
+          });
+        } else if (
+          typedBlock.type === "tool_use" &&
+          typeof typedBlock.id === "string" &&
+          typeof typedBlock.name === "string"
+        ) {
+          extracted.push({
+            id: typedBlock.id,
+            name: typedBlock.name,
+            input: (typedBlock as { input?: unknown }).input,
+          });
+        }
+      }
+    }
+    return extracted;
+  };
+
   const buildFailedAgentEndEvent = (error: string) => ({
     messages: buildAgentEndMessages(),
     success: false,
@@ -1000,11 +1054,14 @@ export async function runPreparedCliAgent(
           params.provider,
           context.cwd ?? context.workspaceDir,
         );
+        const cliMessages = buildAgentEndMessages(lastAssistant);
+        const cliToolUses = extractToolUseBlocksForCliHook(cliMessages);
         await runCliAgentEndHook(params, {
           event: {
-            messages: buildAgentEndMessages(lastAssistant),
+            messages: cliMessages,
             success: true,
             durationMs: Date.now() - context.started,
+            ...(cliToolUses.length > 0 ? { toolUses: cliToolUses } : {}),
           },
           ctx: hookContext,
           hookRunner,

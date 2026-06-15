@@ -563,6 +563,62 @@ function pluginMetadataSnapshotCoversProvider(
   });
 }
 
+/**
+ * Extract tool-call blocks from ALL current-turn assistant messages for hook
+ * payloads. Scans both OpenClaw-normalized `toolCall` blocks (`arguments`)
+ * and raw provider `tool_use` blocks (`input`), mapping each to a common
+ * `{ id, name, input }` shape.
+ *
+ * Using only `lastAssistant` misses tool calls made earlier in the turn —
+ * the final assistant message after a tool loop is commonly text-only.
+ */
+function extractToolUseBlocksForHook(
+  messages: AgentMessage[],
+  prePromptMessageCount: number,
+): { id: string; name: string; input: unknown }[] {
+  const currentTurn = messages.slice(prePromptMessageCount);
+  const extracted: { id: string; name: string; input: unknown }[] = [];
+  for (const message of currentTurn) {
+    if ((message as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const block of content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const typedBlock = block as { type?: unknown; id?: unknown; name?: unknown };
+      if (
+        typedBlock.type === "toolCall" &&
+        typeof typedBlock.id === "string" &&
+        typeof typedBlock.name === "string"
+      ) {
+        // OpenClaw-normalized block: use `arguments`.
+        extracted.push({
+          id: typedBlock.id,
+          name: typedBlock.name,
+          input: (typedBlock as { arguments?: unknown }).arguments,
+        });
+      } else if (
+        typedBlock.type === "tool_use" &&
+        typeof typedBlock.id === "string" &&
+        typeof typedBlock.name === "string"
+      ) {
+        // Raw provider block (e.g. Anthropic): use `input`.
+        extracted.push({
+          id: typedBlock.id,
+          name: typedBlock.name,
+          input: (typedBlock as { input?: unknown }).input,
+        });
+      }
+    }
+  }
+  return extracted;
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -3690,6 +3746,7 @@ export async function runEmbeddedAttempt(
         abort: (reason) => abortActiveRunExternally(reason),
       };
       let lastAssistant: AssistantMessage | undefined;
+      let toolUsesForHook: { id: string; name: string; input: unknown }[] = [];
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: PromptCacheBreak | null = null;
@@ -4982,6 +5039,7 @@ export async function runEmbeddedAttempt(
             .slice()
             .toReversed()
             .find((message): message is AssistantMessage => message.role === "assistant");
+          toolUsesForHook = extractToolUseBlocksForHook(messagesSnapshot, prePromptMessageCount);
           currentAttemptAssistant = findCurrentAttemptAssistantMessage({
             messagesSnapshot,
             prePromptMessageCount,
@@ -5163,6 +5221,7 @@ export async function runEmbeddedAttempt(
               success: !aborted && !promptError,
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
+              ...(toolUsesForHook.length > 0 ? { toolUses: toolUsesForHook } : {}),
             },
             ctx: {
               runId: params.runId,
@@ -5318,6 +5377,7 @@ export async function runEmbeddedAttempt(
                 : {}),
               assistantTexts,
               lastAssistant,
+              ...(toolUsesForHook.length > 0 ? { toolUses: toolUsesForHook } : {}),
               usage: attemptUsage,
             },
             {

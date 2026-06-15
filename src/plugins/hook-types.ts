@@ -319,6 +319,13 @@ export type PluginHookModelCallEndedEvent = PluginHookModelCallBaseEvent & {
   upstreamRequestIdHash?: string;
 };
 
+/** Tool-use content block extracted from the assistant message. */
+export type PluginHookToolUseBlock = {
+  id: string;
+  name: string;
+  input: unknown;
+};
+
 export type PluginHookLlmOutputEvent = {
   runId: string;
   sessionId: string;
@@ -347,6 +354,14 @@ export type PluginHookLlmOutputEvent = {
   prompt?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
+  /**
+   * Tool-use content blocks extracted from the last assistant message.
+   * Each entry carries the tool `name` + `input` so downstream supervisors
+   * can enforce tool-level policy without re-parsing the raw message.
+   * Populated for conversation-access hooks when the assistant message
+   * includes tool_use blocks.
+   */
+  toolUses?: PluginHookToolUseBlock[];
   usage?: {
     input?: number;
     output?: number;
@@ -370,6 +385,12 @@ export type PluginHookAgentEndEvent = {
   success: boolean;
   error?: string;
   durationMs?: number;
+  /**
+   * Tool-use content blocks extracted from assistant messages in the
+   * conversation. Each entry carries the tool `name` + `input` so downstream
+   * supervisors can enforce tool-level policy without re-parsing raw messages.
+   */
+  toolUses?: PluginHookToolUseBlock[];
 };
 
 export type PluginHookBeforeAgentFinalizeEvent = {
