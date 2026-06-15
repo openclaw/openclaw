@@ -1,8 +1,21 @@
 // Status message tests cover status message formatting and persistence.
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { formatFastModeLabel } from "./status-labels.js";
 import { buildStatusMessage } from "./status-message.js";
+
+function statusTestModel(id: string, name: string, contextWindow: number): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: 8_192,
+  };
+}
 
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
@@ -25,9 +38,10 @@ describe("buildStatusMessage context window", () => {
         models: {
           providers: {
             "ollama-cloud": {
+              baseUrl: "https://ollama.com",
               models: [
-                { id: "deepseek-v4-pro", contextWindow: 1_000_000 },
-                { id: "glm-5.1", contextWindow: 200_000 },
+                statusTestModel("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
+                statusTestModel("glm-5.1", "GLM 5.1", 200_000),
               ],
             },
           },
@@ -94,7 +108,8 @@ describe("buildStatusMessage context window", () => {
         models: {
           providers: {
             anthropic: {
-              models: [{ id: "claude-haiku-4-5", contextWindow: 200_000 }],
+              baseUrl: "https://api.anthropic.com",
+              models: [statusTestModel("claude-haiku-4-5", "Claude Haiku 4.5", 200_000)],
             },
           },
         },
