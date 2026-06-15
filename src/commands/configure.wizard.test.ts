@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
     clackSelect: vi.fn(),
     clackText: vi.fn(),
     clackConfirm: vi.fn(),
+    clackPassword: vi.fn(),
     resolveSearchProviderOptions: vi.fn(),
     resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("@clack/prompts", () => ({
   select: mocks.clackSelect,
   text: mocks.clackText,
   confirm: mocks.clackConfirm,
+  password: mocks.clackPassword,
 }));
 
 vi.mock("../config/config.js", () => ({

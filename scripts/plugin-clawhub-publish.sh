@@ -42,6 +42,7 @@ source_repo="${SOURCE_REPO:-${GITHUB_REPOSITORY:-openclaw/openclaw}}"
 source_commit="${SOURCE_COMMIT:-$(git -C "${invocation_root}" rev-parse HEAD)}"
 source_ref="${SOURCE_REF:-$(git -C "${invocation_root}" symbolic-ref -q HEAD || true)}"
 clawhub_workdir="${CLAWDHUB_WORKDIR:-${CLAWHUB_WORKDIR:-${invocation_root}}}"
+manual_override_reason="${OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON:-}"
 
 pack_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-clawhub-pack.XXXXXX")"
 cleanup() {
@@ -155,6 +156,13 @@ if [[ -n "${source_ref}" ]]; then
   publish_cmd+=(
     --source-ref
     "${source_ref}"
+  )
+fi
+
+if [[ -n "${manual_override_reason}" ]]; then
+  publish_cmd+=(
+    --manual-override-reason
+    "${manual_override_reason}"
   )
 fi
 
