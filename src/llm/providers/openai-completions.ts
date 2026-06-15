@@ -377,7 +377,6 @@ export const streamOpenAICompletions: StreamFunction<
           // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
           const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
           const deltaFields = choice.delta as Record<string, unknown>;
-          const shouldEmitReasoning = Boolean(model.reasoning && options?.reasoningEffort);
           let foundReasoningField: string | null = null;
           for (const field of reasoningFields) {
             const value = deltaFields[field];
@@ -456,9 +455,9 @@ export const streamOpenAICompletions: StreamFunction<
             // reasoning_details in the delta for non-tool-call responses.
             if (!output.content.some((b) => b.type === "toolCall")) {
               // Store reasoning_details in the first text block's thinkingSignature
-              const textBlock = output.content.find((b) => b.type === "text");
-              if (textBlock && !textBlock.thinkingSignature) {
-                textBlock.thinkingSignature = JSON.stringify(reasoningDetails);
+              const targetTextBlock = output.content.find((b) => b.type === "text");
+              if (targetTextBlock && !targetTextBlock.thinkingSignature) {
+                targetTextBlock.thinkingSignature = JSON.stringify(reasoningDetails);
               }
             }
           }
