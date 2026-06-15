@@ -272,6 +272,65 @@ describe("qa suite", () => {
     }
   });
 
+  it("writes Crabline channel-driver smoke artifacts when selected", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-crabline-"));
+    try {
+      const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
+        outputDir,
+        startedAt: new Date("2026-04-11T00:00:00.000Z"),
+        finishedAt: new Date("2026-04-11T00:01:00.000Z"),
+        scenarios: [{ name: "Telegram DM", status: "pass", steps: [] }],
+        scenarioDefinitions: [
+          {
+            ...makeQaSuiteTestScenario("telegram-dm", {
+              surface: "channel",
+            }),
+            coverage: {
+              primary: ["channels.dm"],
+            },
+          },
+        ],
+        transport: {
+          id: "qa-channel",
+          createReportNotes: () => [],
+        } as unknown as QaTransportAdapter,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        alternateModel: "mock-openai/gpt-5.5-alt",
+        fastMode: true,
+        concurrency: 1,
+        channelDriverSelection: {
+          capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+          channel: "telegram",
+          channelDriver: "crabline",
+          channelDriverId: "telegram-local-v1",
+          channelLive: false,
+          smokeArtifactPath: "crabline-channel-smoke.json",
+        },
+      });
+
+      const matrix = JSON.parse(
+        await fs.readFile(path.join(outputDir, "crabline-channel-capability-matrix.json"), "utf8"),
+      ) as { rows?: Array<{ capabilityId?: string }> };
+      expect(matrix.rows).toEqual(
+        expect.arrayContaining([expect.objectContaining({ capabilityId: "telegram.dm.text" })]),
+      );
+      const smoke = JSON.parse(
+        await fs.readFile(path.join(outputDir, "crabline-channel-smoke.json"), "utf8"),
+      ) as { result?: { ok?: boolean } };
+      expect(smoke.result?.ok).toBe(true);
+      const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
+        entries?: Array<{ execution?: { channel?: { driver?: string; id?: string } } }>;
+      };
+      expect(evidence.entries?.[0]?.execution?.channel).toMatchObject({
+        driver: "crabline",
+        id: "telegram",
+      });
+    } finally {
+      await fs.rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("arms gateway heap checkpoint env only when requested", () => {
     expect(
       qaSuiteProgressTesting.buildQaGatewayHeapCheckpointRuntimeEnvPatch({

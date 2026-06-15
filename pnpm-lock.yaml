@@ -1335,6 +1335,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
+      crabline:
+        specifier: github:openclaw/crabline#cf60f28094b977593766daf93cbdae365338e62e
+        version: https://codeload.github.com/openclaw/crabline/tar.gz/cf60f28094b977593766daf93cbdae365338e62e
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
@@ -4988,6 +4991,32 @@ packages:
   cors@2.8.6:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
     engines: {node: '>= 0.10'}
+
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/cf60f28094b977593766daf93cbdae365338e62e:
+    resolution: {gitHosted: true, integrity: sha512-654StXyrCac+6GbD5kdM/QUgGj2kcoMkjJAOPcvx9BsFYUrVYyG13DtX1csr2FCb5uaoz+NLbval0PCAT3Y+mA==, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/cf60f28094b977593766daf93cbdae365338e62e}
+    version: 0.1.0
+    engines: {node: '>=22'}
+    hasBin: true
+    peerDependencies:
+      '@beeper/chat-adapter-matrix': ^0.1.0
+      '@chat-adapter/discord': ^4.30.0
+      '@chat-adapter/slack': ^4.30.0
+      '@chat-adapter/state-memory': ^4.30.0
+      chat: ^4.30.0
+      chat-adapter-imessage: ^0.1.1
+    peerDependenciesMeta:
+      '@beeper/chat-adapter-matrix':
+        optional: true
+      '@chat-adapter/discord':
+        optional: true
+      '@chat-adapter/slack':
+        optional: true
+      '@chat-adapter/state-memory':
+        optional: true
+      chat:
+        optional: true
+      chat-adapter-imessage:
+        optional: true
 
   croner@10.0.1:
     resolution: {integrity: sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==}
@@ -10978,6 +11007,13 @@ snapshots:
     dependencies:
       object-assign: 4.1.1
       vary: 1.1.2
+
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/cf60f28094b977593766daf93cbdae365338e62e:
+    dependencies:
+      commander: 14.0.3
+      picocolors: 1.1.1
+      yaml: 2.9.0
+      zod: 4.4.3
 
   croner@10.0.1: {}
 

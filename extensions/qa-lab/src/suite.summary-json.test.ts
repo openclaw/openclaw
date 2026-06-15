@@ -39,6 +39,7 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelLive).toBeNull();
     expect(json.run.channelDriverId).toBeNull();
     expect(json.run.channelCapabilityMatrixPath).toBeNull();
+    expect(json.run.channelDriverSmokePath).toBeNull();
     expect(json.run.scenarioIds).toBeNull();
   });
 
@@ -51,6 +52,7 @@ describe("buildQaSuiteSummaryJson", () => {
         channelDriver: "crabline",
         channelDriverId: "telegram-local-v1",
         channelLive: false,
+        smokeArtifactPath: "crabline-channel-smoke.json",
       },
     });
 
@@ -59,6 +61,7 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelLive).toBe(false);
     expect(json.run.channelDriverId).toBe("telegram-local-v1");
     expect(json.run.channelCapabilityMatrixPath).toBe("crabline-channel-capability-matrix.json");
+    expect(json.run.channelDriverSmokePath).toBe("crabline-channel-smoke.json");
   });
 
   it("includes scenarioIds in run metadata when provided", () => {

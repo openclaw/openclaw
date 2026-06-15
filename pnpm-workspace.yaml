@@ -131,6 +131,7 @@ allowBuilds:
   "@tloncorp/tlon-skill": true
   baileys: true
   authenticate-pam: true
+  crabline: true
   "@discordjs/opus": false
   esbuild: true
   koffi: false

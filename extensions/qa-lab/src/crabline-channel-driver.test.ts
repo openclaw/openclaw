@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildQaCrablineChannelCapabilityMatrix,
+  runQaCrablineChannelDriverSmoke,
   resolveQaCrablineChannelDriverSelection,
 } from "./crabline-channel-driver.js";
 
@@ -22,8 +23,25 @@ describe("crabline channel driver metadata", () => {
       channelDriver: "crabline",
       channelDriverId: "telegram-local-v1",
       channelLive: false,
+      smokeArtifactPath: "crabline-channel-smoke.json",
     });
-    expect(buildQaCrablineChannelCapabilityMatrix(selection!)).toMatchObject({
+    expect(
+      buildQaCrablineChannelCapabilityMatrix(selection!, [
+        {
+          capabilityId: "telegram.dm.text",
+          channel: "telegram",
+          driverId: "telegram-local-v1",
+          notes: "Direct-message text turn with source-visible transcript assertions.",
+          status: "covered",
+        },
+        {
+          capabilityId: "slack.dm.text",
+          channel: "slack",
+          notes: "Planned local Slack upstream driver.",
+          status: "planned",
+        },
+      ]),
+    ).toMatchObject({
       source: "openclaw/crabline",
       channelDriver: "crabline",
       selectedChannel: "telegram",
@@ -40,6 +58,28 @@ describe("crabline channel driver metadata", () => {
           status: "planned",
         }),
       ]),
+    });
+  });
+
+  it("runs Crabline's imported deterministic local driver smoke", async () => {
+    await expect(
+      runQaCrablineChannelDriverSmoke({
+        capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        channelDriverId: "telegram-local-v1",
+        channelLive: false,
+        smokeArtifactPath: "crabline-channel-smoke.json",
+      }),
+    ).resolves.toMatchObject({
+      driver: {
+        channel: "telegram",
+        driverId: "telegram-local-v1",
+      },
+      result: {
+        ok: true,
+        providerId: "telegram-local",
+      },
     });
   });
 
