@@ -5,6 +5,11 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveChannelDmAllowFrom,
+  resolveChannelDmPolicy,
+} from "../channels/plugins/dm-access.js";
+import { getDoctorChannelCapabilities } from "../commands/doctor/channel-capabilities.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import {
@@ -316,15 +321,6 @@ function formatRawChannelConfigIssueMessage(message: string): string {
   return `invalid config: ${message}`;
 }
 
-function asAllowFromList(value: unknown): Array<string | number> | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  return value.filter(
-    (entry): entry is string | number => typeof entry === "string" || typeof entry === "number",
-  );
-}
-
 function buildDmPolicyDependencyWarning(params: {
   channelId: string;
   accountId?: string;
@@ -344,11 +340,20 @@ function buildDmPolicyDependencyWarning(params: {
   return { path: allowFromPath, message };
 }
 
+// Channel map keys that are not channels and must be skipped while scanning DM policy.
+const DM_POLICY_PSEUDO_CHANNEL_KEYS = new Set(["defaults", "modelByChannel", "tools"]);
+
 /**
  * Surface dmPolicy/allowFrom dependency problems generically for every channel that
- * uses the shared top-level dmPolicy/allowFrom contract. These configs parse fine but
- * drop every DM at runtime, so we warn (rather than reject) to stay consistent with
- * `security audit`/`doctor` and avoid breaking existing-but-usable configs on upgrade.
+ * exposes DM policy via the canonical top-level `dmPolicy`/`allowFrom` fields. These
+ * configs parse fine but drop every DM at runtime, so we warn (rather than reject) to
+ * stay consistent with `security audit`/`doctor` and avoid breaking existing-but-usable
+ * configs on upgrade.
+ *
+ * Resolution goes through the shared DM-access helpers so the warning matches the
+ * effective policy/allowFrom the runtime sees, including the legacy `dm.*` aliases and
+ * account->channel inheritance. `nestedOnly` channels (canonical fields under `dm.*`)
+ * are skipped because their config shape does not match this warning's top-level paths.
  */
 function collectChannelDmPolicyDependencyWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
@@ -356,15 +361,16 @@ function collectChannelDmPolicyDependencyWarnings(config: OpenClawConfig): Confi
   }
   const warnings: ConfigValidationIssue[] = [];
   for (const [channelId, channelValue] of Object.entries(config.channels)) {
-    if (channelId === "defaults" || channelId === "modelByChannel" || !isRecord(channelValue)) {
+    if (DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) || !isRecord(channelValue)) {
       continue;
     }
-    const channelPolicy =
-      typeof channelValue.dmPolicy === "string" ? channelValue.dmPolicy : undefined;
-    const channelAllowFrom = asAllowFromList(channelValue.allowFrom);
+    const mode = getDoctorChannelCapabilities(channelId).dmAllowFromMode;
+    if (mode === "nestedOnly") {
+      continue;
+    }
     const channelViolation = evaluateDmPolicyAllowFromDependency({
-      policy: channelPolicy,
-      allowFrom: channelAllowFrom,
+      policy: resolveChannelDmPolicy({ account: channelValue, mode }),
+      allowFrom: resolveChannelDmAllowFrom({ account: channelValue, mode }),
     });
     if (channelViolation) {
       warnings.push(buildDmPolicyDependencyWarning({ channelId, violation: channelViolation }));
@@ -377,8 +383,8 @@ function collectChannelDmPolicyDependencyWarnings(config: OpenClawConfig): Confi
         continue;
       }
       const accountViolation = evaluateDmPolicyAllowFromDependency({
-        policy: typeof accountValue.dmPolicy === "string" ? accountValue.dmPolicy : channelPolicy,
-        allowFrom: asAllowFromList(accountValue.allowFrom) ?? channelAllowFrom,
+        policy: resolveChannelDmPolicy({ account: accountValue, parent: channelValue, mode }),
+        allowFrom: resolveChannelDmAllowFrom({ account: accountValue, parent: channelValue, mode }),
       });
       if (accountViolation) {
         warnings.push(

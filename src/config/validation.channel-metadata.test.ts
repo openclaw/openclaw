@@ -393,6 +393,27 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
       false,
     );
   });
+
+  it('does not warn when dmPolicy="open" is satisfied by the legacy dm.allowFrom alias', () => {
+    // Runtime resolves allowFrom as canonical `allowFrom` ?? legacy `dm.allowFrom`, so a
+    // top-level-canonical channel (Discord) that keeps its wildcard under `dm.allowFrom`
+    // is valid and must not produce a false "all DMs dropped" warning.
+    const result = validateConfigObjectWithPlugins({
+      channels: {
+        discord: {
+          enabled: true,
+          token: "test-token",
+          dmPolicy: "open",
+          dm: { allowFrom: ["*"] },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((warning) => warning.path === "channels.discord.allowFrom")).toBe(
+      false,
+    );
+  });
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {
