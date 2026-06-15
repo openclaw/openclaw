@@ -14,11 +14,13 @@ export type KillProcessTreeOptions = {
  * Best-effort process-tree termination with graceful shutdown.
  * - Windows: use taskkill /T to include descendants. Sends SIGTERM-equivalent
  *   first (without /F), then force-kills if process survives.
- * - Unix: send SIGTERM to process group first, wait grace period, then SIGKILL.
+ * - Unix: send SIGTERM to the process, wait grace period, then SIGKILL.
  *
- * When the child was spawned with `detached: false`, pass `detached: false` to
- * skip the Unix `process.kill(-pid, ...)` group-kill. That avoids signaling the
- * gateway's own process group.
+ * By default, Unix kills use direct `process.kill(pid, ...)` only. Pass
+ * `detached: true` to opt into `process.kill(-pid, ...)` group-kill, which
+ * targets the entire process group. Group-kill is only safe when the child
+ * was spawned with `detached: true` and is its own process group leader;
+ * otherwise it signals the caller's own group — including the gateway.
  */
 export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): void {
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -35,7 +37,7 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
     return;
   }
 
-  const useGroupKill = opts?.detached !== false;
+  const useGroupKill = opts?.detached === true;
   if (opts?.force === true) {
     signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
     return;
@@ -68,7 +70,7 @@ export function signalProcessTree(
     return;
   }
 
-  signalProcessTreeUnix(pid, signal, opts?.detached !== false);
+  signalProcessTreeUnix(pid, signal, opts?.detached === true);
 }
 
 function normalizeGraceMs(value?: number): number {

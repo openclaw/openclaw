@@ -498,7 +498,7 @@ export async function runCommandWithTimeout(
             // Fall through to Node's direct child kill as a last resort.
           }
         }
-        terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+        terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS, detached: true });
         return;
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
