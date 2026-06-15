@@ -1,6 +1,7 @@
 /** Doctor repairs for legacy auth profile JSON stores and OpenAI provider-id migrations. */
 import fs from "node:fs";
 import path from "node:path";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
@@ -26,6 +27,7 @@ import type {
   AuthProfileState,
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
@@ -94,6 +96,86 @@ function extractProviderFromProfileId(profileId: string): string | undefined {
     return undefined;
   }
   return readNonEmptyString(profileId.slice(0, colon));
+}
+
+function extractProviderFromModelRef(modelRef: string): string | undefined {
+  const { model } = splitTrailingAuthProfile(modelRef);
+  const slash = model.indexOf("/");
+  if (slash <= 0) {
+    return undefined;
+  }
+  return readNonEmptyString(model.slice(0, slash));
+}
+
+function collectLegacyConfigAuthProfileProviderHints(
+  cfg: OpenClawConfig,
+): ReadonlyMap<string, string> {
+  const hints = new Map<string, string>();
+  const conflicted = new Set<string>();
+  const addHint = (profileId: string, provider: string): void => {
+    const existing = hints.get(profileId);
+    if (existing && existing !== provider) {
+      hints.delete(profileId);
+      conflicted.add(profileId);
+      return;
+    }
+    if (!conflicted.has(profileId)) {
+      hints.set(profileId, provider);
+    }
+  };
+  const addModelHints = (models: unknown): void => {
+    if (!isRecord(models)) {
+      return;
+    }
+    for (const [modelRef, rawModel] of Object.entries(models)) {
+      const provider = extractProviderFromModelRef(modelRef);
+      if (!provider || !isSafeLegacyProviderKey(provider) || !isRecord(rawModel)) {
+        continue;
+      }
+      const agentRuntime = isRecord(rawModel.agentRuntime) ? rawModel.agentRuntime : null;
+      const authProfileId = agentRuntime
+        ? readNonEmptyString(agentRuntime.authProfileId)
+        : undefined;
+      if (authProfileId) {
+        addHint(authProfileId, provider);
+      }
+    }
+  };
+
+  for (const { value } of collectConfiguredModelRefs(cfg)) {
+    const { profile } = splitTrailingAuthProfile(value);
+    const provider = extractProviderFromModelRef(value);
+    if (profile && provider && isSafeLegacyProviderKey(provider)) {
+      addHint(profile, provider);
+    }
+  }
+
+  const root: Record<string, unknown> = cfg;
+  const auth = isRecord(root.auth) ? root.auth : null;
+  const order = auth && isRecord(auth.order) ? auth.order : null;
+  if (order) {
+    for (const [provider, profileIds] of Object.entries(order)) {
+      if (!isSafeLegacyProviderKey(provider) || !Array.isArray(profileIds)) {
+        continue;
+      }
+      for (const profileId of profileIds) {
+        const normalizedProfileId = readNonEmptyString(profileId);
+        if (normalizedProfileId) {
+          addHint(normalizedProfileId, provider);
+        }
+      }
+    }
+  }
+  const agents = isRecord(root.agents) ? root.agents : null;
+  const defaults = agents && isRecord(agents.defaults) ? agents.defaults : null;
+  addModelHints(defaults?.models);
+  const agentList = agents && Array.isArray(agents.list) ? agents.list : [];
+  for (const agent of agentList) {
+    if (isRecord(agent)) {
+      addModelHints(agent.models);
+    }
+  }
+  return hints;
 }
 
 function inferLegacyCredentialType(
@@ -299,6 +381,41 @@ function collectAuthProfileStateProfileIds(state: AuthProfileState): string[] {
   return [...profileIds];
 }
 
+function inferLegacyConfigAuthProfileMode(
+  raw: Record<string, unknown>,
+): AuthProfileCredential["type"] | undefined {
+  const explicit = readNonEmptyString(raw.mode) ?? readNonEmptyString(raw.type);
+  if (explicit === "api_key" || explicit === "token" || explicit === "oauth") {
+    return explicit;
+  }
+  if (
+    readNonEmptyString(raw.key) ||
+    readNonEmptyString(raw.apiKey) ||
+    readNonEmptyString(raw["api_key"]) ||
+    coerceSecretRef(raw.keyRef) ||
+    coerceSecretRef(raw.key) ||
+    coerceSecretRef(raw.apiKey) ||
+    coerceSecretRef(raw["api_key"])
+  ) {
+    return "api_key";
+  }
+  if (
+    readNonEmptyString(raw.token) ||
+    coerceSecretRef(raw.tokenRef) ||
+    coerceSecretRef(raw.token)
+  ) {
+    return "token";
+  }
+  if (
+    readNonEmptyString(raw.access) &&
+    readNonEmptyString(raw.refresh) &&
+    typeof raw.expires === "number"
+  ) {
+    return "oauth";
+  }
+  return undefined;
+}
+
 function coerceLegacyConfigAuthProfileStore(cfg: OpenClawConfig): AuthProfileStore | null {
   const cfgRecord: Record<string, unknown> = cfg;
   const auth = isRecord(cfgRecord.auth) ? cfgRecord.auth : null;
@@ -306,22 +423,30 @@ function coerceLegacyConfigAuthProfileStore(cfg: OpenClawConfig): AuthProfileSto
   if (!profiles) {
     return null;
   }
+  const providerHints = collectLegacyConfigAuthProfileProviderHints(cfg);
   const store: RawAuthProfileImportStore = { version: AUTH_STORE_VERSION, profiles: {} };
   for (const [profileId, raw] of Object.entries(profiles)) {
     if (!isRecord(raw)) {
       continue;
     }
-    const mode = readNonEmptyString(raw.mode) ?? readNonEmptyString(raw.type);
+    const mode = inferLegacyConfigAuthProfileMode(raw);
     if (mode !== "api_key" && mode !== "token" && mode !== "oauth") {
       continue;
     }
-    const provider = readNonEmptyString(raw.provider) ?? extractProviderFromProfileId(profileId);
+    const provider =
+      readNonEmptyString(raw.provider) ??
+      extractProviderFromProfileId(profileId) ??
+      providerHints.get(profileId);
     if (!provider || !isSafeLegacyProviderKey(provider)) {
       continue;
     }
     const next: Record<string, unknown> = { ...raw, provider, mode };
     if (mode === "api_key") {
-      const keyRef = coerceSecretRef(raw.keyRef) ?? coerceSecretRef(raw.key);
+      const keyRef =
+        coerceSecretRef(raw.keyRef) ??
+        coerceSecretRef(raw.key) ??
+        coerceSecretRef(raw.apiKey) ??
+        coerceSecretRef(raw["api_key"]);
       const key =
         readNonEmptyString(raw.key) ??
         readNonEmptyString(raw.apiKey) ??
@@ -358,12 +483,6 @@ function coerceLegacyConfigAuthProfileStore(cfg: OpenClawConfig): AuthProfileSto
     }
     store.profiles[profileId] = next;
   }
-  if (auth && isRecord(auth.order)) {
-    const state = coerceAuthProfileState({ order: auth.order });
-    if (state.order) {
-      store.order = state.order;
-    }
-  }
   const canonicalStore = coercePersistedAuthProfileStore(store);
   return canonicalStore && Object.keys(canonicalStore.profiles).length > 0 ? canonicalStore : null;
 }
@@ -399,14 +518,39 @@ function stripImportedConfigAuthProfileCredentials(
   return changed;
 }
 
+function hasUsableAuthProfileCredential(credential: AuthProfileCredential): boolean {
+  if (credential.type === "api_key") {
+    return Boolean(readNonEmptyString(credential.key) || credential.keyRef);
+  }
+  if (credential.type === "token") {
+    return Boolean(readNonEmptyString(credential.token) || credential.tokenRef);
+  }
+  return (
+    Boolean(readNonEmptyString(credential.access)) &&
+    Boolean(readNonEmptyString(credential.refresh)) &&
+    typeof credential.expires === "number"
+  );
+}
+
 function mergeImportedAuthProfiles(params: {
   store: AuthProfileStore;
   profiles: AuthProfileStore["profiles"];
   existingProfileIds: ReadonlySet<string>;
+  replaceExistingWithoutCredential?: boolean;
 }): AuthProfileStore {
   const profiles = { ...params.store.profiles };
   for (const [profileId, credential] of Object.entries(params.profiles)) {
     if (!params.existingProfileIds.has(profileId)) {
+      profiles[profileId] = credential;
+      continue;
+    }
+    const existing = profiles[profileId];
+    if (
+      params.replaceExistingWithoutCredential &&
+      existing &&
+      !hasUsableAuthProfileCredential(existing) &&
+      hasUsableAuthProfileCredential(credential)
+    ) {
       profiles[profileId] = credential;
     }
   }
@@ -743,11 +887,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         ? maybeCanonicalStore
         : null;
       const configCanonicalStore =
-        configStore &&
-        isDefaultAgentCandidate(candidate, params.cfg, env) &&
-        !hasLegacyAuthProfileSource(candidate)
-          ? configStore
-          : null;
+        configStore && isDefaultAgentCandidate(candidate, params.cfg, env) ? configStore : null;
       const legacyStore = loadLegacyAuthProfileStore(candidate.agentDir);
       const rawState = fs.existsSync(candidate.statePath)
         ? loadJsonFile(candidate.statePath)
@@ -809,15 +949,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         for (const profileId of Object.keys(configCanonicalStore.profiles)) {
           importedProfileIds.add(profileId);
         }
+        // Config imports fill missing SQLite credentials only; when both exist,
+        // the canonical per-agent SQLite store wins over legacy config secrets.
         next = mergeImportedAuthProfiles({
           store: next,
           profiles: configCanonicalStore.profiles,
-          existingProfileIds,
-        });
-        next = mergeImportedAuthProfileState({
-          store: next,
-          state: coerceAuthProfileState(configCanonicalStore),
-          existingState,
+          existingProfileIds: new Set(Object.keys(next.profiles)),
+          replaceExistingWithoutCredential: true,
         });
       }
       if (hasAuthProfileState(state)) {
