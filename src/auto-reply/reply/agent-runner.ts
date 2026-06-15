@@ -469,7 +469,11 @@ function mergeExecutionTrace(params: {
   provider?: string;
   model?: string;
   runner: "embedded" | "cli";
+  exhausted?: boolean;
 }): TraceExecutionView | undefined {
+  const executionAttempts = params.exhausted
+    ? (params.executionTrace?.attempts ?? []).filter((attempt) => attempt.result !== "success")
+    : (params.executionTrace?.attempts ?? []);
   const attempts: TraceAttemptView[] = [
     ...(params.fallbackAttempts ?? []).map((attempt) =>
       Object.assign(
@@ -482,11 +486,14 @@ function mergeExecutionTrace(params: {
         typeof attempt.status === `number` ? { status: attempt.status } : {},
       ),
     ),
-    ...(params.executionTrace?.attempts ?? []),
+    ...executionAttempts,
   ];
-  const winnerProvider =
-    params.executionTrace?.winnerProvider ?? normalizeOptionalString(params.provider);
-  const winnerModel = params.executionTrace?.winnerModel ?? normalizeOptionalString(params.model);
+  const winnerProvider = params.exhausted
+    ? undefined
+    : (params.executionTrace?.winnerProvider ?? normalizeOptionalString(params.provider));
+  const winnerModel = params.exhausted
+    ? undefined
+    : (params.executionTrace?.winnerModel ?? normalizeOptionalString(params.model));
   if (
     winnerProvider &&
     winnerModel &&
@@ -1713,6 +1720,7 @@ export async function runReplyAgent(params: {
       runResult,
       fallbackProvider,
       fallbackModel,
+      fallbackExhausted,
       fallbackAttempts,
       directlySentBlockKeys,
       directlySentBlockPayloads,
@@ -1772,8 +1780,12 @@ export async function runReplyAgent(params: {
 
     let replyUsageState: PluginHookReplyUsageState | undefined;
     {
-      const winnerProvider = runResult.meta?.executionTrace?.winnerProvider ?? providerUsed;
-      const winnerModel = runResult.meta?.executionTrace?.winnerModel ?? modelUsed;
+      const winnerProvider = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerProvider ?? providerUsed);
+      const winnerModel = fallbackExhausted
+        ? undefined
+        : (runResult.meta?.executionTrace?.winnerModel ?? modelUsed);
       const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
       const compactions = runResult.meta?.agentMeta?.compactionCount;
       const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
@@ -1861,7 +1873,7 @@ export async function runReplyAgent(params: {
       state: fallbackStateEntry,
       cfg,
     });
-    if (fallbackTransition.stateChanged && !preserveUserFacingSessionState) {
+    if (fallbackTransition.stateChanged && !fallbackExhausted && !preserveUserFacingSessionState) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
         fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
@@ -1923,6 +1935,7 @@ export async function runReplyAgent(params: {
       promptTokens,
       usageIsContextSnapshot: usedCliProvider ? true : undefined,
       isHeartbeat,
+      preserveRuntimeModel: fallbackExhausted,
       preserveUserFacingSessionModelState: preserveUserFacingSessionState,
       modelUsed,
       providerUsed,
@@ -1983,7 +1996,11 @@ export async function runReplyAgent(params: {
     };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
-    if (!preserveUserFacingSessionState && fallbackTransition.fallbackTransitioned) {
+    if (
+      !fallbackExhausted &&
+      !preserveUserFacingSessionState &&
+      fallbackTransition.fallbackTransitioned
+    ) {
       emitAgentEvent({
         runId,
         sessionKey,
@@ -2016,7 +2033,11 @@ export async function runReplyAgent(params: {
         );
       }
     }
-    if (!preserveUserFacingSessionState && fallbackTransition.fallbackCleared) {
+    if (
+      !fallbackExhausted &&
+      !preserveUserFacingSessionState &&
+      fallbackTransition.fallbackCleared
+    ) {
       emitAgentEvent({
         runId,
         sessionKey,
@@ -2315,6 +2336,7 @@ export async function runReplyAgent(params: {
       provider: providerUsed,
       model: modelUsed,
       runner: isCliProvider(providerUsed, cfg) ? "cli" : "embedded",
+      exhausted: fallbackExhausted,
     });
     const requestShaping = {
       authMode:

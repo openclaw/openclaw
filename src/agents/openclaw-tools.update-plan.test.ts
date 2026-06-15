@@ -229,11 +229,8 @@ describe("openclaw-tools update_plan gating", () => {
   });
 
   it("auto-enables update_plan for unconfigured GPT-5 openai runs", () => {
-    // Criterion 1 of the GPT-5.4 parity gate ("no stalls after planning") is
-    // universal, not opt-in. Unspecified executionContract on a supported
-    // provider/model auto-activates strict-agentic so unconfigured installs
-    // get the same behavior as explicit opt-in. Explicit "default" still
-    // opts out (see "respects explicit default contract opt-out" below).
+    // Unspecified executionContract on a supported provider/model enables the
+    // structured plan tool by default. Explicit "default" still opts out.
     const cfg = {
       agents: {
         list: [{ id: "main" }],

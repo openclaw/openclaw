@@ -18,6 +18,9 @@ import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessageToolSendActionName } from "./embedded-agent-messaging.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { readToolResultDetails, readToolResultStatus } from "./tool-result-error.js";
+
+export { isToolResultError } from "./tool-result-error.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
@@ -318,21 +321,6 @@ export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   return TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolName(toolName));
 }
 
-function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const record = result as Record<string, unknown>;
-  return record.details && typeof record.details === "object" && !Array.isArray(record.details)
-    ? (record.details as Record<string, unknown>)
-    : undefined;
-}
-
-function readToolResultStatus(result: unknown): string | undefined {
-  const status = readToolResultDetails(result)?.status;
-  return normalizeOptionalLowercaseString(status);
-}
-
 function isExternalToolResult(result: unknown): boolean {
   const details = readToolResultDetails(result);
   if (!details) {
@@ -540,40 +528,6 @@ export function extractToolResultMediaArtifact(
 
 export function extractToolResultMediaPaths(result: unknown): string[] {
   return extractToolResultMediaArtifact(result)?.mediaUrls ?? [];
-}
-
-export function isToolResultError(result: unknown): boolean {
-  const details = readToolResultDetails(result);
-  const normalized = readToolResultStatus(result);
-  const explicitlySuccessful = details?.ok === true || details?.success === true;
-  if (details?.ok === false || details?.success === false) {
-    return true;
-  }
-  const hasFailureStatus =
-    normalized === "error" ||
-    normalized === "failed" ||
-    normalized === "failure" ||
-    normalized === "timeout" ||
-    normalized === "timed_out" ||
-    normalized === "blocked" ||
-    normalized === "denied" ||
-    normalized === "forbidden" ||
-    normalized === "unavailable" ||
-    normalized === "approval-unavailable" ||
-    normalized === "disabled" ||
-    normalized === "aborted" ||
-    normalized === "cancelled" ||
-    normalized === "canceled" ||
-    normalized === "killed" ||
-    normalized === "invalid";
-  if (hasFailureStatus && !explicitlySuccessful) {
-    return true;
-  }
-  if (details?.timedOut === true || Boolean(details?.error)) {
-    return true;
-  }
-  const exitCode = details?.exitCode;
-  return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
 }
 
 export function extractToolErrorCode(result: unknown): string | undefined {

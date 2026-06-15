@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { copyPluginToolMeta } from "../../plugins/tools.js";
+import { copyBeforeToolCallHookMarker } from "../agent-tools.before-tool-call.js";
 import { copyChannelAgentToolMeta } from "../channel-tools.js";
 import {
   logProviderToolSchemaDiagnostics,
@@ -18,6 +19,7 @@ import {
   filterProviderNormalizableTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
+import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -51,14 +53,16 @@ function runtimePlanToolContext(params: {
   };
 }
 
-// Normalizers may return cloned tool definitions. Copy plugin/channel metadata
-// so downstream inventory, delivery, and attribution still know the owner.
+// Normalizers may return cloned tool definitions. Preserve owner and private
+// execution metadata so downstream dispatch keeps the same policy and result contract.
 function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source === target) {
     return;
   }
   copyPluginToolMeta(source as never, target as never);
   copyChannelAgentToolMeta(source as never, target as never);
+  copyBeforeToolCallHookMarker(source as never, target as never);
+  copyToolTerminalPresentation(source as never, target as never);
 }
 
 // Duplicate names cannot be matched by map lookup alone, so same-index matches

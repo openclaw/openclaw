@@ -732,6 +732,7 @@ export async function runCodexAppServerAttempt(
       currentThreadId: params.currentThreadTs,
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
+      onToolOutcome: params.onToolOutcome,
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);

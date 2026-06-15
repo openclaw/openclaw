@@ -1353,6 +1353,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: false,
+          executionStarted: true,
           result,
         } as never);
         return result;
@@ -1362,6 +1363,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: true,
+          executionStarted: true,
           result: buildToolLifecycleErrorResult(error),
         } as never);
         throw error;

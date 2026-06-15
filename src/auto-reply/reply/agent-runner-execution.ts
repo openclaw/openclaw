@@ -40,6 +40,7 @@ import {
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
+import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { isFailoverError } from "../../agents/failover-error.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -312,6 +313,7 @@ export type AgentRunLoopResult =
       runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
+      fallbackExhausted?: true;
       fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCount: number;
@@ -1721,6 +1723,7 @@ export async function runAgentTurnWithFallback(params: {
   let attemptedRuntimeProvider = fallbackProvider;
   let attemptedRuntimeModel = fallbackModel;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
+  let fallbackExhausted = false;
   let transientHttpRetriesRemaining = 1;
   const consumeTransientHttpRetry = () => transientHttpRetriesRemaining-- > 0;
   let liveModelSwitchRetries = 0;
@@ -2064,6 +2067,7 @@ export async function runAgentTurnWithFallback(params: {
             }
             return classification;
           },
+          mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           run: async (provider, model, runOptions) => {
             attemptedRuntimeProvider = provider;
             attemptedRuntimeModel = model;
@@ -2773,6 +2777,7 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      fallbackExhausted = fallbackResult.outcome === "exhausted";
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: attempt.provider,
@@ -2783,10 +2788,12 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code || undefined,
           }))
         : [];
-      await clearRecoveredAutoFallbackPrimaryProbe({
-        provider: fallbackProvider,
-        model: fallbackModel,
-      });
+      if (!fallbackExhausted) {
+        await clearRecoveredAutoFallbackPrimaryProbe({
+          provider: fallbackProvider,
+          model: fallbackModel,
+        });
+      }
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Preserve the active session mapping and surface explicit guidance instead
@@ -3139,6 +3146,7 @@ export async function runAgentTurnWithFallback(params: {
     runResult,
     fallbackProvider,
     fallbackModel,
+    ...(fallbackExhausted ? { fallbackExhausted: true as const } : {}),
     fallbackAttempts,
     didLogHeartbeatStrip,
     autoCompactionCount,

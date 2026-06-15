@@ -2199,6 +2199,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        runId: params.runId,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
         cwd: effectiveCwd,
@@ -5241,7 +5242,9 @@ export async function runEmbeddedAttempt(
 
       const acceptedSessionSpawns = getAcceptedSessionSpawns();
       const observedReplayMetadata = buildAttemptReplayMetadata({
-        toolMetas: toolMetasNormalized,
+        // Structured start arguments already updated replayState for mutations and async work.
+        // Reclassifying by tool name would incorrectly mark read-only cron actions as unsafe.
+        toolMetas: [],
         didSendViaMessagingTool: didSendViaMessagingTool(),
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),

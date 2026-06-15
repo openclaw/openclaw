@@ -268,6 +268,9 @@ export {
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
+  finalizeToolTerminalPresentation,
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
@@ -278,6 +281,7 @@ export {
   type BeforeToolCallPolicyDiagnosticState,
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
+export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessAfterCompactionHook,

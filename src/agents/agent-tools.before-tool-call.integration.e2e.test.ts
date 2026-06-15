@@ -23,12 +23,15 @@ import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   testing as beforeToolCallTesting,
   consumeAdjustedParamsForToolCall,
+  finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { normalizeToolParameters } from "./agent-tools.schema.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { splitSdkTools } from "./embedded-agent-runner.js";
+import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
@@ -937,6 +940,104 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     );
 
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits a tool-authored terminal presentation with the recorded outcome", async () => {
+    const onToolOutcome = vi.fn();
+    const sourceTool = setToolTerminalPresentation(
+      {
+        name: "web_fetch",
+        description: "fetch",
+        parameters: {},
+        execute: vi.fn().mockResolvedValue({
+          content: [],
+          details: { status: 200 },
+        }),
+      } as any,
+      (_params, result) => ({
+        text: `Fetched with status ${(result.details as { status: number }).status}`,
+      }),
+    );
+    const tool = wrapToolWithBeforeToolCallHook(
+      normalizeToolParameters(sourceTool, { modelProvider: "openai" }),
+      {
+        sessionId: "session-terminal-presentation",
+        onToolOutcome,
+      },
+    );
+    await tool.execute("call-terminal-presentation", {
+      url: "https://example.com",
+    });
+
+    expect(onToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "web_fetch",
+        terminalPresentation: "Fetched with status 200",
+      }),
+    );
+  });
+
+  it("clears a parallel terminal presentation when a later finalized tool has none", async () => {
+    let terminalPresentation: string | undefined;
+    const onToolOutcome = vi.fn((outcome: { terminalPresentation?: string }) => {
+      terminalPresentation = outcome.terminalPresentation;
+    });
+    const hookContext = {
+      runId: "run-parallel-terminal-presentation",
+      sessionId: "session-parallel-terminal-presentation",
+      onToolOutcome,
+    };
+    const presentationTool = wrapToolWithBeforeToolCallHook(
+      setToolTerminalPresentation(
+        {
+          name: "web_fetch",
+          description: "fetch",
+          parameters: {},
+          execute: vi.fn().mockResolvedValue({
+            content: [],
+            details: { status: 200 },
+          }),
+        } as any,
+        () => ({ text: "Fetched with status 200" }),
+      ),
+      hookContext,
+    );
+    const plainTool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "read_file",
+        description: "read",
+        parameters: {},
+        execute: vi.fn().mockResolvedValue({
+          content: [],
+          details: { ok: true },
+        }),
+      } as any,
+      hookContext,
+    );
+
+    const presentationResult = await presentationTool.execute("call-presentation", {});
+    const plainResult = await plainTool.execute("call-plain", {});
+    finalizeToolTerminalPresentation({
+      toolCallId: "call-presentation",
+      runId: hookContext.runId,
+      result: presentationResult,
+      isError: false,
+    });
+    expect(terminalPresentation).toBe("Fetched with status 200");
+
+    finalizeToolTerminalPresentation({
+      toolCallId: "call-plain",
+      runId: hookContext.runId,
+      result: plainResult,
+      isError: false,
+    });
+    expect(terminalPresentation).toBeUndefined();
+    expect(onToolOutcome).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        presentationOnly: true,
+        terminalPresentation: undefined,
+      }),
+    );
   });
 
   it("passes hook context for unwrapped tool definitions", async () => {

@@ -4,8 +4,10 @@
  * normalized payload selected by hook processing.
  */
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
+export const preExecutionBlockedToolCallIds = new Set<string>();
 
 /** Clear adjusted tool parameters between isolated tests. */
 export function resetAdjustedParamsByToolCallIdForTests(): void {
   adjustedParamsByToolCallId.clear();
+  preExecutionBlockedToolCallIds.clear();
 }

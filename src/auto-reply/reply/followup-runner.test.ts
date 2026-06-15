@@ -306,7 +306,9 @@ async function persistRunSessionUsageForFollowupTest(
     return;
   }
   const preserveSessionModelState =
-    params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+    params.isHeartbeat === true ||
+    params.preserveRuntimeModel === true ||
+    params.preserveUserFacingSessionModelState === true;
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const nextEntry: SessionEntry = {
     ...entry,
@@ -315,7 +317,7 @@ async function persistRunSessionUsageForFollowupTest(
       ? entry.modelProvider
       : (params.providerUsed ?? entry.modelProvider),
     model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
-    contextTokens: preserveUserFacingRunState
+    contextTokens: preserveSessionModelState
       ? entry.contextTokens
       : (params.contextTokensUsed ?? entry.contextTokens),
     systemPromptReport: preserveUserFacingRunState

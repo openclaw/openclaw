@@ -11,6 +11,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -605,6 +606,7 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
+      let fallbackExhausted = false;
       const resolveFollowupCurrentMessageId = () =>
         run.inputProvenance?.kind === "internal_system" &&
         run.inputProvenance.sourceTool === "restart-sentinel"
@@ -819,6 +821,7 @@ export function createFollowupRunner(params: {
           },
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
+          mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           run: async (provider, model, runOptions) => {
             const suppressQueuedUserPersistenceForCandidate =
               (run.suppressNextUserMessagePersistence ?? false) ||
@@ -1156,6 +1159,7 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        fallbackExhausted = fallbackResult.outcome === "exhausted";
         if (isAgentRunRestartAbortReason(runAbortSignal.reason)) {
           throw runAbortSignal.reason;
         }
@@ -1177,10 +1181,12 @@ export function createFollowupRunner(params: {
           });
         }
         pendingDeferredCliTerminal = undefined;
-        await clearRecoveredAutoFallbackPrimaryProbe({
-          provider: fallbackProvider,
-          model: fallbackModel,
-        });
+        if (!fallbackExhausted) {
+          await clearRecoveredAutoFallbackPrimaryProbe({
+            provider: fallbackProvider,
+            model: fallbackModel,
+          });
+        }
       } catch (err) {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
@@ -1235,6 +1241,7 @@ export function createFollowupRunner(params: {
           compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
           promptTokens,
           isHeartbeat: opts?.isHeartbeat === true,
+          preserveRuntimeModel: fallbackExhausted,
           preserveUserFacingSessionModelState: preserveUserFacingSessionState,
           modelUsed,
           providerUsed,

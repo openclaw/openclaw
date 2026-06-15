@@ -1610,6 +1610,80 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("does not clear an auto-fallback pin for an exhausted preserved result", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+      fallbackAuthProfileId: "google:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = probe.provider;
+    followupRun.run.model = probe.model;
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    const sessionKey = "exhausted-primary-probe";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: probe.provider,
+      modelOverrideFallbackOriginModel: probe.model,
+      authProfileOverride: probe.fallbackAuthProfileId,
+      authProfileOverrideSource: "auto",
+    };
+    const activeSessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    state.runWithModelFallbackMock.mockResolvedValueOnce({
+      outcome: "exhausted",
+      result: {
+        payloads: [{ text: "Terminal tool summary", isError: true }],
+        meta: {
+          error: {
+            kind: "incomplete_turn",
+            message: "All fallback candidates ended incomplete",
+            fallbackSafe: true,
+            terminalPresentation: true,
+          },
+        },
+      },
+      provider: probe.provider,
+      model: probe.model,
+      attempts: [
+        { provider: probe.provider, model: probe.model, error: "incomplete" },
+        {
+          provider: probe.fallbackProvider,
+          model: probe.fallbackModel,
+          error: "incomplete",
+        },
+      ],
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => activeSessionStore[sessionKey],
+    });
+
+    expect(result).toMatchObject({
+      kind: "success",
+      fallbackExhausted: true,
+      fallbackProvider: probe.provider,
+      fallbackModel: probe.model,
+    });
+    expect(activeSessionStore[sessionKey]).toMatchObject({
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: probe.provider,
+      modelOverrideFallbackOriginModel: probe.model,
+    });
+  });
+
   it("keeps fallback auth available for later same-provider fallback models", async () => {
     const probe = {
       provider: "anthropic",
@@ -3384,18 +3458,15 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("classifies GPT-5 plan-only terminal results as fallback-eligible", async () => {
+  it("classifies structured harness plan-only terminal results as fallback-eligible", async () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [
-        {
-          text: "agent stopped after repeated plan-only turns without taking a concrete action.",
-          isError: true,
-        },
-      ],
-      meta: {},
+      payloads: [],
+      meta: {
+        agentHarnessResultClassification: "planning-only",
+      },
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const first = (await params.run("openai", "gpt-5.4")) as {

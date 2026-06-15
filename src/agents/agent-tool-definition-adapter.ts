@@ -402,6 +402,8 @@ export function toToolDefinitions(
                 return buildBlockedToolResult({
                   reason: hookOutcome.reason,
                   deniedReason: hookOutcome.deniedReason,
+                  toolCallId,
+                  runId: hookContext?.runId,
                 });
               }
               throw new Error(hookOutcome.reason);
@@ -433,6 +435,8 @@ export function toToolDefinitions(
             logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
             return buildBlockedToolResult({
               reason: err.reason,
+              toolCallId,
+              runId: hookContext?.runId,
             });
           }
           const described = describeToolExecutionError(err);
@@ -522,6 +526,8 @@ export function toClientToolDefinitions(
               return buildBlockedToolResult({
                 reason: outcome.reason,
                 deniedReason: outcome.deniedReason,
+                toolCallId,
+                runId: hookContext?.runId,
               });
             }
             throw new Error(outcome.reason);
