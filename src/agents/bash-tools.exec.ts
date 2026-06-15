@@ -42,14 +42,12 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { evaluateSecretAwareExecCommand } from "../secrets/platform-runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import { evaluateSecretAwareExecCommand } from "../secrets/platform-runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
