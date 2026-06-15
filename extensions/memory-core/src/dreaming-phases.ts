@@ -887,7 +887,9 @@ async function collectSessionIngestionBatches(params: {
         store: Record<string, { spawnedBy?: unknown }>,
       ): boolean {
         const cached = cronKeyCache.get(key);
-        if (cached !== undefined) return cached;
+        if (cached !== undefined) {
+          return cached;
+        }
         const entry = store[key];
         if (!entry) {
           cronKeyCache.set(key, false);
@@ -907,12 +909,18 @@ async function collectSessionIngestionBatches(params: {
         return false;
       }
       for (const sessionFile of sessionFiles) {
-        if (sessionFile.generatedByCronRun) continue;
+        if (sessionFile.generatedByCronRun) {
+          continue;
+        }
         const store = sessionStores.get(sessionFile.agentId);
-        if (!store) continue;
+        if (!store) {
+          continue;
+        }
         const fileName = path.basename(sessionFile.absolutePath);
         const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
-        if (!sessionId) continue;
+        if (!sessionId) {
+          continue;
+        }
         for (const [key, entry] of Object.entries(store)) {
           if (entry.sessionId === sessionId) {
             if (isCronDescendant(key, store)) {

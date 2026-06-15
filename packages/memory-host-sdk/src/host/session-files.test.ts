@@ -73,14 +73,16 @@ function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
 }
 
 describe("listSessionFilesForAgent", () => {
-  it("excludes reset and deleted archives from session file listing for dreaming corpus", async () => {
+  it("includes primary and usage-counted archive transcripts, excludes non-session files", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
 
-    const included = ["active.jsonl"];
-    const excluded = [
+    const included = [
+      "active.jsonl",
       "active.jsonl.reset.2026-02-16T22-26-33.000Z",
       "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    ];
+    const excluded = [
       "active.jsonl.bak.2026-02-16T22-28-33.000Z",
       "sessions.json",
       "notes.md",
@@ -843,7 +845,7 @@ describe("loadSessionTranscriptClassificationForSessionsDir", () => {
       path.join(sessionsDir, "sessions.json"),
       JSON.stringify({
         "agent:main:cron:job-1:run:run-1": {
-          sessionFile: sessionFile,
+          sessionFile,
         },
       }),
     );
@@ -863,7 +865,7 @@ describe("loadSessionTranscriptClassificationForSessionsDir", () => {
       path.join(sessionsDir, "sessions.json"),
       JSON.stringify({
         "agent:main:subagent:uuid-1": {
-          sessionFile: sessionFile,
+          sessionFile,
           parentTrigger: "cron",
         },
       }),
@@ -904,7 +906,9 @@ describe("loadSessionTranscriptClassificationForSessionsDir", () => {
     const cronSession = path.join(sessionsDir, "cron-run.jsonl");
     const sub1Session = path.join(sessionsDir, "sub-1.jsonl");
     const sub2Session = path.join(sessionsDir, "sub-2.jsonl");
-    for (const f of [cronSession, sub1Session, sub2Session]) fsSync.writeFileSync(f, "");
+    for (const f of [cronSession, sub1Session, sub2Session]) {
+      fsSync.writeFileSync(f, "");
+    }
 
     fsSync.writeFileSync(
       path.join(sessionsDir, "sessions.json"),
@@ -953,7 +957,7 @@ describe("loadSessionTranscriptClassificationForSessionsDir", () => {
       path.join(sessionsDir, "sessions.json"),
       JSON.stringify({
         "agent:main:subagent:uuid-a": {
-          sessionFile: sessionFile,
+          sessionFile,
           spawnedBy: "agent:main:subagent:uuid-b",
         },
         "agent:main:subagent:uuid-b": {
@@ -986,7 +990,7 @@ describe("loadSessionTranscriptClassificationForSessionsDir", () => {
       path.join(sessionsDir, "sessions.json"),
       JSON.stringify({
         "agent:main:dreaming-narrative-run-42": {
-          sessionFile: sessionFile,
+          sessionFile,
         },
       }),
     );
