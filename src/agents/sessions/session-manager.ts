@@ -1368,6 +1368,9 @@ export class SessionManager {
   private labelTimestampsById: Map<string, string> = new Map();
   private leafId: string | null = null;
   private appendParentId: string | null = null;
+  // Owned writes can publish in separate callbacks while one prompt is released.
+  // Ordinary appends/navigation clear this cursor before the next prompt.
+  private promptReleasedSideBranchParentId: string | null | undefined;
   private recoveredCorruptHeader = false;
   private sessionFileSnapshot: SessionFileSnapshot | undefined;
 
@@ -1481,6 +1484,7 @@ export class SessionManager {
     this.labelsById.clear();
     this.leafId = null;
     this.appendParentId = null;
+    this.promptReleasedSideBranchParentId = undefined;
     this.flushed = false;
 
     if (this.shouldPersist) {
@@ -1490,6 +1494,13 @@ export class SessionManager {
     return this.sessionFile;
   }
 
+  private resolveOpaqueLeafTargetId(targetId: string | null): string | null {
+    if (targetId === null || this.byId.has(targetId)) {
+      return targetId;
+    }
+    return this.resolveCanonicalParentId(targetId);
+  }
+
   private buildIndex(): void {
     this.byId.clear();
     this.opaqueParentsById.clear();
@@ -1497,18 +1508,14 @@ export class SessionManager {
     this.labelTimestampsById.clear();
     this.leafId = null;
     this.appendParentId = null;
+    this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
     for (let index = 0; index <= this.fileEntries.length; index += 1) {
       while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
         const opaqueRecord = this.opaqueFileEntries[opaqueIndex]?.record;
         const leafEntry = parseOpaqueLeafEntry(opaqueRecord);
         if (leafEntry) {
-          const canonicalLeafId =
-            leafEntry.targetId === null
-              ? null
-              : this.byId.has(leafEntry.targetId)
-                ? leafEntry.targetId
-                : this.resolveCanonicalParentId(leafEntry.targetId);
+          const canonicalLeafId = this.resolveOpaqueLeafTargetId(leafEntry.targetId);
           this.opaqueParentsById.set(leafEntry.id, canonicalLeafId);
           this.leafId = canonicalLeafId;
           this.appendParentId = canonicalLeafId;
@@ -1673,6 +1680,7 @@ export class SessionManager {
     this.opaqueFileEntries = [];
     this.opaqueParentsById.clear();
     this.appendParentId = null;
+    this.promptReleasedSideBranchParentId = undefined;
   }
 
   private writeFullFile(): string {
@@ -1832,16 +1840,29 @@ export class SessionManager {
    * moving the prepared reply branch or adding delivery mirrors to its context.
    */
   mergePromptReleasedSessionEntries(entries: readonly PromptReleasedSessionEntry[]): void {
-    let sideBranchParentId = this.leafId;
+    let sideBranchParentId =
+      this.promptReleasedSideBranchParentId === undefined
+        ? this.leafId
+        : this.promptReleasedSideBranchParentId;
     for (const sourceEntry of entries) {
       if (sourceEntry.type === "prompt_released_opaque") {
         this.opaqueFileEntries.push({
           index: this.fileEntries.length,
           record: sourceEntry.record,
         });
+        const leafEntry = parseOpaqueLeafEntry(sourceEntry.record);
+        if (leafEntry) {
+          this.opaqueParentsById.set(
+            leafEntry.id,
+            this.resolveOpaqueLeafTargetId(leafEntry.targetId),
+          );
+          sideBranchParentId = leafEntry.targetId;
+          continue;
+        }
         const link = parseParentLinkedOpaqueEntry(sourceEntry.record);
         if (link) {
           this.opaqueParentsById.set(link.id, link.parentId);
+          sideBranchParentId = link.id;
         }
         continue;
       }
@@ -1868,6 +1889,7 @@ export class SessionManager {
         }
       }
     }
+    this.promptReleasedSideBranchParentId = sideBranchParentId;
     if (this.sessionFile) {
       this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
     }
@@ -1878,6 +1900,7 @@ export class SessionManager {
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
     this.appendParentId = entry.id;
+    this.promptReleasedSideBranchParentId = undefined;
     this.persist(entry, options);
   }
 
@@ -2208,6 +2231,7 @@ export class SessionManager {
     }
     this.leafId = branchTargetId;
     this.appendParentId = branchTargetId;
+    this.promptReleasedSideBranchParentId = undefined;
   }
 
   /**
@@ -2218,6 +2242,7 @@ export class SessionManager {
   resetLeaf(): void {
     this.leafId = null;
     this.appendParentId = null;
+    this.promptReleasedSideBranchParentId = undefined;
   }
 
   /**

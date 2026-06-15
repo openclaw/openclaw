@@ -1662,6 +1662,114 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("keeps merged messages downstream of parent-linked opaque events", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const baseAnswerId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const metadata = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: baseAnswerId,
+      payload: { source: "plugin" },
+    };
+    const deliveryEntry = {
+      type: "message" as const,
+      id: "plugin-delivery",
+      parentId: baseAnswerId,
+      timestamp: "2026-06-04T00:00:03.000Z",
+      message: buildAssistantMessage("plugin delivery"),
+    };
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      { type: "prompt_released_opaque", record: metadata },
+    ]);
+    sessionManager.mergePromptReleasedSessionEntries([deliveryEntry]);
+    (
+      sessionManager as unknown as {
+        rewriteFile: () => void;
+      }
+    ).rewriteFile();
+
+    const sessionFile = sessionManager.getSessionFile();
+    expect(sessionFile).toBeDefined();
+    const records = (await fs.readFile(sessionFile!, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+    expect(records.find((record) => record.id === deliveryEntry.id)?.parentId).toBe(metadata.id);
+
+    const reopened = SessionManager.open(sessionFile!, dir, dir);
+    expect(reopened.getBranch(deliveryEntry.id).map((entry) => entry.id)).toEqual([
+      expect.any(String),
+      baseAnswerId,
+      deliveryEntry.id,
+    ]);
+    const branchedFile = reopened.createBranchedSession(deliveryEntry.id);
+    expect(branchedFile).toBeDefined();
+    const branchedRecords = (await fs.readFile(branchedFile!, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+    expect(branchedRecords).toContainEqual(metadata);
+    expect(branchedRecords.find((record) => record.id === deliveryEntry.id)?.parentId).toBe(
+      metadata.id,
+    );
+  });
+
+  it("applies merged leaf controls across separate callbacks", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const baseAnswerId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const metadata = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: baseAnswerId,
+      payload: { source: "plugin" },
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "plugin-leaf",
+      parentId: metadata.id,
+      timestamp: "2026-06-04T00:00:03.000Z",
+      targetId: baseAnswerId,
+    };
+    const deliveryEntry = {
+      type: "message" as const,
+      id: "plugin-delivery",
+      parentId: leafEntry.id,
+      timestamp: "2026-06-04T00:00:04.000Z",
+      message: buildAssistantMessage("plugin delivery"),
+    };
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      { type: "prompt_released_opaque", record: metadata },
+    ]);
+    sessionManager.mergePromptReleasedSessionEntries([
+      { type: "prompt_released_opaque", record: leafEntry },
+    ]);
+    sessionManager.mergePromptReleasedSessionEntries([deliveryEntry]);
+    (
+      sessionManager as unknown as {
+        rewriteFile: () => void;
+      }
+    ).rewriteFile();
+
+    const sessionFile = sessionManager.getSessionFile();
+    expect(sessionFile).toBeDefined();
+    const records = (await fs.readFile(sessionFile!, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
+    expect(records.find((record) => record.id === deliveryEntry.id)?.parentId).toBe(baseAnswerId);
+    expect(
+      SessionManager.open(sessionFile!, dir, dir)
+        .getBranch(deliveryEntry.id)
+        .map((entry) => entry.id),
+    ).toEqual([expect.any(String), baseAnswerId, deliveryEntry.id]);
+  });
+
   it("removes leaf controls that target regenerated labels when branching", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
