@@ -20,16 +20,17 @@ import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } 
 import {
   coerceNodeInvokePayload,
   type SkillBinsProvider,
+  buildNodeEventParams,
   buildNodeInvokeResultParams,
   handleInvoke,
 } from "./invoke.js";
+import { registerNodeGatewayEventEmitter } from "./node-event-emitter.js";
 import {
   ensureNodeHostPluginRegistry,
   listRegisteredNodeHostCapsAndCommands,
 } from "./plugin-node-host.js";
 
-export { buildNodeInvokeResultParams };
-export { buildNodeEventParams } from "./invoke.js";
+export { buildNodeInvokeResultParams, buildNodeEventParams };
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -306,9 +307,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       handleNodeHostReconnectPaused(info);
     },
     onClose: (code, reason) => {
+      // Stop offering node-originated event emission once the authenticated
+      // connection is gone, so plugins fail loudly instead of dropping a turn.
+      registerNodeGatewayEventEmitter(null);
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
   });
+
+  // Let node-host plugins (e.g. the browser extension bridge) originate
+  // authenticated node→gateway events (such as agent.request) over this node's
+  // own paired connection, so the gateway attributes the turn to this node.
+  registerNodeGatewayEventEmitter((event, payload) =>
+    client.request("node.event", buildNodeEventParams(event, payload)).then(() => undefined),
+  );
 
   const skillBins = new SkillBinsCache(async () => {
     const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});

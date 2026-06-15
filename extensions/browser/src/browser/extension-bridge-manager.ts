@@ -15,6 +15,7 @@ export async function ensureExtensionBridge(opts: {
   port?: number;
   identity?: { nodeId?: string; nodeIntegrated?: boolean };
   onWarn?: (m: string) => void;
+  onAgentRequest?: (payload: { message: string; sessionKey?: string }) => Promise<void>;
 }): Promise<ExtensionBridgeHandle> {
   if (handle) return handle;
   if (starting) return starting;
@@ -23,6 +24,7 @@ export async function ensureExtensionBridge(opts: {
     port,
     identity: opts.identity,
     logger: { info: (m) => opts.onWarn?.(m), warn: (m) => opts.onWarn?.(m) },
+    onAgentRequest: opts.onAgentRequest,
   })
     .then((h) => {
       handle = h;

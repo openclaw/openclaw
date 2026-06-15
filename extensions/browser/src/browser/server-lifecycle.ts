@@ -1,6 +1,7 @@
 /**
  * Browser server lifecycle helpers for relay setup and profile shutdown.
  */
+import { emitNodeGatewayEvent } from "openclaw/plugin-sdk/gateway-runtime";
 import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { ensureExtensionBridge, stopExtensionBridge } from "./extension-bridge-manager.js";
@@ -23,7 +24,14 @@ export async function ensureExtensionRelayForProfiles(params: {
   const needsBridge = Object.values(profiles).some((p) => p?.driver === "extension");
   if (!needsBridge) return;
   try {
-    await ensureExtensionBridge({ onWarn: params.onWarn });
+    await ensureExtensionBridge({
+      onWarn: params.onWarn,
+      // Originate node-attributed turns when this process is a paired node-host.
+      // emitNodeGatewayEvent throws if no node connection is registered (e.g. a
+      // gateway-only deployment), which the bridge surfaces to the side panel so
+      // it can fall back to a direct gateway turn.
+      onAgentRequest: (payload) => emitNodeGatewayEvent("agent.request", payload),
+    });
   } catch (err) {
     params.onWarn(`extension bridge failed to start: ${String(err)}`);
   }

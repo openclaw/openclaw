@@ -93,6 +93,13 @@ export function startExtensionBridgeServer(opts: {
   host?: string;
   identity?: BridgeIdentity;
   logger?: { info?: (m: string) => void; warn?: (m: string) => void };
+  /**
+   * Originate a node-attributed agent turn from a side-panel message. Wired to
+   * the node-host's authenticated event emitter so the gateway records this
+   * node as the turn's host (enabling gateway.tools.byNode). Absent when the
+   * bridge is not running inside a paired node-host.
+   */
+  onAgentRequest?: (payload: { message: string; sessionKey?: string }) => Promise<void>;
 }): Promise<ExtensionBridgeHandle> {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port;
@@ -285,6 +292,24 @@ export function startExtensionBridgeServer(opts: {
       if (m.type === "req" && m.method === "connect") {
         ws.send(JSON.stringify({ type: "res", id: m.id, ok: true }));
         log("extension handshake ok");
+        return;
+      }
+      // Side-panel turn → originate a node-attributed agent.request so the
+      // gateway gates this turn's tools by the hosting node (gateway.tools.byNode).
+      // The reply streams back over the side panel's own gateway subscription on
+      // the same sessionKey, so the bridge only acks acceptance here.
+      if (m.type === "req" && m.method === "agent.request") {
+        const params = (m.params || {}) as { message?: unknown; sessionKey?: unknown };
+        const message = typeof params.message === "string" ? params.message : "";
+        const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : undefined;
+        const failTurn = (error: string) =>
+          ws.send(JSON.stringify({ type: "res", id: m.id, ok: false, error }));
+        if (!message.trim()) return failTurn("message required");
+        if (!opts.onAgentRequest) return failTurn("node agent routing unavailable");
+        opts
+          .onAgentRequest({ message, sessionKey })
+          .then(() => ws.send(JSON.stringify({ type: "res", id: m.id, ok: true })))
+          .catch((e: unknown) => failTurn(String((e as Error)?.message ?? e)));
         return;
       }
       if (m.method === "pong") return;
