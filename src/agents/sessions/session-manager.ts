@@ -483,7 +483,6 @@ function rememberSessionEntries(
   filePath: string,
   snapshot: SessionFileSnapshot,
   entries: FileEntry[],
-  copyMutableEntries = false,
 ): FileEntry[] {
   if (!hasReadableSessionHeader(entries)) {
     sessionEntriesCache.delete(filePath);
@@ -507,7 +506,7 @@ function rememberSessionEntries(
     if (Object.isFrozen(entry)) {
       return entry;
     }
-    return freezeFileEntry(copyMutableEntries ? cloneFileEntry(entry) : entry);
+    return freezeFileEntry(entry);
   });
   const cached: CachedSessionEntries = {
     snapshot,
@@ -586,7 +585,7 @@ function rememberWrittenSessionEntries(
     sessionEntriesCache.delete(resolvedPath);
     return afterReadSnapshot;
   }
-  rememberSessionEntries(resolvedPath, afterReadSnapshot, entries, true);
+  rememberSessionEntries(resolvedPath, afterReadSnapshot, parseJsonlEntries(content));
   return afterReadSnapshot;
 }
 
@@ -631,8 +630,13 @@ function rememberAppendedSessionEntry(
     sessionEntriesCache.delete(resolvedPath);
     return snapshot;
   }
+  if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(resolvedPath);
+    return snapshot;
+  }
 
-  cached.entries.push(freezeFileEntry(cloneFileEntry(entry)));
+  const persistedEntry = JSON.parse(serializeJsonlEntry(entry)) as FileEntry;
+  cached.entries.push(freezeFileEntry(persistedEntry));
   cached.snapshot = snapshot;
   sessionEntriesCache.delete(resolvedPath);
   sessionEntriesCache.set(resolvedPath, cached);

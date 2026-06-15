@@ -259,6 +259,71 @@ describe("SessionManager.open", () => {
     }
   });
 
+  it("caches the persisted JSON shape for owned appends", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: buildAssistantMessage("message 1"),
+    };
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(assistantEntry)}\n`,
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        withSessionWriteLock: async (run) => await run(),
+      },
+      async () => {
+        sessionManager.appendCustomEntry("json-shape", {
+          date: new Date("2026-06-15T00:00:00.000Z"),
+          dropped: () => "not persisted",
+          nan: Number.NaN,
+        });
+      },
+    );
+
+    const warmEntry = SessionManager.open(sessionFile, dir, dir)
+      .getEntries()
+      .find((entry) => entry.type === "custom");
+    const freshEntry = loadEntriesFromFile(sessionFile).find((entry) => entry.type === "custom");
+    expect(warmEntry).toEqual(freshEntry);
+    expect(warmEntry).toMatchObject({
+      data: {
+        date: "2026-06-15T00:00:00.000Z",
+        nan: null,
+      },
+    });
+    expect((warmEntry as { data?: Record<string, unknown> }).data).not.toHaveProperty("dropped");
+  });
+
+  it("caches the persisted JSON shape after a deferred full write", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    sessionManager.appendCustomEntry("json-shape", {
+      kept: "value",
+      dropped: () => "not persisted",
+    });
+
+    expect(() => {
+      sessionManager.appendMessage(buildAssistantMessage("first assistant"));
+    }).not.toThrow();
+
+    const warmEntry = SessionManager.open(sessionFile, dir, dir)
+      .getEntries()
+      .find((entry) => entry.type === "custom");
+    expect(warmEntry).toMatchObject({ data: { kept: "value" } });
+    expect((warmEntry as { data?: Record<string, unknown> }).data).not.toHaveProperty("dropped");
+  });
+
   it("keeps the exported file loader mutable and separate from warm SessionManager entries", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
@@ -543,8 +608,9 @@ describe("SessionManager.open", () => {
         expect.objectContaining({ type: "session", id: "original-session", cwd: dir }),
       );
 
-      // Header normalization stayed in memory; the warm hits never re-parsed.
-      expect(parseCount).toBe(0);
+      // The warm hits stayed parse-free. The required header rewrite parses
+      // its two persisted lines once so the cache matches JSON round-tripping.
+      expect(parseCount).toBe(2);
     } finally {
       JSON.parse = originalParse;
     }
