@@ -72,6 +72,11 @@ export function collectConfiguredModelRefs(
         `${path}.compaction.memoryFlush.model`,
         isRecord(agent.compaction.memoryFlush) ? agent.compaction.memoryFlush.model : undefined,
       );
+      if (Array.isArray(agent.compaction.fallbacks)) {
+        for (const [index, entry] of agent.compaction.fallbacks.entries()) {
+          pushModelRef(`${path}.compaction.fallbacks.${index}`, entry);
+        }
+      }
     }
     if (isRecord(agent.models)) {
       for (const modelRef of Object.keys(agent.models)) {

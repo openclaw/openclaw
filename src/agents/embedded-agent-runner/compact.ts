@@ -438,7 +438,12 @@ function hasCompactionModelFallbackCandidates(params: CompactEmbeddedAgentSessio
  * fallback chain.
  */
 function hasExplicitCompactionFallbacks(params: CompactEmbeddedAgentSessionParams): boolean {
-  const explicit = resolveCompactionFallbacksOverride(params);
+  // Check ONLY the raw compaction.fallbacks config value, NOT through
+  // resolveCompactionFallbacksOverride, which also considers runtime overrides
+  // and the chat model's fallback chain. For explicit compaction.model, only
+  // explicit compaction.fallbacks should trigger the fallback path — otherwise
+  // the documented exact-model behavior is silently changed.
+  const explicit = params.config?.agents?.defaults?.compaction?.fallbacks;
   return Array.isArray(explicit) && explicit.length > 0;
 }
 
