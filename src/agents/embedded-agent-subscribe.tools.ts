@@ -633,11 +633,11 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
 }
 
 function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
-  const toRaw = readStringValue(args.to);
-  if (toRaw) {
-    return toRaw;
-  }
-  return readStringValue(args.target);
+  return (
+    normalizeOptionalString(args.target) ??
+    normalizeOptionalString(args.to) ??
+    normalizeOptionalString(args.channelId)
+  );
 }
 
 function resolveMessagingToolThreadEvidence(params: {
@@ -744,7 +744,7 @@ export function extractMessagingToolSend(
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
-    const pluginExtractionArgs = readStringValue(args.to) ? args : { ...args, to: toRaw };
+    const pluginExtractionArgs = { ...args, to: toRaw };
     const pluginExtracted = providerId
       ? getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args: pluginExtractionArgs })
       : null;
