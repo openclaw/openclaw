@@ -1915,10 +1915,15 @@ describe("timestampOptsFromConfig", () => {
   });
 
   it("keeps timestamp injection enabled for upgraded configs unless explicitly disabled", () => {
+    const upgradedConfigWithExistingDefaults = {
+      agents: { defaults: { userTimezone: "America/Chicago" } },
+    } as OpenClawConfig;
+
     // Existing user configs do not store envelopeTimestamp; omission remains
-    // the shipped default, so no config migration is needed for this broadened
-    // use of the setting.
+    // the shipped default even when other agent defaults are present, so no
+    // config migration is needed for this broadened use of the setting.
     expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
+    expect(timestampOptsFromConfig(upgradedConfigWithExistingDefaults).includeTimestamp).toBe(true);
     expect(
       timestampOptsFromConfig({
         agents: { defaults: { envelopeTimestamp: "off" } },
