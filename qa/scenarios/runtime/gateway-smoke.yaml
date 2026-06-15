@@ -1,0 +1,29 @@
+title: Gateway smoke script coverage
+
+scenario:
+  id: gateway-smoke
+  surface: gateway-runtime
+  coverage:
+    primary:
+      - health-apis
+    secondary:
+      - websocket-transport
+      - connect-request
+      - hello-ok-snapshot
+  objective: Link the gateway smoke script test to QA Lab evidence for loopback WebSocket connect and health checks.
+  successCriteria:
+    - The script smoke passes against a loopback Gateway WebSocket using the real client.
+    - The smoke sends the expected operator connect request before health.
+    - Failed connect and health responses close the WebSocket client and report bounded errors.
+    - Unpaired iOS-shaped smoke clients do not call scoped chat history.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/gateway/index.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - scripts/dev/gateway-smoke.ts
+    - test/scripts/gateway-smoke.test.ts
+  execution:
+    kind: vitest
+    path: test/scripts/gateway-smoke.test.ts
+    summary: Vitest coverage for the gateway smoke connect and health script.
