@@ -1724,7 +1724,8 @@ export function resolveAllowAlwaysPersistenceDecision(params: {
     }
   }
 
-  return { kind: "one-shot", reasons: [...new Set([...reasons, "no-reusable-pattern"])] };
+  reasons.add("no-reusable-pattern");
+  return { kind: "one-shot", reasons: [...reasons] };
 }
 
 export function persistAllowAlwaysDecision(params: {
