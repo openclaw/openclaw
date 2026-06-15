@@ -22,6 +22,8 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { resolveApiKeyForProfile as resolveApiKeyForProfileImpl } from "../auth-profiles/oauth.js";
+import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
@@ -263,6 +265,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
+      resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
@@ -319,6 +322,92 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         preparedExecution: null,
       }),
     ).toBe(false);
+  });
+
+  it("passes raw refreshed OAuth profile fields to profile-owned CLI preparation", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "google-gemini-cli:user@example.test";
+    const prepareExecution = vi.fn(async () => ({
+      env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
+    }));
+    const resolveApiKeyForProfile = vi.fn(async () => ({
+      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+      provider: "google-gemini-cli",
+      email: "user@example.test",
+    }));
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "raw-access-token",
+            refresh: "raw-refresh-token",
+            expires: 1_800_000_000_000,
+            projectId: "project-1",
+            email: "user@example.test",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: false,
+          authEpochMode: "profile-only",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        timeoutMs: 1_000,
+        runId: "run-test-gemini-oauth-raw-profile-fields",
+        authProfileId,
+        config: {},
+      });
+
+      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileId,
+          authCredential: expect.objectContaining({
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "raw-access-token",
+            refresh: "raw-refresh-token",
+            expires: 1_800_000_000_000,
+          }),
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {

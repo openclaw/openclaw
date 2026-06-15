@@ -106,6 +106,7 @@ const prepareDeps = {
   prepareClaudeCliSkillsPlugin,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
+  resolveApiKeyForProfile,
 };
 
 async function resolveCliSkillsPrompt(params: {
@@ -314,7 +315,7 @@ export async function prepareCliRunContext(
         profileId: authProfileId,
       }),
     });
-    const resolvedAuth = await resolveApiKeyForProfile({
+    const resolvedAuth = await prepareDeps.resolveApiKeyForProfile({
       cfg: params.config,
       store: writableAuthStore,
       profileId: authProfileId,
@@ -329,12 +330,13 @@ export async function prepareCliRunContext(
     });
     authCredential = authStore.profiles[authProfileId];
     if (resolvedAuth && authCredential) {
-      authCredential =
-        authCredential.type === "api_key"
-          ? { ...authCredential, key: resolvedAuth.apiKey }
-          : authCredential.type === "token"
-            ? { ...authCredential, token: resolvedAuth.apiKey }
-            : { ...authCredential, access: resolvedAuth.apiKey };
+      // Apply resolved strings only to static credentials with secret refs.
+      // OAuth CLI bridges need raw refreshed fields from the reloaded store.
+      if (authCredential.type === "api_key") {
+        authCredential = { ...authCredential, key: resolvedAuth.apiKey };
+      } else if (authCredential.type === "token") {
+        authCredential = { ...authCredential, token: resolvedAuth.apiKey };
+      }
     }
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";

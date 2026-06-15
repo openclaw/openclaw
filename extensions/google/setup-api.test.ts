@@ -23,8 +23,10 @@ type GeminiPrepareContext = Parameters<
 };
 
 function buildGeminiOAuthPrepareContext(workspaceDir: string): GeminiPrepareContext {
+  const agentDir = path.join(workspaceDir, "agent");
   return {
     workspaceDir,
+    agentDir,
     provider: "google-gemini-cli",
     modelId: "gemini-3.1-pro-preview",
     authProfileId: "google-gemini-cli:user@example.test",
@@ -42,8 +44,10 @@ function buildGeminiOAuthPrepareContext(workspaceDir: string): GeminiPrepareCont
 }
 
 function buildGeminiApiKeyPrepareContext(workspaceDir: string): GeminiPrepareContext {
+  const agentDir = path.join(workspaceDir, "agent");
   return {
     workspaceDir,
+    agentDir,
     provider: "google-gemini-cli",
     modelId: "gemini-3.1-flash-lite",
     authProfileId: "google-gemini-cli:api-key",
@@ -85,20 +89,20 @@ describe("google setup entry", () => {
 });
 
 describe("google gemini cli backend auth bridge", () => {
-  it("materializes selected OpenClaw OAuth credentials into an isolated Gemini CLI home", async () => {
+  it("materializes selected OpenClaw OAuth credentials into a persistent profile-scoped Gemini CLI home", async () => {
     const backend = buildGoogleGeminiCliBackend();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
-    let prepared:
-      | Awaited<ReturnType<NonNullable<typeof backend.prepareExecution>>>
-      | null
-      | undefined;
     let home: string | undefined;
 
     try {
-      prepared = await backend.prepareExecution?.(buildGeminiOAuthPrepareContext(workspaceDir));
+      const context = buildGeminiOAuthPrepareContext(workspaceDir);
+      const prepared = await backend.prepareExecution?.(context);
 
       home = prepared?.env?.GEMINI_CLI_HOME;
       expect(home).toBeTruthy();
+      expect(prepared?.env?.GEMINI_FORCE_FILE_STORAGE).toBe("true");
+      expect(home).toContain(path.join(context.agentDir, "cli-runtimes", "google-gemini-cli"));
+      expect(home).not.toContain("user@example.test");
 
       const raw = await fs.readFile(path.join(home ?? "", ".gemini", "oauth_creds.json"), "utf8");
       expect(JSON.parse(raw)).toEqual({
@@ -108,29 +112,54 @@ describe("google gemini cli backend auth bridge", () => {
         expiry_date: 1_800_000_000_000,
         token_type: "Bearer",
       });
+      const nestedSettingsRaw = await fs.readFile(
+        path.join(home ?? "", ".gemini", "settings.json"),
+        "utf8",
+      );
+      const rootSettingsRaw = await fs.readFile(path.join(home ?? "", "settings.json"), "utf8");
+      expect(JSON.parse(nestedSettingsRaw)).toEqual({
+        security: { auth: { selectedType: "oauth-personal" } },
+      });
+      expect(JSON.parse(rootSettingsRaw)).toEqual(JSON.parse(nestedSettingsRaw));
+
+      const sessionMarker = path.join(home ?? "", ".gemini", "session-state.json");
+      await fs.writeFile(sessionMarker, '{"keep":true}\n', "utf8");
+      const cachedCredentialsPath = path.join(home ?? "", ".gemini", "gemini-credentials.json");
+      await fs.writeFile(cachedCredentialsPath, "stale-cache", "utf8");
+
+      const preparedAgain = await backend.prepareExecution?.(context);
+      expect(preparedAgain?.env?.GEMINI_CLI_HOME).toBe(home);
+      await expect(fs.access(sessionMarker)).resolves.toBeUndefined();
+      await expect(fs.access(cachedCredentialsPath)).rejects.toThrow();
     } finally {
-      await prepared?.cleanup?.();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
-
-    await expect(fs.access(home ?? "")).rejects.toThrow();
   });
 
-  it("prepares selected Gemini API-key credentials without writing OAuth state", async () => {
+  it("prepares selected Gemini API-key credentials and removes stale OAuth state for that profile home", async () => {
     const backend = buildGoogleGeminiCliBackend();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
-    let prepared:
-      | Awaited<ReturnType<NonNullable<typeof backend.prepareExecution>>>
-      | null
-      | undefined;
     let home: string | undefined;
 
     try {
-      prepared = await backend.prepareExecution?.(buildGeminiApiKeyPrepareContext(workspaceDir));
+      const context = buildGeminiApiKeyPrepareContext(workspaceDir);
+      const firstPrepared = await backend.prepareExecution?.(context);
+      home = firstPrepared?.env?.GEMINI_CLI_HOME;
+      expect(home).toBeTruthy();
+      await fs.writeFile(path.join(home ?? "", ".gemini", "oauth_creds.json"), "{}\n", "utf8");
+      await fs.writeFile(
+        path.join(home ?? "", ".gemini", "gemini-credentials.json"),
+        "stale-cache",
+        "utf8",
+      );
+
+      const prepared = await backend.prepareExecution?.(context);
 
       home = prepared?.env?.GEMINI_CLI_HOME;
       expect(home).toBeTruthy();
       expect(prepared?.env?.GEMINI_API_KEY).toBe("gemini-api-key");
+      expect(prepared?.env?.GEMINI_FORCE_FILE_STORAGE).toBe("true");
+      expect(prepared?.clearEnv).toContain("GEMINI_API_KEY");
       expect(prepared?.clearEnv).toContain("GOOGLE_GENAI_USE_GCA");
       expect(prepared?.clearEnv).toContain("GOOGLE_GENAI_USE_VERTEXAI");
       expect(prepared?.clearEnv).toContain("GOOGLE_GEMINI_BASE_URL");
@@ -145,12 +174,12 @@ describe("google gemini cli backend auth bridge", () => {
       await expect(
         fs.access(path.join(home ?? "", ".gemini", "oauth_creds.json")),
       ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(home ?? "", ".gemini", "gemini-credentials.json")),
+      ).rejects.toThrow();
     } finally {
-      await prepared?.cleanup?.();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
-
-    await expect(fs.access(home ?? "")).rejects.toThrow();
   });
 
   it("rejects Vercel AI Gateway profiles for the Gemini CLI backend", async () => {
@@ -161,6 +190,7 @@ describe("google gemini cli backend auth bridge", () => {
       await expect(
         backend.prepareExecution?.({
           workspaceDir,
+          agentDir: path.join(workspaceDir, "agent"),
           provider: "google-gemini-cli",
           modelId: "gemini-3.1-flash-lite",
           authProfileId: "vercel-ai-gateway:default",
@@ -176,12 +206,14 @@ describe("google gemini cli backend auth bridge", () => {
     }
   });
 
-  it("clears inherited Gemini GCA credentials when staging selected OAuth credentials", async () => {
+  it("clears inherited Gemini auth credentials when staging selected OAuth credentials", async () => {
     const backend = buildGoogleGeminiCliBackend();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
     const originalUseGca = process.env.GOOGLE_GENAI_USE_GCA;
     const originalCloudAccessToken = process.env.GOOGLE_CLOUD_ACCESS_TOKEN;
     const originalForceEncryptedFileStorage = process.env.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE;
+    const originalGeminiApiKey = process.env.GEMINI_API_KEY;
+    const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
     let prepared:
       | Awaited<ReturnType<NonNullable<typeof backend.prepareExecution>>>
       | null
@@ -190,6 +222,8 @@ describe("google gemini cli backend auth bridge", () => {
     process.env.GOOGLE_GENAI_USE_GCA = "true";
     process.env.GOOGLE_CLOUD_ACCESS_TOKEN = "ambient-cloud-token";
     process.env.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE = "true";
+    process.env.GEMINI_API_KEY = "ambient-gemini-key";
+    process.env.GOOGLE_API_KEY = "ambient-google-key";
 
     try {
       prepared = await backend.prepareExecution?.(buildGeminiOAuthPrepareContext(workspaceDir));
@@ -199,12 +233,36 @@ describe("google gemini cli backend auth bridge", () => {
         "GOOGLE_GENAI_USE_GCA",
         "GOOGLE_CLOUD_ACCESS_TOKEN",
         "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+        "GEMINI_FORCE_FILE_STORAGE",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_PROJECT_ID",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_GEMINI_BASE_URL",
+        "GEMINI_CLI_CUSTOM_HEADERS",
+        "GEMINI_API_KEY_AUTH_MECHANISM",
+        "GEMINI_API_KEY",
       ]);
     } finally {
       restoreEnv("GOOGLE_GENAI_USE_GCA", originalUseGca);
       restoreEnv("GOOGLE_CLOUD_ACCESS_TOKEN", originalCloudAccessToken);
       restoreEnv("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", originalForceEncryptedFileStorage);
+      restoreEnv("GEMINI_API_KEY", originalGeminiApiKey);
+      restoreEnv("GOOGLE_API_KEY", originalGoogleApiKey);
       await prepared?.cleanup?.();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires an agent directory for profile-owned Gemini CLI state", async () => {
+    const backend = buildGoogleGeminiCliBackend();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
+
+    try {
+      const { agentDir: _agentDir, ...context } = buildGeminiOAuthPrepareContext(workspaceDir);
+      await expect(backend.prepareExecution?.(context)).rejects.toThrow(/agent directory/);
+    } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });

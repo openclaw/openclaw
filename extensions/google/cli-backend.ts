@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
@@ -5,7 +6,6 @@ import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
   pro: "gemini-3.1-pro-preview",
@@ -15,10 +15,12 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
 const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3-flash-preview";
 const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
+const GEMINI_CLI_CREDENTIALS_FILENAME = "gemini-credentials.json";
 const GEMINI_CLI_GCA_AUTH_ENV = [
   "GOOGLE_GENAI_USE_GCA",
   "GOOGLE_CLOUD_ACCESS_TOKEN",
   "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+  "GEMINI_FORCE_FILE_STORAGE",
 ];
 const GEMINI_CLI_API_KEY_AUTH_ENV = [
   ...GEMINI_CLI_GCA_AUTH_ENV,
@@ -31,11 +33,11 @@ const GEMINI_CLI_API_KEY_AUTH_ENV = [
   "GEMINI_CLI_CUSTOM_HEADERS",
   "GEMINI_API_KEY_AUTH_MECHANISM",
 ];
+const GEMINI_CLI_PROFILE_AUTH_ENV = [...GEMINI_CLI_API_KEY_AUTH_ENV, "GEMINI_API_KEY"];
 
 type PreparedGeminiCliExecution = {
   env: Record<string, string>;
   clearEnv: string[];
-  cleanup: () => Promise<void>;
 };
 
 function normalizeString(value: string | undefined): string | undefined {
@@ -66,6 +68,11 @@ type GeminiApiKeyCredential = GeminiAuthProfileCredential & {
   type: "api_key";
   provider: typeof GEMINI_CLI_PROVIDER_ID;
   key: string;
+};
+
+type GeminiCliAuthHomeContext = {
+  agentDir?: string;
+  authProfileId?: string;
 };
 
 function throwUnsupportedGeminiCredential(credential: GeminiAuthProfileCredential): never {
@@ -140,25 +147,58 @@ function requireGeminiApiKeyCredential(
   };
 }
 
-async function createIsolatedGeminiCliHome(settings: unknown): Promise<{
-  tempHome: string;
+function resolveGeminiCliProfileHome(ctx: GeminiCliAuthHomeContext): {
+  home: string;
+  geminiDir: string;
+} {
+  const agentDir = normalizeString(ctx.agentDir);
+  if (!agentDir) {
+    throw new Error("Gemini CLI auth profile execution requires an agent directory.");
+  }
+  const authProfileId = normalizeString(ctx.authProfileId);
+  if (!authProfileId) {
+    throw new Error("Gemini CLI auth profile execution requires a selected auth profile.");
+  }
+
+  const profileHash = crypto.createHash("sha256").update(authProfileId).digest("hex").slice(0, 24);
+  const home = path.join(agentDir, "cli-runtimes", GEMINI_CLI_PROVIDER_ID, "profiles", profileHash);
+  return { home, geminiDir: path.join(home, ".gemini") };
+}
+
+async function writeGeminiCliJson(filePath: string, value: unknown): Promise<void> {
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await fs.chmod(filePath, 0o600);
+}
+
+async function prepareGeminiCliProfileHome(
+  ctx: GeminiCliAuthHomeContext,
+  settings: unknown,
+): Promise<{
+  home: string;
   geminiDir: string;
 }> {
-  const tempHome = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "gemini-cli-home-"),
-  );
-  await fs.chmod(tempHome, 0o700);
-  const geminiDir = path.join(tempHome, ".gemini");
+  const { home, geminiDir } = resolveGeminiCliProfileHome(ctx);
   await fs.mkdir(geminiDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(
-    path.join(geminiDir, "settings.json"),
-    `${JSON.stringify(settings, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
-  return { tempHome, geminiDir };
+  await fs.chmod(home, 0o700);
+  await fs.chmod(geminiDir, 0o700);
+  await Promise.all([
+    writeGeminiCliJson(path.join(geminiDir, "settings.json"), settings),
+    writeGeminiCliJson(path.join(home, "settings.json"), settings),
+  ]);
+  return { home, geminiDir };
+}
+
+async function clearGeminiCliCachedCredentials(geminiDir: string): Promise<void> {
+  // Gemini prefers its token store over oauth_creds.json. Rebuild that store
+  // from the selected OpenClaw profile each run so stale CLI auth cannot win.
+  await fs.rm(path.join(geminiDir, GEMINI_CLI_CREDENTIALS_FILENAME), { force: true });
 }
 
 async function prepareGeminiCliOAuthHome(
+  ctx: GeminiCliAuthHomeContext,
   credential: GeminiAuthProfileCredential | undefined,
 ): Promise<PreparedGeminiCliExecution | null> {
   const oauth = requireGeminiOAuthCredential(credential);
@@ -166,43 +206,34 @@ async function prepareGeminiCliOAuthHome(
     return null;
   }
 
-  const { tempHome, geminiDir } = await createIsolatedGeminiCliHome({
+  const { home, geminiDir } = await prepareGeminiCliProfileHome(ctx, {
     security: { auth: { selectedType: "oauth-personal" } },
   });
-  try {
-    const idToken = normalizeString(oauth.idToken);
-    const oauthCreds: Record<string, string | number> = {
-      access_token: oauth.access,
-      refresh_token: oauth.refresh,
-      expiry_date: oauth.expires,
-      token_type: "Bearer",
-    };
-    if (idToken) {
-      oauthCreds.id_token = idToken;
-    }
-
-    await fs.writeFile(
-      path.join(geminiDir, "oauth_creds.json"),
-      `${JSON.stringify(oauthCreds, null, 2)}\n`,
-      { encoding: "utf8", mode: 0o600 },
-    );
-
-    return {
-      env: {
-        GEMINI_CLI_HOME: tempHome,
-      },
-      clearEnv: [...GEMINI_CLI_GCA_AUTH_ENV],
-      cleanup: async () => {
-        await fs.rm(tempHome, { recursive: true, force: true });
-      },
-    };
-  } catch (error) {
-    await fs.rm(tempHome, { recursive: true, force: true });
-    throw error;
+  await clearGeminiCliCachedCredentials(geminiDir);
+  const idToken = normalizeString(oauth.idToken);
+  const oauthCreds: Record<string, string | number> = {
+    access_token: oauth.access,
+    refresh_token: oauth.refresh,
+    expiry_date: oauth.expires,
+    token_type: "Bearer",
+  };
+  if (idToken) {
+    oauthCreds.id_token = idToken;
   }
+
+  await writeGeminiCliJson(path.join(geminiDir, "oauth_creds.json"), oauthCreds);
+
+  return {
+    env: {
+      GEMINI_CLI_HOME: home,
+      GEMINI_FORCE_FILE_STORAGE: "true",
+    },
+    clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV],
+  };
 }
 
 async function prepareGeminiCliApiKeyHome(
+  ctx: GeminiCliAuthHomeContext,
   credential: GeminiAuthProfileCredential | undefined,
 ): Promise<PreparedGeminiCliExecution | null> {
   const apiKey = requireGeminiApiKeyCredential(credential);
@@ -210,31 +241,30 @@ async function prepareGeminiCliApiKeyHome(
     return null;
   }
 
-  const { tempHome } = await createIsolatedGeminiCliHome({
+  const { home, geminiDir } = await prepareGeminiCliProfileHome(ctx, {
     security: { auth: { selectedType: "gemini-api-key" } },
   });
-  try {
-    return {
-      env: {
-        GEMINI_CLI_HOME: tempHome,
-        GEMINI_API_KEY: apiKey.key,
-      },
-      clearEnv: [...GEMINI_CLI_API_KEY_AUTH_ENV],
-      cleanup: async () => {
-        await fs.rm(tempHome, { recursive: true, force: true });
-      },
-    };
-  } catch (error) {
-    await fs.rm(tempHome, { recursive: true, force: true });
-    throw error;
-  }
+  await Promise.all([
+    fs.rm(path.join(geminiDir, "oauth_creds.json"), { force: true }),
+    clearGeminiCliCachedCredentials(geminiDir),
+  ]);
+  return {
+    env: {
+      GEMINI_CLI_HOME: home,
+      GEMINI_FORCE_FILE_STORAGE: "true",
+      GEMINI_API_KEY: apiKey.key,
+    },
+    clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV],
+  };
 }
 
 async function prepareGeminiCliAuthHome(
+  ctx: GeminiCliAuthHomeContext,
   credential: GeminiAuthProfileCredential | undefined,
 ): Promise<PreparedGeminiCliExecution | null> {
   return (
-    (await prepareGeminiCliOAuthHome(credential)) ?? (await prepareGeminiCliApiKeyHome(credential))
+    (await prepareGeminiCliOAuthHome(ctx, credential)) ??
+    (await prepareGeminiCliApiKeyHome(ctx, credential))
   );
 }
 
@@ -257,6 +287,10 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     authEpochMode: "profile-only",
     prepareExecution: async (ctx) =>
       await prepareGeminiCliAuthHome(
+        {
+          agentDir: ctx.agentDir,
+          authProfileId: ctx.authProfileId,
+        },
         (ctx as typeof ctx & { authCredential?: GeminiAuthProfileCredential }).authCredential,
       ),
     config: {
