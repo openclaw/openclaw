@@ -1149,7 +1149,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : undefined,
       vector: {
         enabled: this.vector.enabled,
-        storeAvailable: this.vector.available ?? undefined,
+        storeAvailable: this.vector.available ?? (this.hasSemanticChunks() || undefined),
         semanticAvailable: this.vector.semanticAvailable,
         available: this.vector.semanticAvailable,
         extensionPath: this.vector.extensionPath,
