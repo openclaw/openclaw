@@ -425,7 +425,28 @@ export type ChatHistoryResult = {
   sessionInfo?: GatewaySessionRow;
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
+  inFlightRun?: { runId?: unknown; text?: unknown };
 };
+
+function adoptInFlightRunFromChatHistory(
+  state: ChatState,
+  inFlightRun: ChatHistoryResult["inFlightRun"],
+  startedAtMs: number,
+): void {
+  const runId =
+    typeof inFlightRun?.runId === "string" && inFlightRun.runId.trim()
+      ? inFlightRun.runId.trim()
+      : "";
+  if (!runId) {
+    return;
+  }
+  const text = typeof inFlightRun?.text === "string" ? inFlightRun.text : "";
+  // Mirror TUI switch-back: adopt the gateway's active run so live deltas/finals
+  // continue on this client after history reload cleared local stream state.
+  state.chatRunId = runId;
+  state.chatStream = text;
+  state.chatStreamStartedAt = startedAtMs;
+}
 
 export type ChatMetadataResult = CommandsListResult & {
   models?: ModelCatalogEntry[];
@@ -807,6 +828,7 @@ async function loadChatHistoryUncached(
         prunePersistedToolStreamMessages(state, persistedToolStreamIds);
       }
     }
+    adoptInFlightRunFromChatHistory(state, res.inFlightRun, startedAtMs);
     recordChatHistoryTiming(state, "applied", startedAtMs, {
       requestSessionKey: sessionKey,
       requestAgentId,

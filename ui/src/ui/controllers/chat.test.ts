@@ -2163,6 +2163,50 @@ describe("abortChatRun", () => {
   });
 });
 
+describe("loadChatHistory inFlightRun adoption", () => {
+  it("restores an in-flight run reported by chat.history on session switch-back", async () => {
+    const messages = [{ role: "user", content: [{ type: "text", text: "Hello" }] }];
+    const request = vi.fn().mockResolvedValue({
+      messages,
+      inFlightRun: { runId: "run-bg", text: "still working in the background" },
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-bg");
+    expect(state.chatStream).toBe("still working in the background");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+    expect(state.chatMessages).toEqual(messages);
+  });
+
+  it("adopts an in-flight run with no buffered text for reading-indicator state", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "Hello" }] }],
+      inFlightRun: { runId: "run-bg", text: "" },
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-bg");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+  });
+});
+
 describe("loadChatHistory retry handling", () => {
   it("falls back to chat.history when chat.startup is unknown", async () => {
     const request = vi
