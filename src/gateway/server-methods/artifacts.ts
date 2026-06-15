@@ -422,8 +422,14 @@ function resolveQuerySession(
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
     const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
-    const taskAgentId =
-      asNonEmptyString(task?.agentId) ?? resolveRequesterSessionAgentId(requesterSessionKey, cfg);
+    const ownerAgentId = parseAgentSessionKey(task?.ownerKey)?.agentId;
+    const requesterAgentId =
+      asNonEmptyString(task?.requesterAgentId) ??
+      ownerAgentId ??
+      (requesterSessionKey === "global"
+        ? undefined
+        : resolveRequesterSessionAgentId(requesterSessionKey, cfg));
+    const taskAgentId = asNonEmptyString(task?.agentId) ?? requesterAgentId;
     if (
       query.agentId &&
       taskAgentId &&
@@ -431,11 +437,20 @@ function resolveQuerySession(
     ) {
       return undefined;
     }
-    const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
     if (requesterSessionKey) {
-      const scopedSessionKey = resolveScopedArtifactSessionKey(requesterSessionKey, agentId, cfg);
-      return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
+      // task.agentId identifies the executor. requesterAgentId keeps global
+      // requester transcripts in the correct agent store across restarts.
+      const sessionAgentId = requesterAgentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
+      const scopedSessionKey = resolveScopedArtifactSessionKey(
+        requesterSessionKey,
+        sessionAgentId,
+        cfg,
+      );
+      return scopedSessionKey
+        ? { sessionKey: scopedSessionKey, agentId: sessionAgentId }
+        : undefined;
     }
+    const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
     const runId = asNonEmptyString(task?.runId);
     const sessionKey = runId ? resolveSessionKeyForRun(runId, { agentId }) : undefined;
     const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);

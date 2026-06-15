@@ -857,6 +857,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
+  ensureColumn(db, "task_runs", "requester_agent_id TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
 }
 

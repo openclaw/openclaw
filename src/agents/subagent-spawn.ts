@@ -1671,6 +1671,7 @@ export async function spawnSubagentDirect(
       task,
       taskName,
       agentId: targetAgentId,
+      requesterAgentId,
       cleanup,
       label: label || undefined,
       model: resolvedModel,

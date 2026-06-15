@@ -79,6 +79,28 @@ describe("openclaw state database", () => {
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
+  it("adds requester agent attribution to existing task tables", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE task_runs DROP COLUMN requester_agent_id");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db.prepare("PRAGMA table_info(task_runs)").all() as Array<{
+      name?: string;
+    }>;
+    expect(columns.some((column) => column.name === "requester_agent_id")).toBe(true);
+  });
+
   it("opens databases with early cron tables before creating cron indexes", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");

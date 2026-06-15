@@ -522,15 +522,17 @@ describe("task-registry store runtime", () => {
     });
   });
 
-  it("persists inferred child-session agent ids in sqlite task rows", async () => {
+  it("persists executor and requester agent ids in sqlite task rows", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-agent-id-" },
       async () => {
         const created = createTaskRecord({
           runtime: "subagent",
-          ownerKey: "agent:main:main",
+          requesterSessionKey: "global",
+          ownerKey: "global",
           scopeKind: "session",
           childSessionKey: "agent:worker:subagent:child",
+          requesterAgentId: "main",
           runId: "run-worker-subagent-sqlite",
           task: "Inspect worker state",
           status: "running",
@@ -543,20 +545,22 @@ describe("task-registry store runtime", () => {
           database.db,
           db
             .selectFrom("task_runs")
-            .select(["agent_id", "child_session_key", "owner_key"])
+            .select(["agent_id", "requester_agent_id", "child_session_key", "owner_key"])
             .where("task_id", "=", created.taskId),
         );
 
         expect(row).toEqual({
           agent_id: "worker",
+          requester_agent_id: "main",
           child_session_key: "agent:worker:subagent:child",
-          owner_key: "agent:main:main",
+          owner_key: "global",
         });
 
         resetTaskRegistryForTests({ persist: false });
         expect(findTaskByRunId("run-worker-subagent-sqlite")).toMatchObject({
           taskId: created.taskId,
           agentId: "worker",
+          requesterAgentId: "main",
         });
       },
     );
