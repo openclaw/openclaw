@@ -37,6 +37,7 @@ export function scanEmptyAllowlistPolicyWarnings(
     prefix: string,
     channelName: string,
     parent?: DoctorAccountRecord,
+    shouldSkipDefaultEmptyGroupAllowlistWarning?: ScanEmptyAllowlistPolicyWarningsParams["shouldSkipDefaultEmptyGroupAllowlistWarning"],
   ) => {
     const accountDm = asObjectRecord(account.dm);
     const parentDm = asObjectRecord(parent?.dm);
@@ -62,6 +63,7 @@ export function scanEmptyAllowlistPolicyWarnings(
         parent,
         prefix,
         shouldSkipDefaultEmptyGroupAllowlistWarning:
+          shouldSkipDefaultEmptyGroupAllowlistWarning ??
           params.shouldSkipDefaultEmptyGroupAllowlistWarning,
       }),
     );
@@ -88,9 +90,28 @@ export function scanEmptyAllowlistPolicyWarnings(
     if (isDisabledRecord(channelConfig)) {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`, channelName);
-
+    // When the top-level groupAllowFrom is empty but every real account
+    // has its own populated groupAllowFrom/allowFrom, the parent scope is
+    // never reached at runtime — suppress the false-positive warning
+    // (issue #92684).
     const accounts = asObjectRecord(channelConfig.accounts);
+    const allAccountsHaveAllowlists =
+      accounts &&
+      Object.values(accounts).every(
+        (account) =>
+          !account ||
+          typeof account !== "object" ||
+          isDisabledRecord(account) ||
+          (account.groupAllowFrom as DoctorAllowFromList | undefined)?.length > 0 ||
+          (account.allowFrom as DoctorAllowFromList | undefined)?.length > 0,
+      );
+    const shouldSkipForTopLevel =
+      allAccountsHaveAllowlists && Object.keys(accounts ?? {}).length > 0
+        ? () => true
+        : params.shouldSkipDefaultEmptyGroupAllowlistWarning;
+
+    checkAccount(channelConfig, `channels.${channelName}`, channelName, undefined, shouldSkipForTopLevel);
+
     if (!accounts) {
       continue;
     }
