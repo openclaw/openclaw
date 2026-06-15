@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
+import { isToolAvailabilityExpression } from "../tools/availability.js";
 import type { JsonObject, ToolDescriptor } from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginToolContext } from "./types.js";
@@ -144,6 +145,24 @@ function asJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+function isAvailabilityLikeRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return "kind" in record || "allOf" in record || "anyOf" in record;
+}
+
+function readAgentToolAvailability(tool: AnyAgentTool): ToolDescriptor["availability"] | undefined {
+  const availability = tool.availability;
+  if (isToolAvailabilityExpression(availability)) {
+    return availability;
+  }
+  return isAvailabilityLikeRecord(availability)
+    ? (availability as ToolDescriptor["availability"])
+    : undefined;
+}
+
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
@@ -151,6 +170,7 @@ export function capturePluginToolDescriptor(params: {
 }): CachedPluginToolDescriptor {
   const label = (params.tool as { label?: unknown }).label;
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+  const availability = readAgentToolAvailability(params.tool);
   return {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
     optional: params.optional,
@@ -161,6 +181,7 @@ export function capturePluginToolDescriptor(params: {
       inputSchema: asJsonObject(params.tool.parameters),
       owner: { kind: "plugin", pluginId: params.pluginId },
       executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+      ...(availability ? { availability } : {}),
     },
   };
 }

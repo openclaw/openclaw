@@ -68,8 +68,54 @@ function hasConfiguredValue(params: {
   return true;
 }
 
-function hasAvailabilityExpressionShape(value: ToolAvailabilityExpression): boolean {
-  return "kind" in value || "allOf" in value || "anyOf" in value;
+function isValidSignalShape(obj: Record<string, unknown>): boolean {
+  const kind = obj.kind;
+  switch (kind) {
+    case "always":
+      return true;
+    case "auth":
+      return typeof obj.providerId === "string";
+    case "config":
+      return Array.isArray(obj.path);
+    case "env":
+      return typeof obj.name === "string";
+    case "plugin-enabled":
+      return typeof obj.pluginId === "string";
+    case "context":
+      return typeof obj.key === "string";
+    default:
+      return false;
+  }
+}
+
+function hasAvailabilityExpressionShape(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  if ("kind" in obj) {
+    return isValidSignalShape(obj);
+  }
+  if ("allOf" in obj) {
+    const allOf = obj.allOf;
+    if (!Array.isArray(allOf)) {
+      return false;
+    }
+    return allOf.every((entry) => hasAvailabilityExpressionShape(entry));
+  }
+  if ("anyOf" in obj) {
+    const anyOf = obj.anyOf;
+    if (!Array.isArray(anyOf)) {
+      return false;
+    }
+    return anyOf.every((entry) => hasAvailabilityExpressionShape(entry));
+  }
+  return false;
+}
+
+/** Narrow unknown values to planner availability expressions before descriptor capture. */
+export function isToolAvailabilityExpression(value: unknown): value is ToolAvailabilityExpression {
+  return hasAvailabilityExpressionShape(value);
 }
 
 function diagnostic(
@@ -88,24 +134,47 @@ function evaluateSignal(
     case "always":
       return null;
     case "auth":
+      if (!signal.providerId) {
+        return diagnostic(
+          "unsupported-signal",
+          signal,
+          "Malformed auth signal: missing providerId",
+        );
+      }
       return context.authProviderIds?.has(signal.providerId)
         ? null
         : diagnostic("auth-missing", signal, `Missing auth provider: ${signal.providerId}`);
     case "config": {
+      if (!Array.isArray(signal.path)) {
+        return diagnostic("unsupported-signal", signal, "Malformed config signal: missing path");
+      }
       const value = resolveConfigPath(context.config, signal.path);
       return hasConfiguredValue({ value, signal, context })
         ? null
         : diagnostic("config-missing", signal, `Missing config path: ${signal.path.join(".")}`);
     }
     case "env":
+      if (!signal.name) {
+        return diagnostic("unsupported-signal", signal, "Malformed env signal: missing name");
+      }
       return context.env?.[signal.name]?.trim()
         ? null
         : diagnostic("env-missing", signal, `Missing environment value: ${signal.name}`);
     case "plugin-enabled":
+      if (!signal.pluginId) {
+        return diagnostic(
+          "unsupported-signal",
+          signal,
+          "Malformed plugin-enabled signal: missing pluginId",
+        );
+      }
       return context.enabledPluginIds?.has(signal.pluginId)
         ? null
         : diagnostic("plugin-disabled", signal, `Plugin is not enabled: ${signal.pluginId}`);
     case "context": {
+      if (!signal.key) {
+        return diagnostic("unsupported-signal", signal, "Malformed context signal: missing key");
+      }
       const value: JsonPrimitive | undefined = context.values?.[signal.key];
       if (!("equals" in signal)) {
         return value === undefined
@@ -130,7 +199,7 @@ function evaluateExpression(
     return diagnosticLocal ? [diagnosticLocal] : [];
   }
   if ("allOf" in expression) {
-    if (expression.allOf.length === 0) {
+    if (!Array.isArray(expression.allOf) || expression.allOf.length === 0) {
       return [
         {
           reason: "unsupported-signal",
@@ -141,7 +210,7 @@ function evaluateExpression(
     return expression.allOf.flatMap((entry) => evaluateExpression(entry, context));
   }
   if ("anyOf" in expression) {
-    if (expression.anyOf.length === 0) {
+    if (!Array.isArray(expression.anyOf) || expression.anyOf.length === 0) {
       return [
         {
           reason: "unsupported-signal",

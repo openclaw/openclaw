@@ -1,6 +1,7 @@
 // Determines which manifest contracts are eligible for plugin activation.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -22,6 +23,34 @@ export function isManifestPluginAvailableForControlPlane(params: {
     return true;
   }
   return isInstalledPluginEnabled(params.snapshot.index, params.plugin.id, params.config);
+}
+
+/** Resolves plugin ids treated as enabled for manifest/control-plane availability checks. */
+export function resolveManifestControlPlaneEnabledPluginIds(params: {
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
+  config?: OpenClawConfig;
+}): ReadonlySet<string> {
+  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
+  const enabledPluginIds = new Set<string>();
+  for (const plugin of params.snapshot.plugins) {
+    if (
+      !isManifestPluginAvailableForControlPlane({
+        snapshot: params.snapshot,
+        plugin,
+        config: params.config,
+      })
+    ) {
+      continue;
+    }
+    if (
+      normalizedPlugins.entries[plugin.id]?.enabled === false ||
+      normalizedPlugins.deny.includes(plugin.id)
+    ) {
+      continue;
+    }
+    enabledPluginIds.add(plugin.id);
+  }
+  return enabledPluginIds;
 }
 
 export function hasManifestContractValue(params: {

@@ -8,12 +8,19 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-patte
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { buildToolPlan } from "../tools/planner.js";
+import type {
+  ToolAvailabilityContext,
+  ToolAvailabilityExpression,
+  ToolDescriptor,
+} from "../tools/types.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
+  resolveManifestControlPlaneEnabledPluginIds,
 } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
@@ -254,6 +261,13 @@ function isManifestToolOptional(plugin: PluginManifestRecord, toolName: string):
   return plugin.toolMetadata?.[toolName]?.optional === true;
 }
 
+function isManifestToolReplaySafe(params: {
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolName: string;
+}): boolean {
+  return params.manifestPlugin?.toolMetadata?.[params.toolName]?.replaySafe === true;
+}
+
 function isPluginToolOptional(params: {
   entry: PluginToolRegistration;
   manifestPlugin: PluginManifestRecord | undefined;
@@ -263,13 +277,6 @@ function isPluginToolOptional(params: {
     params.entry.optional ||
     (params.manifestPlugin ? isManifestToolOptional(params.manifestPlugin, params.toolName) : false)
   );
-}
-
-function isManifestToolReplaySafe(params: {
-  manifestPlugin: PluginManifestRecord | undefined;
-  toolName: string;
-}): boolean {
-  return params.manifestPlugin?.toolMetadata?.[params.toolName]?.replaySafe === true;
 }
 
 function isTrustedManifestLocalMediaTool(params: {
@@ -833,7 +840,7 @@ function resolveCachedPluginTools(params: {
     ) {
       continue;
     }
-    const pluginTools: AnyAgentTool[] = [];
+    const pluginTools: Array<{ tool: AnyAgentTool; descriptor: ToolDescriptor }> = [];
     let hasNameConflict = false;
     const localNormalizedNames = new Set<string>();
     for (const cachedDescriptor of cached) {
@@ -873,27 +880,118 @@ function resolveCachedPluginTools(params: {
         break;
       }
       localNormalizedNames.add(normalizedDescriptorName);
-      pluginTools.push(
-        createCachedDescriptorPluginTool({
+      pluginTools.push({
+        descriptor: cachedDescriptor.descriptor,
+        tool: createCachedDescriptorPluginTool({
           descriptor: cachedDescriptor,
           plugin,
           ctx: params.ctx,
           loadContext: params.loadContext,
           runtimeOptions: params.runtimeOptions,
         }),
-      );
+      });
     }
     if (hasNameConflict) {
       continue;
     }
+    warnPluginToolDescriptorAuthoringErrors({
+      pluginId: plugin.id,
+      descriptors: pluginTools.map((entry) => entry.descriptor),
+      availability: buildPluginToolAvailabilityContext({
+        config: params.availabilityConfig,
+        env: params.env,
+        enabledPluginIds: resolveManifestControlPlaneEnabledPluginIds({
+          snapshot: params.snapshot,
+          config: params.config,
+        }),
+        hasAuthForProvider: params.hasAuthForProvider,
+        descriptors: pluginTools.map((entry) => entry.descriptor),
+      }),
+      logger: params.loadContext.logger,
+    });
     for (const pluginTool of pluginTools) {
-      params.existing.add(pluginTool.name);
-      params.existingNormalized.add(normalizeToolName(pluginTool.name));
-      tools.push(pluginTool);
+      params.existing.add(pluginTool.tool.name);
+      params.existingNormalized.add(normalizeToolName(pluginTool.tool.name));
+      tools.push(pluginTool.tool);
     }
     handledPluginIds.add(plugin.id);
   }
   return { tools, handledPluginIds };
+}
+
+function collectAuthProviderIds(
+  availability: ToolAvailabilityExpression | undefined,
+  providerIds: Set<string>,
+): void {
+  if (!availability) {
+    return;
+  }
+  if ("kind" in availability) {
+    if (availability.kind === "auth") {
+      if (availability.providerId) {
+        providerIds.add(availability.providerId);
+      }
+    }
+    return;
+  }
+  if ("allOf" in availability && Array.isArray(availability.allOf)) {
+    for (const entry of availability.allOf) {
+      collectAuthProviderIds(entry, providerIds);
+    }
+    return;
+  }
+  if ("anyOf" in availability && Array.isArray(availability.anyOf)) {
+    for (const entry of availability.anyOf) {
+      collectAuthProviderIds(entry, providerIds);
+    }
+  }
+}
+
+function buildPluginToolAvailabilityContext(params: {
+  config: PluginLoadOptions["config"];
+  env: NodeJS.ProcessEnv;
+  enabledPluginIds: ReadonlySet<string>;
+  hasAuthForProvider?: (providerId: string) => boolean;
+  descriptors?: readonly ToolDescriptor[];
+}): ToolAvailabilityContext {
+  const authProviderIds = new Set<string>();
+  if (params.hasAuthForProvider && params.descriptors) {
+    const candidateProviderIds = new Set<string>();
+    for (const descriptor of params.descriptors) {
+      collectAuthProviderIds(descriptor.availability, candidateProviderIds);
+    }
+    for (const providerId of candidateProviderIds) {
+      if (params.hasAuthForProvider(providerId)) {
+        authProviderIds.add(providerId);
+      }
+    }
+  }
+  return {
+    config: params.config as ToolAvailabilityContext["config"],
+    env: params.env,
+    enabledPluginIds: params.enabledPluginIds,
+    authProviderIds,
+  };
+}
+
+function warnPluginToolDescriptorAuthoringErrors(params: {
+  pluginId: string;
+  descriptors: readonly ToolDescriptor[];
+  availability: ToolAvailabilityContext;
+  logger: { warn: (message: string) => void };
+}): void {
+  buildToolPlan({
+    descriptors: params.descriptors,
+    availability: params.availability,
+    onHiddenDiagnostic: ({ descriptor, diagnostic }) => {
+      if (diagnostic.reason !== "unsupported-signal") {
+        return;
+      }
+      params.logger.warn(
+        `[plugins] tool descriptor authoring error (${params.pluginId}/${descriptor.name}): ${diagnostic.message}`,
+      );
+    },
+  });
 }
 
 function resolvePluginToolRegistry(params: {
@@ -1381,7 +1479,26 @@ export function resolvePluginTools(params: {
     }
   }
 
+  const toolAvailabilityContext = buildPluginToolAvailabilityContext({
+    config: params.context.runtimeConfig ?? context.config,
+    env,
+    enabledPluginIds: resolveManifestControlPlaneEnabledPluginIds({
+      snapshot,
+      config: context.config,
+    }),
+    hasAuthForProvider: params.hasAuthForProvider,
+    descriptors: [...capturedDescriptorsByPluginId.values()]
+      .flat()
+      .map((entry) => entry.descriptor),
+  });
+
   for (const [pluginId, descriptors] of capturedDescriptorsByPluginId) {
+    warnPluginToolDescriptorAuthoringErrors({
+      pluginId,
+      descriptors: descriptors.map((entry) => entry.descriptor),
+      availability: toolAvailabilityContext,
+      logger: context.logger,
+    });
     const manifestPlugin = manifestPluginsById.get(pluginId);
     if (!manifestPlugin) {
       continue;
