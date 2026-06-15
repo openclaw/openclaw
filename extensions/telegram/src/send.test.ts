@@ -65,11 +65,6 @@ const {
 } = telegramSendModule;
 const sendMessageTelegramImpl = sendMessageTelegramImported;
 
-type RichSendCallParams = {
-  rich_message?: { markdown?: string; html?: string };
-  reply_markup?: unknown;
-};
-
 type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   raw?: {
     sendRichMessage?: (params: {
@@ -91,8 +86,20 @@ function richTextForTest(richMessage: { markdown?: string; html?: string }): str
     : (richMessage.html ?? "");
 }
 
-function richSendCallParams(): RichSendCallParams[] {
-  return botRawApi.sendRichMessage.mock.calls.map(([params]) => params);
+function textSendCallParams(): Array<{
+  chatId: unknown;
+  text: string;
+  params: Record<string, unknown>;
+}> {
+  return botApi.sendMessage.mock.calls.map(([chatId, text, params]) => ({
+    chatId,
+    text: String(text ?? ""),
+    params: requireRecord(params, "sendMessage params"),
+  }));
+}
+
+function textSendHtmlChunks(): string[] {
+  return textSendCallParams().map((call) => call.text);
 }
 
 function withRichRawTextTestApi(
@@ -888,7 +895,9 @@ describe("sendMessageTelegram", () => {
         name: "html send succeeds",
         text: "hi",
         sendMessage: vi.fn().mockResolvedValue({ message_id: 7, chat: { id: "123" } }),
-        expectedCalls: [["123", "hi", { parse_mode: "HTML", skip_entity_detection: true }]],
+        expectedCalls: [
+          ["123", "hi", { parse_mode: "HTML", link_preview_options: { is_disabled: true } }],
+        ],
       },
     ] as const;
     for (const testCase of cases) {
@@ -908,7 +917,7 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("sends Markdown durable text as Telegram rich HTML", async () => {
+  it("sends Markdown durable text through legacy Telegram HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
 
     await sendMessageTelegram("123", "**hi**", {
@@ -916,13 +925,15 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: "<b>hi</b>" },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      "<b>hi</b>",
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("sends complex Markdown through Telegram rich HTML", async () => {
+  it("sends complex Markdown through legacy Telegram HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 46, chat: { id: "123" } });
     const markdown = [
       "# Heading",
@@ -941,13 +952,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalled();
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("does not pass currency through Telegram Rich Markdown math parsing", async () => {
+  it("does not pass currency through legacy Telegram HTML math parsing", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
     const text =
       "10Y realistic strong outcome: ~$400-600K TC, top end ($800K+) gated on frontier lab equity.";
@@ -957,19 +967,15 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: {
-        html: markdownToTelegramRichHtml(text),
-      },
-    });
-    const richMessage = richSendCallParams()[0]?.rich_message;
-    expect(richMessage?.html).toContain("$400-600K");
-    expect(richMessage?.html).toContain("($800K+)");
-    expect(richMessage?.markdown).toBeUndefined();
+    expect(botApi.sendMessage).toHaveBeenCalled();
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    const sentHtml = textSendHtmlChunks()[0] ?? "";
+    expect(sentHtml).toContain("$400-600K");
+    expect(sentHtml).toContain("($800K+)");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves line breaks outside fenced code through rich HTML", async () => {
+  it("preserves line breaks outside fenced code through legacy Telegram HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
     const markdown = [
       "Status: ok | mode",
@@ -987,17 +993,14 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalled();
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("isolates supported rich HTML media tags as blocks", async () => {
+  it("isolates supported rich HTML media tags as legacy HTML blocks", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 48, chat: { id: "123" } });
     const html = '<b>See</b><img src="https://example.com/diagram.png">';
-    const expectedHtml =
-      '<b>See</b>\n\n<figure><img src="https://example.com/diagram.png"/></figure>';
 
     await sendMessageTelegram("123", html, {
       cfg: TELEGRAM_TEST_CFG,
@@ -1005,13 +1008,15 @@ describe("sendMessageTelegram", () => {
       textMode: "html",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: expectedHtml },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      '<b>See</b>&lt;img src="https://example.com/diagram.png"&gt;',
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves supported Telegram rich HTML structures", async () => {
+  it("preserves supported Telegram HTML structures", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 49, chat: { id: "123" } });
     const html = [
       "<h2>Plan</h2>",
@@ -1027,17 +1032,15 @@ describe("sendMessageTelegram", () => {
       textMode: "html",
     });
 
-    const renderedHtml = richSendCallParams()[0]?.rich_message?.html ?? "";
-    expect(renderedHtml).toContain("<h2>Plan</h2>");
-    expect(renderedHtml).toContain("<details><summary>More</summary><p>Hidden</p></details>");
-    expect(renderedHtml).toContain("<table>");
-    expect(renderedHtml).toContain(
-      '\n\n<figure tg-spoiler><img src="https://example.com/diagram.png" alt="diagram"/></figure>\n\n',
-    );
-    expect(renderedHtml).toContain("<tg-math>x^2 + y^2</tg-math>");
+    const renderedHtml = textSendHtmlChunks()[0] ?? "";
+    expect(renderedHtml).toContain("&lt;h2&gt;Plan&lt;/h2&gt;");
+    expect(renderedHtml).toContain("&lt;details&gt;");
+    expect(renderedHtml).toContain("&lt;table&gt;");
+    expect(renderedHtml).toContain("https://example.com/diagram.png");
+    expect(renderedHtml).toContain("&lt;tg-math&gt;x^2 + y^2&lt;/tg-math&gt;");
   });
 
-  it("sends raw rich HTML tags through Telegram rich HTML", async () => {
+  it("sends raw rich HTML tags through legacy Telegram HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 49, chat: { id: "123" } });
     const markdown = [
       '<img src="https://example.com/diagram.png" alt="Diagram">',
@@ -1051,12 +1054,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(richSendCallParams()[0]?.rich_message).toEqual({
-      html: markdownToTelegramRichHtml(markdown),
-    });
+    expect(textSendHtmlChunks()[0]).toContain('&lt;img src="https://example.com/diagram.png"');
+    expect(textSendHtmlChunks()[0]).toContain("&lt;details&gt;");
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("sends Markdown tables within Telegram's column limit as rich HTML tables", async () => {
+  it("sends Markdown tables within Telegram's column limit as legacy HTML tables", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 50, chat: { id: "123" } });
     const markdown = markdownTable(20);
 
@@ -1065,11 +1068,10 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
-    expect(richSendCallParams()[0]?.rich_message?.html).toContain("<table>");
+    expect(botApi.sendMessage).toHaveBeenCalled();
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+    expect(textSendHtmlChunks()[0]).toContain("| H1 | H2 |");
   });
 
   it("does not auto-linkify Markdown URLs when link previews are disabled", async () => {
@@ -1088,10 +1090,13 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(richSendCallParams()[0]?.rich_message).toEqual({
-      html: "https://example.com",
-      skip_entity_detection: true,
-    });
+    expect(textSendHtmlChunks()[0]).toContain("https://example.com");
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      '<a href="https://example.com">https://example.com</a>',
+      expect.objectContaining({ link_preview_options: { is_disabled: true }, parse_mode: "HTML" }),
+    );
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
   it("renders wide Markdown tables as code blocks when they exceed Telegram's column limit", async () => {
@@ -1103,14 +1108,13 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
-    expect(richSendCallParams()[0]?.rich_message?.html).toContain("<pre><code>");
+    expect(botApi.sendMessage).toHaveBeenCalled();
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+    expect(textSendHtmlChunks()[0]).toContain("| H1 | H2 |");
   });
 
-  it("renders fenced wide Markdown tables as code in rich HTML", async () => {
+  it("renders fenced wide Markdown tables as code in legacy Telegram HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 52, chat: { id: "123" } });
     const markdown = `~~~\n${markdownTable(25)}\n~~~`;
 
@@ -1119,10 +1123,9 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalled();
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
   it("falls back only wide Markdown tables outside fences", async () => {
@@ -1136,13 +1139,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
+    expect(botApi.sendMessage).toHaveBeenCalled();
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("chunks long rich HTML when source text exceeds the message limit", async () => {
+  it("chunks long legacy Telegram HTML when source text exceeds the message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
     const line = "**section** with _style_ and `code`";
     const markdown = `# Long\n\n${`${line}\n`.repeat(2000)}`;
@@ -1152,13 +1154,13 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
+    const chunks = textSendHtmlChunks();
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 32_768)).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 4096)).toBe(true);
     expect(chunks.join("").match(/<b>section<\/b>/g)).toHaveLength(2000);
   });
 
-  it("chunks rich HTML above the Bot API rich message limit", async () => {
+  it("chunks legacy Telegram HTML above the Bot API text message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 54, chat: { id: "123" } });
     const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(3000)}`;
 
@@ -1167,14 +1169,14 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
-    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    const chunks = textSendHtmlChunks();
     expect(chunks.at(0)).toContain("Long");
     expect(chunks.join("").match(/<b>section<\/b>/g)).toHaveLength(3000);
-    expect(chunks.every((chunk) => chunk.length <= 32_768)).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 4096)).toBe(true);
   });
 
-  it("chunks long inline Markdown as bounded rich HTML", async () => {
+  it("chunks long inline Markdown as bounded legacy Telegram HTML", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 52, chat: { id: "123" } });
     const markdown = `**${"A".repeat(70_000)}**`;
 
@@ -1183,14 +1185,13 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message);
+    const chunks = textSendHtmlChunks();
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk?.markdown === undefined)).toBe(true);
-    expect(chunks.every((chunk) => (chunk?.html ?? "").length <= 32_768)).toBe(true);
-    expect(chunks.map((chunk) => chunk?.html ?? "").join("")).toContain("A".repeat(100));
+    expect(chunks.every((chunk) => chunk.length <= 4096)).toBe(true);
+    expect(chunks.join("")).toContain("A".repeat(100));
   });
 
-  it("chunks rich markdown above Telegram's rich block limit", async () => {
+  it("chunks markdown above Telegram's text message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
     const markdown = Array.from({ length: 900 }, (_, index) => `Paragraph ${index + 1}`).join(
       "\n\n",
@@ -1201,13 +1202,13 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
-    expect(chunks).toHaveLength(2);
-    expect(chunks.every((chunk) => (chunk.match(/Paragraph \d+/g)?.length ?? 0) <= 500)).toBe(true);
+    const chunks = textSendHtmlChunks();
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4096)).toBe(true);
     expect(chunks.join("").match(/Paragraph \d+/g)).toHaveLength(900);
   });
 
-  it("chunks rich markdown headings above Telegram's rich block limit", async () => {
+  it("chunks markdown headings above Telegram's text message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 54, chat: { id: "123" } });
     const markdown = Array.from({ length: 600 }, (_, index) => `# Heading ${index + 1}`).join("\n");
 
@@ -1216,13 +1217,13 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
-    expect(chunks).toHaveLength(2);
-    expect(chunks.at(0)?.match(/Heading \d+/g)).toHaveLength(500);
-    expect(chunks.at(1)?.match(/Heading \d+/g)).toHaveLength(100);
+    const chunks = textSendHtmlChunks();
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4096)).toBe(true);
+    expect(chunks.join("").match(/Heading \d+/g)).toHaveLength(600);
   });
 
-  it("keeps long rich markdown lists intact", async () => {
+  it("keeps long markdown lists intact when within the text limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 55, chat: { id: "123" } });
     const markdown = Array.from({ length: 600 }, (_, index) => `- Item ${index + 1}`).join("\n");
 
@@ -1231,14 +1232,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(0);
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps tall rich markdown tables intact", async () => {
+  it("keeps tall markdown tables intact when within the text limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 56, chat: { id: "123" } });
     const markdown = [
       "| Name | Value |",
@@ -1251,11 +1250,9 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(0);
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
   it("does not split rich block chunks on blank lines inside fences", async () => {
@@ -1269,11 +1266,9 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(0);
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
   it("does not split rich heading chunks inside fences", async () => {
@@ -1288,14 +1283,12 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
-    expect(botRawApi.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: "123",
-      rich_message: { html: markdownToTelegramRichHtml(markdown) },
-    });
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(0);
+    expect(textSendCallParams().every((call) => call.params.parse_mode === "HTML")).toBe(true);
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
-  it("chunks long rich markdown fences into bounded rich HTML chunks", async () => {
+  it("chunks long markdown fences into bounded legacy Telegram HTML chunks", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 59, chat: { id: "123" } });
     const markdown = `~~~ts\n${"const value = 1;\n".repeat(5000)}~~~`;
 
@@ -1304,13 +1297,13 @@ describe("sendMessageTelegram", () => {
       token: "tok",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
+    const chunks = textSendHtmlChunks();
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 32_768)).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 4096)).toBe(true);
     expect(chunks.join("")).toContain("const value = 1;");
   });
 
-  it("chunks explicit rich HTML above the Bot API rich message limit", async () => {
+  it("chunks explicit legacy HTML above the Bot API text message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 60, chat: { id: "123" } });
     const html = `<b>${"A".repeat(70_000)}</b>`;
 
@@ -1321,15 +1314,16 @@ describe("sendMessageTelegram", () => {
       buttons: [[{ text: "OK", callback_data: "ok" }]],
     });
 
-    expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
-    const calls = richSendCallParams();
-    expect(calls.every((params) => (params.rich_message?.html ?? "").length <= 32_768)).toBe(true);
-    expect(calls.at(0)?.rich_message?.html).toMatch(/^<b>A/);
-    expect(calls.at(-1)?.rich_message?.html).toMatch(/A<\/b>$/);
-    expect(calls.slice(0, -1).every((params) => params.reply_markup === undefined)).toBe(true);
-    expect(calls.at(-1)?.reply_markup).toEqual({
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    const calls = textSendCallParams();
+    expect(calls.every((call) => call.text.length <= 4096)).toBe(true);
+    expect(calls.at(0)?.text).toMatch(/^<b>A/);
+    expect(calls.at(-1)?.text).toMatch(/A<\/b>$/);
+    expect(calls.slice(0, -1).every((call) => call.params.reply_markup === undefined)).toBe(true);
+    expect(calls.at(-1)?.params.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
   it("chunks explicit rich HTML after media normalization", async () => {
@@ -1351,10 +1345,10 @@ describe("sendMessageTelegram", () => {
       textMode: "html",
     });
 
-    const chunks = richSendCallParams().map((params) => params.rich_message?.html ?? "");
+    const chunks = textSendHtmlChunks();
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= html.length + 5)).toBe(true);
-    expect(chunks.join("")).toContain("<figure>");
+    expect(chunks.join("")).toContain('&lt;img src="https://example.com/a.png"&gt;');
   });
 
   it("fails when Telegram text send returns no message_id", async () => {
@@ -1612,7 +1606,7 @@ describe("sendMessageTelegram", () => {
     expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: undefined,
     });
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
     expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toContain("A");
     expect(res.messageId).toBe("74");
@@ -2593,7 +2587,7 @@ describe("sendMessageTelegram", () => {
     expect(logs).toContain("accountId=ops");
     expect(logs).toContain(`chatId=${chatId}`);
     expect(logs).toContain("messageId=321");
-    expect(logs).toContain("operation=sendRichMessage");
+    expect(logs).toContain("operation=sendMessage");
     expect(logs).toContain("threadId=271");
     expect(logs).toContain("replyToMessageId=123");
     expect(logs).toContain("silent=true");
@@ -2797,10 +2791,11 @@ describe("sendMessageTelegram", () => {
       buttons: [[{ text: "OK", callback_data: "ok" }]],
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const firstCall = firstMockCall(sendMessage, "first sendMessage call");
-    const firstParams = requireRecord(firstCall[2], "first sendMessage params");
-    expect(firstParams.reply_markup).toEqual({
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
+    const lastCall = sendMessage.mock.calls.at(-1);
+    expect(lastCall).toBeDefined();
+    const lastParams = requireRecord(lastCall?.[2], "last sendMessage params");
+    expect(lastParams.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(res.messageId).toBe("91");
@@ -2820,13 +2815,17 @@ describe("sendMessageTelegram", () => {
       buttons: [[{ text: "OK", callback_data: "ok" }]],
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
     const firstCall = firstMockCall(sendMessage, "first sendMessage call");
     const firstParams = requireRecord(firstCall[2], "first sendMessage params");
     const firstText = requireString(firstCall[1], "first sendMessage text");
+    const lastCall = sendMessage.mock.calls.at(-1);
+    expect(lastCall).toBeDefined();
+    const lastParams = requireRecord(lastCall?.[2], "last sendMessage params");
     expect(firstParams.parse_mode).toBe("HTML");
+    expect(lastParams.parse_mode).toBe("HTML");
     expect(firstText).toContain("A");
-    expect(firstParams.reply_markup).toEqual({
+    expect(lastParams.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(res.messageId).toBe("91");
