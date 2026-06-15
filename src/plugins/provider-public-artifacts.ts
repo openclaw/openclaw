@@ -112,6 +112,17 @@ function pluginOwnsProviderPolicyRef(
     return true;
   }
 
+  // A plugin's policy surface also serves the CLI backends it declares (e.g. the anthropic
+  // plugin owns the "claude-cli" backend). Those backends are providers in their own right
+  // but have no standalone surface, so without this they resolve to no policy at all — which,
+  // in subagent sessions, silently caps their thinking profile at the base "high" ceiling.
+  const ownedCliBackends = new Set(
+    plugin.cliBackends.map((backend) => normalizeProviderId(backend)).filter(Boolean),
+  );
+  if (ownedCliBackends.has(normalizedProviderId)) {
+    return true;
+  }
+
   for (const [rawAlias, rawTarget] of Object.entries(plugin.providerAuthAliases ?? {})) {
     const alias = normalizeProviderId(rawAlias);
     const target = normalizeProviderId(rawTarget);
