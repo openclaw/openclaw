@@ -67,7 +67,6 @@ import {
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
 import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
-import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
@@ -144,7 +143,6 @@ import {
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
 
-export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -204,6 +202,22 @@ async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string)
   } catch {
     return false;
   }
+}
+
+function includeStickerDescription(body: string | undefined, formattedDescription: string): string {
+  if (!body) {
+    return formattedDescription;
+  }
+  const current = body.trim();
+  if (!current || current === "<media:image>") {
+    return formattedDescription;
+  }
+  // Cached descriptions can already be present from inbound context construction.
+  // Keep that body intact so captions, forwarded text, and supplemental context survive.
+  if (body.includes(formattedDescription)) {
+    return body;
+  }
+  return `${formattedDescription}\n${body}`;
 }
 
 type DispatchTelegramMessageParams = {
@@ -1524,11 +1538,12 @@ export const dispatchTelegramMessage = async ({
 
         sticker.cachedDescription = description;
         if (!stickerSupportsVision) {
-          ctxPayload.Body = formattedDesc;
-          ctxPayload.BodyForAgent = formattedDesc;
-          pruneStickerMediaFromContext(ctxPayload, {
-            stickerMediaIncluded: ctxPayload.StickerMediaIncluded,
-          });
+          ctxPayload.Body = includeStickerDescription(ctxPayload.Body, formattedDesc);
+          ctxPayload.BodyForAgent = includeStickerDescription(
+            ctxPayload.BodyForAgent,
+            formattedDesc,
+          );
+          ctxPayload.SkipStickerMediaUnderstanding = true;
         }
         cacheSticker({
           fileId: sticker.fileId,

@@ -87,7 +87,7 @@ const resolveAndPersistSessionFile = vi.hoisted(() =>
   })),
 );
 const generateTopicLabel = vi.hoisted(() => vi.fn());
-const describeStickerImage = vi.hoisted(() => vi.fn(async () => null));
+const describeStickerImage = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => ({})));
 const findModelInCatalog = vi.hoisted(() => vi.fn(() => null));
 const modelSupportsVision = vi.hoisted(() => vi.fn(() => false));
@@ -554,6 +554,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
       route: { agentId: "ops" } as unknown as TelegramMessageContext["route"],
     });
   }
+
+  it("skips general understanding after describing a first-seen non-vision sticker", async () => {
+    describeStickerImage.mockResolvedValueOnce("A curious sticker");
+    const ctxPayload = {
+      MediaPath: "/tmp/sticker.webp",
+      Sticker: {
+        fileId: "sticker-file",
+        fileUniqueId: "sticker-unique",
+      },
+      StickerMediaIncluded: true,
+    } as TelegramMessageContext["ctxPayload"];
+
+    await dispatchWithContext({
+      context: createContext({ ctxPayload }),
+    });
+
+    expect(describeStickerImage).toHaveBeenCalledOnce();
+    expect(ctxPayload.BodyForAgent).toBe("[Sticker] A curious sticker");
+    expect(ctxPayload.SkipStickerMediaUnderstanding).toBe(true);
+    expectDispatchParams({
+      ctx: expect.objectContaining({
+        SkipStickerMediaUnderstanding: true,
+      }),
+    });
+  });
+
+  it("preserves cached sticker descriptions with user text through dispatch", async () => {
+    const body = "[Sticker] Cached description\nWhat is this?";
+    const ctxPayload = {
+      Body: body,
+      BodyForAgent: body,
+      MediaPath: "/tmp/sticker.webp",
+      Sticker: {
+        fileId: "sticker-file",
+        fileUniqueId: "sticker-unique",
+        cachedDescription: "Cached description",
+      },
+      StickerMediaIncluded: true,
+      SkipStickerMediaUnderstanding: true,
+    } as TelegramMessageContext["ctxPayload"];
+
+    await dispatchWithContext({
+      context: createContext({ ctxPayload }),
+    });
+
+    expect(describeStickerImage).not.toHaveBeenCalled();
+    expect(ctxPayload.Body).toBe(body);
+    expect(ctxPayload.BodyForAgent).toBe(body);
+    expectDispatchParams({
+      ctx: expect.objectContaining({
+        BodyForAgent: body,
+        SkipStickerMediaUnderstanding: true,
+      }),
+    });
+  });
 
   it("streams drafts in private threads and forwards thread id", async () => {
     const draftStream = createDraftStream();

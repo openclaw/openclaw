@@ -2182,15 +2182,32 @@ describe("createTelegramBot", () => {
         mediaRef?: string;
         replyToId?: string;
       }>;
+      UntrustedStructuredContext?: unknown[];
     };
     expect(payload.ReplyChain).toHaveLength(2);
     expect(payload.ReplyChain?.[0]?.messageId).toBe("9001");
     expect(payload.ReplyChain?.[0]?.body).toBe("r u back from hermes");
     expect(payload.ReplyChain?.[0]?.replyToId).toBe("9000");
     expect(payload.ReplyChain?.[1]?.messageId).toBe("9000");
-    expect(payload.ReplyChain?.[1]?.mediaRef).toBe("telegram:file/root-photo-1");
     expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
-    expect(payload.ReplyChain?.[1]?.mediaPath).not.toBe("");
+    expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
+    expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("9000")).toMatchObject({
+      sender: "Kesava",
+    });
+    expect(messagesById.get("9000")?.media_path).toMatch(/^media:\/\/inbound\//);
+    expect(messagesById.get("9000")?.media_path).not.toBe(payload.ReplyChain?.[1]?.mediaPath);
+    expect(messagesById.get("9000")?.media_ref).toBeUndefined();
     expect(getFileSpy).toHaveBeenCalledWith("root-photo-1");
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
@@ -2289,9 +2306,10 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyChain?.[1]).toMatchObject({
       sender: "OpenClaw",
       body: "Done, here is the image",
-      mediaRef: "telegram:file/generated-photo-1",
     });
     expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
+    expect(payload.ReplyChain?.[1]?.mediaPath).toContain("/media/inbound/");
+    expect(payload.ReplyChain?.[1]?.mediaRef).toBeUndefined();
     const [conversationContext] = requireArray(
       payload.UntrustedStructuredContext,
       "structured context",
@@ -2308,6 +2326,7 @@ describe("createTelegramBot", () => {
       media_ref: "telegram:file/generated-photo-1",
       is_reply_target: true,
     });
+    expect(messagesById.get("101")?.media_path).toBeUndefined();
     expect(messagesById.get("102")).toMatchObject({
       sender: "UserB",
       body: "Why is there a 4th person?",
