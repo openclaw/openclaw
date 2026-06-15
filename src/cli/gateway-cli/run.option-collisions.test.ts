@@ -933,6 +933,26 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors.join("\n")).toContain("Refusing to reset the dev gateway state");
   });
 
+  it("blocks dev reset when parseable future-version metadata is schema-invalid", async () => {
+    configState.snapshot = {
+      config: {},
+      exists: true,
+      issues: [{ message: "unknown newer field", path: "gateway.newerField" }],
+      parsed: { gateway: { newerField: true }, meta: { lastTouchedVersion: "9999.1.1" } },
+      sourceConfig: {
+        gateway: { newerField: true },
+        meta: { lastTouchedVersion: "9999.1.1" },
+      },
+      valid: false,
+    };
+
+    await expect(prepareGatewayReset()).rejects.toThrow("__exit__:1");
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Refusing to reset the dev gateway state");
+  });
+
   it("does not retain targets or credentials from the config deleted by dev reset", async () => {
     await withEnvAsync(
       {
