@@ -1880,7 +1880,7 @@ export default definePluginEntry({
     // Lifecycle Hooks
     // ========================================================================
 
-    // Auto-recall: inject relevant memories during prompt build
+    // Auto-recall: inject relevant memories as plugin system context during prompt build
     api.on("before_prompt_build", async (event) => {
       const currentCfg = resolveCurrentHookConfig();
       if (!currentCfg.autoRecall) {
@@ -1931,7 +1931,7 @@ export default definePluginEntry({
         }
 
         return {
-          prependContext: context,
+          prependSystemContext: context,
         };
       } catch (err) {
         api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
