@@ -79,15 +79,17 @@
  *      real states (no mocks: real SQLite, real file I/O, real JSON.parse):
  *      (a) missing DB → `absent`, (b) valid store → `present`, (c) garbage
  *      SQLite file → `unreadable`, (d) row present but malformed `store_json`
- *      cell → `unreadable`.  Pre-fix the raw reader swallowed (c)/(d) to `null`
- *      and the fingerprint read them as a cacheable `absent`, letting stale
- *      provider/auth discovery ride a warm hit when auth state could not be
- *      trusted.  Post-fix they read `unreadable`, which the fingerprint maps to
- *      `uncacheable` (fail closed).  Note: the round-2 byte-equality write guard
- *      means a forced re-plan with identical output does NOT rewrite
- *      models.json, so the reader outcome — not an inode/mtime delta — is the
- *      ground-truth signal here.  A final positive control restores a valid
- *      store and confirms a steady-state warm hit (stable inode/mtime).
+ *      cell → `unreadable`.  It also calls the public source-fingerprint shim
+ *      for (c)/(d) and asserts `cacheable: false`.  Pre-fix the raw reader
+ *      swallowed (c)/(d) to `null` and the fingerprint read them as a cacheable
+ *      `absent`, letting stale provider/auth discovery ride a warm hit when
+ *      auth state could not be trusted.  Post-fix they read `unreadable`, which
+ *      the fingerprint exposes as non-cacheable (fail closed).  Note: the
+ *      round-2 byte-equality write guard means a forced re-plan with identical
+ *      output does NOT rewrite models.json, so the reader + fingerprint
+ *      outcomes — not an inode/mtime delta — are the ground-truth signals here.
+ *      A final positive control restores a valid store and confirms a
+ *      steady-state warm hit (stable inode/mtime).
  *
  * The proof is self-checking: any regression throws and exits non-zero.
  * Captured output must show "All runtime assertions passed." on success.
@@ -103,7 +105,10 @@ import {
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
 } from "../src/agents/auth-profiles/sqlite.js";
-import { ensureOpenClawModelsJson } from "../src/agents/models-config.js";
+import {
+  buildModelsJsonSourceFingerprint,
+  ensureOpenClawModelsJson,
+} from "../src/agents/models-config.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -364,6 +369,7 @@ async function scenarioUnreadableAuthStoreFailsClosed(): Promise<void> {
   console.log("[5/5] unreadable-auth-store-fails-closed");
   const agentDir = await makeAgentDir("corrupt-auth");
   const authDbPath = resolveAuthProfileDatabasePath(agentDir);
+  const cfg = createOpenAiConfig();
 
   // This scenario proves the P1 contract at its real seam: the exported
   // `readPersistedAuthProfileStoreRawOutcome` — the discriminated reader the
@@ -371,7 +377,8 @@ async function scenarioUnreadableAuthStoreFailsClosed(): Promise<void> {
   // legitimately ABSENT store from an UNREADABLE one across all four real
   // states (no mocks: real SQLite, real file I/O, real `JSON.parse`).  The
   // fingerprint's fail-closed branch keys entirely on the `unreadable` kind, so
-  // pinning the reader's discrimination pins the security contract directly.
+  // pinning the reader's discrimination plus the public shim's `cacheable:false`
+  // result pins the security contract directly.
   //
   // Why prove the reader directly rather than via a models.json rewrite: the
   // round-2 byte-equality write guard (scenario 4) means a forced re-plan that
@@ -412,7 +419,7 @@ async function scenarioUnreadableAuthStoreFailsClosed(): Promise<void> {
   // read-only open/query throws.  PRE-FIX the raw reader swallowed this to
   // `null` and the fingerprint path read it as a cacheable `absent`, letting
   // stale provider/auth discovery ride a warm hit.  POST-FIX it reads
-  // `unreadable` → the fingerprint returns `uncacheable` (fail closed).
+  // `unreadable` → the fingerprint returns `cacheable:false` (fail closed).
   closeOpenClawAgentDatabasesForTest();
   await fsPromises.writeFile(authDbPath, "this is not a valid sqlite database file");
   await fsPromises.rm(`${authDbPath}-wal`, { force: true });
@@ -422,6 +429,12 @@ async function scenarioUnreadableAuthStoreFailsClosed(): Promise<void> {
   assert(
     corruptOutcome.kind === "unreadable",
     "a corrupt/unreadable SQLite auth DB must read as unreadable, NOT absent (fail closed)",
+  );
+  const corruptFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir);
+  console.log(`    corrupt-db fingerprint cacheable=${corruptFingerprint.cacheable}`);
+  assert(
+    corruptFingerprint.cacheable === false,
+    "a corrupt/unreadable SQLite auth DB must make the source fingerprint non-cacheable",
   );
 
   // (d) UNREADABLE (malformed JSON cell) — the row exists and the DB opens
@@ -454,12 +467,17 @@ async function scenarioUnreadableAuthStoreFailsClosed(): Promise<void> {
     malformedOutcome.kind === "unreadable",
     "a malformed JSON store cell must read as unreadable, NOT absent (fail closed)",
   );
+  const malformedFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir);
+  console.log(`    malformed-json-cell fingerprint cacheable=${malformedFingerprint.cacheable}`);
+  assert(
+    malformedFingerprint.cacheable === false,
+    "a malformed JSON store cell must make the source fingerprint non-cacheable",
+  );
 
   // (e) End-to-end positive control: a restored VALID store re-enables caching.
   // Remove the garbled file, seed a valid store, then confirm a warm hit leaves
   // models.json untouched (inode/mtime steady) — caching resumed once the auth
   // store is trustworthy again.
-  const cfg = createOpenAiConfig();
   const modelsPath = path.join(agentDir, "models.json");
   closeOpenClawAgentDatabasesForTest();
   await fsPromises.rm(authDbPath, { force: true });
