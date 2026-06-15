@@ -5,6 +5,21 @@ vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: vi.fn(),
 }));
 
+const { MockUploadDailyLimitExceededError } = vi.hoisted(() => {
+  class MockUploadDailyLimitExceededError extends Error {
+    override readonly name = "UploadDailyLimitExceededError";
+
+    constructor(
+      readonly filePath: string,
+      readonly fileSize: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+  return { MockUploadDailyLimitExceededError };
+});
+
 vi.mock("./sender.js", () => ({
   accountToCreds: (account: { appId: string; clientSecret: string }) => ({
     appId: account.appId,
@@ -12,11 +27,12 @@ vi.mock("./sender.js", () => ({
   }),
   sendMedia: vi.fn(),
   sendText: vi.fn(),
-  UploadDailyLimitExceededError: class UploadDailyLimitExceededError extends Error {},
+  UploadDailyLimitExceededError: MockUploadDailyLimitExceededError,
 }));
 
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { sendPhoto } from "./outbound-media-send.js";
+import { OUTBOUND_ERROR_CODES, type OutboundResult } from "./outbound-types.js";
 import { sendMedia as senderSendMedia } from "./sender.js";
 
 const mockedLoadOutboundMediaFromUrl = vi.mocked(loadOutboundMediaFromUrl);
@@ -71,5 +87,33 @@ describe("trySendViaHostRead error handling", () => {
 
     expect(result).toMatchObject({ channel: "qqbot", error: expect.any(String) });
     expect(result.error).toContain("qq upload quota exceeded");
+  });
+
+  it("preserves daily upload quota metadata from senderSendMedia", async () => {
+    mockedLoadOutboundMediaFromUrl.mockResolvedValue({
+      buffer: Buffer.from("report"),
+      kind: "document",
+      fileName: "report.docx",
+      contentType: "application/octet-stream",
+    });
+    mockedSenderSendMedia.mockRejectedValue(
+      new MockUploadDailyLimitExceededError(
+        "/tmp/openclaw-sandbox/report.docx",
+        2048,
+        "daily quota",
+      ),
+    );
+
+    const result = (await sendPhoto(
+      makeCtx(),
+      "/tmp/openclaw-sandbox/report.docx",
+    )) as OutboundResult;
+
+    expect(result).toMatchObject({
+      channel: "qqbot",
+      errorCode: OUTBOUND_ERROR_CODES.UPLOAD_DAILY_LIMIT_EXCEEDED,
+      qqBizCode: 40093002,
+    });
+    expect(result.error).toContain("report.docx");
   });
 });

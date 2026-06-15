@@ -248,6 +248,9 @@ async function trySendViaHostRead(
     });
     return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
   } catch (err) {
+    if (err instanceof UploadDailyLimitExceededError) {
+      return buildDailyLimitExceededResult(err);
+    }
     return {
       channel: "qqbot",
       error: formatErrorMessage(err),
