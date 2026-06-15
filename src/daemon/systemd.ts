@@ -1358,13 +1358,23 @@ async function runSystemdServiceAction(params: {
     if (res.code !== 0) {
       throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
     }
-    const retiredUserUnit = await retireConflictingUserScopeUnitForSystemUnit(
-      env,
-      installed.conflictingUnit,
-    );
-    if (retiredUserUnit) {
+    try {
+      const retiredUserUnit = await retireConflictingUserScopeUnitForSystemUnit(
+        env,
+        installed.conflictingUnit,
+      );
+      if (retiredUserUnit) {
+        params.stdout.write(
+          `${formatLine("Retired conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath})`)}\n`,
+        );
+      }
+    } catch (error) {
+      const conflictingUnit = installed.conflictingUnit;
+      const cleanupTarget = conflictingUnit
+        ? `${conflictingUnit.unitName} (${conflictingUnit.unitPath})`
+        : unitName;
       params.stdout.write(
-        `${formatLine("Retired conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath})`)}\n`,
+        `${formatLine("Could not retire conflicting systemd service", `${cleanupTarget}: ${formatErrorMessage(error)}`)}\n`,
       );
     }
     params.stdout.write(`${formatLine(params.label, unitName)}\n`);
