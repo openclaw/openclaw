@@ -642,7 +642,7 @@ export function runAgentAttempt(params: {
           nextCliSessionId === activeCliSessionBinding?.sessionId
             ? activeCliSessionBinding
             : undefined,
-        authProfileId: authProfileId ?? params.cfg.auth?.order?.[cliExecutionProvider]?.[0],
+        authProfileId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
         images: params.isFallbackRetry ? undefined : params.opts.images,
