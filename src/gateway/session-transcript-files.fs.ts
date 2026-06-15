@@ -16,6 +16,10 @@ import {
 } from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+} from "../trajectory/paths.js";
 
 type ArchiveFileReason = SessionArchiveReason;
 type ResetArchiveCandidate = { archivePath: string; name: string; timestamp: number };
@@ -435,21 +439,16 @@ export function archiveSessionTranscriptsDetailed(opts: {
     opts.restrictToStoreDir && opts.storePath
       ? canonicalizePathForComparison(path.dirname(opts.storePath))
       : null;
-  for (const candidate of resolveSessionTranscriptCandidates(
-    opts.sessionId,
-    opts.storePath,
-    opts.sessionFile,
-    opts.agentId,
-  )) {
-    const candidatePath = canonicalizePathForComparison(candidate);
-    if (storeDir) {
-      const relative = path.relative(storeDir, candidatePath);
-      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-        continue;
-      }
+  const dirAllowsPath = (candidatePath: string): boolean => {
+    if (!storeDir) {
+      return true;
     }
-    if (!fs.existsSync(candidatePath)) {
-      continue;
+    const relative = path.relative(storeDir, candidatePath);
+    return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+  };
+  const archiveIfExists = (candidatePath: string): void => {
+    if (!dirAllowsPath(candidatePath) || !fs.existsSync(candidatePath)) {
+      return;
     }
     try {
       archived.push({
@@ -459,6 +458,33 @@ export function archiveSessionTranscriptsDetailed(opts: {
     } catch (err) {
       opts.onArchiveError?.(err, candidatePath);
     }
+  };
+  for (const candidate of resolveSessionTranscriptCandidates(
+    opts.sessionId,
+    opts.storePath,
+    opts.sessionFile,
+    opts.agentId,
+  )) {
+    const candidatePath = canonicalizePathForComparison(candidate);
+    if (!dirAllowsPath(candidatePath)) {
+      continue;
+    }
+    if (!fs.existsSync(candidatePath)) {
+      continue;
+    }
+    // Archive the primary transcript file first.
+    archiveIfExists(candidatePath);
+    // Also archive the trajectory sidecar files so tool-call forensics survive
+    // session reset (#90707). The trajectory runtime file holds assistant tool
+    // calls and results; the pointer sidecar records the runtime file location.
+    const trajectoryRuntimePath = resolveTrajectoryFilePath({
+      env: {},
+      sessionFile: candidate,
+      sessionId: opts.sessionId,
+    });
+    archiveIfExists(trajectoryRuntimePath);
+    const trajectoryPointerPath = resolveTrajectoryPointerFilePath(candidate);
+    archiveIfExists(trajectoryPointerPath);
   }
   return archived;
 }
