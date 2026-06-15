@@ -844,6 +844,21 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("does not run for dreaming-narrative cron session keys", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:dreaming-narrative-light-abc123",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("defaults to direct-style sessions only", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should we order?", messages: [] },

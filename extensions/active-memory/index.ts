@@ -1155,6 +1155,9 @@ function isEligibleInteractiveSession(ctx: {
   if (ctx.trigger !== "user") {
     return false;
   }
+  if (ctx.sessionKey?.toLowerCase().includes("dreaming-narrative")) {
+    return false;
+  }
   if (!ctx.sessionKey && !ctx.sessionId) {
     return false;
   }
