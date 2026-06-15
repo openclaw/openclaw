@@ -15,6 +15,8 @@ Options:
   --env-file <path>        Env file path (default: <repo-root>/.env)
   --config-dir <path>      OpenClaw config dir (default: env or ~/.openclaw)
   --workspace-dir <path>   OpenClaw workspace dir (default: env or ~/.openclaw/workspace)
+  --auth-profile-secret-dir <path>
+                           Auth-profile secret dir (default: env or ~/.openclaw-auth-profile-secrets)
   --apply-env              Overwrite --env-file with backup .env (default: false)
   --no-stop                Do not stop gateway container before restore
   -h, --help               Show this help
@@ -27,6 +29,7 @@ ENV_FILE=""
 ARCHIVE_PATH=""
 CONFIG_DIR=""
 WORKSPACE_DIR=""
+AUTH_PROFILE_SECRET_DIR=""
 APPLY_ENV=0
 STOP_FIRST=1
 ENV_FILE_EXPLICIT=0
@@ -52,6 +55,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workspace-dir)
       WORKSPACE_DIR="$2"
+      shift 2
+      ;;
+    --auth-profile-secret-dir)
+      AUTH_PROFILE_SECRET_DIR="$2"
       shift 2
       ;;
     --apply-env)
@@ -113,11 +120,16 @@ fi
 if [[ -z "$WORKSPACE_DIR" ]]; then
   WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$(env_value_from_file "$ENV_FILE" OPENCLAW_WORKSPACE_DIR)}"
 fi
+if [[ -z "$AUTH_PROFILE_SECRET_DIR" ]]; then
+  AUTH_PROFILE_SECRET_DIR="${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-$(env_value_from_file "$ENV_FILE" OPENCLAW_AUTH_PROFILE_SECRET_DIR)}"
+fi
 
 CONFIG_DIR="${CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+AUTH_PROFILE_SECRET_DIR="${AUTH_PROFILE_SECRET_DIR:-$HOME/.openclaw-auth-profile-secrets}"
 CONFIG_DIR="$(resolve_abs_path "$CONFIG_DIR")"
 WORKSPACE_DIR="$(resolve_abs_path "$WORKSPACE_DIR")"
+AUTH_PROFILE_SECRET_DIR="$(resolve_abs_path "$AUTH_PROFILE_SECRET_DIR")"
 
 if [[ $STOP_FIRST -eq 1 ]] && command -v docker >/dev/null 2>&1; then
   compose_file="$REPO_ROOT/docker-compose.yml"
@@ -129,7 +141,7 @@ if [[ $STOP_FIRST -eq 1 ]] && command -v docker >/dev/null 2>&1; then
 fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$(dirname "$CONFIG_DIR")" "$(dirname "$WORKSPACE_DIR")"
+mkdir -p "$(dirname "$CONFIG_DIR")" "$(dirname "$WORKSPACE_DIR")" "$(dirname "$AUTH_PROFILE_SECRET_DIR")"
 
 if [[ -d "$CONFIG_DIR" ]]; then
   mv "$CONFIG_DIR" "${CONFIG_DIR}.pre-restore-${timestamp}"
@@ -137,14 +149,22 @@ fi
 if [[ -d "$WORKSPACE_DIR" ]]; then
   mv "$WORKSPACE_DIR" "${WORKSPACE_DIR}.pre-restore-${timestamp}"
 fi
+if [[ -d "$AUTH_PROFILE_SECRET_DIR" && -d "$tmpdir/payload/auth-profile-secrets" ]]; then
+  mv "$AUTH_PROFILE_SECRET_DIR" "${AUTH_PROFILE_SECRET_DIR}.pre-restore-${timestamp}"
+fi
 
-mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR"
+mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR" "$AUTH_PROFILE_SECRET_DIR"
 
 echo "==> Restoring config"
 rsync -a "$tmpdir/payload/config/" "$CONFIG_DIR/"
 
 echo "==> Restoring workspace"
 rsync -a "$tmpdir/payload/workspace/" "$WORKSPACE_DIR/"
+
+if [[ -d "$tmpdir/payload/auth-profile-secrets" ]]; then
+  echo "==> Restoring auth-profile secret directory"
+  rsync -a "$tmpdir/payload/auth-profile-secrets/" "$AUTH_PROFILE_SECRET_DIR/"
+fi
 
 if [[ -f "$tmpdir/payload/repo/.env" ]]; then
   if [[ $APPLY_ENV -eq 1 ]]; then
@@ -153,9 +173,11 @@ if [[ -f "$tmpdir/payload/repo/.env" ]]; then
       cp "$ENV_FILE" "${ENV_FILE}.pre-restore-${timestamp}"
     fi
     cp "$tmpdir/payload/repo/.env" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
     echo "==> Applied backed up env file to $ENV_FILE"
   else
     cp "$tmpdir/payload/repo/.env" "${ENV_FILE}.from-backup"
+    chmod 600 "${ENV_FILE}.from-backup"
     echo "==> Wrote env candidate to ${ENV_FILE}.from-backup"
   fi
 fi

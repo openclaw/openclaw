@@ -14,6 +14,8 @@ Options:
   --env-file <path>        Env file to include (default: <repo-root>/.env)
   --config-dir <path>      OpenClaw config dir (default: env or ~/.openclaw)
   --workspace-dir <path>   OpenClaw workspace dir (default: env or ~/.openclaw/workspace)
+  --auth-profile-secret-dir <path>
+                           Auth-profile secret dir (default: env or ~/.openclaw-auth-profile-secrets)
   --output-dir <path>      Output directory for backup archive (default: <repo-root>/backups)
   --name <name>            Backup name prefix (default: openclaw-backup-<timestamp>)
   -h, --help               Show this help
@@ -25,6 +27,7 @@ REPO_ROOT="$ROOT_DIR"
 ENV_FILE=""
 CONFIG_DIR=""
 WORKSPACE_DIR=""
+AUTH_PROFILE_SECRET_DIR=""
 OUTPUT_DIR=""
 BACKUP_NAME=""
 ENV_FILE_EXPLICIT=0
@@ -47,6 +50,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workspace-dir)
       WORKSPACE_DIR="$2"
+      shift 2
+      ;;
+    --auth-profile-secret-dir)
+      AUTH_PROFILE_SECRET_DIR="$2"
       shift 2
       ;;
     --output-dir)
@@ -91,11 +98,16 @@ fi
 if [[ -z "$WORKSPACE_DIR" ]]; then
   WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$(env_value_from_file "$ENV_FILE" OPENCLAW_WORKSPACE_DIR)}"
 fi
+if [[ -z "$AUTH_PROFILE_SECRET_DIR" ]]; then
+  AUTH_PROFILE_SECRET_DIR="${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-$(env_value_from_file "$ENV_FILE" OPENCLAW_AUTH_PROFILE_SECRET_DIR)}"
+fi
 
 CONFIG_DIR="${CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+AUTH_PROFILE_SECRET_DIR="${AUTH_PROFILE_SECRET_DIR:-$HOME/.openclaw-auth-profile-secrets}"
 CONFIG_DIR="$(resolve_abs_path "$CONFIG_DIR")"
 WORKSPACE_DIR="$(resolve_abs_path "$WORKSPACE_DIR")"
+AUTH_PROFILE_SECRET_DIR="$(resolve_abs_path "$AUTH_PROFILE_SECRET_DIR")"
 
 [[ -d "$CONFIG_DIR" ]] || fail "Config directory does not exist: $CONFIG_DIR"
 [[ -d "$WORKSPACE_DIR" ]] || fail "Workspace directory does not exist: $WORKSPACE_DIR"
@@ -108,6 +120,7 @@ case "$BACKUP_NAME" in
     fail "--name must be a simple filename prefix using letters, numbers, dot, underscore, or dash"
     ;;
 esac
+umask 077
 mkdir -p "$OUTPUT_DIR"
 
 tmpdir="$(mktemp -d)"
@@ -129,6 +142,14 @@ rsync "${config_rsync_args[@]}" "$CONFIG_DIR/" "$stage/payload/config/"
 echo "==> Copying workspace directory"
 rsync -a "$WORKSPACE_DIR/" "$stage/payload/workspace/"
 
+if [[ -d "$AUTH_PROFILE_SECRET_DIR" ]]; then
+  echo "==> Copying auth-profile secret directory"
+  mkdir -p "$stage/payload/auth-profile-secrets"
+  rsync -a "$AUTH_PROFILE_SECRET_DIR/" "$stage/payload/auth-profile-secrets/"
+else
+  echo "WARNING: auth-profile secret directory not found; skipping: $AUTH_PROFILE_SECRET_DIR" >&2
+fi
+
 if [[ -f "$ENV_FILE" ]]; then
   echo "==> Including env file: $ENV_FILE"
   cp "$ENV_FILE" "$stage/payload/repo/.env"
@@ -149,6 +170,7 @@ done
   echo "repo_root=$REPO_ROOT"
   echo "config_dir=$CONFIG_DIR"
   echo "workspace_dir=$WORKSPACE_DIR"
+  echo "auth_profile_secret_dir=$AUTH_PROFILE_SECRET_DIR"
 } >"$stage/meta/backup.env"
 
 if command -v docker >/dev/null 2>&1; then
@@ -210,6 +232,7 @@ archive_path="$OUTPUT_DIR/${BACKUP_NAME}.tar.gz"
   cd "$OUTPUT_DIR"
   shasum -a 256 "$(basename "$archive_path")" > "$(basename "$archive_path").sha256"
 )
+chmod 600 "$archive_path" "${archive_path}.sha256"
 
 echo
 echo "Backup created:"

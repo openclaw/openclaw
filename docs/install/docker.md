@@ -493,8 +493,10 @@ The archive includes:
 
 - OpenClaw config dir (`OPENCLAW_CONFIG_DIR` or `~/.openclaw`)
 - OpenClaw workspace dir (`OPENCLAW_WORKSPACE_DIR` or `~/.openclaw/workspace`)
+- Auth-profile secret key dir (`OPENCLAW_AUTH_PROFILE_SECRET_DIR` or
+  `~/.openclaw-auth-profile-secrets`)
 - `.env` and Docker setup files from the repo root
-- metadata and an internal checksum manifest
+- metadata, an internal checksum manifest, and an external archive checksum
 
 Output files:
 
@@ -507,6 +509,7 @@ Optional path overrides:
 scripts/migrate/backup-openclaw.sh \
   --config-dir "$HOME/.openclaw" \
   --workspace-dir "$HOME/.openclaw/workspace" \
+  --auth-profile-secret-dir "$HOME/.openclaw-auth-profile-secrets" \
   --output-dir "$HOME/openclaw-backups"
 ```
 
@@ -528,8 +531,9 @@ Default restore behavior:
 
 - verifies archive checksums
 - stops `openclaw-gateway` before restore
-- snapshots current config and workspace as `.pre-restore-<timestamp>`
-- restores config and workspace from backup
+- snapshots current config, workspace, and auth-profile secret dirs as
+  `.pre-restore-<timestamp>`
+- restores config, workspace, and auth-profile secret state from backup
 - writes the backup env file as `.env.from-backup` for review
 
 To overwrite `.env` directly:
