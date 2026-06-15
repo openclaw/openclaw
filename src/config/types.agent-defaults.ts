@@ -566,7 +566,9 @@ export type AgentCompactionConfig = {
    */
   maxActiveTranscriptBytes?: number | string;
   /**
-   * Send brief compaction notices to the user when compaction starts and completes.
+   * Send brief context-maintenance notices to the user: when compaction starts
+   * and completes, and when a pre-compaction memory flush is exhausted so the
+   * reply continues in a degraded state.
    * Default: false (silent by default).
    */
   notifyUser?: boolean;
