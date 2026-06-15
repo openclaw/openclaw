@@ -1,8 +1,8 @@
 #!/usr/bin/env -S pnpm tsx
 // Npm Update Smoke script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -11,6 +11,8 @@ import {
   extractLastOpenClawVersionFromLog,
   makeTempDir,
   packOpenClaw,
+  packageBuildCommitFromTgz,
+  packageVersionFromTgz,
   parsePlatformList,
   parseProvider,
   readPositiveIntEnv,
@@ -43,6 +45,7 @@ interface NpmUpdateOptions {
   freshTargetSpec?: string;
   hostIp?: string;
   packageSpec: string;
+  targetTarball?: string;
   updateTarget: string;
   platforms: Set<Platform>;
   provider: Provider;
@@ -288,6 +291,7 @@ Options:
   --package-spec <npm-spec>  Baseline npm package spec. Default: openclaw@latest
   --update-target <target>    Target passed to guest 'openclaw update --tag'.
                              Default: host-served tgz packed from current checkout.
+  --target-tarball <path>     Host-serve this prepared tgz for update and fresh install.
   --fresh-target <npm-spec>   Also run fresh install smoke for this package after update lanes.
   --beta-validation [target]  Resolve a beta tag/alias/version, then run latest->target update
                              plus fresh target install. Default target when flag is bare: beta.
@@ -313,6 +317,7 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
     json: false,
     modelId: undefined,
     packageSpec: "",
+    targetTarball: undefined,
     platforms: parsePlatformList("all"),
     provider: "openai",
     updateTarget: "",
@@ -328,6 +333,10 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
         break;
       case "--update-target":
         options.updateTarget = ensureValue(args, i, arg);
+        i++;
+        break;
+      case "--target-tarball":
+        options.targetTarball = ensureValue(args, i, arg);
         i++;
         break;
       case "--fresh-target":
@@ -376,6 +385,14 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
       default:
         die(`unknown arg: ${arg}`);
     }
+  }
+  if (
+    options.targetTarball &&
+    (options.betaValidation || options.updateTarget || options.freshTargetSpec)
+  ) {
+    throw new Error(
+      "--target-tarball cannot be combined with --beta-validation, --update-target, or --fresh-target",
+    );
   }
   return options;
 }
@@ -435,6 +452,9 @@ export class NpmUpdateSmoke {
   private updateExpectedNeedle = "";
   private updateTargetPackageVersion = "";
   private updateTargetTarball = "";
+  private targetTarballPath = "";
+  private targetTarballBuildCommit = "";
+  private targetTarballVersion = "";
   private linuxVm = linuxVmDefault;
 
   private freshStatus = platformRecord("skip");
@@ -481,7 +501,7 @@ export class NpmUpdateSmoke {
     }).stdout.trim();
     this.harnessCheckoutVersion = readHarnessCheckoutVersion();
     this.hostIp = resolveHostIp(this.options.hostIp ?? "");
-    this.configurePublishedTargets();
+    await this.configureTargets();
     this.assertPublishedTargetMatchesHarnessCheckout();
 
     if (this.options.platforms.has("linux")) {
@@ -634,6 +654,31 @@ export class NpmUpdateSmoke {
   }
 
   private async prepareUpdateTarget(): Promise<void> {
+    if (this.targetTarballPath) {
+      const hostedTarballPath = path.join(this.tgzDir, path.basename(this.targetTarballPath));
+      await copyFile(this.targetTarballPath, hostedTarballPath);
+      this.artifact = {
+        buildCommit: this.targetTarballBuildCommit,
+        buildCommitShort: this.targetTarballBuildCommit.slice(0, 7),
+        path: hostedTarballPath,
+        version: this.targetTarballVersion,
+      };
+      this.server = await startHostServer({
+        artifactPath: this.artifact.path,
+        dir: this.tgzDir,
+        hostIp: this.hostIp,
+        label: "prepared candidate tgz",
+        port: 0,
+      });
+      const targetUrl = this.server.urlFor(this.artifact.path);
+      this.updateTargetEffective = targetUrl;
+      this.freshTargetSpec = targetUrl;
+      this.updateExpectedNeedle = this.targetTarballVersion;
+      this.updateTargetPackageVersion = this.targetTarballVersion;
+      this.updateTargetBuildCommit = this.artifact.buildCommitShort ?? "";
+      this.updateTargetTarball = targetUrl;
+      return;
+    }
     if (!this.options.updateTarget || this.options.updateTarget === "local-main") {
       this.artifact = await packOpenClaw({
         destination: this.tgzDir,
@@ -1187,7 +1232,24 @@ export class NpmUpdateSmoke {
     });
   }
 
-  private configurePublishedTargets(): void {
+  private async configureTargets(): Promise<void> {
+    if (this.options.targetTarball) {
+      const targetTarballPath = path.resolve(this.options.targetTarball);
+      if (!existsSync(targetTarballPath)) {
+        throw new Error(`target tarball does not exist: ${targetTarballPath}`);
+      }
+      this.targetTarballPath = targetTarballPath;
+      [this.targetTarballVersion, this.targetTarballBuildCommit] = await Promise.all([
+        packageVersionFromTgz(targetTarballPath),
+        packageBuildCommitFromTgz(targetTarballPath),
+      ]);
+      if (!this.targetTarballVersion || !this.targetTarballBuildCommit) {
+        throw new Error(
+          `target tarball is missing package or build metadata: ${targetTarballPath}`,
+        );
+      }
+      return;
+    }
     if (this.options.betaValidation) {
       const version = resolveOpenClawRegistryVersion(this.options.betaValidation);
       if (!version) {
@@ -1217,9 +1279,11 @@ export class NpmUpdateSmoke {
     if (process.env.OPENCLAW_PARALLELS_ALLOW_HARNESS_TARGET_MISMATCH === "1") {
       return;
     }
-    const candidateVersion = this.freshTargetSpec
-      ? parseOpenClawPackageSpecVersion(this.freshTargetSpec)
-      : parseOpenClawPackageSpecVersion(this.options.updateTarget);
+    const candidateVersion =
+      this.targetTarballVersion ||
+      (this.freshTargetSpec
+        ? parseOpenClawPackageSpecVersion(this.freshTargetSpec)
+        : parseOpenClawPackageSpecVersion(this.options.updateTarget));
     const targetFamily = openClawVersionFamily(candidateVersion);
     if (!targetFamily) {
       return;

@@ -9,7 +9,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import {
+  configureSqliteConnectionPragmas,
+  type SqliteWalMaintenance,
+} from "../infra/sqlite-wal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
@@ -219,20 +222,6 @@ function registerAgentDatabase(params: {
   );
 }
 
-function closeCachedOpenClawAgentDatabase(pathname: string): boolean {
-  const database = cachedDatabases.get(pathname);
-  if (!database) {
-    return false;
-  }
-  database.walMaintenance.close();
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
-  if (database.db.isOpen) {
-    database.db.close();
-  }
-  cachedDatabases.delete(pathname);
-  return true;
-}
-
 /** List agent databases recorded in the shared OpenClaw state registry. */
 export function listOpenClawRegisteredAgentDatabases(
   options: OpenClawStateDatabaseOptions = {},
@@ -279,13 +268,13 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteWalMaintenance(db, {
+  const walMaintenance = configureSqliteConnectionPragmas(db, {
+    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     databaseLabel: `openclaw-agent:${agentId}`,
     databasePath: pathname,
+    foreignKeys: true,
+    synchronous: "NORMAL",
   });
-  db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-  db.exec("PRAGMA foreign_keys = ON;");
   try {
     ensureAgentSchema(db, agentId, pathname);
   } catch (err) {
@@ -311,23 +300,12 @@ export function runOpenClawAgentWriteTransaction<T>(
   return result;
 }
 
-/** Close one cached agent database handle if this process opened it. */
-export function closeOpenClawAgentDatabase(options: OpenClawAgentDatabaseOptions): boolean {
-  return closeCachedOpenClawAgentDatabase(
-    resolveOpenClawAgentSqlitePath({
-      ...options,
-      agentId: normalizeAgentId(options.agentId),
-    }),
-  );
-}
-
 /** Close cached agent databases so tests can remove temp dirs and reopen cleanly. */
 export function closeOpenClawAgentDatabasesForTest(): void {
-  while (cachedDatabases.size > 0) {
-    const pathname = cachedDatabases.keys().next().value;
-    if (pathname === undefined) {
-      break;
-    }
-    closeCachedOpenClawAgentDatabase(pathname);
+  for (const database of cachedDatabases.values()) {
+    database.walMaintenance.close();
+    clearNodeSqliteKyselyCacheForDatabase(database.db);
+    database.db.close();
   }
+  cachedDatabases.clear();
 }

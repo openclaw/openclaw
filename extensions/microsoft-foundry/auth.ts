@@ -26,6 +26,7 @@ import {
 } from "./onboard.js";
 import {
   buildFoundryAuthResult,
+  formatFoundryApiLabel,
   type FoundryProviderApi,
   isFoundryMaiImageModel,
   listConfiguredFoundryProfileIds,
@@ -124,7 +125,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       | Array<{
           name: string;
           modelName?: string;
-          api?: "openai-completions" | "openai-responses";
+          api?: FoundryProviderApi;
         }>
       | undefined;
     if (selectedSub) {
@@ -154,7 +155,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
             `Endpoint: ${endpoint}`,
             `Deployment: ${modelId}`,
             selectedDeployment.modelName ? `Model: ${selectedDeployment.modelName}` : undefined,
-            `API: ${api === "openai-responses" ? "Responses" : "Chat Completions"}`,
+            `API: ${formatFoundryApiLabel(api)}`,
           ]
             .filter(Boolean)
             .join("\n"),
@@ -251,14 +252,17 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
       throw new Error("Missing Azure OpenAI API key.");
     }
     const selection = await promptApiKeyEndpointAndModel(ctx);
+    const existingModelNameHint =
+      existingMetadata?.modelId === selection.modelId
+        ? (existingMetadata.modelName ?? existingMetadata.modelId)
+        : undefined;
     return buildFoundryAuthResult({
       profileId: `${PROVIDER_ID}:default`,
       apiKey: capturedSecretInput ?? "",
       ...(capturedMode ? { secretInputMode: capturedMode } : {}),
       endpoint: selection.endpoint,
       modelId: selection.modelId,
-      modelNameHint:
-        selection.modelNameHint ?? existingMetadata?.modelName ?? existingMetadata?.modelId,
+      modelNameHint: selection.modelNameHint ?? existingModelNameHint,
       api: selection.api,
       authMethod: "api-key",
       currentProviderProfileIds: listConfiguredFoundryProfileIds(ctx.config),

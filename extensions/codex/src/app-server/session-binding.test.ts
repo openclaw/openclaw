@@ -67,7 +67,7 @@ describe("codex app-server session binding", () => {
 
     const binding = await readCodexAppServerBinding(sessionFile);
 
-    expect(binding?.schemaVersion).toBe(1);
+    expect(binding?.schemaVersion).toBe(2);
     expect(binding?.threadId).toBe("thread-123");
     expect(binding?.sessionFile).toBe(sessionFile);
     expect(binding?.cwd).toBe(tempDir);
@@ -106,6 +106,84 @@ describe("codex app-server session binding", () => {
     const binding = await readCodexAppServerBinding(sessionFile);
 
     expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("round-trips plugin app policy context destructive approval mode", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    const pluginAppPolicyContext = {
+      fingerprint: "plugin-policy-1",
+      apps: {
+        "google-calendar-app": {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated" as const,
+          pluginName: "google-calendar",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "auto" as const,
+          mcpServerNames: ["google-calendar"],
+        },
+      },
+      pluginAppIds: {
+        "google-calendar": ["google-calendar-app"],
+      },
+    };
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-123",
+      cwd: tempDir,
+      pluginAppPolicyContext,
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("normalizes v1 plugin app policy context destructive approval modes", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    await fs.writeFile(
+      resolveCodexAppServerBindingPath(sessionFile),
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-123",
+        cwd: tempDir,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        pluginAppPolicyContext: {
+          fingerprint: "plugin-policy-1",
+          apps: {
+            "auto-accept-app": {
+              configKey: "gmail",
+              marketplaceName: "openai-curated",
+              pluginName: "gmail",
+              allowDestructiveActions: true,
+              destructiveApprovalMode: "auto",
+              mcpServerNames: ["gmail"],
+            },
+            "approval-routed-app": {
+              configKey: "google-calendar",
+              marketplaceName: "openai-curated",
+              pluginName: "google-calendar",
+              allowDestructiveActions: true,
+              destructiveApprovalMode: "on-request",
+              mcpServerNames: ["google-calendar"],
+            },
+          },
+          pluginAppIds: {
+            gmail: ["auto-accept-app"],
+            "google-calendar": ["approval-routed-app"],
+          },
+        },
+      }),
+    );
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.schemaVersion).toBe(2);
+    expect(binding?.pluginAppPolicyContext?.apps["auto-accept-app"]?.destructiveApprovalMode).toBe(
+      "allow",
+    );
+    expect(
+      binding?.pluginAppPolicyContext?.apps["approval-routed-app"]?.destructiveApprovalMode,
+    ).toBe("auto");
   });
 
   it("round-trips context-engine binding metadata", async () => {
@@ -303,6 +381,18 @@ describe("codex app-server session binding", () => {
     const sessionFile = path.join(tempDir, "missing.json");
     await clearCodexAppServerBinding(sessionFile);
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+  });
+
+  it("does not recreate missing binding directories while clearing", async () => {
+    const deletedDir = path.join(tempDir, "deleted-session");
+    const sessionFile = path.join(deletedDir, "session.json");
+
+    await clearCodexAppServerBinding(sessionFile);
+    await expect(clearCodexAppServerBindingForThread(sessionFile, "thread-missing")).resolves.toBe(
+      false,
+    );
+
+    await expect(fs.access(deletedDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("clears a binding only when the thread matches", async () => {

@@ -5,7 +5,10 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
-import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
+import {
+  MODEL_CONTEXT_TOKEN_CACHE,
+  providerContextTokenCacheKey,
+} from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
@@ -109,6 +112,7 @@ describe("buildStatusMessage", () => {
         inputTokens: 1200,
         outputTokens: 800,
         totalTokens: 16_000,
+        totalTokensFresh: true,
         contextTokens: 32_000,
         thinkingLevel: "low",
         verboseLevel: "on",
@@ -121,6 +125,7 @@ describe("buildStatusMessage", () => {
       resolvedHarness: "openclaw",
       queue: { mode: "collect", depth: 0 },
       modelAuth: "api-key",
+      subagentsLine: "🤖 Subagents: 1\n- active run",
       now: 10 * 60_000, // 10 minutes later
     });
     const normalized = normalizeTestText(text);
@@ -141,6 +146,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
+    expect(normalized).toContain("- active run");
   });
 
   it("shows configured model costs for aws-sdk providers", () => {
@@ -219,6 +225,30 @@ describe("buildStatusMessage", () => {
 
     expect(normalized).toContain("Context: ?/1.0m");
     expect(normalized).not.toContain("Context: 3.8m/1.0m");
+  });
+
+  it("preserves legacy unknown-freshness totalTokens as context usage", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/test:opus",
+        contextTokens: 1_000_000,
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        totalTokens: 25_000,
+        contextTokens: 1_000_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      now: 10 * 60_000,
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Context: 25k/1.0m");
+    expect(normalized).not.toContain("Context: ?/1.0m");
   });
 
   it("uses estimated context budget status when fresh totalTokens are unavailable", () => {
@@ -856,6 +886,7 @@ describe("buildStatusMessage", () => {
         channel: "discord",
         groupId: "123",
         totalTokens: 49_000,
+        totalTokensFresh: true,
         contextTokens: 1_048_576,
       },
       sessionKey: "agent:main:main",
@@ -891,6 +922,7 @@ describe("buildStatusMessage", () => {
         sessionId: "ctx1m",
         updatedAt: 0,
         totalTokens: 200_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -909,6 +941,7 @@ describe("buildStatusMessage", () => {
         sessionId: "opus47",
         updatedAt: 0,
         totalTokens: 200_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -928,6 +961,7 @@ describe("buildStatusMessage", () => {
       modelOverride: "small-model",
       contextTokens: 4_096,
       totalTokens: 1_024,
+      totalTokensFresh: true,
     };
 
     applyModelOverrideToSessionEntry({
@@ -981,6 +1015,7 @@ describe("buildStatusMessage", () => {
         fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
+        totalTokensFresh: true,
         contextTokens: 1_048_576,
       },
       sessionKey: "agent:main:main",
@@ -1113,6 +1148,7 @@ describe("buildStatusMessage", () => {
         fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
+        totalTokensFresh: true,
         contextTokens: 1_048_576,
       },
       sessionKey: "agent:main:main",
@@ -1157,6 +1193,7 @@ describe("buildStatusMessage", () => {
         fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
+        totalTokensFresh: true,
         contextTokens: 123_456,
       },
       sessionKey: "agent:main:main",
@@ -1203,6 +1240,7 @@ describe("buildStatusMessage", () => {
         fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -1248,6 +1286,7 @@ describe("buildStatusMessage", () => {
         fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -1292,6 +1331,7 @@ describe("buildStatusMessage", () => {
         fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -1333,6 +1373,7 @@ describe("buildStatusMessage", () => {
         fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
+        totalTokensFresh: true,
         contextTokens: 128_000,
       },
       sessionKey: "agent:main:main",
@@ -1981,6 +2022,54 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("does not let legacy cumulative session totals override fresh transcript context usage", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-legacy-cumulative-context";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          usage: {
+            input: 10_000,
+            output: 1_000,
+            cacheRead: 26_000,
+            cacheWrite: 0,
+            totalTokens: 36_000,
+          },
+        });
+
+        const text = buildStatusMessage({
+          agent: {
+            model: "anthropic/claude-opus-4-6",
+            contextTokens: 1_000_000,
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            inputTokens: 16,
+            outputTokens: 5_100,
+            cacheRead: 2_300_000,
+            cacheWrite: 11_000,
+            totalTokens: 2_300_000,
+            contextTokens: 1_000_000,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+        const normalized = normalizeTestText(text);
+
+        expect(normalized).toContain("Cache: 100% hit · 2.3m cached, 11k new");
+        expect(normalized).toContain("Context: 36k/1.0m (4%)");
+        expect(normalized).not.toContain("Context: 2.3m/1.0m");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
   it("reads transcript usage for non-default agents", async () => {
     await withTempHome(
       async (dir) => {
@@ -2237,6 +2326,7 @@ describe("buildStatusMessage", () => {
         sessionId: "sess-runtime-slash-id",
         updatedAt: 0,
         totalTokens: 1205,
+        totalTokensFresh: true,
         model: "google/gemini-2.5-pro",
       },
       sessionKey: "agent:main:main",
@@ -2279,6 +2369,7 @@ describe("buildStatusMessage", () => {
         fallbackNoticeActiveModel: "fake-minimax/FakeMiniMax-M2.5",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2314,6 +2405,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         model: "openai/gpt-4o",
         totalTokens: 49_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2331,7 +2423,10 @@ describe("buildStatusMessage", () => {
     await withTempHome(
       async (dir) => {
         MODEL_CONTEXT_TOKEN_CACHE.set("gemini-2.5-pro", 128_000);
-        MODEL_CONTEXT_TOKEN_CACHE.set("google-gemini-cli/gemini-2.5-pro", 1_000_000);
+        MODEL_CONTEXT_TOKEN_CACHE.set(
+          providerContextTokenCacheKey("google-gemini-cli", "gemini-2.5-pro"),
+          1_000_000,
+        );
 
         const sessionId = "sess-google-bare-model";
         writeTranscriptUsageLog({
@@ -2374,7 +2469,10 @@ describe("buildStatusMessage", () => {
 
   it("prefers provider-qualified context windows for fresh bare model ids", () => {
     MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
-    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set(
+      providerContextTokenCacheKey("anthropic", "claude-opus-4-6"),
+      1_000_000,
+    );
 
     const text = buildStatusMessage({
       agent: {
@@ -2384,6 +2482,7 @@ describe("buildStatusMessage", () => {
         sessionId: "sess-anthropic-qualified-context",
         updatedAt: 0,
         totalTokens: 25_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2397,7 +2496,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("does not let agent contextTokens inflate status above the model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("openai/gpt-5.5", 272_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("openai", "gpt-5.5"), 272_000);
 
     const text = buildStatusMessage({
       agent: {
@@ -2408,6 +2507,7 @@ describe("buildStatusMessage", () => {
         sessionId: "sess-openai-chatgpt-cap-context",
         updatedAt: 0,
         totalTokens: 25_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2432,6 +2532,7 @@ describe("buildStatusMessage", () => {
         sessionId: "sess-openai-chatgpt-runtime-cap-context",
         updatedAt: 0,
         totalTokens: 25_000,
+        totalTokensFresh: true,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -2469,6 +2570,7 @@ describe("buildStatusMessage", () => {
         fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
         fallbackNoticeReason: "model not allowed",
         totalTokens: 49_000,
+        totalTokensFresh: true,
         contextTokens: 128_000,
       },
       sessionKey: "agent:main:main",

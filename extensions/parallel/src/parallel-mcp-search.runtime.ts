@@ -14,6 +14,10 @@ const MCP_TIMEOUT_SECONDS = 30;
 
 const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
+// Identify free-tier traffic at the HTTP layer (mirrors the paid REST path);
+// without this, undici sends a generic `node` UA and OpenClaw usage is only
+// visible via the JSON-RPC `clientInfo` payload.
+const USER_AGENT = `openclaw-parallel/${PLUGIN_VERSION} (${process.platform})`;
 
 type JsonRpcMessage = Record<string, unknown>;
 
@@ -38,6 +42,7 @@ function mcpHeaders(params: {
 }): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "User-Agent": USER_AGENT,
     // The Search MCP may answer either as a single JSON object or as an SSE
     // stream; advertise both so the server can pick.
     Accept: "application/json, text/event-stream",

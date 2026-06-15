@@ -70,6 +70,11 @@ export type {
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+export type {
+  ExecAutoReviewDecision,
+  ExecAutoReviewInput,
+  ExecAutoReviewer,
+} from "../infra/exec-auto-review.js";
 export type { NormalizedUsage } from "../agents/usage.js";
 export type {
   AgentToolResultMiddleware,
@@ -124,8 +129,12 @@ export {
 } from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  isToolResultError,
+  sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";

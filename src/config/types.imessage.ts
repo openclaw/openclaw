@@ -34,6 +34,7 @@ export type IMessageActionConfig = {
 
 /** Inbound tapback notification policy. */
 export type IMessageReactionNotificationMode = "off" | "own" | "all";
+export type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
 /** Per-account iMessage runtime/config shape. */
 export type IMessageAccountConfig = {
@@ -57,6 +58,8 @@ export type IMessageAccountConfig = {
   actions?: IMessageActionConfig;
   /** Optional default send service (imessage|sms|auto). */
   service?: "imessage" | "sms" | "auto";
+  /** Preferred imsg RPC send transport. Default: auto. */
+  sendTransport?: IMessageSendTransport;
   /** Optional default region (used when sending SMS). */
   region?: string;
   /** Direct message access policy (default: pairing). */

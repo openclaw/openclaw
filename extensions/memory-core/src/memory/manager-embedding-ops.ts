@@ -41,6 +41,10 @@ import {
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";
+import {
+  resolveMemoryIndexProviderIdentities,
+  type MemoryIndexProviderIdentity,
+} from "./manager-reindex-state.js";
 import { MemoryManagerSyncOps, type MemoryIndexWorkItem } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
@@ -163,11 +167,16 @@ export function resolveMemoryIndexConcurrency(params: {
 export async function runEmbeddingOperationWithTimeout<T>(params: {
   timeoutMs: number;
   message: string;
+  /** Caller-owned cancellation, merged with the per-call watchdog abort. */
+  signal?: AbortSignal;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   const controller = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, controller.signal])
+    : controller.signal;
   if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
-    return await params.run(controller.signal);
+    return await params.run(signal);
   }
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   let timer: NodeJS.Timeout | null = null;
@@ -179,7 +188,7 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
     }, timeoutMs);
   });
   try {
-    const operation = params.run(controller.signal);
+    const operation = params.run(signal);
     return (await Promise.race([operation, timeoutPromise])) as T;
   } finally {
     if (timer) {
@@ -223,6 +232,36 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       .run(excess);
   }
 
+  private upsertEmbeddingCacheEntries(
+    entries: Array<{ hash: string; embedding: number[] }>,
+    provider: { id: string; model: string } | null = this.provider,
+  ): void {
+    upsertMemoryEmbeddingCache({
+      db: this.db,
+      enabled: this.cache.enabled,
+      provider,
+      providerKey: this.providerKey,
+      entries,
+      tableName: EMBEDDING_CACHE_TABLE,
+    });
+    if (this.embeddingCacheMirrorDb && this.embeddingCacheMirrorDb !== this.db) {
+      try {
+        upsertMemoryEmbeddingCache({
+          db: this.embeddingCacheMirrorDb,
+          enabled: this.cache.enabled,
+          provider,
+          providerKey: this.providerKey,
+          entries,
+          tableName: EMBEDDING_CACHE_TABLE,
+        });
+      } catch (err) {
+        log.warn("memory embeddings: failed to mirror safe-reindex cache batch", {
+          error: formatErrorMessage(err),
+        });
+      }
+    }
+  }
+
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
     if (chunks.length === 0) {
       return [];
@@ -235,7 +274,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     const missingChunks = missing.map((m) => m.chunk);
     const batches = buildMemoryEmbeddingBatches(missingChunks, EMBEDDING_BATCH_MAX_TOKENS);
-    const toCache: Array<{ hash: string; embedding: number[] }> = [];
     const provider = this.provider;
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
@@ -256,36 +294,31 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const batchEmbeddings = hasStructuredInputs
         ? await this.embedBatchInputsWithRetry(inputs)
         : await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
+      const batchCacheEntries: Array<{ hash: string; embedding: number[] }> = [];
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
         if (item) {
           embeddings[item.index] = embedding;
-          toCache.push({ hash: item.chunk.hash, embedding });
+          batchCacheEntries.push({ hash: item.chunk.hash, embedding });
         }
       }
+      this.upsertEmbeddingCacheEntries(batchCacheEntries);
       cursor += batch.length;
     }
-    upsertMemoryEmbeddingCache({
-      db: this.db,
-      enabled: this.cache.enabled,
-      provider: this.provider,
-      providerKey: this.providerKey,
-      entries: toCache,
-      tableName: EMBEDDING_CACHE_TABLE,
-    });
     return embeddings;
   }
 
   protected computeProviderKey(): string {
-    // FTS-only mode: no provider, use a constant key
-    if (!this.provider) {
-      return hashText(JSON.stringify({ provider: "none", model: "fts-only" }));
-    }
-    if (this.providerRuntime?.cacheKeyData) {
-      return hashText(JSON.stringify(this.providerRuntime.cacheKeyData));
-    }
-    return hashText(JSON.stringify({ provider: this.provider.id, model: this.provider.model }));
+    return this.resolveProviderIndexIdentities()[0].providerKey;
+  }
+
+  protected resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[] {
+    return resolveMemoryIndexProviderIdentities({
+      provider: this.provider,
+      cacheKeyData: this.providerRuntime?.cacheKeyData,
+      aliases: this.providerRuntime?.indexIdentityAliases,
+    });
   }
 
   private buildBatchDebug(
@@ -349,14 +382,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       embeddings[item.index] = embedding;
       toCache.push({ hash: item.chunk.hash, embedding });
     }
-    upsertMemoryEmbeddingCache({
-      db: this.db,
-      enabled: this.cache.enabled,
-      provider,
-      providerKey: this.providerKey,
-      entries: toCache,
-      tableName: EMBEDDING_CACHE_TABLE,
-    });
+    this.upsertEmbeddingCacheEntries(toCache, provider);
     return embeddings;
   }
 
@@ -369,8 +395,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       cached: loadMemoryEmbeddingCache({
         db: this.db,
         enabled: this.cache.enabled,
-        provider: this.provider,
-        providerKey: this.providerKey,
+        providerIdentities: this.provider ? this.resolveProviderIndexIdentities() : [],
         hashes: chunks.map((chunk) => chunk.hash),
         tableName: EMBEDDING_CACHE_TABLE,
       }),
@@ -493,7 +518,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected async embedQueryWithRetry(text: string): Promise<number[]> {
+  protected async embedQueryWithRetry(text: string, signal?: AbortSignal): Promise<number[]> {
     const provider = this.provider;
     if (!provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
@@ -501,14 +526,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     try {
       return await runMemoryEmbeddingRetryLoop({
         run: async () => {
+          signal?.throwIfAborted();
           const timeoutMs = this.resolveEmbeddingTimeout("query");
           log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
           return await runEmbeddingOperationWithTimeout({
             timeoutMs,
             message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
-            run: async (signal) => await provider.embedQuery(text, { signal }),
+            signal,
+            run: async (opSignal) => await provider.embedQuery(text, { signal: opSignal }),
           });
         },
+        signal,
         isRetryable: isRetryableMemoryEmbeddingError,
         waitForRetry: async (delayMs) => {
           await this.waitForEmbeddingRetry(delayMs, "retrying query");

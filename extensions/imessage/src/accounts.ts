@@ -131,6 +131,7 @@ export function resolveIMessageAccount(params: {
     merged.cliPath?.trim() ||
     merged.dbPath?.trim() ||
     merged.service ||
+    merged.sendTransport ||
     merged.region?.trim() ||
     (merged.allowFrom && merged.allowFrom.length > 0) ||
     (merged.groupAllowFrom && merged.groupAllowFrom.length > 0) ||

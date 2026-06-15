@@ -3,10 +3,26 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  listSessionEntries as listAccessorSessionEntries,
+  loadSessionEntry,
+  readSessionUpdatedAt as readAccessorSessionUpdatedAt,
+} from "../config/sessions/session-accessor.js";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  readSessionUpdatedAt,
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
   type OpenClawConfig,
 } from "./config-runtime.js";
+
+describe("config-runtime session read exports", () => {
+  it("routes read helpers through the session accessor seam", () => {
+    expect(getSessionEntry).toBe(loadSessionEntry);
+    expect(listSessionEntries).toBe(listAccessorSessionEntries);
+    expect(readSessionUpdatedAt).toBe(readAccessorSessionUpdatedAt);
+  });
+});
 
 describe("resolvePluginConfigObject", () => {
   it("returns the plugin config object for a configured plugin entry", () => {

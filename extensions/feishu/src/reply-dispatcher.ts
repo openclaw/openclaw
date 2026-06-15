@@ -120,7 +120,8 @@ type CreateFeishuReplyDispatcherParams = {
   chatId: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
-  /** When true, preserve typing indicator on reply target but send messages without reply metadata */
+  typingTargetMessageId?: string;
+  /** When true, omit reply metadata from visible messages while keeping typing on its target. */
   skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
   /** True when inbound message is already inside a thread/topic context */
@@ -141,6 +142,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     agentId,
     chatId,
     replyToMessageId,
+    typingTargetMessageId: explicitTypingTargetMessageId,
     skipReplyToInMessages,
     replyInThread,
     threadReply,
@@ -149,6 +151,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     identity,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  const typingTargetMessageId = explicitTypingTargetMessageId?.trim() || replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const allowTopLevelReplyFallback =
@@ -172,7 +175,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!(account.config.typingIndicator ?? true)) {
           return;
         }
-        if (!replyToMessageId) {
+        if (!typingTargetMessageId) {
           return;
         }
         // Skip typing indicator for old messages — likely replays after context
@@ -192,7 +195,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
         typingState = await addTypingIndicator({
           cfg,
-          messageId: replyToMessageId,
+          messageId: typingTargetMessageId,
           accountId,
           runtime: params.runtime,
         });
@@ -579,7 +582,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const queueIdleSideEffects = (options?: { markClosedForReply?: boolean }): Promise<void> => {
     const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
       await closeStreaming(options);
-      await Promise.resolve(typingCallbacks?.onIdle?.());
+      typingCallbacks?.onIdle?.();
     });
     idleSideEffectsPromise = nextIdleSideEffects.catch(() => {});
     return nextIdleSideEffects;

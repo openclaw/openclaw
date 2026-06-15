@@ -4,6 +4,7 @@ import { constants, accessSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -43,6 +44,7 @@ const require = createRequire(import.meta.url);
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
 const MIN_PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
 const PENDING_PERSISTED_ECHO_GRACE_MS = 5_000;
+type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
 type IMessageSendOpts = {
   cliPath?: string;
@@ -471,6 +473,16 @@ function shouldRecoverApprovalPromptGuid(params: {
   );
 }
 
+function canCheckSentMessageAfterRpcTimeout(params: {
+  dbPath?: string;
+  resolveSentMessageGuidImpl?: IMessageSendOpts["resolveSentMessageGuidImpl"];
+}): boolean {
+  return (
+    Boolean(params.resolveSentMessageGuidImpl) ||
+    canResolveLatestSentMessageGuidFromChatDb(params.dbPath)
+  );
+}
+
 function resolveOutboundEchoText(text: string, mediaContentType?: string): string | undefined {
   if (text.trim()) {
     return text;
@@ -882,6 +894,7 @@ export async function sendMessageIMessage(
     opts.service ??
     resolveTargetService(target) ??
     (account.config.service as IMessageService | undefined);
+  const sendTransport = (account.config.sendTransport ?? "auto") as IMessageSendTransport;
   // Sends use a dedicated longer default (not the 10s probe timeout) so macOS 26
   // bridge stalls aren't aborted mid-send. Explicit opts/probeTimeoutMs still win
   // for callers that tuned them. See DEFAULT_IMESSAGE_SEND_TIMEOUT_MS.
@@ -936,7 +949,8 @@ export async function sendMessageIMessage(
     throw new Error("iMessage send requires text or media");
   }
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
-  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
+  const replyActionsEnabled = createActionGate(account.config.actions)("reply");
+  const resolvedReplyToId = replyActionsEnabled ? sanitizeReplyToId(opts.replyToId) : undefined;
   const runCliJson =
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
@@ -990,6 +1004,7 @@ export async function sendMessageIMessage(
     text: message,
     service: service || "auto",
     region,
+    transport: sendTransport,
   };
   if (resolvedReplyToId) {
     params.reply_to = resolvedReplyToId;
@@ -1019,6 +1034,14 @@ export async function sendMessageIMessage(
       ? await opts.createClient({ cliPath, dbPath })
       : await createIMessageRpcClient({ cliPath, dbPath }));
   const shouldClose = !opts.client;
+  let closedClient = false;
+  const stopOwnedClient = async () => {
+    if (!shouldClose || closedClient) {
+      return;
+    }
+    closedClient = true;
+    await client.stop();
+  };
   let result: Record<string, unknown>;
   const sendStartedAtMs = Date.now();
   let pendingEchoKey: string | undefined;
@@ -1036,7 +1059,7 @@ export async function sendMessageIMessage(
         timeoutMs,
       });
     } catch (error) {
-      if (filePath || resolvedReplyToId || !isIMessageRpcSendTimeout(error)) {
+      if (filePath || !isIMessageRpcSendTimeout(error)) {
         throw error;
       }
       if (
@@ -1044,6 +1067,10 @@ export async function sendMessageIMessage(
           message,
           filePath,
           replyToId: resolvedReplyToId,
+        }) ||
+        !canCheckSentMessageAfterRpcTimeout({
+          dbPath: chatDbLookupPath,
+          resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
         })
       ) {
         throw error;
@@ -1055,10 +1082,11 @@ export async function sendMessageIMessage(
         sentAfterMs: sendStartedAtMs,
         resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
       });
-      if (!recoveredGuid) {
+      if (recoveredGuid) {
+        result = { guid: recoveredGuid, status: "sent" };
+      } else {
         throw error;
       }
-      result = { guid: recoveredGuid, status: "sent" };
     }
     const resolvedId = resolveMessageId(result);
     const messageId =
@@ -1149,8 +1177,6 @@ export async function sendMessageIMessage(
     forgetPersistedIMessageEchoKey(pendingEchoKey);
     throw error;
   } finally {
-    if (shouldClose) {
-      await client.stop();
-    }
+    await stopOwnedClient();
   }
 }

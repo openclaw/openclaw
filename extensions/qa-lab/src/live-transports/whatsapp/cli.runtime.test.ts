@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QA_EVIDENCE_FILENAME } from "../../evidence-summary.js";
 import { runQaWhatsAppCommand } from "./cli.runtime.js";
 
 const runWhatsAppQaLiveMock = vi.hoisted(() => vi.fn());
@@ -38,24 +39,48 @@ afterEach(async () => {
 async function writeSummary(summary: unknown) {
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-whatsapp-cli-"));
   tempDirs.push(outputDir);
-  const summaryPath = path.join(outputDir, "whatsapp-qa-summary.json");
+  const summaryPath = path.join(outputDir, QA_EVIDENCE_FILENAME);
   await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   return { outputDir, summaryPath };
 }
 
+function makeEvidenceSummary(status: "pass" | "fail" | "blocked" | "skipped") {
+  return {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt: "2026-05-01T00:00:00.000Z",
+    entries: [
+      {
+        test: {
+          kind: "live-transport-check",
+          id: "whatsapp-mention-gating",
+          title: "WhatsApp mention gating",
+        },
+        coverage: [],
+        execution: {
+          runner: "host",
+          environment: { ref: null, os: "darwin", nodeVersion: "v24.0.0" },
+          provider: {
+            id: "openai",
+            live: false,
+            model: { name: null, ref: null },
+            fixture: "mock-openai",
+          },
+          channel: { id: "whatsapp", live: true, driver: "native" },
+          packageSource: { kind: "source-checkout" },
+          artifacts: [],
+        },
+        result: { status },
+      },
+    ],
+  };
+}
+
 describe("WhatsApp QA CLI runtime", () => {
-  it("fails when a standard scenario is skipped by default", async () => {
+  it("fails when a requirement is skipped by default", async () => {
     originalExitCode = process.exitCode;
     process.exitCode = undefined;
-    const { outputDir, summaryPath } = await writeSummary({
-      counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
-      scenarios: [
-        {
-          id: "whatsapp-mention-gating",
-          status: "skip",
-        },
-      ],
-    });
+    const { outputDir, summaryPath } = await writeSummary(makeEvidenceSummary("skipped"));
     runWhatsAppQaLiveMock.mockResolvedValueOnce({
       observedMessagesPath: path.join(outputDir, "observed.json"),
       reportPath: path.join(outputDir, "report.md"),
@@ -71,10 +96,7 @@ describe("WhatsApp QA CLI runtime", () => {
   it("allows skipped scenarios when failures are explicitly allowed", async () => {
     originalExitCode = process.exitCode;
     process.exitCode = undefined;
-    const { outputDir, summaryPath } = await writeSummary({
-      counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
-      scenarios: [{ id: "whatsapp-mention-gating", status: "skip" }],
-    });
+    const { outputDir, summaryPath } = await writeSummary(makeEvidenceSummary("skipped"));
     runWhatsAppQaLiveMock.mockResolvedValueOnce({
       observedMessagesPath: path.join(outputDir, "observed.json"),
       reportPath: path.join(outputDir, "report.md"),

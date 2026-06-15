@@ -74,9 +74,11 @@ resolve_package_tgz() {
 
 package_mount_args=()
 package_install_source="$PACKAGE_SPEC"
+package_source_kind="npm-package"
 resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
 if [ -n "$resolved_package_tgz" ]; then
   package_install_source="/package-under-test/$(basename "$resolved_package_tgz")"
+  package_source_kind="packed-tarball"
   package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")
 else
   validate_openclaw_package_spec "$PACKAGE_SPEC"
@@ -91,8 +93,12 @@ fi
 
 credential_source="$(resolve_credential_source)"
 credential_role="$(resolve_credential_role)"
-if [ -z "$credential_role" ] && [ -n "${CI:-}" ] && [ "$credential_source" = "convex" ]; then
-  credential_role="ci"
+if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then
+  if [ -n "${CI:-}" ]; then
+    credential_role="ci"
+  else
+    credential_role="maintainer"
+  fi
 fi
 
 validate_credential_preflight() {
@@ -160,6 +166,9 @@ docker_env=(
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="$PACKAGE_SPEC"
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL"
   -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"
+  -e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"
+  -e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"
+  -e OPENCLAW_QA_RUNNER="${OPENCLAW_QA_RUNNER:-docker}"
   -e OPENCLAW_NPM_TELEGRAM_FAST="${OPENCLAW_NPM_TELEGRAM_FAST:-1}"
 )
 
@@ -199,7 +208,7 @@ for key in \
   OPENCLAW_QA_CREDENTIAL_OWNER_ID \
   OPENCLAW_QA_ALLOW_INSECURE_HTTP \
   OPENCLAW_QA_REDACT_PUBLIC_METADATA \
-  OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT \
+  OPENCLAW_QA_PACKAGE_SOURCE_SHA \
   OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS \
   OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS \
   OPENCLAW_QA_SUITE_PROGRESS \
@@ -207,6 +216,10 @@ for key in \
   OPENCLAW_NPM_TELEGRAM_MODEL \
   OPENCLAW_NPM_TELEGRAM_ALT_MODEL \
   OPENCLAW_NPM_TELEGRAM_SCENARIOS \
+  OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES \
+  OPENCLAW_NPM_TELEGRAM_RTT_CHECKS \
+  OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS \
+  OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES \
   OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH \
   OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT \
   OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES; do

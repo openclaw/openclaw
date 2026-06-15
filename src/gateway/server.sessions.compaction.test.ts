@@ -6,13 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
   onceMessage,
   agentDiscoveryMock,
-  readSessionStore,
   rpcReq,
   startConnectedServerWithClient,
   testState,
@@ -228,7 +226,14 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       ),
   ).toBe(false);
 
-  const storeAfterBranch = readSessionStore(storePath);
+  const storeAfterBranch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      parentSessionKey?: string;
+      compactionCheckpoints?: unknown[];
+      sessionId?: string;
+    }
+  >;
   const branchedEntry = storeAfterBranch[branched.payload!.key];
   expect(branchedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(branchedEntry?.compactionCheckpoints).toBeUndefined();
@@ -293,7 +298,10 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       ),
   ).toBe(false);
 
-  const storeAfterRestore = readSessionStore(storePath);
+  const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { compactionCheckpoints?: unknown[]; sessionId?: string }
+  >;
   expect(storeAfterRestore["agent:main:main"]?.sessionId).toBe(restored.payload?.sessionId);
   expect(storeAfterRestore["agent:main:main"]?.compactionCheckpoints).toHaveLength(1);
 
@@ -316,15 +324,27 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
     reason: "manual",
     summary: "work checkpoint",
   });
-  await writeSessionStoreForTestAsync(mainStorePath, {
-    global: sessionStoreEntry("sess-main-global", { sessionFile: mainSessionFile }),
-  });
-  await writeSessionStoreForTestAsync(workStorePath, {
-    global: sessionStoreEntry(fixture.sessionId, {
-      sessionFile: fixture.sessionFile,
-      compactionCheckpoints: [checkpointEntry],
-    }),
-  });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify(
+      { global: sessionStoreEntry("sess-main-global", { sessionFile: mainSessionFile }) },
+      null,
+      2,
+    ),
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify(
+      {
+        global: sessionStoreEntry(fixture.sessionId, {
+          sessionFile: fixture.sessionFile,
+          compactionCheckpoints: [checkpointEntry],
+        }),
+      },
+      null,
+      2,
+    ),
+  );
 
   const listed = await directSessionReq<{
     checkpoints: Array<{ checkpointId: string; summary?: string }>;
@@ -350,8 +370,14 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
   );
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("global");
-  const mainStore = readSessionStore(mainStorePath);
-  const workStore = readSessionStore(workStorePath);
+  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
+  const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
   expect(mainStore.global?.sessionId).toBe("sess-main-global");
   expect(workStore.global?.sessionId).toBe(restored.payload?.sessionId);
   testState.sessionStorePath = undefined;
@@ -487,7 +513,15 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   });
   expect(compactionCall.trigger).toBe("manual");
 
-  const store = readSessionStore(storePath);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      contextBudgetStatus?: unknown;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
   expect(store["agent:main:main"]?.compactionCount).toBe(1);
   expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
   expect(store["agent:main:main"]?.totalTokens).toBe(80);
@@ -557,7 +591,14 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
     completed: false,
   });
 
-  const store = readSessionStore(storePath);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
   expect(store["agent:main:main"]?.compactionCount).toBe(2);
   expect(store["agent:main:main"]?.totalTokens).toBe(54_321);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
@@ -568,9 +609,13 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
 test("sessions.patch preserves nested model ids under provider overrides", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
   const storePath = path.join(dir, "sessions.json");
-  await writeSessionStoreForTestAsync(storePath, {
-    "agent:main:main": sessionStoreEntry("sess-main"),
-  });
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({
+      "agent:main:main": sessionStoreEntry("sess-main"),
+    }),
+    "utf-8",
+  );
 
   await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
