@@ -1587,6 +1587,50 @@ describe("processDiscordMessage session routing", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
   });
 
+  it("keeps explicit message-tool-only Discord status reactions active across tool execution", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "echo hi" },
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      ackReactionScope: "all",
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+          groupChat: { visibleReplies: "message_tool" },
+          statusReactions: {
+            enabled: true,
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    const runPromise = runProcessDiscordMessage(ctx);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTimersAsync();
+    await runPromise;
+
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    const emojis = getReactionEmojis();
+    expect(emojis).toContain("👀");
+    expect(emojis).toContain(DEFAULT_EMOJIS.tool);
+    expect(emojis).toContain(DEFAULT_EMOJIS.done);
+  });
+
   it("suppresses Discord reactions for room events even when status reactions are explicit", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {

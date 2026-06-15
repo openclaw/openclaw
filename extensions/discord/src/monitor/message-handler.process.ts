@@ -981,9 +981,16 @@ async function processDiscordMessageInner(
         queuedDeliveryCorrelations: isRoomEvent ? [{ begin: beginDeliveryCorrelation }] : undefined,
         suppressTyping: isRoomEvent ? true : undefined,
         allowProgressCallbacksWhenSourceDeliverySuppressed:
-          sourceRepliesAreToolOnly && draftPreview.draftStream && draftPreview.isProgressMode
+          sourceRepliesAreToolOnly &&
+          ((draftPreview.draftStream && draftPreview.isProgressMode) || statusReactionsActive)
             ? true
             : undefined,
+        suppressDefaultToolProgressMessages:
+          sourceRepliesAreToolOnly && statusReactionsActive
+            ? true
+            : draftPreview.suppressDefaultToolProgressMessages
+              ? true
+              : undefined,
         disableBlockStreaming: sourceRepliesAreToolOnly
           ? true
           : (draftPreview.disableBlockStreamingForDraft ??
@@ -1001,9 +1008,6 @@ async function processDiscordMessageInner(
           ? () => draftPreview.handleAssistantMessageBoundary()
           : undefined,
         onModelSelected,
-        suppressDefaultToolProgressMessages: draftPreview.suppressDefaultToolProgressMessages
-          ? true
-          : undefined,
         commentaryProgressEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,
