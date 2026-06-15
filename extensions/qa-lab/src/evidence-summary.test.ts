@@ -12,7 +12,7 @@ import {
 } from "./evidence-summary.js";
 
 describe("evidence summary", () => {
-  it("builds taxonomy-mapped QA suite evidence entries from catalog metadata", () => {
+  it("builds QA suite evidence entries from catalog metadata", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: [
         { kind: "summary", path: "qa-suite-summary.json" },
@@ -22,7 +22,7 @@ describe("evidence summary", () => {
         {
           id: "dm-chat-baseline",
           title: "DM baseline conversation",
-          sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
           surface: "dm",
           coverage: {
             primary: ["channels.dm"],
@@ -47,6 +47,7 @@ describe("evidence summary", () => {
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
     expect(evidence.schemaVersion).toBe(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION);
+    expect(evidence.profile).toBeUndefined();
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]).toMatchObject({
       test: {
@@ -54,37 +55,30 @@ describe("evidence summary", () => {
         id: "dm-chat-baseline",
         title: "DM baseline conversation",
         source: {
-          path: "qa/scenarios/channels/dm-chat-baseline.md",
+          path: "qa/scenarios/channels/dm-chat-baseline.yaml",
         },
       },
-      mapping: {
-        profile: "smoke-ci",
-        coverage: [
-          {
-            id: "channels.dm",
-            role: "primary",
-            surfaceIds: ["dm"],
-            categoryIds: ["channels.dm"],
-          },
-          {
-            id: "channels.qa-channel",
-            role: "secondary",
-            surfaceIds: ["dm"],
-            categoryIds: [],
-          },
-        ],
-        refs: [
-          {
-            kind: "docs",
-            path: "docs/channels/qa-channel.md",
-          },
-          {
-            kind: "code",
-            path: "extensions/qa-channel/src/gateway.ts",
-          },
-        ],
-        runtimeParityTier: "standard",
-      },
+      coverage: [
+        {
+          id: "channels.dm",
+          role: "primary",
+        },
+        {
+          id: "channels.qa-channel",
+          role: "secondary",
+        },
+      ],
+      refs: [
+        {
+          kind: "docs",
+          path: "docs/channels/qa-channel.md",
+        },
+        {
+          kind: "code",
+          path: "extensions/qa-channel/src/gateway.ts",
+        },
+      ],
+      runtimeParityTier: "standard",
       execution: {
         runner: "host",
         provider: {
@@ -133,7 +127,6 @@ describe("evidence summary", () => {
       artifactPaths: [
         { kind: "summary", path: QA_EVIDENCE_FILENAME },
         { kind: "report", path: "telegram-qa-report.md" },
-        { kind: "transport-observations", path: "telegram-qa-observed-messages.json" },
       ],
       env: {
         OPENCLAW_QA_RUNNER: "crabbox",
@@ -144,7 +137,7 @@ describe("evidence summary", () => {
       checks: [
         {
           id: "telegram-canary",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           title: "Telegram canary",
           status: "fail",
           details: "timed out waiting for SUT reply",
@@ -155,6 +148,7 @@ describe("evidence summary", () => {
     });
 
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.profile).toBeUndefined();
     expect(evidence.entries).toEqual([
       expect.objectContaining({
         test: {
@@ -162,23 +156,16 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
         },
-        mapping: {
-          profile: "release",
-          coverage: [
-            {
-              id: "channels.telegram.live",
-              role: "live-transport",
-              surfaceIds: ["channels.telegram"],
-              categoryIds: ["channels.telegram.live"],
-            },
-            {
-              id: "channels.telegram.canary",
-              role: "live-transport-standard",
-              surfaceIds: ["channels.telegram"],
-              categoryIds: ["channels.telegram.live"],
-            },
-          ],
-        },
+        coverage: [
+          {
+            id: "channels.telegram.live",
+            role: "live-transport",
+          },
+          {
+            id: "channels.telegram.canary",
+            role: "live-transport-coverage",
+          },
+        ],
         execution: expect.objectContaining({
           runner: "crabbox",
           provider: {
@@ -206,11 +193,6 @@ describe("evidence summary", () => {
               path: "telegram-qa-report.md",
               source: "telegram-live-transport",
             },
-            {
-              kind: "transport-observations",
-              path: "telegram-qa-observed-messages.json",
-              source: "telegram-live-transport",
-            },
           ],
         }),
         result: {
@@ -224,6 +206,45 @@ describe("evidence summary", () => {
         },
       }),
     ]);
+  });
+
+  it("preserves aggregate live transport timing", () => {
+    const evidence = buildLiveTransportEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
+      generatedAt: "2026-06-07T12:05:00.000Z",
+      primaryModel: "openai/gpt-5.5",
+      providerMode: "live-frontier",
+      checks: [
+        {
+          id: "telegram-mentioned-message-reply",
+          coverageIds: ["channels.telegram.mention-gating"],
+          title: "Telegram mentioned message gets a reply",
+          status: "pass",
+          details: "5 samples collected.",
+          rttMs: 2000,
+          timing: {
+            rttMs: 1200,
+            avgMs: 1300,
+            p50Ms: 1200,
+            p95Ms: 1800,
+            maxMs: 2200,
+            samples: 5,
+            failedSamples: 1,
+          },
+        },
+      ],
+      transportId: "telegram",
+    });
+
+    expect(evidence.entries[0]?.result.timing).toEqual({
+      rttMs: 1200,
+      avgMs: 1300,
+      p50Ms: 1200,
+      p95Ms: 1800,
+      maxMs: 2200,
+      samples: 5,
+      failedSamples: 1,
+    });
   });
 
   it("builds Vitest runner evidence entries", () => {
@@ -243,8 +264,6 @@ describe("evidence summary", () => {
           title: "Agent runner boundary integration tests",
           sourcePath: "src/agents/agent-runner.e2e.test.ts",
           primaryCoverageIds: ["runtime.agent-runner", "runtime.delivery"],
-          surfaceIds: ["agent-runtime-and-provider-execution"],
-          categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
           codeRefs: ["src/agents/agent-runner.ts"],
         },
       ],
@@ -258,6 +277,7 @@ describe("evidence summary", () => {
     });
 
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.profile).toBeUndefined();
     expect(evidence.entries).toEqual([
       expect.objectContaining({
         test: {
@@ -268,29 +288,22 @@ describe("evidence summary", () => {
             path: "src/agents/agent-runner.e2e.test.ts",
           },
         },
-        mapping: {
-          profile: "smoke-ci",
-          coverage: [
-            {
-              id: "runtime.agent-runner",
-              role: "primary",
-              surfaceIds: ["agent-runtime-and-provider-execution"],
-              categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
-            },
-            {
-              id: "runtime.delivery",
-              role: "primary",
-              surfaceIds: ["agent-runtime-and-provider-execution"],
-              categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
-            },
-          ],
-          refs: [
-            {
-              kind: "code",
-              path: "src/agents/agent-runner.ts",
-            },
-          ],
-        },
+        coverage: [
+          {
+            id: "runtime.agent-runner",
+            role: "primary",
+          },
+          {
+            id: "runtime.delivery",
+            role: "primary",
+          },
+        ],
+        refs: [
+          {
+            kind: "code",
+            path: "src/agents/agent-runner.ts",
+          },
+        ],
         execution: expect.objectContaining({
           runner: "vitest",
           provider: expect.objectContaining({
@@ -333,8 +346,6 @@ describe("evidence summary", () => {
           title: "Control UI browser workflow",
           sourcePath: "ui/control-ui.e2e.test.ts",
           primaryCoverageIds: ["control-ui.browser"],
-          surfaceIds: ["browser-control-ui-and-webchat"],
-          categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
           docsRefs: ["docs/concepts/qa-e2e-automation.md"],
           codeRefs: ["ui/"],
         },
@@ -350,6 +361,7 @@ describe("evidence summary", () => {
     });
 
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.profile).toBeUndefined();
     expect(evidence.entries[0]).toMatchObject({
       test: {
         kind: "playwright-test",
@@ -359,26 +371,22 @@ describe("evidence summary", () => {
           path: "ui/control-ui.e2e.test.ts",
         },
       },
-      mapping: {
-        coverage: [
-          {
-            id: "control-ui.browser",
-            role: "primary",
-            surfaceIds: ["browser-control-ui-and-webchat"],
-            categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
-          },
-        ],
-        refs: [
-          {
-            kind: "docs",
-            path: "docs/concepts/qa-e2e-automation.md",
-          },
-          {
-            kind: "code",
-            path: "ui/",
-          },
-        ],
-      },
+      coverage: [
+        {
+          id: "control-ui.browser",
+          role: "primary",
+        },
+      ],
+      refs: [
+        {
+          kind: "docs",
+          path: "docs/concepts/qa-e2e-automation.md",
+        },
+        {
+          kind: "code",
+          path: "ui/",
+        },
+      ],
       execution: {
         runner: "playwright",
         artifacts: [
@@ -406,7 +414,7 @@ describe("evidence summary", () => {
     });
   });
 
-  it("carries profile env values without hardcoding taxonomy mapping ids", () => {
+  it("carries profile env values without hardcoding taxonomy coverage ids", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
       scenarioDefinitions: [
@@ -429,7 +437,7 @@ describe("evidence summary", () => {
       scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
 
-    expect(evidence.entries[0]?.mapping.profile).toBe("experimental-profile");
+    expect(evidence.profile).toBe("experimental-profile");
   });
 
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
@@ -485,7 +493,7 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
           details: "Canary passed.",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           status: "pass",
         },
       ],
@@ -515,7 +523,7 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
           details: "Canary passed.",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           status: "pass",
         },
       ],
@@ -543,7 +551,7 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
           details: "Canary passed.",
-          standardId: "canary",
+          coverageIds: ["channels.telegram.canary"],
           status: "pass",
         },
       ],

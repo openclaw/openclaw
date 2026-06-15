@@ -139,7 +139,7 @@ describe("createQaScenarioRuntimeApi", () => {
       surface: "test",
       objective: "test",
       successCriteria: ["works"],
-      sourcePath: "qa/scenarios/generic-flow.md",
+      sourcePath: "qa/scenarios/generic-flow.yaml",
       execution: {
         kind: "flow" as const,
         config: { expected: "value" },

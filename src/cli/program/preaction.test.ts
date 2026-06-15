@@ -362,6 +362,18 @@ describe("registerPreActionHooks", () => {
 
     vi.clearAllMocks();
     await runPreAction({
+      parseArgv: ["plugins", "install", "@openclaw/discord@2026.5.22"],
+      processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/discord@2026.5.22"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
       parseArgv: ["plugins", "install", "@openclaw/brave-plugin"],
       processArgv: ["node", "openclaw", "plugins", "install", "@openclaw/brave-plugin"],
     });

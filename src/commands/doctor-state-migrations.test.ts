@@ -431,9 +431,9 @@ function writeLegacyTaskStateSidecars(root: string): {
       .prepare(
         `
           INSERT INTO task_runs (
-            task_id, runtime, source_id, requester_session_key, child_session_key, run_id, task,
-            status, delivery_status, notify_policy, created_at, last_event_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            task_id, runtime, source_id, requester_session_key, child_session_key, agent_id, run_id,
+            task, status, delivery_status, notify_policy, created_at, last_event_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -442,6 +442,7 @@ function writeLegacyTaskStateSidecars(root: string): {
         "nightly",
         "",
         "agent:main:cron:nightly",
+        "ops",
         "legacy-task-run",
         "Legacy cron task",
         "running",
@@ -505,6 +506,36 @@ function writeLegacyTaskStateSidecars(root: string): {
   }
 
   return { taskRunsPath, flowRunsPath };
+}
+
+function appendLegacyCrossAgentTask(taskRunsPath: string): void {
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(taskRunsPath);
+  try {
+    db.prepare(
+      `
+        INSERT INTO task_runs (
+          task_id, runtime, requester_session_key, child_session_key, agent_id, run_id, task,
+          status, delivery_status, notify_policy, created_at, last_event_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "legacy-cross-agent",
+      "subagent",
+      "agent:main:main",
+      "agent:worker:subagent:child",
+      "main",
+      "legacy-cross-agent-run",
+      "Inspect worker state",
+      "running",
+      "pending",
+      "done_only",
+      130,
+      140,
+    );
+  } finally {
+    db.close();
+  }
 }
 
 async function detectAndRunMigrations(params: {
@@ -2271,6 +2302,7 @@ describe("doctor legacy state migrations", () => {
         ownerKey: "system:cron:nightly",
         scopeKind: "system",
         requesterSessionKey: "",
+        agentId: "ops",
         runId: "legacy-task-run",
       });
       expect(taskState.deliveryStates.get("legacy-task")).toMatchObject({
@@ -2343,6 +2375,90 @@ describe("doctor legacy state migrations", () => {
       expect(loadTaskRegistryStateFromSqlite().tasks.has("legacy-task")).toBe(true);
       expect(loadTaskFlowRegistryStateFromSqlite().flows.has("legacy-flow")).toBe(true);
     });
+  });
+
+  it("canonicalizes cross-agent attribution while importing task sidecars", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath } = writeLegacyTaskStateSidecars(root);
+    appendLegacyCrossAgentTask(taskRunsPath);
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 2 task registry sidecar rows → shared SQLite state");
+
+    await withStateDir(root, async () => {
+      expect(loadTaskRegistryStateFromSqlite().tasks.get("legacy-cross-agent")).toMatchObject({
+        taskId: "legacy-cross-agent",
+        agentId: "worker",
+        requesterAgentId: "main",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:worker:subagent:child",
+      });
+    });
+  });
+
+  it("keeps task sidecars when only requester attribution conflicts", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath } = writeLegacyTaskStateSidecars(root);
+    appendLegacyCrossAgentTask(taskRunsPath);
+
+    await withStateDir(root, async () => {
+      loadTaskRegistryStateFromSqlite();
+      closeOpenClawStateDatabaseForTest();
+      const sqlite = requireNodeSqlite();
+      const db = new sqlite.DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+      try {
+        db.prepare(
+          `INSERT INTO task_runs (
+            task_id,
+            runtime,
+            requester_session_key,
+            owner_key,
+            scope_kind,
+            child_session_key,
+            agent_id,
+            requester_agent_id,
+            run_id,
+            task,
+            status,
+            delivery_status,
+            notify_policy,
+            created_at,
+            last_event_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          "legacy-cross-agent",
+          "subagent",
+          "agent:main:main",
+          "agent:main:main",
+          "session",
+          "agent:worker:subagent:child",
+          "worker",
+          "other-requester",
+          "legacy-cross-agent-run",
+          "Inspect worker state",
+          "running",
+          "pending",
+          "done_only",
+          130,
+          140,
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.warnings).toContain(
+      "Left task registry sidecar in place because 1 row already existed in shared state: legacy-cross-agent",
+    );
+    expect(fs.existsSync(taskRunsPath)).toBe(true);
   });
 
   it("keeps task sidecars when shared state already has conflicting task rows", async () => {

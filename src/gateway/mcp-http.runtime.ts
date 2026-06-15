@@ -36,6 +36,7 @@ type McpLoopbackScopeParams = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean | undefined;
 };
 
@@ -70,6 +71,7 @@ export class McpLoopbackToolCache {
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
+      params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
       params.senderIsOwner === true
         ? "owner"
         : params.senderIsOwner === false

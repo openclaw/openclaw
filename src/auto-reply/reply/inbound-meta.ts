@@ -1,4 +1,5 @@
 // Normalizes inbound message metadata before it is exposed to reply prompts.
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -11,12 +12,11 @@ import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { TemplateContext } from "../templating.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
 
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
-const MESSAGE_TOOL_DELIVERY_HINT =
-  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.";
 
 /** Options for building the user-context prefix added to inbound prompts. */
 type InboundUserContextPrefixOptions = {
@@ -34,6 +34,53 @@ function normalizePromptMetadataString(value: unknown): string | undefined {
   }
   const sanitized = stripNullBytes(normalized);
   return sanitized || undefined;
+}
+
+function normalizePromptMediaPath(value: unknown): string | undefined {
+  const mediaPath = normalizePromptMetadataString(value);
+  if (!mediaPath) {
+    return undefined;
+  }
+  const toInboundMediaPath = (id: string): string | undefined => {
+    if (
+      !id ||
+      id === "." ||
+      id === ".." ||
+      id.length > MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS ||
+      id.includes("/") ||
+      id.includes("\\") ||
+      id.includes("\0")
+    ) {
+      return undefined;
+    }
+    try {
+      return `media://inbound/${encodeURIComponent(id)}`;
+    } catch {
+      return undefined;
+    }
+  };
+  const decodeInboundMediaId = (id: string): string | undefined => {
+    try {
+      return decodeURIComponent(id);
+    } catch {
+      return undefined;
+    }
+  };
+  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
+  if (canonicalMatch?.[1]) {
+    const id = decodeInboundMediaId(canonicalMatch[1]);
+    return id ? toInboundMediaPath(id) : undefined;
+  }
+  const relativeMatch = /^media\/inbound\/([^/\\]+)$/i.exec(mediaPath);
+  if (relativeMatch?.[1]) {
+    const id = decodeInboundMediaId(relativeMatch[1]);
+    return id ? toInboundMediaPath(id) : undefined;
+  }
+  const normalized = mediaPath.replace(/\\/g, "/");
+  if (!normalized.includes("/media/inbound/")) {
+    return undefined;
+  }
+  return toInboundMediaPath(path.posix.basename(normalized));
 }
 
 function normalizePromptMetadataStringArray(value: unknown): string[] | undefined {
@@ -194,7 +241,8 @@ function formatChatWindowMessage(
   const timestamp = formatConversationTimestamp(value["timestamp_ms"], envelope);
   const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
   const mediaType = sanitizeTranscriptField(value["media_type"]);
-  const mediaRef = sanitizeTranscriptField(value["media_ref"]);
+  const mediaLocator =
+    normalizePromptMediaPath(value["media_path"]) ?? sanitizeTranscriptField(value["media_ref"]);
   const body = sanitizeTranscriptBody(value["body"]);
   const details = [
     messageId ? `#${messageId}` : undefined,
@@ -202,7 +250,7 @@ function formatChatWindowMessage(
     value["is_reply_target"] === true ? "[reply target]" : undefined,
     replyToId ? `->#${replyToId}` : undefined,
   ].filter(Boolean);
-  const media = mediaType ? `[${mediaType}${mediaRef ? ` ${mediaRef}` : ""}]` : undefined;
+  const media = mediaType ? `[${mediaType}${mediaLocator ? ` ${mediaLocator}` : ""}]` : undefined;
   const content = [body, media].filter(Boolean).join(" ");
   if (!content) {
     return undefined;
@@ -316,7 +364,7 @@ function buildReplyChainPayload(ctx: TemplateContext): Array<Record<string, unkn
     const rawBody = sanitizePromptBody(entry.body);
     const body = rawBody ? truncateBodyHeadTail(rawBody) : rawBody;
     const mediaType = normalizePromptMetadataString(entry.mediaType);
-    const mediaPath = normalizePromptMetadataString(entry.mediaPath);
+    const mediaPath = normalizePromptMediaPath(entry.mediaPath);
     const mediaRef = normalizePromptMetadataString(entry.mediaRef);
     if (!body && !mediaType && !mediaPath && !mediaRef) {
       return [];
@@ -483,7 +531,7 @@ export function buildInboundUserContextPrefix(
 ): string {
   const blocks: string[] = [];
   if (options?.sourceReplyDeliveryMode === "message_tool_only") {
-    blocks.push(MESSAGE_TOOL_DELIVERY_HINT);
+    blocks.push(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
   }
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";

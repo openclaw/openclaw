@@ -658,6 +658,19 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
   const ownerKey = ownerRaw || requesterRaw || `system:${runtime}:${sourceId || taskId}`;
   const scopeRaw = typeof row.scope_kind === "string" ? row.scope_kind : "";
   const scopeKind = scopeRaw === "system" || ownerKey.startsWith("system:") ? "system" : "session";
+  const childSessionKey =
+    typeof row.child_session_key === "string" ? row.child_session_key.trim() : "";
+  const persistedAgentId = typeof row.agent_id === "string" ? row.agent_id.trim() : "";
+  const isSpawnRuntime = runtime === "subagent" || runtime === "acp";
+  const childAgentId = isSpawnRuntime ? parseAgentSessionKey(childSessionKey)?.agentId : undefined;
+  const requesterAgentId =
+    (typeof row.requester_agent_id === "string" ? row.requester_agent_id.trim() : "") ||
+    (isSpawnRuntime
+      ? (parseAgentSessionKey(ownerKey)?.agentId ??
+        parseAgentSessionKey(requesterRaw)?.agentId ??
+        (childAgentId && persistedAgentId !== childAgentId ? persistedAgentId : ""))
+      : "");
+  const executorAgentId = requesterAgentId ? childAgentId || persistedAgentId : persistedAgentId;
   return {
     task_id: taskId,
     runtime,
@@ -666,10 +679,11 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
     requester_session_key: scopeKind === "system" ? "" : requesterRaw || ownerKey,
     owner_key: ownerKey,
     scope_kind: scopeKind,
-    child_session_key: legacyBindValue(row.child_session_key),
+    child_session_key: childSessionKey || null,
     parent_flow_id: legacyBindValue(row.parent_flow_id),
     parent_task_id: legacyBindValue(row.parent_task_id),
-    agent_id: legacyBindValue(row.agent_id),
+    agent_id: executorAgentId || null,
+    requester_agent_id: requesterAgentId || null,
     run_id: legacyBindValue(row.run_id),
     label: legacyBindValue(row.label),
     task: legacyBindValue(row.task ?? ""),
@@ -760,6 +774,7 @@ function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
       pickLegacyColumn(columns, "parent_flow_id"),
       pickLegacyColumn(columns, "parent_task_id"),
       pickLegacyColumn(columns, "agent_id"),
+      pickLegacyColumn(columns, "requester_agent_id"),
       pickLegacyColumn(columns, "run_id"),
       pickLegacyColumn(columns, "label"),
       "task",
@@ -851,15 +866,15 @@ function insertTaskRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
     `
       INSERT INTO task_runs (
         task_id, runtime, task_kind, source_id, requester_session_key, owner_key, scope_kind,
-        child_session_key, parent_flow_id, parent_task_id, agent_id, run_id, label, task, status,
-        delivery_status, notify_policy, created_at, started_at, ended_at, last_event_at,
-        cleanup_after, error, progress_summary, terminal_summary, terminal_outcome
+        child_session_key, parent_flow_id, parent_task_id, agent_id, requester_agent_id, run_id,
+        label, task, status, delivery_status, notify_policy, created_at, started_at, ended_at,
+        last_event_at, cleanup_after, error, progress_summary, terminal_summary, terminal_outcome
       ) VALUES (
         @task_id, @runtime, @task_kind, @source_id, @requester_session_key, @owner_key,
-        @scope_kind, @child_session_key, @parent_flow_id, @parent_task_id, @agent_id, @run_id,
-        @label, @task, @status, @delivery_status, @notify_policy, @created_at, @started_at,
-        @ended_at, @last_event_at, @cleanup_after, @error, @progress_summary, @terminal_summary,
-        @terminal_outcome
+        @scope_kind, @child_session_key, @parent_flow_id, @parent_task_id, @agent_id,
+        @requester_agent_id, @run_id, @label, @task, @status, @delivery_status, @notify_policy,
+        @created_at, @started_at, @ended_at, @last_event_at, @cleanup_after, @error,
+        @progress_summary, @terminal_summary, @terminal_outcome
       )
     `,
   ).run(row);
@@ -933,6 +948,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
           "parent_flow_id",
           "parent_task_id",
           "agent_id",
+          "requester_agent_id",
           "run_id",
           "label",
           "task",

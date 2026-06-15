@@ -37,6 +37,39 @@ import { testApi, usageHandlers } from "./usage.js";
 
 describe("gateway usage helpers", () => {
   const dayMs = 24 * 60 * 60 * 1000;
+  const costSummary = (params: { date?: string; totalTokens: number; totalCost: number }) => ({
+    updatedAt: Date.now(),
+    days: 1,
+    daily: [
+      {
+        date: params.date ?? "2026-02-01",
+        input: params.totalTokens,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: params.totalTokens,
+        totalCost: params.totalCost,
+        inputCost: params.totalCost,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+    ],
+    totals: {
+      input: params.totalTokens,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: params.totalTokens,
+      totalCost: params.totalCost,
+      inputCost: params.totalCost,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    },
+  });
 
   function expectUtcDateRange(
     range: ReturnType<typeof testApi.parseDateRange>,
@@ -256,5 +289,65 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
     );
+  });
+
+  it("aggregates usage.cost only for explicit all-agent scope", async () => {
+    vi.mocked(loadCostUsageSummaryFromCache).mockImplementation(async (params) =>
+      params?.agentId === "opus"
+        ? costSummary({ totalTokens: 20, totalCost: 2 })
+        : costSummary({ totalTokens: 10, totalCost: 1 }),
+    );
+
+    const config = {
+      agents: { list: [{ id: "main" }, { id: "opus" }] },
+      session: {},
+    } as OpenClawConfig;
+    const context = { getRuntimeConfig: () => config };
+    const params = { startDate: "2026-02-01", endDate: "2026-02-01", mode: "utc" };
+
+    const defaultRespond = vi.fn();
+    await usageHandlers["usage.cost"]({
+      respond: defaultRespond,
+      params,
+      context,
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBeUndefined();
+    expect(defaultRespond.mock.calls[0]?.[1]).toMatchObject({
+      totals: { totalTokens: 10, totalCost: 1 },
+    });
+
+    const aggregateRespond = vi.fn();
+    await usageHandlers["usage.cost"]({
+      respond: aggregateRespond,
+      params: { ...params, agentScope: "all" },
+      context,
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(3);
+    expect(
+      vi.mocked(loadCostUsageSummaryFromCache)
+        .mock.calls.slice(1)
+        .map((call) => call[0]?.agentId),
+    ).toEqual(["main", "opus"]);
+    expect(aggregateRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(aggregateRespond.mock.calls[0]?.[1]).toMatchObject({
+      totals: { totalTokens: 30, totalCost: 3 },
+      daily: [{ date: "2026-02-01", totalTokens: 30, totalCost: 3 }],
+    });
+
+    const mainRespond = vi.fn();
+    await usageHandlers["usage.cost"]({
+      respond: mainRespond,
+      params: { ...params, agentId: "main" },
+      context,
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[3]?.[0]?.agentId).toBe("main");
+    expect(mainRespond.mock.calls[0]?.[1]).toMatchObject({
+      totals: { totalTokens: 10, totalCost: 1 },
+    });
   });
 });

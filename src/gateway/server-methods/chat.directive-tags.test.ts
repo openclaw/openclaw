@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -51,6 +52,7 @@ const mockState = vi.hoisted(() => ({
       ttsSupplement?: { spokenText: string };
       audioAsVoice?: boolean;
       trustedLocalMedia?: boolean;
+      sensitiveMedia?: boolean;
       replyToId?: string;
       replyToCurrent?: boolean;
       isReasoning?: boolean;
@@ -105,6 +107,9 @@ const mockState = vi.hoisted(() => ({
   // stageSandboxMedia silently skips over-cap files.
   unstagedSources: null as string[] | null,
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
+  // Paths the mocked resolveInboundMediaReference treats as managed inbound
+  // media-store entries (drives the #90097 managed-PDF staging-fallback tests).
+  managedInboundPaths: null as string[] | null,
 }));
 
 function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
@@ -423,6 +428,22 @@ vi.mock("../../media/store.js", async () => {
         mockState.activeSaveMediaCalls -= 1;
       }
     }),
+  };
+});
+
+vi.mock("../../media/media-reference.js", async () => {
+  const original = await vi.importActual<typeof import("../../media/media-reference.js")>(
+    "../../media/media-reference.js",
+  );
+  return {
+    ...original,
+    // Treat only test-declared paths as managed inbound media, so the #90097
+    // managed-PDF fallback can be exercised without a real on-disk media store.
+    resolveInboundMediaReference: vi.fn(async (source: string) =>
+      mockState.managedInboundPaths?.includes(source)
+        ? { id: source, normalizedSource: source, physicalPath: source, sourceType: "path" }
+        : null,
+    ),
   };
 });
 
@@ -840,6 +861,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.stagedRelativePaths = null;
     mockState.unstagedSources = null;
     mockState.deleteMediaBufferCalls = [];
+    mockState.managedInboundPaths = null;
     mockState.hasBeforeAgentRunHooks = false;
     mockState.beforeMessageWriteBlock = false;
     mockState.beforeMessageWriteContent = null;
@@ -869,7 +891,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-command-session-metadata",
       message: "/goal pause waiting",
-      expectBroadcast: false,
+      waitFor: "none",
     });
 
     await waitForAssertion(() => {
@@ -887,6 +909,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       reason: "command-metadata",
     });
     expect(typeof payload?.ts).toBe("number");
+    await waitForAssertion(() => {
+      expect(context.dedupe.has("chat:idem-command-session-metadata")).toBe(true);
+    });
   });
 
   it("broadcasts session metadata changes before later command dispatch failure", async () => {
@@ -2351,6 +2376,804 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdates[0]?.message)).toContain("Command result with TTS.");
   });
 
+  it("folds block-only non-agent command replies into the final WebChat message", async () => {
+    createTranscriptFixture("openclaw-chat-send-command-block-final-");
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: [
+            "Trajectory exports can include prompts, model messages, tool schemas, tool results, runtime events, and local paths.",
+            "Trajectory bundle: requested `openclaw sessions export-trajectory` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.",
+          ].join("\n"),
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block",
+      message: "/export-trajectory bundle",
+    });
+
+    const text = getMessageContent(payload)
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    expect(text).toContain("Trajectory exports can include");
+    expect(text).toContain("through exec approval");
+    expect(text).toContain("Approve once");
+    const broadcast = lastBroadcastPayload(context);
+    expect(broadcast?.runId).toBe("idem-command-block");
+    expect(broadcast?.state).toBe("final");
+    const broadcastText = getMessageContent(broadcast)
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    expect(broadcastText).toContain("Trajectory exports can include");
+    expect(broadcastText).toContain("through exec approval");
+    expect(broadcastText).toContain("Approve once");
+  });
+
+  it("keeps slash-command block text when the final payload only adds media", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-block-media-final-");
+    const audioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: { text: "Trajectory exports can include prompts." },
+      },
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          replyToCurrent: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-media",
+      message: "/export-trajectory bundle",
+    });
+
+    const content = getMessageContent(payload);
+    expect(content[0]).toEqual({ type: "text", text: "Trajectory exports can include prompts." });
+    expect(content[1]).toEqual({
+      type: "attachment",
+      attachment: expect.objectContaining({
+        kind: "audio",
+        label: "tts.mp3",
+      }),
+    });
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant" &&
+        JSON.stringify(update.message).includes("[[reply_to_current]]"),
+    );
+    expect(transcriptUpdate).toBeTruthy();
+  });
+
+  it("keeps visible slash-command finals alongside earlier block text", async () => {
+    createTranscriptFixture("openclaw-chat-send-command-block-text-final-");
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: { text: "Trajectory exports can include prompts." },
+      },
+      {
+        kind: "final",
+        payload: { text: "Approve once to create the bundle." },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-text",
+      message: "/export-trajectory bundle",
+    });
+
+    const text = getMessageContent(payload)
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    expect(text).toContain("Trajectory exports can include prompts.");
+    expect(text).toContain("Approve once to create the bundle.");
+  });
+
+  it("deduplicates exact slash-command final text echoes", async () => {
+    createTranscriptFixture("openclaw-chat-send-command-block-duplicate-text-final-");
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: { text: "Trajectory exports can include prompts." },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "Trajectory exports can include prompts.[[reply_to_current]]",
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-duplicate-text",
+      message: "/export-trajectory bundle",
+    });
+
+    const text = getMessageContent(payload)
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    expect(text.match(/Trajectory exports/gu)).toHaveLength(1);
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain("[[reply_to_current]]");
+  });
+
+  it("keeps slash-command block text when the final payload only carries a reply directive", async () => {
+    createTranscriptFixture("openclaw-chat-send-command-block-reply-directive-final-");
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: { text: "Trajectory exports can include prompts." },
+      },
+      {
+        kind: "final",
+        payload: { text: "[[reply_to_current]]" },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-reply-directive",
+      message: "/export-trajectory bundle",
+    });
+
+    expect(extractFirstTextBlock(payload)).toBe("Trajectory exports can include prompts.");
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain("[[reply_to_current]]");
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain(
+      "Trajectory exports can include prompts.",
+    );
+  });
+
+  it("keeps media from duplicate slash-command finals without duplicating block text", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-block-media-dupe-");
+    const audioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "Trajectory exports can include prompts.",
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "[[audio_as_voice]]",
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-media-dupe",
+      message: "/export-trajectory bundle",
+    });
+
+    const text = getMessageContent(payload)
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    expect(text.match(/Trajectory exports/gu)).toHaveLength(1);
+    expect(getMessageContent(payload)[1]).toEqual({
+      type: "attachment",
+      attachment: expect.objectContaining({
+        isVoiceNote: true,
+        kind: "audio",
+        label: "tts.mp3",
+      }),
+    });
+  });
+
+  it("deduplicates slash-command media when file URLs and paths reference the same attachment", async () => {
+    const transcriptDir = createTranscriptFixture(
+      "openclaw-chat-send-command-block-media-file-url-",
+    );
+    const audioPath = path.join(transcriptDir, "voice.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "Trajectory exports can include prompts.",
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          mediaUrls: [pathToFileURL(audioPath).href],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-media-file-url",
+      message: "/export-trajectory bundle",
+    });
+
+    const content = getMessageContent(payload);
+    expect(content).toHaveLength(2);
+    expect(content[1]).toEqual({
+      type: "attachment",
+      attachment: expect.objectContaining({
+        isVoiceNote: true,
+        kind: "audio",
+        label: "voice.mp3",
+      }),
+    });
+  });
+
+  it("does not downgrade a voice-note block when a duplicate final has normalized false flags", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-block-voice-sticky-");
+    const audioPath = path.join(transcriptDir, "voice.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "Trajectory exports can include prompts.",
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: false,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-voice-sticky",
+      message: "/export-trajectory bundle",
+    });
+
+    const attachments = getMessageContent(payload).filter((block) => block.type === "attachment");
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.attachment).toEqual(
+      expect.objectContaining({
+        isVoiceNote: true,
+        label: "voice.mp3",
+      }),
+    );
+  });
+
+  it("keeps final text when only the slash-command media is duplicated", async () => {
+    const transcriptDir = createTranscriptFixture(
+      "openclaw-chat-send-command-block-media-different-final-text-",
+    );
+    const audioPath = path.join(transcriptDir, "voice.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "preview",
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "done",
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          replyToCurrent: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-media-different-final-text",
+      message: "/export-trajectory bundle",
+    });
+
+    const content = getMessageContent(payload);
+    const text = content
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    expect(text).toContain("preview");
+    expect(text).toContain("done");
+    expect(content.filter((block) => block.type === "attachment")).toHaveLength(1);
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain("[[reply_to_current]]");
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain("done");
+  });
+
+  it("keeps same-caption slash-command finals when media differs", async () => {
+    const transcriptDir = createTranscriptFixture(
+      "openclaw-chat-send-command-block-same-caption-different-media-",
+    );
+    const blockAudioPath = path.join(transcriptDir, "block.mp3");
+    const finalAudioPath = path.join(transcriptDir, "final.mp3");
+    fs.writeFileSync(blockAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(finalAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "shared caption",
+          mediaUrls: [blockAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "shared caption",
+          mediaUrls: [finalAudioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-same-caption-different-media",
+      message: "/export-trajectory bundle",
+    });
+
+    const attachments = getMessageContent(payload).filter((block) => block.type === "attachment");
+    expect(attachments).toHaveLength(2);
+    expect(attachments[0]?.attachment).toEqual(
+      expect.objectContaining({
+        label: "block.mp3",
+      }),
+    );
+    expect(
+      (attachments[0]?.attachment as { isVoiceNote?: unknown } | undefined)?.isVoiceNote,
+    ).not.toBe(true);
+    expect(attachments[1]?.attachment).toEqual(
+      expect.objectContaining({
+        isVoiceNote: true,
+        label: "final.mp3",
+      }),
+    );
+  });
+
+  it("deduplicates slash-command final echoes against the same text and media block", async () => {
+    const transcriptDir = createTranscriptFixture(
+      "openclaw-chat-send-command-block-same-caption-same-media-",
+    );
+    const firstAudioPath = path.join(transcriptDir, "first.mp3");
+    const secondAudioPath = path.join(transcriptDir, "second.mp3");
+    fs.writeFileSync(firstAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(secondAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "shared caption",
+          mediaUrls: [firstAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "block",
+        payload: {
+          text: "shared caption",
+          mediaUrls: [secondAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "shared caption",
+          mediaUrls: [secondAudioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-same-caption-same-media",
+      message: "/export-trajectory bundle",
+    });
+
+    const content = getMessageContent(payload);
+    const text = content
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    expect(text.match(/shared caption/gu)).toHaveLength(2);
+    const attachments = content.filter((block) => block.type === "attachment");
+    expect(attachments).toHaveLength(2);
+    expect(attachments[0]?.attachment).toEqual(
+      expect.objectContaining({
+        label: "first.mp3",
+      }),
+    );
+    expect(attachments[1]?.attachment).toEqual(
+      expect.objectContaining({
+        isVoiceNote: true,
+        label: "second.mp3",
+      }),
+    );
+  });
+
+  it("uses canonical mediaUrls when deduplicating slash-command block media", async () => {
+    const transcriptDir = createTranscriptFixture(
+      "openclaw-chat-send-command-block-media-canonical-",
+    );
+    const blockAudioPath = path.join(transcriptDir, "block.mp3");
+    const finalAudioPath = path.join(transcriptDir, "final.mp3");
+    fs.writeFileSync(blockAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(finalAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "Trajectory exports can include prompts.",
+          mediaUrl: finalAudioPath,
+          mediaUrls: [blockAudioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          mediaUrls: [finalAudioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-media-canonical",
+      message: "/export-trajectory bundle",
+    });
+
+    const content = getMessageContent(payload);
+    expect(content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Trajectory exports can include prompts."),
+    });
+    expect(content.slice(1)).toEqual([
+      {
+        type: "attachment",
+        attachment: expect.objectContaining({
+          kind: "audio",
+          label: "block.mp3",
+        }),
+      },
+      {
+        type: "attachment",
+        attachment: expect.objectContaining({
+          kind: "audio",
+          label: "final.mp3",
+        }),
+      },
+    ]);
+  });
+
+  it("does not spread duplicate final media flags across multi-media command blocks", async () => {
+    const transcriptDir = createTranscriptFixture(
+      "openclaw-chat-send-command-block-media-partial-",
+    );
+    const firstAudioPath = path.join(transcriptDir, "first.mp3");
+    const secondAudioPath = path.join(transcriptDir, "second.mp3");
+    fs.writeFileSync(firstAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(secondAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "Trajectory exports can include prompts.",
+          mediaUrls: [firstAudioPath, secondAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          mediaUrls: [firstAudioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-media-partial",
+      message: "/export-trajectory bundle",
+    });
+
+    const attachments = getMessageContent(payload).filter((block) => block.type === "attachment");
+    expect(attachments).toHaveLength(3);
+    expect(attachments[0]?.attachment).toEqual(
+      expect.objectContaining({
+        label: "first.mp3",
+      }),
+    );
+    expect(attachments[0]?.attachment?.isVoiceNote).not.toBe(true);
+    expect(attachments[1]?.attachment).toEqual(
+      expect.objectContaining({
+        label: "second.mp3",
+      }),
+    );
+    expect(attachments[1]?.attachment?.isVoiceNote).not.toBe(true);
+    expect(attachments[2]?.attachment).toEqual(
+      expect.objectContaining({
+        isVoiceNote: true,
+        label: "first.mp3",
+      }),
+    );
+  });
+
+  it("keeps sensitive overlapping slash-command media out of transcripts", async () => {
+    const transcriptDir = createTranscriptFixture(
+      "openclaw-chat-send-command-block-media-sensitive-overlap-",
+    );
+    const secretAudioPath = path.join(transcriptDir, "secret.mp3");
+    const publicAudioPath = path.join(transcriptDir, "public.mp3");
+    fs.writeFileSync(secretAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(publicAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "preview",
+          mediaUrls: [secretAudioPath, publicAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          mediaUrls: [secretAudioPath],
+          sensitiveMedia: true,
+          trustedLocalMedia: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-media-sensitive-overlap",
+      message: "/export-trajectory bundle",
+    });
+
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(JSON.stringify(transcriptUpdate?.message)).not.toContain(secretAudioPath);
+  });
+
+  it("keeps reordered slash-command final media instead of treating it as duplicate", async () => {
+    const transcriptDir = createTranscriptFixture(
+      "openclaw-chat-send-command-block-media-reordered-",
+    );
+    const firstAudioPath = path.join(transcriptDir, "first.mp3");
+    const secondAudioPath = path.join(transcriptDir, "second.mp3");
+    fs.writeFileSync(firstAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(secondAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "Trajectory exports can include prompts.",
+          mediaUrls: [firstAudioPath, secondAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          mediaUrls: [secondAudioPath, firstAudioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-command-block-media-reordered",
+      message: "/export-trajectory bundle",
+    });
+
+    const attachments = getMessageContent(payload).filter((block) => block.type === "attachment");
+    expect(attachments.map((block) => block.attachment?.label)).toEqual([
+      "first.mp3",
+      "second.mp3",
+      "second.mp3",
+      "first.mp3",
+    ]);
+    expect(attachments.slice(0, 2).every((block) => block.attachment?.isVoiceNote !== true)).toBe(
+      true,
+    );
+    expect(attachments.slice(2).every((block) => block.attachment?.isVoiceNote === true)).toBe(
+      true,
+    );
+  });
+
   it("renders image reply payloads as assistant image content instead of MEDIA text", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-image-");
     mockState.finalPayload = {
@@ -2445,6 +3268,29 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       throw new Error("Expected directive-only final message");
     }
     expect(extractFirstTextBlock(payload)).toBe("");
+  });
+
+  it("preserves inline reply directives in transcript text while stripping them from display", async () => {
+    createTranscriptFixture("openclaw-chat-send-inline-reply-transcript-");
+    mockState.finalText = "see[[reply_to_current]]now  with  spacing";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-inline-reply-transcript",
+    });
+
+    expect(extractFirstTextBlock(payload)).toBe("see now with spacing");
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain("[[reply_to_current]]");
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain("see now  with  spacing");
   });
 
   it("rejects oversized chat.send session keys before dispatch", async () => {
@@ -4075,6 +4921,31 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(transcriptUpdate)).not.toContain("[[audio_as_voice]]");
   });
 
+  it("falls back to inline reply id when structured replyToId sanitizes empty", async () => {
+    createTranscriptFixture("openclaw-chat-send-inline-reply-id-fallback-");
+    mockState.finalPayload = {
+      text: "hello[[reply_to:inline-id]]",
+      replyToId: "]]\n[[",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-inline-reply-id-fallback",
+    });
+
+    expect(extractFirstTextBlock(payload)?.trim()).toBe("hello");
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(JSON.stringify(transcriptUpdate)).toContain("[[reply_to:inline-id]]");
+  });
+
   it("routes text-only image offloads into media-understanding fields", async () => {
     createTranscriptFixture("openclaw-chat-send-text-only-attachments-");
     mockState.finalText = "ok";
@@ -4722,6 +5593,198 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
+  it("falls back to the managed inbound PDF path when sandbox staging is incomplete (#90097)", async () => {
+    createTranscriptFixture("openclaw-chat-send-managed-pdf-incomplete-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = { modelProvider: "test-provider", model: "vision-model" };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    const managedPath = "/home/user/.openclaw/media/inbound/report.pdf";
+    mockState.savedMediaResults = [{ path: managedPath, contentType: "application/pdf" }];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    // Staging returns an incomplete map (the file silently fell out).
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
+    mockState.unstagedSources = [managedPath];
+    mockState.managedInboundPaths = [managedPath];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-managed-pdf-incomplete",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    // Send proceeds with the absolute managed path; buffers are NOT deleted.
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([managedPath]);
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe(managedPath);
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
+    // Host-side readable: no sandbox workspace dir is carried for the fallback.
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
+    // Marker still blocks the dispatch pipeline from re-running staging.
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
+  it("falls back to the managed inbound PDF path when sandbox staging throws (#90097)", async () => {
+    createTranscriptFixture("openclaw-chat-send-managed-pdf-throw-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = { modelProvider: "test-provider", model: "vision-model" };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    const managedPath = "/home/user/.openclaw/media/inbound/report.pdf";
+    mockState.savedMediaResults = [{ path: managedPath, contentType: "application/pdf" }];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stageSandboxMediaError = new Error("ENOSPC: no space left on device");
+    mockState.managedInboundPaths = [managedPath];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-managed-pdf-throw",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([managedPath]);
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
+  it("does not fall back when not every offloaded ref is a managed PDF (#90097)", async () => {
+    createTranscriptFixture("openclaw-chat-send-managed-pdf-mixed-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = { modelProvider: "test-provider", model: "vision-model" };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    const managedPdf = "/home/user/.openclaw/media/inbound/report.pdf";
+    const managedZip = "/home/user/.openclaw/media/inbound/data.zip";
+    mockState.savedMediaResults = [
+      { path: managedPdf, contentType: "application/pdf" },
+      { path: managedZip, contentType: "application/zip" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf", "media/inbound/data.zip"];
+    mockState.unstagedSources = [managedPdf];
+    // Both managed, but the non-PDF ref must block the all-or-nothing fallback.
+    mockState.managedInboundPaths = [managedPdf, managedZip];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+    const zip = Buffer.from("PKdata").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-managed-pdf-mixed",
+      message: "read these",
+      requestParams: {
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: pdf },
+          { type: "file", mimeType: "application/zip", fileName: "data.zip", content: zip },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    // Mixed batch keeps the existing delete + 5xx behavior (no silent passthrough).
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    const [ok, , error] = lastRespondCall(respond) ?? [];
+    expect(ok).toBe(false);
+    expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(mockState.deleteMediaBufferCalls.map((c) => c.id).toSorted()).toEqual([
+      "saved-media",
+      "saved-media",
+    ]);
+  });
+
+  it("passes sandbox-oversized managed inbound PDFs through instead of rejecting them (#90097)", async () => {
+    createTranscriptFixture("openclaw-chat-send-managed-pdf-oversize-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    const managedPath = "/home/user/.openclaw/media/inbound/huge.pdf";
+    mockState.savedMediaResults = [{ path: managedPath, contentType: "application/pdf" }];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.managedInboundPaths = [managedPath];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const oversized = Buffer.alloc(6 * 1024 * 1024);
+    oversized.set(Buffer.from("%PDF-1.4\n"), 0);
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-managed-pdf-oversize",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "huge.pdf",
+            content: oversized.toString("base64"),
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe(managedPath);
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([managedPath]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
   it("rejects sandbox-oversized non-image attachments as 4xx before staging", async () => {
     // Regression: resolveChatAttachmentMaxBytes defaults to 20MB, but
     // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (5MB) and
@@ -4744,15 +5807,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     ];
     mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/huge.pdf", contentType: "application/pdf" },
+      {
+        path: "/home/user/.openclaw/media/inbound/huge.bin",
+        contentType: "application/octet-stream",
+      },
     ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     const respond = vi.fn();
     const context = createChatContext();
     // 6MB buffer — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
     const oversized = Buffer.alloc(6 * 1024 * 1024);
-    oversized.set(Buffer.from("%PDF-1.4\n"), 0);
-    const pdf = oversized.toString("base64");
+    oversized.set(Buffer.from("OPENCLAW-BINARY\n"), 0);
+    const oversizedPayload = oversized.toString("base64");
 
     await runNonStreamingChatSend({
       context,
@@ -4761,7 +5827,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "read this",
       requestParams: {
         attachments: [
-          { type: "file", mimeType: "application/pdf", fileName: "huge.pdf", content: pdf },
+          {
+            type: "file",
+            mimeType: "application/octet-stream",
+            fileName: "huge.bin",
+            content: oversizedPayload,
+          },
         ],
       },
       expectBroadcast: false,
@@ -5008,6 +6079,33 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(typeof message?.timestamp).toBe("number");
       const persistedUser = readPersistedUserMessages()[0];
       expect(persistedUser?.content).toBe("hello from failed dispatch");
+    });
+  });
+
+  it("emits a user transcript update when a slash-prefixed turn fails before command delivery", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-slash-error-no-run-");
+    mockState.dispatchError = new Error("slash command continued into unavailable runtime");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-slash-error-no-run",
+      message: "/unknown keep this user turn",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-user-transcript-slash-error-no-run")?.ok).toBe(false);
+      const userUpdate = findUserUpdate();
+      const message = userUpdateMessage(userUpdate);
+      expect(userUpdate?.sessionFile.endsWith("sess.jsonl")).toBe(true);
+      expect(userUpdate?.sessionKey).toBe("main");
+      expect(message?.role).toBe("user");
+      expect(message?.content).toBe("/unknown keep this user turn");
+      const persistedUser = readPersistedUserMessages()[0];
+      expect(persistedUser?.content).toBe("/unknown keep this user turn");
     });
   });
 

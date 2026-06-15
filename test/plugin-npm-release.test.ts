@@ -1,5 +1,5 @@
 // Plugin npm release tests validate plugin npm release artifacts.
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
@@ -98,15 +98,23 @@ function externalPluginContract(version: string) {
   };
 }
 
+function writePluginReadme(repoDir: string, extensionId: string): void {
+  const packageDir = join(repoDir, "extensions", extensionId);
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, "README.md"), `# ${extensionId}\n`);
+}
+
 describe("collectPublishablePluginPackageErrors", () => {
   it("accepts a valid publishable plugin package candidate", () => {
     expect(
       collectPublishablePluginPackageErrors({
         extensionId: "zalo",
         packageDir: bundledPluginRoot("zalo"),
+        readmeText: "# Zalo\n",
         packageJson: {
           name: "@openclaw/zalo",
           version: "2026.3.15",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -131,6 +139,7 @@ describe("collectPublishablePluginPackageErrors", () => {
       collectPublishablePluginPackageErrors({
         extensionId: "broken",
         packageDir: bundledPluginRoot("broken"),
+        readmeText: "# Broken\n",
         packageJson: {
           name: "broken",
           version: "latest",
@@ -150,6 +159,7 @@ describe("collectPublishablePluginPackageErrors", () => {
     ).toEqual([
       'package name must start with "@openclaw/"; found "broken".',
       "package.json private must not be true.",
+      'package.json type must be "module" so built .js runtime entries load as ESM.',
       `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
       'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
@@ -162,9 +172,11 @@ describe("collectPublishablePluginPackageErrors", () => {
       collectPublishablePluginPackageErrors({
         extensionId: "twitch",
         packageDir: bundledPluginRoot("twitch"),
+        readmeText: "# Twitch\n",
         packageJson: {
           name: "@openclaw/twitch",
           version: "2026.5.1-beta.1",
+          type: "module",
           openclaw: {
             extensions: ["./index.ts"],
             ...externalPluginContract("2026.5.1-beta.1"),
@@ -187,9 +199,11 @@ describe("collectPublishablePluginPackageErrors", () => {
       collectPublishablePluginPackageErrors({
         extensionId: "voice-call",
         packageDir: bundledPluginRoot("voice-call"),
+        readmeText: "# Voice call\n",
         packageJson: {
           name: "@openclaw/voice-call",
           version: "2026.5.1-beta.1",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -211,9 +225,11 @@ describe("collectPublishablePluginPackageErrors", () => {
       collectPublishablePluginPackageErrors({
         extensionId: "voice-call",
         packageDir: bundledPluginRoot("voice-call"),
+        readmeText: "# Voice call\n",
         packageJson: {
           name: "@openclaw/voice-call",
           version: "2026.5.1-beta.1",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -233,6 +249,35 @@ describe("collectPublishablePluginPackageErrors", () => {
       "openclaw.compat.pluginApi is required for external code plugin packages.",
       "openclaw.build.openclawVersion is required for external code plugin packages.",
     ]);
+  });
+
+  it("requires package documentation before publishing", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "zalo",
+        packageDir: bundledPluginRoot("zalo"),
+        readmeText: " \n",
+        packageJson: {
+          name: "@openclaw/zalo",
+          version: "2026.3.15",
+          type: "module",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
+          openclaw: {
+            extensions: ["./index.ts"],
+            ...externalPluginContract("2026.3.15"),
+            install: {
+              npmSpec: "@openclaw/zalo",
+            },
+            release: {
+              publishToNpm: true,
+            },
+          },
+        },
+      }),
+    ).toEqual(["README.md must exist and contain package documentation."]);
   });
 });
 
@@ -291,9 +336,11 @@ describe("collectPublishablePluginPackages", () => {
   it("collects publishable npm plugins from extension package manifests", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10",
+      type: "module",
       repository: {
         type: "git",
         url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -326,9 +373,11 @@ describe("collectPublishablePluginPackages", () => {
   it("does not validate unselected publishable plugin manifests", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10-beta.1",
+      type: "module",
       repository: {
         type: "git",
         url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -404,9 +453,11 @@ describe("collectPublishablePluginPackages", () => {
   it("publishes alpha plugin packages to the alpha dist-tag", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10-alpha.1",
+      type: "module",
       repository: {
         type: "git",
         url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,

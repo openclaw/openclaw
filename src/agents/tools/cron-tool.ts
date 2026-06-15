@@ -24,6 +24,7 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
+import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import {
   type AnyAgentTool,
   jsonResult,
@@ -438,6 +439,46 @@ function filterCronStatusResultForSelfScope(result: unknown): unknown {
   return { enabled: isRecord(result) && result.enabled === true };
 }
 
+function formatCronTerminalPresentation(
+  params: unknown,
+  result: unknown,
+): { text: string } | undefined {
+  if (!isRecord(params) || !isRecord(result) || !isRecord(result.details)) {
+    return undefined;
+  }
+  switch (params.action) {
+    case "status": {
+      const enabled = result.details.enabled === true ? "yes" : "no";
+      return { text: `Cron scheduler status.\nEnabled: ${enabled}` };
+    }
+    case "list": {
+      const total =
+        typeof result.details.total === "number" &&
+        Number.isFinite(result.details.total) &&
+        result.details.total >= 0
+          ? Math.floor(result.details.total)
+          : undefined;
+      const count =
+        total ?? (Array.isArray(result.details.jobs) ? result.details.jobs.length : undefined);
+      return count === undefined
+        ? { text: "Cron jobs listed." }
+        : { text: `Cron jobs listed.\nCount: ${count}` };
+    }
+    case "get":
+      return { text: "Cron job loaded." };
+    case "runs": {
+      const entries = Array.isArray(result.details.entries)
+        ? result.details.entries.length
+        : undefined;
+      return entries === undefined
+        ? { text: "Cron run history loaded." }
+        : { text: `Cron run history loaded.\nCount: ${entries}` };
+    }
+    default:
+      return undefined;
+  }
+}
+
 function cronListResultHasJob(result: unknown, jobId: string): boolean {
   return (
     isRecord(result) &&
@@ -520,7 +561,7 @@ async function buildReminderContextLines(params: {
 
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
-  return {
+  const tool: AnyAgentTool = {
     label: "Cron",
     name: "cron",
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
@@ -912,4 +953,5 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
       }
     },
   };
+  return setToolTerminalPresentation(tool, formatCronTerminalPresentation);
 }

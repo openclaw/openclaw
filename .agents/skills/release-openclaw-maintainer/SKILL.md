@@ -150,9 +150,21 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 - Stable Windows Hub release closeout requires the signed
   `OpenClawCompanion-Setup-x64.exe`, `OpenClawCompanion-Setup-arm64.exe`, and
   `OpenClawCompanion-SHA256SUMS.txt` assets on the canonical
-  `openclaw/openclaw` GitHub Release. Use the public `Windows Node Release`
-  workflow after the matching `openclaw/openclaw-windows-node` release exists;
-  it verifies Authenticode signatures on Windows before uploading assets.
+  `openclaw/openclaw` GitHub Release. Pass the exact signed
+  `openclaw/openclaw-windows-node` release tag as `windows_node_tag` to
+  `OpenClaw Release Publish`, together with the candidate-approved
+  `windows_node_installer_digests` map; it prevalidates the published source
+  release and required installers against that map before any publish child,
+  dispatches the public `Windows Node Release` workflow while the OpenClaw
+  release is still a draft, carries those pinned source asset digests
+  unchanged, verifies the expected OpenClaw Foundation Authenticode signer on
+  Windows, re-downloads and checksum-verifies the promoted asset contract, and
+  blocks publication until the canonical asset contract is present. Use direct
+  `Windows Node Release` dispatch only for recovery, always with an exact tag,
+  never `latest`, and the explicit `expected_installer_digests` JSON map from
+  the approved source release. Recovery rejects unexpected
+  `OpenClawCompanion-*` target asset names, then replaces the expected contract
+  assets with the pinned source bytes.
 - Website Windows Hub download links should target exact canonical
   `openclaw/openclaw/releases/download/vYYYY.M.PATCH/...` assets for the current
   stable release, or `releases/latest/download/...` only after verifying the
@@ -309,6 +321,7 @@ Upgrade with the beta channel.
 Before tagging or publishing, run:
 
 ```bash
+pnpm release:fast-pretag-check
 pnpm check:architecture
 pnpm build
 pnpm ui:build
@@ -317,6 +330,21 @@ pnpm release:check
 pnpm test:install:smoke
 ```
 
+- Treat `pnpm release:fast-pretag-check` as a hard packaging gate. Every
+  publishable plugin must have a non-empty package-root `README.md`, build its
+  package-local runtime, and pass the npm and ClawHub release metadata checks
+  before a tag or publish workflow can start. Do not defer README, entrypoint,
+  or packed-artifact failures to postpublish verification.
+- Before tagging, require green CI for the exact release-candidate SHA, not an
+  earlier branch SHA. Heal every related red CI, release-check, packaging, or
+  root-Dockerfile lane on the release branch, forward-port the fix to `main`,
+  and rerun the affected exact-SHA gates. Never waive a red Docker lane because
+  npm preflight passed.
+- Root Dockerfile proof is mandatory before every beta and stable tag. Run the
+  release `install-smoke` group or equivalent root Dockerfile build for the
+  exact candidate SHA and require it to pass. The tag-triggered Docker Release
+  workflow is post-tag publishing, not the first valid proof that the root
+  Dockerfile can build.
 - Before tagging, diff publishable plugin package manifests against the last
   reachable stable/beta release tag. For every newly publishable package
   (`openclaw.release.publishToNpm: true` or `publishToClawHub: true`) whose
@@ -632,9 +660,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
    off, live OpenAI off, and regression failure off. Let it run in parallel
    with preflight and validation work.
 10. Run the fast local beta preflight from the release branch before any npm
-    preflight or publish. Keep expensive Docker, Parallels, and published-package
-    install/update lanes for after the beta is live unless the operator asks to
-    run them before beta publication.
+    preflight or publish. Require exact-SHA CI and root Dockerfile install-smoke
+    to be green before tagging. Keep the remaining expensive Docker, Parallels,
+    and published-package install/update lanes for after the beta is live unless
+    the operator asks to run them before beta publication.
 11. For beta releases, skip mac app build/sign/notarize unless beta scope or a
     release blocker specifically requires it. For stable releases, include the
     mac app, signing, notarization, and appcast path.
@@ -675,19 +704,23 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     where npm did not publish the beta version, delete/recreate the same beta
     tag and any accidental draft/incomplete prerelease at the fixed commit
     instead of skipping a prerelease number.
-22. Start `.github/workflows/openclaw-npm-release.yml` from the same branch with
+22. Start `.github/workflows/openclaw-release-publish.yml` from the same branch with
     the same tag for the real publish, choose `npm_dist_tag` (`beta` default,
     `latest` only when you intentionally want direct stable publish), keep it
     the same as the preflight run, and pass the successful npm
-    `preflight_run_id`.
+    `preflight_run_id` plus the successful `full_release_validation_run_id`.
+    For stable publish, also pass the exact non-prerelease
+    `openclaw/openclaw-windows-node` tag as `windows_node_tag` and its
+    candidate-approved installer digest map as `windows_node_installer_digests`.
 23. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
 24. Wait for the real publish workflow to run postpublish verification,
     create or update the GitHub release as a draft, upload dependency evidence,
+    promote and verify the required Windows Hub assets for stable releases,
     append release verification proof, and only then undraft/publish it. If a
-    waited plugin publish fails after OpenClaw npm succeeds, the workflow keeps
-    the release draft with OpenClaw npm evidence and exits red; do not undraft
-    until the plugin publish gap is repaired. The standalone verifier command
-    remains the recovery probe:
+    waited plugin publish or Windows Hub promotion fails after OpenClaw npm
+    succeeds, the workflow keeps the release draft with OpenClaw npm evidence
+    and exits red; do not undraft until the gap is repaired. The standalone
+    verifier command remains the recovery probe:
     `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>`.
 25. Run the post-published beta verification roster. First scan current `main`
     for critical fixes that landed after the release branch cut; backport only

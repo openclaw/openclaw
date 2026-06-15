@@ -244,6 +244,7 @@ describe("createCopilotToolBridge", () => {
           groupChannel: "#general",
           groupSpace: "team-1",
           currentChannelId: "C123",
+          currentMessagingTarget: "user:U123",
           currentThreadTs: "1700000000.000100",
           currentMessageId: "M-1",
           messageProvider: "slack",
@@ -277,6 +278,7 @@ describe("createCopilotToolBridge", () => {
         groupChannel: "#general",
         groupSpace: "team-1",
         currentChannelId: "C123",
+        currentMessagingTarget: "user:U123",
         currentThreadTs: "1700000000.000100",
         currentMessageId: "M-1",
         messageProvider: "slack",
@@ -1213,14 +1215,70 @@ describe("convertOpenClawToolToSdkTool", () => {
   });
 
   it("converts single text content to an exact textResultForLlm", async () => {
-    const sdkTool = convertOpenClawToolToSdkTool(
-      makeTool({}, { content: [{ text: "hello", type: "text" }], details: null }),
-      {},
-    );
+    const onAgentToolResult = vi.fn();
+    const sourceResult = {
+      content: [{ text: "hello", type: "text" }],
+      details: { results: [{ text: "hello" }] },
+    };
+    const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), { onAgentToolResult });
 
     const result = await runSdkTool(sdkTool, {});
 
     expect(result).toEqual({ resultType: "success", textResultForLlm: "hello" });
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "tool-a",
+      result: sourceResult,
+      isError: false,
+    });
+  });
+
+  it("reports thrown tool failures to the private result observer", async () => {
+    const error = new Error("backend unavailable");
+    const onAgentToolResult = vi.fn();
+    const sdkTool = convertOpenClawToolToSdkTool(
+      makeTool({
+        execute: vi.fn(async () => {
+          throw error;
+        }),
+      }),
+      { onAgentToolResult },
+    );
+
+    await runSdkTool(sdkTool, {});
+
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "tool-a",
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "[copilot-tool-bridge] tool 'tool-a' failed: backend unavailable",
+          },
+        ],
+        details: { status: "failed", error: "backend unavailable" },
+      },
+      isError: true,
+    });
+  });
+
+  it("reports returned OpenClaw error results as observer failures", async () => {
+    const onAgentToolResult = vi.fn();
+    const sourceResult = {
+      content: [{ text: '{"status":"error","error":"backend unavailable"}', type: "text" }],
+      details: { status: "error", error: "backend unavailable" },
+    };
+    const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), {
+      onAgentToolResult,
+    });
+
+    const result = await runSdkTool(sdkTool, {});
+
+    expect(result).toMatchObject({ resultType: "success" });
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "tool-a",
+      result: sourceResult,
+      isError: true,
+    });
   });
 
   it("joins multiple text blocks with newlines", async () => {
@@ -1276,16 +1334,12 @@ describe("convertOpenClawToolToSdkTool", () => {
   });
 
   it("returns a failure result for unsupported content shapes", async () => {
-    const sdkTool = convertOpenClawToolToSdkTool(
-      makeTool(
-        {},
-        {
-          content: [{ type: "resource" }],
-          details: null,
-        },
-      ),
-      {},
-    );
+    const onAgentToolResult = vi.fn();
+    const sourceResult = {
+      content: [{ type: "resource" }],
+      details: null,
+    };
+    const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), { onAgentToolResult });
 
     const result = await runSdkTool(sdkTool, {});
 
@@ -1296,6 +1350,11 @@ describe("convertOpenClawToolToSdkTool", () => {
     expect(getError(result as ToolResultObject)).toBe(
       "[copilot-tool-bridge] unsupported AgentToolResult content shape: resource",
     );
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "tool-a",
+      result: sourceResult,
+      isError: true,
+    });
   });
 
   it("returns a failure result when execute throws and preserves the error", async () => {

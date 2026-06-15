@@ -883,6 +883,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       db: this.db,
       vectorTable: VECTOR_TABLE,
       providerModel: this.provider.model,
+      providerModelAliases: this.resolveProviderIndexIdentities()
+        .slice(1)
+        .map((identity) => identity.model),
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,

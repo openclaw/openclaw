@@ -201,8 +201,10 @@ export type MsgContext = {
   MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
-  /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
+  /** True when current-turn sticker media is present in MediaPaths. */
   StickerMediaIncluded?: boolean;
+  /** Skip automatic understanding for the current sticker because its cached description is used. */
+  SkipStickerMediaUnderstanding?: boolean;
   OutputDir?: string;
   OutputBase?: string;
   /** Remote host for SCP when media lives on a different machine (e.g., openclaw@192.168.64.3). */

@@ -7,10 +7,14 @@ import {
   createPluginInstallLogger,
   resolveFileNpmSpecToLocalPath,
 } from "../../cli/plugins-command-helpers.js";
-import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
+import {
+  persistPluginInstall,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+} from "../../cli/plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -369,12 +373,26 @@ async function loadPluginCommandConfig(): Promise<
   | { ok: true; path: string; snapshot: ConfigSnapshotForInstallPersist }
   | { ok: false; path: string; error: string }
 > {
-  const snapshot = await readConfigFileSnapshot();
+  const prepared = await readConfigFileSnapshotForWrite();
+  const snapshot = prepared.snapshot;
   if (!snapshot.valid) {
     return {
       ok: false,
       path: snapshot.path,
       error: "Config file is invalid; fix it before using /plugins.",
+    };
+  }
+  const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
+  const { pluginMutation } = resolveInstallConfigMutationPreflights({
+    parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
+    snapshotPath: snapshot.path,
+    writeOptions,
+  });
+  if (pluginMutation.mode === "blocked") {
+    return {
+      ok: false,
+      path: snapshot.path,
+      error: pluginMutation.reason,
     };
   }
   return {
@@ -383,6 +401,7 @@ async function loadPluginCommandConfig(): Promise<
     snapshot: {
       config: structuredClone(snapshot.sourceConfig),
       baseHash: snapshot.hash,
+      writeOptions,
     },
   };
 }

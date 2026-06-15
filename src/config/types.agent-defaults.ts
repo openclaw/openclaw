@@ -342,7 +342,7 @@ export type AgentDefaultsConfig = {
     /**
      * Embedded OpenClaw execution contract:
      * - default: keep the standard runner behavior
-     * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
+     * - strict-agentic: enable structured plan tracking and non-visible turn recovery on supported GPT-5 runs
      */
     executionContract?: EmbeddedAgentExecutionContract;
   };
