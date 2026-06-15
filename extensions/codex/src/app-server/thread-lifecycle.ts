@@ -769,7 +769,7 @@ export async function startOrResumeThread(params: {
     action: rotatedContextEngineBinding ? "rotated" : "started",
   });
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     threadId: response.thread.id,
     sessionFile: params.params.sessionFile,
     cwd: params.cwd,
