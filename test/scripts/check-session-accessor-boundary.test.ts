@@ -151,18 +151,21 @@ describe("session accessor boundary guard", () => {
   it("flags legacy writer imports and calls", () => {
     expect(
       findSessionAccessorWriteBoundaryViolations(`
-        import { applySessionStoreEntryPatch, updateSessionStore, updateSessionStoreEntry as updateEntry } from "../config/sessions.js";
+        import { applySessionStoreEntryPatch, saveSessionStore, updateSessionStore, updateSessionStoreEntry as updateEntry } from "../config/sessions.js";
+        saveSessionStore(storePath, store);
         updateSessionStore(storePath, () => undefined);
         sessions.updateSessionStoreEntry({ storePath, sessionKey, update });
         applySessionStoreEntryPatch({ storePath, sessionKey, patch });
       `),
     ).toEqual([
       { line: 2, reason: 'imports legacy session store writer "applySessionStoreEntryPatch"' },
+      { line: 2, reason: 'imports legacy session store writer "saveSessionStore"' },
       { line: 2, reason: 'imports legacy session store writer "updateSessionStore"' },
       { line: 2, reason: 'imports legacy session store writer "updateSessionStoreEntry"' },
-      { line: 3, reason: 'calls legacy session store writer "updateSessionStore"' },
-      { line: 4, reason: 'references legacy session store writer "updateSessionStoreEntry"' },
-      { line: 5, reason: 'calls legacy session store writer "applySessionStoreEntryPatch"' },
+      { line: 3, reason: 'calls legacy session store writer "saveSessionStore"' },
+      { line: 4, reason: 'calls legacy session store writer "updateSessionStore"' },
+      { line: 5, reason: 'references legacy session store writer "updateSessionStoreEntry"' },
+      { line: 6, reason: 'calls legacy session store writer "applySessionStoreEntryPatch"' },
     ]);
   });
 

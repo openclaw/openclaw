@@ -25,6 +25,7 @@ const legacyWholeStoreAccessNames = new Set([
 ]);
 const legacyWriterNames = new Set([
   "applySessionStoreEntryPatch",
+  "saveSessionStore",
   "updateSessionStore",
   "updateSessionStoreEntry",
 ]);
