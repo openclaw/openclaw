@@ -38,6 +38,109 @@ const assignIf = (
   }
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneJsonRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function mergeRecordPreview(
+  existing: unknown,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...(isRecord(existing) ? cloneJsonRecord(existing) : {}),
+    ...cloneJsonRecord(patch),
+  };
+}
+
+function applyCronEditDryRunPatchPreview(
+  existing: CronJob,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const after = cloneJsonRecord(existing as unknown as Record<string, unknown>);
+  for (const field of [
+    "name",
+    "description",
+    "enabled",
+    "deleteAfterRun",
+    "sessionTarget",
+    "wakeMode",
+    "agentId",
+    "sessionKey",
+  ]) {
+    if (Object.hasOwn(patch, field)) {
+      after[field] = patch[field];
+    }
+  }
+  if (isRecord(patch.schedule)) {
+    const nextSchedule = cloneJsonRecord(patch.schedule);
+    if (
+      nextSchedule.kind === "cron" &&
+      !Object.hasOwn(nextSchedule, "staggerMs") &&
+      existing.schedule.kind === "cron" &&
+      existing.schedule.staggerMs !== undefined
+    ) {
+      nextSchedule.staggerMs = existing.schedule.staggerMs;
+    }
+    after.schedule = nextSchedule;
+  }
+  if (isRecord(patch.payload)) {
+    const existingPayload = existing.payload;
+    after.payload =
+      isRecord(existingPayload) && existingPayload.kind === patch.payload.kind
+        ? mergeRecordPreview(existingPayload, patch.payload)
+        : cloneJsonRecord(patch.payload);
+  }
+  if (isRecord(patch.delivery)) {
+    after.delivery = mergeRecordPreview(existing.delivery, patch.delivery);
+  }
+  if (Object.hasOwn(patch, "failureAlert")) {
+    after.failureAlert =
+      patch.failureAlert === false || !isRecord(patch.failureAlert)
+        ? patch.failureAlert
+        : mergeRecordPreview(existing.failureAlert, patch.failureAlert);
+  }
+  return after;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .filter((key) => value[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+
+function buildCronEditDryRunPreview(existing: CronJob, patch: Record<string, unknown>) {
+  const after = applyCronEditDryRunPatchPreview(existing, patch);
+  const beforeRecord = existing as unknown as Record<string, unknown>;
+  const changedFields = Object.keys(patch).filter(
+    (field) => stableJson(beforeRecord[field]) !== stableJson(after[field]),
+  );
+  const before = Object.fromEntries(changedFields.map((field) => [field, beforeRecord[field]]));
+  const afterChanged = Object.fromEntries(changedFields.map((field) => [field, after[field]]));
+  return {
+    dryRun: true,
+    patch,
+    before,
+    after: afterChanged,
+    diff: changedFields.map((field) => ({
+      field,
+      before: beforeRecord[field],
+      after: after[field],
+    })),
+  };
+}
+
 async function loadCronJobForEditSchedulePatch(
   opts: Record<string, unknown>,
   id: string,
@@ -87,10 +190,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--session-key <key>", "Set session key for job routing")
       .option("--clear-session-key", "Unset session key", false)
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
-      .option(
-        "--at <when>",
-        "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m",
-      )
+      .option("--at <when>", "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
       .option(
@@ -154,6 +254,7 @@ export function registerCronEditCommand(cron: Command) {
         "--failure-alert-account-id <id>",
         "Account ID for failure alert channel (multi-account setups)",
       )
+      .option("--dry-run", "Preview the cron.update patch without applying it", false)
       .action(async (id, opts) => {
         try {
           const sessionTarget =
@@ -524,6 +625,15 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.accountId = accountId ? accountId : undefined;
             }
             patch.failureAlert = failureAlert;
+          }
+
+          if (opts.dryRun) {
+            const existing = await readCronJobForEdit(opts, String(id));
+            defaultRuntime.writeJson({
+              id,
+              ...buildCronEditDryRunPreview(existing, patch),
+            });
+            return;
           }
 
           const res = await callGatewayFromCli("cron.update", opts, {
