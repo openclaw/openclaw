@@ -6,6 +6,7 @@ import { windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
+  currentRunningSnapshotInfo,
   makeTempDir,
   parseMode,
   parseProvider,
@@ -16,6 +17,8 @@ import {
   resolveSnapshot,
   run,
   say,
+  shouldSkipSnapshotRestore,
+  validateSnapshotRestoreMode,
   warn,
   withProgressOnStderr,
   writeSummaryMarkdown,
@@ -28,7 +31,7 @@ import {
 } from "./common.ts";
 import { runWindowsBackgroundPowerShell, WindowsGuest } from "./guest-transports.ts";
 import { startHostServer } from "./host-server.ts";
-import { waitForVmStatus } from "./parallels-vm.ts";
+import { ensureVmRunning } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import { windowsProviderOnlyPluginIsolationScript } from "./plugin-isolation.ts";
 import {
@@ -275,7 +278,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     this.guest = new WindowsGuest(this.options.vmName, this.phases);
     this.tgzDir = await makeTempDir("openclaw-parallels-windows-tgz.");
     try {
-      this.snapshot = resolveSnapshot(this.options.vmName, this.options.snapshotHint);
+      validateSnapshotRestoreMode(this.options.mode, "Windows smoke");
+      this.snapshot = shouldSkipSnapshotRestore()
+        ? currentRunningSnapshotInfo(this.options.vmName)
+        : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
       await this.prepareHost(
@@ -442,6 +448,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   }
 
   private restoreSnapshot(): void {
+    if (shouldSkipSnapshotRestore()) {
+      say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
+      return;
+    }
     this.waitForVmNotRestoring(240);
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     let restored = false;
@@ -472,16 +482,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
       throw new Error("snapshot-switch failed after restoring-state retries");
     }
     this.waitForVmNotRestoring(240);
-    if (this.snapshot.state === "poweroff") {
-      waitForVmStatus(this.options.vmName, "stopped", 240, {
-        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
-      });
-      say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
-      });
-    }
+    ensureVmRunning(this.options.vmName, 240, {
+      probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      transitionTimeoutMs: () => this.remainingPhaseTimeoutMs(120_000),
+    });
   }
 
   private waitForVmNotRestoring(timeoutSeconds: number): void {

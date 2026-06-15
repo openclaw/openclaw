@@ -20,6 +20,7 @@ import {
 import {
   buildCurrentOpenClawCliArgv,
   buildCurrentOpenClawCliCommand,
+  buildCurrentOpenClawCliExecEnv,
 } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
@@ -244,10 +245,13 @@ async function requestTrajectoryExportApproval(
       trigger: "export-trajectory",
       scopeKey: EXPORT_TRAJECTORY_EXEC_SCOPE_KEY,
       allowBackground: true,
+      approvalFollowupMode: "agent",
       timeoutSec,
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
+      sessionId: params.sessionEntry?.sessionId,
+      sessionStore: params.cfg.session?.store,
       mainKey: params.cfg.session?.mainKey,
       sessionScope: params.cfg.session?.scope,
       messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
@@ -265,6 +269,7 @@ async function requestTrajectoryExportApproval(
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
+      env: buildCurrentOpenClawCliExecEnv(),
       security: "allowlist",
       ask: "always",
       background: true,

@@ -11,6 +11,7 @@ import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-targe
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -23,6 +24,7 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
+import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import {
   type AnyAgentTool,
   jsonResult,
@@ -97,13 +99,13 @@ function failureDestinationModeSchema(params: { nullableClears: boolean }) {
   return Type.Optional(Type.Union(variants));
 }
 
-function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
+function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }) {
   return Type.Object(
     {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
       text: Type.Optional(Type.String({ description: "systemEvent text" })),
       message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
-      model: Type.Optional(Type.String({ description: "Model override" })),
+      model: params.model,
       thinking: Type.Optional(Type.String({ description: "Thinking override" })),
       timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
       lightContext: Type.Optional(Type.Boolean()),
@@ -147,6 +149,7 @@ function createCronScheduleSchema(): TSchema {
 function createCronPayloadSchema(): TSchema {
   return Type.Optional(
     cronPayloadObjectSchema({
+      model: Type.Optional(Type.String({ description: "Model override" })),
       toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools" })),
     }),
   );
@@ -273,6 +276,7 @@ function createCronPatchObjectSchema(): TSchema {
         wakeMode: optionalStringEnum(CRON_WAKE_MODES),
         payload: Type.Optional(
           cronPayloadObjectSchema({
+            model: nullableStringSchema("Model override, or null to clear"),
             toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
           }),
         ),
@@ -306,7 +310,18 @@ export function createCronToolSchema(): TSchema {
       contextMessages: Type.Optional(
         Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
       ),
-      agentId: Type.Optional(Type.String({ description: "List filter: agent id" })),
+      agentId: Type.Optional(
+        Type.String({
+          description:
+            'List filter for `action: "list"`; wake target override for `action: "wake"` (defaults to the calling agent when omitted on wake)',
+        }),
+      ),
+      sessionKey: Type.Optional(
+        Type.String({
+          description:
+            'Wake target override for `action: "wake"`: route the event to the named session rather than the calling agent\'s current session. Defaults to the resolved calling-session key when omitted.',
+        }),
+      ),
     },
     { additionalProperties: true },
   );
@@ -337,6 +352,18 @@ function stripExistingContext(text: string) {
     return text;
   }
   return text.slice(0, index).trim();
+}
+
+function assertNoCronCommandPayload(value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  const payload = isRecord(value.payload) ? value.payload : undefined;
+  if (payload?.kind === "command") {
+    throw new Error(
+      "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+    );
+  }
 }
 
 function truncateText(input: string, maxLen: number) {
@@ -410,6 +437,46 @@ function filterCronListResultToJobId(result: unknown, jobId: string): unknown {
 
 function filterCronStatusResultForSelfScope(result: unknown): unknown {
   return { enabled: isRecord(result) && result.enabled === true };
+}
+
+function formatCronTerminalPresentation(
+  params: unknown,
+  result: unknown,
+): { text: string } | undefined {
+  if (!isRecord(params) || !isRecord(result) || !isRecord(result.details)) {
+    return undefined;
+  }
+  switch (params.action) {
+    case "status": {
+      const enabled = result.details.enabled === true ? "yes" : "no";
+      return { text: `Cron scheduler status.\nEnabled: ${enabled}` };
+    }
+    case "list": {
+      const total =
+        typeof result.details.total === "number" &&
+        Number.isFinite(result.details.total) &&
+        result.details.total >= 0
+          ? Math.floor(result.details.total)
+          : undefined;
+      const count =
+        total ?? (Array.isArray(result.details.jobs) ? result.details.jobs.length : undefined);
+      return count === undefined
+        ? { text: "Cron jobs listed." }
+        : { text: `Cron jobs listed.\nCount: ${count}` };
+    }
+    case "get":
+      return { text: "Cron job loaded." };
+    case "runs": {
+      const entries = Array.isArray(result.details.entries)
+        ? result.details.entries.length
+        : undefined;
+      return entries === undefined
+        ? { text: "Cron run history loaded." }
+        : { text: `Cron run history loaded.\nCount: ${entries}` };
+    }
+    default:
+      return undefined;
+  }
 }
 
 function cronListResultHasJob(result: unknown, jobId: string): boolean {
@@ -494,7 +561,7 @@ async function buildReminderContextLines(params: {
 
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
-  return {
+  const tool: AnyAgentTool = {
     label: "Cron",
     name: "cron",
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
@@ -511,7 +578,7 @@ ACTIONS:
 - remove: delete job; needs jobId
 - run: trigger now; needs jobId
 - runs: run history; needs jobId
-- wake: send wake event; needs text, optional mode
+- wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane.
 
 JOB SCHEMA (for add action):
 {
@@ -657,6 +724,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             throw new Error("job required");
           }
           const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
+          assertNoCronCommandPayload(canonicalJob);
           assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
           const job =
             normalizeCronJobCreate(canonicalJob, {
@@ -774,6 +842,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           const canonicalPatch = canonicalizeCronToolObject(
             params.patch as Record<string, unknown>,
           );
+          assertNoCronCommandPayload(canonicalPatch);
           assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
           const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
           if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
@@ -815,8 +884,68 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             params.mode === "now" || params.mode === "next-heartbeat"
               ? params.mode
               : "next-heartbeat";
+          // Resolve the calling agent's session key into the internal form
+          // the cron service routes by (mirrors the `add` action above).
+          // Without this, the wake gateway call goes through with no session
+          // key and the system event lands on the heartbeat / main default
+          // rather than the originating conversation lane. Closes the
+          // upstream half of openclaw/openclaw#46886 (#64556 — agentId/
+          // sessionKey silently ignored for `action: "wake"`). Explicit
+          // params on the tool call still take precedence over the inferred
+          // value, so call sites that want to wake a different session can
+          // pass `sessionKey` / `agentId` directly.
+          const cfg = getRuntimeConfig();
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
+          const explicitSessionKey = readStringParam(params, "sessionKey");
+          const explicitAgentId = readStringParam(params, "agentId");
+          const inferredSessionKey = opts?.agentSessionKey
+            ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+            : undefined;
+          const inferredAgentId = opts?.agentSessionKey
+            ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+            : undefined;
+          const sessionKey = explicitSessionKey ?? inferredSessionKey;
+          // When a caller supplies an explicit cross-agent sessionKey without
+          // an explicit agentId, the gateway target resolver treats agentId as
+          // authoritative — pairing the caller's inferred agentId with a
+          // foreign session key would canonicalize the wake back to the
+          // caller's main lane. Derive the agentId from the explicit canonical
+          // session key instead; only fall through to the inferred
+          // caller-agent when no explicit sessionKey was supplied.
+          const agentIdFromExplicitSessionKey = explicitSessionKey
+            ? parseAgentSessionKey(explicitSessionKey)?.agentId
+            : undefined;
+          // A contradictory explicit pair (agentId X + a sessionKey owned by
+          // agent Y) is ambiguous: the gateway target resolver treats agentId
+          // as authoritative and would silently canonicalize the wake onto a
+          // session under X that the caller never named. Reject instead of
+          // guessing one canonical owner.
+          if (
+            explicitAgentId &&
+            agentIdFromExplicitSessionKey &&
+            normalizeLowercaseStringOrEmpty(explicitAgentId) !==
+              normalizeLowercaseStringOrEmpty(agentIdFromExplicitSessionKey)
+          ) {
+            throw new Error(
+              `wake agentId "${explicitAgentId}" contradicts the agent that owns sessionKey ` +
+                `("${agentIdFromExplicitSessionKey}"); pass a single canonical wake target`,
+            );
+          }
+          const agentId =
+            explicitAgentId ??
+            (explicitSessionKey ? agentIdFromExplicitSessionKey : inferredAgentId);
           return jsonResult(
-            await callGateway("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
+            await callGateway(
+              "wake",
+              gatewayOpts,
+              {
+                mode,
+                text,
+                ...(sessionKey ? { sessionKey } : {}),
+                ...(agentId ? { agentId } : {}),
+              },
+              { expectFinal: false },
+            ),
           );
         }
         default:
@@ -824,4 +953,5 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
       }
     },
   };
+  return setToolTerminalPresentation(tool, formatCronTerminalPresentation);
 }

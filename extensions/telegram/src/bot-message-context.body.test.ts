@@ -166,6 +166,73 @@ describe("resolveTelegramInboundBody", () => {
     expect(result?.bodyText).toBe("<media:document> (2 attachments)");
   });
 
+  it("preserves cached sticker descriptions when downloaded media exists", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 6,
+        date: 1_700_000_006,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        sticker: {
+          file_id: "sticker-1",
+          file_unique_id: "sticker-u1",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+          emoji: "ok",
+          set_name: "test-set",
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          stickerMetadata: {
+            emoji: "ok",
+            setName: "test-set",
+            cachedDescription: "Cached description",
+          },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe('[Sticker ok from "test-set"] Cached description');
+    expect(result?.stickerCacheHit).toBe(true);
+  });
+
+  it("includes cached sticker descriptions with user captions", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 7,
+        date: 1_700_000_007,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        caption: "What is this?",
+        sticker: {
+          file_id: "sticker-2",
+          file_unique_id: "sticker-u2",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          stickerMetadata: { cachedDescription: "Cached description" },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe("[Sticker] Cached description\nWhat is this?");
+    expect(result?.stickerCacheHit).toBe(true);
+  });
+
   it("lets catch-all mention patterns activate captionless group photos", async () => {
     const logger = { info: vi.fn() };
 

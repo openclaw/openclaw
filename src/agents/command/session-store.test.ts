@@ -368,6 +368,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("caps configured context override by the resolved runtime model window", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.5", contextWindow: 272_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-capped-context-override";
+      const sessionId = "test-capped-context-override-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
+      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(272_000);
+    });
+  });
+
   it("clears the embedded harness pin after a CLI run", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
@@ -1593,7 +1642,15 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
           modelProvider: "anthropic",
           model: "claude-opus-4-6",
+          agentHarnessId: "openclaw",
           contextTokens: 1_000_000,
+          cliSessionBindings: {
+            "claude-cli": { sessionId: "existing-cli-session" },
+          },
+          cliSessionIds: {
+            "claude-cli": "existing-cli-session",
+          },
+          claudeCliSessionId: "existing-cli-session",
           contextBudgetStatus: {
             schemaVersion: 1,
             source: "pre-prompt-estimate",
@@ -1623,9 +1680,11 @@ describe("updateSessionStoreAfterAgentRun", () => {
           durationMs: 500,
           agentMeta: {
             sessionId,
-            provider: "ollama",
-            model: "llama3.2:1b",
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            agentHarnessId: "codex",
             contextTokens: 128_000,
+            cliSessionBinding: { sessionId: "heartbeat-cli-session" },
             contextBudgetStatus: {
               schemaVersion: 1,
               source: "pre-prompt-estimate",
@@ -1664,16 +1723,24 @@ describe("updateSessionStoreAfterAgentRun", () => {
       // Runtime model and contextTokens should be preserved from the original entry
       expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
+      expect(sessionStore[sessionKey]?.agentHarnessId).toBe("openclaw");
       expect(sessionStore[sessionKey]?.contextTokens).toBe(1_000_000);
       expect(sessionStore[sessionKey]?.contextBudgetStatus?.provider).toBe("anthropic");
       expect(sessionStore[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(640_000);
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "existing-cli-session",
+      });
 
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(persisted[sessionKey]?.modelProvider).toBe("anthropic");
+      expect(persisted[sessionKey]?.agentHarnessId).toBe("openclaw");
       expect(persisted[sessionKey]?.contextTokens).toBe(1_000_000);
       expect(persisted[sessionKey]?.contextBudgetStatus?.provider).toBe("anthropic");
       expect(persisted[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(640_000);
+      expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "existing-cli-session",
+      });
     });
   });
 

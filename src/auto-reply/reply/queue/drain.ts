@@ -1,6 +1,16 @@
+import { createHash } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
+import { normalizeChatType } from "../../../channels/chat-type.js";
+import { resolveStorePath } from "../../../config/sessions.js";
+import { readSessionEntry } from "../../../config/sessions/store-load.js";
 // Drains queued follow-up runs while preserving route and session identity.
-import { channelRouteCompactKey } from "../../../plugin-sdk/channel-route.js";
+import {
+  channelRouteCompactKey,
+  channelRouteDedupeKey,
+} from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
   buildCollectPrompt,
@@ -9,6 +19,7 @@ import {
   drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
+  removeQueuedItemsByRef,
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
@@ -51,39 +62,40 @@ export function kickFollowupDrainIfIdle(key: string): void {
 
 type OriginRoutingMetadata = Pick<
   FollowupRun,
-  "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+  | "originatingChannel"
+  | "originatingTo"
+  | "originatingAccountId"
+  | "originatingThreadId"
+  | "originatingReplyToId"
+  | "originatingReplyToMode"
+  | "originatingChatType"
 >;
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
-  const metadata: OriginRoutingMetadata = {};
-  for (const item of items) {
-    if (!metadata.originatingChannel && item.originatingChannel) {
-      metadata.originatingChannel = item.originatingChannel;
-    }
-    if (!metadata.originatingTo && item.originatingTo) {
-      metadata.originatingTo = item.originatingTo;
-    }
-    if (!metadata.originatingAccountId && item.originatingAccountId) {
-      metadata.originatingAccountId = item.originatingAccountId;
-    }
-    // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
-    if (
-      metadata.originatingThreadId == null &&
-      item.originatingThreadId != null &&
-      item.originatingThreadId !== ""
-    ) {
-      metadata.originatingThreadId = item.originatingThreadId;
-    }
-    if (
-      metadata.originatingChannel &&
-      metadata.originatingTo &&
-      metadata.originatingAccountId &&
-      metadata.originatingThreadId != null
-    ) {
-      break;
-    }
+  const source =
+    items.find((item) => item.originatingChannel && item.originatingTo) ??
+    items.find(
+      (item) =>
+        item.originatingChannel ||
+        item.originatingTo ||
+        item.originatingAccountId ||
+        item.originatingThreadId != null ||
+        item.originatingReplyToId ||
+        item.originatingReplyToMode ||
+        item.originatingChatType,
+    );
+  if (!source) {
+    return {};
   }
-  return metadata;
+  return {
+    originatingChannel: source.originatingChannel,
+    originatingTo: source.originatingTo,
+    originatingAccountId: source.originatingAccountId,
+    originatingThreadId: source.originatingThreadId,
+    originatingReplyToId: source.originatingReplyToId,
+    originatingReplyToMode: source.originatingReplyToMode,
+    originatingChatType: source.originatingChatType,
+  };
 }
 
 // Keep this key aligned with the fields that affect per-message authorization or
@@ -107,7 +119,55 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string
   ]);
 }
 
-function splitCollectItemsByAuthorization(items: FollowupRun[]): FollowupRun[][] {
+export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
+  const execution = run.run;
+  const provenance = execution.inputProvenance;
+  return JSON.stringify([
+    channelRouteDedupeKey({
+      channel: run.originatingChannel,
+      to: run.originatingTo,
+      accountId: run.originatingAccountId,
+      threadId: run.originatingThreadId,
+    }),
+    resolveFollowupReplyAnchor(run) ?? "",
+    run.originatingReplyToMode ?? "",
+    normalizeChatType(run.originatingChatType) ?? "",
+    resolveFollowupAuthorizationKey(execution),
+    normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
+    execution.messageProvider ?? "",
+    execution.chatType ?? "",
+    execution.agentAccountId ?? "",
+    execution.groupId ?? "",
+    execution.groupChannel ?? "",
+    execution.groupSpace ?? "",
+    execution.traceAuthorized === true,
+    execution.elevatedLevel ?? "",
+    provenance?.kind ?? "",
+    provenance?.originSessionId ?? "",
+    provenance?.sourceSessionKey ?? "",
+    provenance?.sourceChannel ?? "",
+    provenance?.sourceTool ?? "",
+    execution.extraSystemPrompt ?? "",
+    execution.extraSystemPromptStatic ?? "",
+    execution.sourceReplyDeliveryMode ?? "",
+    execution.silentReplyPromptMode ?? "",
+    execution.enforceFinalTag === true,
+    execution.skipProviderRuntimeHints === true,
+    execution.silentExpected === true,
+    execution.allowEmptyAssistantReplyAsSilent === true,
+    execution.suppressNextUserMessagePersistence === true,
+    execution.suppressTranscriptOnlyAssistantPersistence === true,
+    execution.blockReplyBreak,
+  ]);
+}
+
+export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
+  return run.originatingReplyToMode === "off"
+    ? undefined
+    : normalizeOptionalString(run.originatingReplyToId);
+}
+
+function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[][] {
   if (items.length <= 1) {
     return items.length === 0 ? [] : [items];
   }
@@ -117,7 +177,7 @@ function splitCollectItemsByAuthorization(items: FollowupRun[]): FollowupRun[][]
   let currentKey: string | undefined;
 
   for (const item of items) {
-    const itemKey = resolveFollowupAuthorizationKey(item.run);
+    const itemKey = resolveFollowupDeliveryContextKey(item);
     if (currentGroup.length === 0 || itemKey === currentKey) {
       currentGroup.push(item);
       currentKey = itemKey;
@@ -239,17 +299,27 @@ function collectRuntimeMetadata(
   };
 }
 
-function collectSummaryRuntimeMetadata(items: FollowupRun[]): FollowupRuntimeMetadata {
-  return collectRuntimeMetadata(items, items.length === 1 ? items[0] : undefined);
-}
-
-function clearFollowupQueueSummaryState(queue: {
+type FollowupQueueSummaryState = {
   dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
-  summarySources?: FollowupRun[];
-}): void {
+  summarySources: FollowupRun[];
+  summaryElisions: Array<{
+    contextKey: string;
+    count: number;
+    source: FollowupRun;
+    sourceRefs: WeakSet<FollowupRun>;
+  }>;
+  evictedSummaryCount: number;
+};
+
+function clearFollowupQueueSummaryState(queue: FollowupQueueSummaryState): void {
   completeFollowupQueueSummarySources(queue);
+  for (const entry of queue.summaryElisions) {
+    completeFollowupRunLifecycle(entry.source);
+  }
+  queue.summaryElisions = [];
+  queue.evictedSummaryCount = 0;
   clearQueueSummaryState(queue);
 }
 
@@ -262,70 +332,99 @@ function completeFollowupQueueSummarySources(queue: { summarySources?: FollowupR
   }
 }
 
-function previewRestorableQueueSummaryPrompt(params: {
-  state: {
-    dropPolicy: "summarize" | "old" | "new";
-    droppedCount: number;
-    summaryLines: string[];
-  };
-  noun: string;
-}): { prompt?: string; restore?: () => void } {
-  const snapshot = {
-    droppedCount: params.state.droppedCount,
-    summaryLines: [...params.state.summaryLines],
-  };
-  const prompt = previewQueueSummaryPrompt(params);
+type QueueSummaryDelivery = {
+  prompt: string;
+  droppedCount: number;
+  sources: FollowupRun[];
+};
+
+function createQueueSummaryDelivery(params: {
+  queue: FollowupQueueSummaryState;
+  sources?: FollowupRun[];
+}): QueueSummaryDelivery | undefined {
+  const sources = params.sources ? [...params.sources] : [...params.queue.summarySources];
+  if (
+    params.sources &&
+    !sources.every((source, index) => params.queue.summarySources[index] === source)
+  ) {
+    return undefined;
+  }
+  const droppedCount = params.sources ? sources.length : params.queue.droppedCount;
+  const summaryLines = params.sources
+    ? params.queue.summaryLines.slice(0, sources.length)
+    : [...params.queue.summaryLines];
+  const prompt = previewQueueSummaryPrompt({
+    state: {
+      dropPolicy: params.queue.dropPolicy,
+      droppedCount,
+      summaryLines,
+    },
+    noun: "message",
+  });
   if (!prompt) {
-    return {};
+    return undefined;
   }
   return {
     prompt,
-    restore: () => {
-      const currentLines = params.state.summaryLines;
-      // previewQueueSummaryPrompt reads a snapshot clone; the live queue still
-      // contains this snapshot plus any newer drops that arrived before restore.
-      const hasSnapshotPrefix =
-        params.state.droppedCount >= snapshot.droppedCount &&
-        snapshot.summaryLines.every((line, index) => currentLines[index] === line);
-      if (hasSnapshotPrefix) {
-        return;
-      }
-      params.state.droppedCount =
-        params.state.droppedCount >= snapshot.droppedCount
-          ? params.state.droppedCount
-          : params.state.droppedCount + snapshot.droppedCount;
-      params.state.summaryLines = [...snapshot.summaryLines, ...currentLines];
-    },
+    droppedCount,
+    sources,
   };
 }
 
-async function runWithSummarySourceCleanup(
-  queue: { summarySources?: FollowupRun[] },
+function consumeQueueSummaryDelivery(
+  queue: FollowupQueueSummaryState,
+  delivery: QueueSummaryDelivery,
+): void {
+  let consumedCount = delivery.sources.length === 0 ? delivery.droppedCount : 0;
+  for (const source of delivery.sources) {
+    const sourceIndex = queue.summarySources.indexOf(source);
+    if (sourceIndex >= 0) {
+      queue.summarySources.splice(sourceIndex, 1);
+      queue.summaryLines.splice(sourceIndex, 1);
+      consumedCount += 1;
+    } else {
+      const elisionIndex = queue.summaryElisions.findIndex((entry) => entry.sourceRefs.has(source));
+      if (elisionIndex >= 0) {
+        const entry = queue.summaryElisions[elisionIndex];
+        entry.count = Math.max(0, entry.count - 1);
+        consumedCount += 1;
+        if (entry.count === 0) {
+          queue.summaryElisions.splice(elisionIndex, 1);
+        }
+      }
+    }
+    completeFollowupRunLifecycle(source);
+  }
+  queue.droppedCount = Math.max(0, queue.droppedCount - consumedCount);
+}
+
+function releaseQueueSummaryDeliveryForRetry(
+  queue: FollowupQueueSummaryState,
+  delivery: QueueSummaryDelivery,
+): void {
+  for (const source of delivery.sources) {
+    const sourceIndex = queue.summarySources.indexOf(source);
+    if (sourceIndex >= 0) {
+      queue.summarySources[sourceIndex] = createOverflowSummaryRetrySource(source);
+    }
+    completeFollowupRunLifecycle(source);
+  }
+}
+
+async function runQueueSummaryDelivery(
+  queue: FollowupQueueSummaryState,
+  delivery: QueueSummaryDelivery,
   run: () => Promise<void>,
 ): Promise<void> {
   try {
     await run();
   } catch (err) {
     if (!isFollowupRunDeferredError(err)) {
-      completeFollowupQueueSummarySources(queue);
+      releaseQueueSummaryDeliveryForRetry(queue, delivery);
     }
     throw err;
   }
-  completeFollowupQueueSummarySources(queue);
-}
-
-async function runWithDeferredSummaryRestore<T>(
-  restore: (() => void) | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  try {
-    return await run();
-  } catch (err) {
-    if (isFollowupRunDeferredError(err)) {
-      restore?.();
-    }
-    throw err;
-  }
+  consumeQueueSummaryDelivery(queue, delivery);
 }
 
 async function dropAbortedFollowups(
@@ -348,20 +447,238 @@ async function dropAbortedFollowups(
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
-  if (!channel && !to && !accountId && (threadId == null || threadId === "")) {
-    return {};
+  const replyToId = resolveFollowupReplyAnchor(item);
+  const chatType = normalizeChatType(item.originatingChatType);
+  if (!channel && !to && !accountId && (threadId == null || threadId === "") && !replyToId) {
+    return chatType ? { key: JSON.stringify(["unresolved", chatType]) } : {};
   }
   if (!isRoutableChannel(channel) || !to) {
     return { cross: true };
   }
   const key = channelRouteCompactKey({ channel, to, accountId, threadId });
-  return key ? { key } : { cross: true };
+  return key
+    ? {
+        key: JSON.stringify([
+          key,
+          replyToId ?? "",
+          item.originatingReplyToMode ?? "",
+          chatType ?? "",
+        ]),
+      }
+    : { cross: true };
+}
+
+function resolveOverflowSummarySourceGroup(queue: {
+  summarySources: FollowupRun[];
+}): FollowupRun[] {
+  const source = queue.summarySources[0];
+  if (!source) {
+    return [];
+  }
+  const contextKey = resolveFollowupDeliveryContextKey(source);
+  const sources: FollowupRun[] = [];
+  for (const candidate of queue.summarySources) {
+    if (resolveFollowupDeliveryContextKey(candidate) !== contextKey) {
+      break;
+    }
+    sources.push(candidate);
+  }
+  return sources;
+}
+
+export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
+  return {
+    prompt: source.prompt,
+    transcriptPrompt: source.transcriptPrompt,
+    messageId: source.messageId,
+    summaryLine: source.summaryLine,
+    enqueuedAt: source.enqueuedAt,
+    originatingChannel: source.originatingChannel,
+    originatingTo: source.originatingTo,
+    originatingAccountId: source.originatingAccountId,
+    originatingThreadId: source.originatingThreadId,
+    originatingReplyToId: source.originatingReplyToId,
+    originatingReplyToMode: source.originatingReplyToMode,
+    originatingChatType: source.originatingChatType,
+    run: source.run,
+  };
+}
+
+async function runSyntheticOverflowSummary(params: {
+  source: FollowupRun;
+  prompt: string;
+  runFollowup: (run: FollowupRun) => Promise<void>;
+}): Promise<void> {
+  const promptHash = createHash("sha256").update(params.prompt).digest("hex");
+  const routeHash = createHash("sha256")
+    .update(
+      JSON.stringify([
+        channelRouteDedupeKey({
+          channel: params.source.originatingChannel,
+          to: params.source.originatingTo,
+          accountId: params.source.originatingAccountId,
+          threadId: params.source.originatingThreadId,
+        }),
+        resolveFollowupReplyAnchor(params.source) ?? "",
+        params.source.originatingReplyToMode ?? "",
+        normalizeChatType(params.source.originatingChatType) ?? "",
+      ]),
+    )
+    .digest("hex");
+  const sessionKey = normalizeOptionalString(params.source.run.sessionKey);
+  const storePath = sessionKey
+    ? resolveStorePath(params.source.run.config.session?.store, {
+        agentId: params.source.run.agentId,
+      })
+    : undefined;
+  const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+    input: {
+      text: params.prompt,
+      idempotencyKey: `followup-overflow:${params.source.run.sessionId}:${routeHash}:${params.source.messageId ?? params.source.enqueuedAt}:${promptHash}`,
+      provenance: params.source.run.inputProvenance,
+    },
+    target: () => {
+      if (!sessionKey || !storePath) {
+        return {
+          transcriptPath: params.source.run.sessionFile,
+          sessionId: params.source.run.sessionId,
+          agentId: params.source.run.agentId,
+          sessionKey: params.source.run.sessionId,
+          cwd: params.source.run.cwd ?? params.source.run.workspaceDir,
+          config: params.source.run.config,
+        };
+      }
+      const sessionEntry = readSessionEntry(storePath, sessionKey);
+      return {
+        sessionId: sessionEntry?.sessionId ?? params.source.run.sessionId,
+        sessionKey,
+        sessionEntry,
+        storePath,
+        agentId: params.source.run.agentId,
+        cwd: params.source.run.cwd ?? params.source.run.workspaceDir,
+        config: params.source.run.config,
+      };
+    },
+    beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+    errorContext: "followup overflow summary transcript",
+  });
+  await params.runFollowup({
+    prompt: params.prompt,
+    transcriptPrompt: params.prompt,
+    messageId: params.source.messageId,
+    userTurnTranscriptRecorder,
+    run: params.source.run,
+    enqueuedAt: Date.now(),
+    ...resolveOriginRoutingMetadata([params.source]),
+  });
+}
+
+async function drainElidedOverflowSummary(params: {
+  queue: FollowupQueueSummaryState;
+  runFollowup: (run: FollowupRun) => Promise<void>;
+}): Promise<boolean> {
+  const entry = params.queue.summaryElisions[0];
+  if (!entry) {
+    return false;
+  }
+  const retainedSources =
+    params.queue.summaryElisions.length === 1
+      ? resolveOverflowSummarySourceGroup(params.queue).filter(
+          (source) => resolveFollowupDeliveryContextKey(source) === entry.contextKey,
+        )
+      : [];
+  const source = retainedSources.at(-1) ?? entry.source;
+  const elidedCount = entry.count;
+  const droppedCount = elidedCount + retainedSources.length;
+  const summaryLines = params.queue.summaryLines.slice(0, retainedSources.length);
+  const prompt = previewQueueSummaryPrompt({
+    state: {
+      dropPolicy: params.queue.dropPolicy,
+      droppedCount,
+      summaryLines,
+    },
+    noun: "message",
+  });
+  if (!prompt) {
+    return false;
+  }
+  await runQueueSummaryDelivery(
+    params.queue,
+    {
+      prompt,
+      droppedCount: retainedSources.length,
+      sources: retainedSources,
+    },
+    async () => {
+      await runSyntheticOverflowSummary({
+        source,
+        prompt,
+        runFollowup: params.runFollowup,
+      });
+    },
+  );
+  const entryIndex = params.queue.summaryElisions.indexOf(entry);
+  if (entryIndex < 0) {
+    return true;
+  }
+  const consumedCount = Math.min(elidedCount, entry.count);
+  entry.count -= consumedCount;
+  params.queue.droppedCount = Math.max(0, params.queue.droppedCount - consumedCount);
+  if (entry.count === 0) {
+    params.queue.summaryElisions.splice(entryIndex, 1);
+  }
+  return true;
+}
+
+async function drainOverflowSummaryGroup(params: {
+  queue: FollowupQueueSummaryState;
+  runFollowup: (run: FollowupRun) => Promise<void>;
+}): Promise<boolean> {
+  if (params.queue.evictedSummaryCount > 0) {
+    const evictedCount = params.queue.evictedSummaryCount;
+    params.queue.evictedSummaryCount = 0;
+    params.queue.droppedCount = Math.max(0, params.queue.droppedCount - evictedCount);
+    defaultRuntime.error?.(
+      `followup queue omitted ${evictedCount} route-isolated overflow summar${evictedCount === 1 ? "y" : "ies"} after reaching the summary context cap`,
+    );
+    return true;
+  }
+  if (await drainElidedOverflowSummary(params)) {
+    return true;
+  }
+  const sources = resolveOverflowSummarySourceGroup(params.queue);
+  const source = sources.at(-1);
+  if (!source) {
+    return false;
+  }
+  const delivery = createQueueSummaryDelivery({
+    queue: params.queue,
+    sources,
+  });
+  if (!delivery) {
+    return false;
+  }
+  await runQueueSummaryDelivery(params.queue, delivery, async () => {
+    await runSyntheticOverflowSummary({
+      source,
+      prompt: delivery.prompt,
+      runFollowup: params.runFollowup,
+    });
+  });
+  return true;
 }
 
 export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
+  const existingQueue = FOLLOWUP_QUEUES.get(key);
+  if (existingQueue?.draining) {
+    // The active drain keeps its current callback, but deferred retries must
+    // use the latest session/runtime context supplied by the finishing run.
+    rememberFollowupDrainCallback(key, runFollowup);
+    return;
+  }
   const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
   if (!queue) {
     return;
@@ -390,6 +707,15 @@ export function scheduleFollowupDrain(
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
+        if (
+          queue.droppedCount > 0 &&
+          (await drainOverflowSummaryGroup({
+            queue,
+            runFollowup: effectiveRunFollowup,
+          }))
+        ) {
+          continue;
+        }
         if (queue.mode === "collect") {
           // Once the batch is mixed, never collect again within this drain.
           // Prevents “collect after shift” collapsing different targets.
@@ -411,28 +737,6 @@ export function scheduleFollowupDrain(
             run: effectiveRunFollowup,
           });
           if (collectDrainResult === "empty") {
-            const summaryOnly = previewRestorableQueueSummaryPrompt({
-              state: queue,
-              noun: "message",
-            });
-            const summaryOnlyPrompt = summaryOnly.prompt;
-            const run = queue.lastRun;
-            if (summaryOnlyPrompt && run) {
-              await runWithDeferredSummaryRestore(summaryOnly.restore, async () => {
-                await runWithSummarySourceCleanup(queue, async () => {
-                  await effectiveRunFollowup({
-                    prompt: summaryOnlyPrompt,
-                    run,
-                    enqueuedAt: Date.now(),
-                    ...collectSummaryRuntimeMetadata([]),
-                    ...collectQueuedImages(queue.items),
-                  });
-                });
-              });
-              clearFollowupQueueSummaryState(queue);
-              continue;
-            }
-            summaryOnly.restore?.();
             break;
           }
           if (collectDrainResult === "drained") {
@@ -440,35 +744,14 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.slice();
-          const summaryResult = previewRestorableQueueSummaryPrompt({
-            state: queue,
-            noun: "message",
-          });
-          const summary = summaryResult.prompt;
-          const authGroups = splitCollectItemsByAuthorization(items);
-          if (authGroups.length === 0) {
-            const run = queue.lastRun;
-            if (!summary || !run) {
-              summaryResult.restore?.();
-              break;
-            }
-            await runWithDeferredSummaryRestore(summaryResult.restore, async () => {
-              await runWithSummarySourceCleanup(queue, async () => {
-                await effectiveRunFollowup({
-                  prompt: summary,
-                  run,
-                  enqueuedAt: Date.now(),
-                  ...collectSummaryRuntimeMetadata([]),
-                });
-              });
-            });
-            clearFollowupQueueSummaryState(queue);
-            continue;
+          const contextGroups = splitCollectItemsByDeliveryContext(items);
+          if (contextGroups.length === 0) {
+            break;
           }
 
-          let pendingSummary = summary;
-          for (const groupItems of authGroups) {
-            const run = groupItems.at(-1)?.run ?? queue.lastRun;
+          for (const groupItems of contextGroups) {
+            const groupSource = groupItems.at(-1);
+            const run = groupSource?.run ?? queue.lastRun;
             if (!run) {
               break;
             }
@@ -477,68 +760,24 @@ export function scheduleFollowupDrain(
             const prompt = buildCollectPrompt({
               title: "[Queued messages while agent was busy]",
               items: groupItems,
-              summary: pendingSummary,
               renderItem: renderCollectItem,
             });
             const drainGroup = async () => {
               await effectiveRunFollowup({
                 prompt,
                 run,
+                messageId:
+                  groupSource?.messageId ??
+                  (groupSource ? resolveFollowupReplyAnchor(groupSource) : undefined),
                 enqueuedAt: Date.now(),
                 ...routing,
                 ...collectRuntimeMetadata(groupItems),
                 ...collectQueuedImages(groupItems),
               });
             };
-            if (pendingSummary) {
-              await runWithDeferredSummaryRestore(summaryResult.restore, async () => {
-                await runWithSummarySourceCleanup(queue, drainGroup);
-              });
-            } else {
-              await drainGroup();
-            }
-            queue.items.splice(0, groupItems.length);
-            if (pendingSummary) {
-              clearFollowupQueueSummaryState(queue);
-              pendingSummary = undefined;
-            }
+            await drainGroup();
+            removeQueuedItemsByRef(queue.items, groupItems);
           }
-          continue;
-        }
-
-        const summaryResult = previewRestorableQueueSummaryPrompt({
-          state: queue,
-          noun: "message",
-        });
-        const summaryPrompt = summaryResult.prompt;
-        if (summaryPrompt) {
-          const run = queue.lastRun;
-          if (!run) {
-            summaryResult.restore?.();
-            break;
-          }
-          if (
-            !(await runWithDeferredSummaryRestore(summaryResult.restore, async () =>
-              drainNextQueueItem(queue.items, async (item) => {
-                await runWithSummarySourceCleanup(queue, async () => {
-                  await effectiveRunFollowup({
-                    prompt: summaryPrompt,
-                    run,
-                    enqueuedAt: Date.now(),
-                    originatingChannel: item.originatingChannel,
-                    originatingTo: item.originatingTo,
-                    originatingAccountId: item.originatingAccountId,
-                    originatingThreadId: item.originatingThreadId,
-                    ...collectSummaryRuntimeMetadata([item]),
-                    ...collectQueuedImages([item]),
-                  });
-                });
-              }),
-            ))
-          ) {
-            break;
-          }
-          clearFollowupQueueSummaryState(queue);
           continue;
         }
 

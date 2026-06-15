@@ -112,15 +112,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const contextTokens =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
-      : typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
-        ? params.contextTokensOverride
-        : ((await getContextModule()).resolveContextTokensForModel({
-            cfg,
-            provider: providerUsed,
-            model: modelUsed,
-            fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-            allowAsyncLoad: false,
-          }) ?? DEFAULT_CONTEXT_TOKENS);
+      : ((await getContextModule()).resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          contextTokensOverride: params.contextTokensOverride,
+          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
@@ -186,12 +185,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
     });
   }
   if (!preserveUserFacingRunState) {
-    if (agentHarnessId) {
-      next.agentHarnessId = agentHarnessId;
-    } else if (result.meta.executionTrace?.runner === "cli") {
-      next.agentHarnessId = undefined;
+    if (!preserveRuntimeModel) {
+      if (agentHarnessId) {
+        next.agentHarnessId = agentHarnessId;
+      } else if (result.meta.executionTrace?.runner === "cli") {
+        next.agentHarnessId = undefined;
+      }
     }
-    if (isCliProvider(providerUsed, cfg)) {
+    if (!preserveRuntimeModel && isCliProvider(providerUsed, cfg)) {
       const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
       if (result.meta.agentMeta?.clearCliSessionBinding === true) {
         clearCliSession(next, providerUsed);

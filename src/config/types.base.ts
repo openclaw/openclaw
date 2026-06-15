@@ -365,7 +365,7 @@ export type WebWhatsAppConfig = {
   keepAliveIntervalMs?: number;
   /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
   connectTimeoutMs?: number;
-  /** Baileys query timeout in milliseconds. Default: 60000. */
+  /** Baileys query and WhatsApp outbound socket operation timeout in milliseconds. Default: 60000. */
   defaultQueryTimeoutMs?: number;
 };
 

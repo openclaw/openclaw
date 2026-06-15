@@ -8,13 +8,16 @@ import { createClientToolNameConflictError } from "../agents/agent-tool-definiti
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
+import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
+  testState,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -263,6 +266,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     };
 
     try {
+      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      resetConfigRuntimeState();
+
       const resNonPost = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
         method: "GET",
         headers: { authorization: "Bearer secret" },
@@ -333,6 +339,30 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       await ensureResponseConsumed(resDefaultAlias);
 
+      {
+        agentCommand.mockClear();
+        const res = await postResponses(
+          port,
+          { model: "openclaw", input: "hi" },
+          { "x-openclaw-agent-id": "missing-agent" },
+        );
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postResponses(port, { model: "openclaw/missing-agent", input: "hi" });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
       mockAgentOnce([{ text: "hello" }]);
       const resChannelHeader = await postResponses(
         port,
@@ -353,7 +383,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
           model: "openclaw",
           input: "hi",
         },
-        { "x-openclaw-model": "openai/gpt-5.4" },
+        {
+          "x-openclaw-model": "openai/gpt-5.4",
+          "x-openclaw-scopes": "operator.admin, operator.write",
+        },
       );
       expect(resModelOverride.status).toBe(200);
       const optsModelOverride = firstAgentOpts();
@@ -364,7 +397,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const resInvalidOverride = await postResponses(
         port,
         { model: "openclaw", input: "hi" },
-        { "x-openclaw-model": "openai/" },
+        {
+          "x-openclaw-model": "openai/",
+          "x-openclaw-scopes": "operator.admin, operator.write",
+        },
       );
       expect(resInvalidOverride.status).toBe(400);
       const invalidOverrideJson = (await resInvalidOverride.json()) as {
@@ -374,6 +410,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(invalidOverrideJson.error?.message).toBe("Invalid `x-openclaw-model`.");
       expect(agentCommand).toHaveBeenCalledTimes(0);
       await ensureResponseConsumed(resInvalidOverride);
+
+      agentCommand.mockClear();
+      const resWriteOnlyOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-model": "openai/gpt-5.4" },
+      );
+      expect(resWriteOnlyOverride.status).toBe(403);
+      const writeOnlyJson = (await resWriteOnlyOverride.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(writeOnlyJson.error?.type).toBe("forbidden");
+      expect(writeOnlyJson.error?.message).toBe("missing scope: operator.admin");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+      await ensureResponseConsumed(resWriteOnlyOverride);
 
       agentCommand.mockClear();
       agentCommand.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
@@ -797,7 +848,8 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       await ensureResponseConsumed(resNoUser);
     } finally {
-      // shared server
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
     }
   });
 
@@ -1656,6 +1708,91 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }),
     });
     await expectInvalidRequest(blockedScheme, /invalid request|http or https/i);
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("accepts image-only input without text, matching /v1/chat/completions", async () => {
+    const port = enabledPort;
+    // 1x1 PNG; same fixture used by the parity schema tests.
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              source: { type: "base64", media_type: "image/png", data: pngBase64 },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = firstAgentOpts();
+    // Image-only turn carries a non-empty placeholder so the agent command runs,
+    // with the real image attached via `images` (parity with /v1/chat/completions).
+    expect((opts as { message?: string }).message ?? "").toBe(IMAGE_ONLY_USER_MESSAGE);
+    expect((opts as { images?: unknown[] }).images?.length).toBe(1);
+    await ensureResponseConsumed(res);
+  });
+
+  it("accepts file-only input without text, matching image-only", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      instructions: "Summarize the attached document.",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              source: {
+                type: "base64",
+                media_type: "text/plain",
+                data: Buffer.from("the quick brown fox").toString("base64"),
+                filename: "doc.txt",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = firstAgentOpts();
+    expect((opts as { message?: string }).message ?? "").not.toBe("");
+    const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
+    expect(extraSystemPrompt).toContain('<file name="doc.txt">');
+    expect(extraSystemPrompt).toContain("the quick brown fox");
+    await ensureResponseConsumed(res);
+  });
+
+  it("still rejects input with neither text nor image", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: [{ type: "message", role: "user", content: [] }],
+    });
+
+    await expectInvalidRequest(res, /Missing user message/i);
     expect(agentCommand).not.toHaveBeenCalled();
   });
 

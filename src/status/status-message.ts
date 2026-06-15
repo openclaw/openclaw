@@ -293,6 +293,7 @@ const readUsageFromSessionLog = (
       cacheWrite: number;
       promptTokens: number;
       total: number;
+      totalTokensFresh: boolean;
       model?: string;
     }
   | undefined => {
@@ -350,6 +351,7 @@ const readUsageFromSessionLog = (
       cacheWrite,
       promptTokens,
       total,
+      totalTokensFresh: snapshot.totalTokensFresh === true,
       model,
     };
   } catch {
@@ -631,15 +633,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
+  // Undefined freshness is legacy, not stale: keep persisted totals for /status,
+  // but let a fresh transcript prompt snapshot replace them when available.
   const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
-  let totalTokens =
-    freshTotalTokens ??
-    (entry?.totalTokensFresh === false
-      ? undefined
-      : (entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0)));
+  let totalTokens = freshTotalTokens;
 
-  // Prefer prompt-size tokens from the session transcript when it looks larger
-  // (cached prompt tokens are often missing from agent meta/store).
+  // Explicitly stale session/cache usage can still hydrate Tokens/Cache lines
+  // but must not become Context.
   if (args.includeTranscriptUsage) {
     const logUsage = readUsageFromSessionLog(
       entry?.sessionId,
@@ -649,10 +649,17 @@ export function buildStatusMessage(args: StatusArgs): string {
       args.sessionStorePath,
     );
     if (logUsage) {
-      const candidate = logUsage.promptTokens || logUsage.total;
+      const candidate = logUsage.totalTokensFresh
+        ? logUsage.promptTokens || logUsage.total
+        : undefined;
       if (
         allowTranscriptContextUsage &&
-        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
+        candidate !== undefined &&
+        candidate > 0 &&
+        (entry?.totalTokensFresh !== true ||
+          !totalTokens ||
+          totalTokens === 0 ||
+          candidate > totalTokens)
       ) {
         totalTokens = candidate;
       }
@@ -728,10 +735,28 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
       : undefined;
+  const persistedContextMatchesActiveModel = (() => {
+    if (persistedContextTokens === undefined) {
+      return false;
+    }
+    const entryProvider = normalizeLowercaseStringOrEmpty(entry?.modelProvider);
+    const entryModel = normalizeLowercaseStringOrEmpty(entry?.model);
+    const lookupProvider = normalizeLowercaseStringOrEmpty(contextLookupProvider);
+    const lookupModel = normalizeLowercaseStringOrEmpty(contextLookupModel);
+    if (!entryModel || !lookupModel || entryModel !== lookupModel) {
+      return false;
+    }
+    if (entryProvider && lookupProvider && entryProvider !== lookupProvider) {
+      return false;
+    }
+    return !runtimeDiffersFromSelected || initialFallbackState.active;
+  })();
   const cappedPersistedContextTokens =
     typeof persistedContextTokens === "number" && typeof activeContextTokens === "number"
       ? Math.min(persistedContextTokens, activeContextTokens)
-      : persistedContextTokens;
+      : persistedContextMatchesActiveModel
+        ? persistedContextTokens
+        : undefined;
   const agentContextTokens =
     typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
       ? args.agent.contextTokens
@@ -771,17 +796,40 @@ export function buildStatusMessage(args: StatusArgs): string {
   const contextTokens = runtimeDiffersFromSelected
     ? (explicitRuntimeContextTokens ??
       (() => {
-        if (persistedContextTokens !== undefined) {
+        const runtimeSnapshotHasFallbackProvenance =
+          initialFallbackState.active ||
+          hasSessionAutoModelFallbackProvenance(entry) ||
+          areRuntimeModelRefsEquivalent(activeModelLabel, modelRefs.selected.label || "unknown");
+        if (!runtimeSnapshotHasFallbackProvenance) {
+          if (typeof selectedContextTokens === "number") {
+            if (explicitConfiguredContextTokens !== undefined) {
+              return Math.min(explicitConfiguredContextTokens, selectedContextTokens);
+            }
+            if (agentContextTokens !== undefined) {
+              return Math.min(agentContextTokens, selectedContextTokens);
+            }
+            return selectedContextTokens;
+          }
+          if (explicitConfiguredContextTokens !== undefined) {
+            return explicitConfiguredContextTokens;
+          }
+          if (agentContextTokens !== undefined) {
+            return agentContextTokens;
+          }
+          return DEFAULT_CONTEXT_TOKENS;
+        }
+        if (cappedPersistedContextTokens !== undefined) {
+          const trustedPersistedContextTokens = cappedPersistedContextTokens;
           const persistedLooksSelectedWindow =
             typeof selectedContextTokens === "number" &&
-            persistedContextTokens === selectedContextTokens;
+            trustedPersistedContextTokens === selectedContextTokens;
           const activeWindowDiffersFromSelected =
             typeof selectedContextTokens === "number" &&
             typeof activeContextTokens === "number" &&
             activeContextTokens !== selectedContextTokens;
           const explicitConfiguredMatchesPersisted =
             typeof explicitConfiguredContextTokens === "number" &&
-            explicitConfiguredContextTokens === persistedContextTokens;
+            explicitConfiguredContextTokens === trustedPersistedContextTokens;
           if (
             persistedLooksSelectedWindow &&
             activeWindowDiffersFromSelected &&
@@ -790,9 +838,9 @@ export function buildStatusMessage(args: StatusArgs): string {
             return activeContextTokens;
           }
           if (typeof activeContextTokens === "number") {
-            return Math.min(persistedContextTokens, activeContextTokens);
+            return Math.min(trustedPersistedContextTokens, activeContextTokens);
           }
-          return persistedContextTokens;
+          return trustedPersistedContextTokens;
         }
         if (cappedConfiguredContextTokens !== undefined) {
           return cappedConfiguredContextTokens;
@@ -866,7 +914,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Context: ${contextUsageLabel}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
-    .filter(Boolean)
+    .filter((line): line is string => Boolean(line))
     .join(" · ");
 
   const queueMode = args.queue?.mode ?? "unknown";
@@ -989,7 +1037,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         `📌 Session selected: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`,
         "⚠️ Reason: session override",
         `⚠️ This session is pinned to ${selectedModelLabel}; config primary ${configuredDefaultModelLabel} will apply to new/unpinned sessions.`,
-        `↩️ Clear with: /model ${configuredDefaultModelLabel} or /reset`,
+        "↩️ Clear with: /model default",
         "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
       ]
     : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
@@ -1042,6 +1090,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     voiceLine,
     activationLine,
   ]
-    .filter(Boolean)
+    .filter((line): line is string => Boolean(line))
     .join("\n");
 }

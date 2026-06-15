@@ -75,6 +75,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
+import { isAgentRunRestartAbortReason } from "./run-termination.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
@@ -208,6 +209,9 @@ function isTerminalAbort(signal: AbortSignal | undefined): boolean {
   if (!(reason instanceof Error)) {
     return false;
   }
+  if (isAgentRunRestartAbortReason(reason)) {
+    return true;
+  }
   if (reason.name === "TimeoutError") {
     return true;
   }
@@ -264,6 +268,8 @@ export type ModelFallbackResultClassification =
       status?: number;
       code?: string;
       rawError?: string;
+      preserveResultOnExhaustion?: boolean;
+      preserveResultPriority?: number;
     }
   | {
       error: unknown;
@@ -280,11 +286,23 @@ type ModelFallbackResultClassifier<T> = (attempt: {
 }) => ModelFallbackResultClassification | Promise<ModelFallbackResultClassification>;
 
 type ModelFallbackRunResult<T> = {
+  outcome: "completed" | "exhausted";
   result: T;
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
 };
+
+type ModelFallbackExhaustionResult<T> = Pick<
+  ModelFallbackRunResult<T>,
+  "result" | "provider" | "model"
+> & {
+  priority: number;
+};
+type ModelFallbackClassifiedResult<T> = Pick<
+  ModelFallbackRunResult<T>,
+  "result" | "provider" | "model"
+>;
 
 type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
 
@@ -305,6 +323,7 @@ function buildFallbackSuccess<T>(params: {
   attempts: FallbackAttempt[];
 }): ModelFallbackRunResult<T> {
   return {
+    outcome: "completed",
     result: params.result,
     provider: params.provider,
     model: params.model,
@@ -364,7 +383,14 @@ async function runFallbackAttempt<T>(params: {
   total: number;
   attribution?: FailoverAttribution;
   abortSignal?: AbortSignal;
-}): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
+}): Promise<
+  | { success: ModelFallbackRunResult<T> }
+  | {
+      error: unknown;
+      classifiedResult?: ModelFallbackClassifiedResult<T>;
+      exhaustionResult?: ModelFallbackExhaustionResult<T>;
+    }
+> {
   const runResult = await runFallbackCandidate({
     run: params.run,
     provider: params.provider,
@@ -390,7 +416,32 @@ async function runFallbackAttempt<T>(params: {
       if (isTerminalAbort(params.abortSignal)) {
         throw toLintErrorObject(classifiedError, "Non-Error thrown");
       }
-      return { error: classifiedError };
+      const preserveResultOnExhaustion =
+        classification &&
+        "preserveResultOnExhaustion" in classification &&
+        classification.preserveResultOnExhaustion === true;
+      return {
+        error: classifiedError,
+        classifiedResult: {
+          result: runResult.result,
+          provider: params.provider,
+          model: params.model,
+        },
+        ...(preserveResultOnExhaustion
+          ? {
+              exhaustionResult: {
+                result: runResult.result,
+                provider: params.provider,
+                model: params.model,
+                priority:
+                  typeof classification.preserveResultPriority === "number" &&
+                  Number.isFinite(classification.preserveResultPriority)
+                    ? classification.preserveResultPriority
+                    : 0,
+              },
+            }
+          : {}),
+      };
     }
     return {
       success: buildFallbackSuccess({
@@ -1060,12 +1111,22 @@ function shouldProbePrimaryDuringCooldown(params: {
   profileIds: string[];
   model: string;
 }): boolean {
-  if (!params.isPrimary || !params.hasFallbackCandidates) {
+  if (!params.isPrimary) {
     return false;
   }
 
   if (!isProbeThrottleOpen(params.now, params.throttleKey)) {
     return false;
+  }
+
+  // A single-provider primary has no fallback chain to prefer, so every open
+  // throttle slot is a recovery probe: "is the primary callable yet?" is a
+  // recovery question independent of fallback configuration. Without this, a
+  // fallbacks:[] setup that hits a rate/subscription cap stays suspended until
+  // the provider-reported reset (which can be days out) even though the rolling
+  // cap usually recovers earlier. See #90702.
+  if (!params.hasFallbackCandidates) {
+    return true;
   }
 
   const soonest = params.authRuntime.getSoonestCooldownExpiry(params.authStore, params.profileIds, {
@@ -1163,15 +1224,11 @@ function resolveCooldownDecision(params: {
   }
 
   // Billing is semi-persistent: the user may fix their balance, or a transient
-  // 402 might have been misclassified. Probe single-provider setups on the
-  // standard throttle so they can recover without a restart; when fallbacks
-  // exist, only probe near cooldown expiry so the fallback chain stays preferred.
+  // 402 might have been misclassified. shouldProbe already re-probes
+  // single-provider setups on the throttle (no fallback chain to prefer) and
+  // multi-fallback setups near cooldown expiry, so both recover without a restart.
   if (inferredReason === "billing") {
-    const shouldProbeSingleProviderBilling =
-      params.isPrimary &&
-      !params.hasFallbackCandidates &&
-      isProbeThrottleOpen(params.now, params.probeThrottleKey);
-    if (params.isPrimary && (shouldProbe || shouldProbeSingleProviderBilling)) {
+    if (params.isPrimary && shouldProbe) {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
@@ -1222,6 +1279,7 @@ export async function runWithModelFallback<T>(
     onError?: ModelFallbackErrorHandler;
     onFallbackStep?: ModelFallbackStepHandler;
     classifyResult?: ModelFallbackResultClassifier<T>;
+    mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
     skipAuthProfileRuntime?: boolean;
     abortSignal?: AbortSignal;
   } & ModelManifestNormalizationContext,
@@ -1247,6 +1305,8 @@ export async function runWithModelFallback<T>(
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let latestClassifiedResult: ModelFallbackClassifiedResult<T> | undefined;
+  let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
@@ -1548,6 +1608,15 @@ export async function runWithModelFallback<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
+    if (attemptRun.classifiedResult) {
+      latestClassifiedResult = attemptRun.classifiedResult;
+    }
+    if (
+      attemptRun.exhaustionResult &&
+      (!exhaustionResult || attemptRun.exhaustionResult.priority >= exhaustionResult.priority)
+    ) {
+      exhaustionResult = attemptRun.exhaustionResult;
+    }
     {
       // Local runtime coordination errors (session write-lock timeout, embedded
       // attempt session takeover) are not provider/model failures. Aborting
@@ -1676,6 +1745,28 @@ export async function runWithModelFallback<T>(
         total: candidates.length,
       });
     }
+  }
+
+  if (exhaustionResult) {
+    if (latestClassifiedResult && params.mergeExhaustedResult) {
+      return {
+        outcome: "exhausted",
+        result: params.mergeExhaustedResult({
+          latestResult: latestClassifiedResult.result,
+          preferredResult: exhaustionResult.result,
+        }),
+        provider: latestClassifiedResult.provider,
+        model: latestClassifiedResult.model,
+        attempts,
+      };
+    }
+    return {
+      outcome: "exhausted",
+      result: exhaustionResult.result,
+      provider: exhaustionResult.provider,
+      model: exhaustionResult.model,
+      attempts,
+    };
   }
 
   return throwFallbackFailureSummary({

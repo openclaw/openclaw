@@ -31,6 +31,7 @@ const beforeToolCallMocks = vi.hoisted(() => ({
   },
   consumeAdjustedParamsForToolCall: vi.fn((_: string): unknown => undefined),
   recordAdjustedParamsForToolCall: vi.fn(),
+  recordStructuredReplayTrustForToolCall: vi.fn(),
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
@@ -97,6 +98,11 @@ async function loadFreshAfterToolCallModulesForTest() {
     emitAgentEvent: vi.fn(),
     emitAgentItemEvent: vi.fn(),
   }));
+  vi.doMock("./agent-tools.before-tool-call.state.js", () => ({
+    consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
+    consumePreExecutionBlockedToolCall: vi.fn(() => false),
+    consumeStructuredReplaySafeToolCall: vi.fn(() => false),
+  }));
   vi.doMock("./agent-tools.before-tool-call.js", () => ({
     BeforeToolCallBlockedError: beforeToolCallMocks.BeforeToolCallBlockedError,
     buildBlockedToolResult: ({ reason }: { reason: string }) => ({
@@ -104,7 +110,10 @@ async function loadFreshAfterToolCallModulesForTest() {
       details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
     }),
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
+    consumePreExecutionBlockedToolCall: vi.fn(() => false),
     recordAdjustedParamsForToolCall: beforeToolCallMocks.recordAdjustedParamsForToolCall,
+    recordStructuredReplayTrustForToolCall:
+      beforeToolCallMocks.recordStructuredReplayTrustForToolCall,
     isBeforeToolCallBlockedError: (error: unknown) =>
       error instanceof beforeToolCallMocks.BeforeToolCallBlockedError,
     isToolWrappedWithBeforeToolCallHook: beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook,

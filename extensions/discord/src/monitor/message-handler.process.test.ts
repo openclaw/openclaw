@@ -142,12 +142,14 @@ type DispatchInboundParams = {
     }) => Promise<void> | void;
     onItemEvent?: (payload: {
       itemId?: string;
+      toolCallId?: string;
       kind?: string;
       progressText?: string;
       summary?: string;
       title?: string;
       name?: string;
     }) => Promise<void> | void;
+    onVerboseProgressVisibility?: (isActive: () => boolean) => void;
     onPlanUpdate?: (payload: {
       phase?: string;
       explanation?: string;
@@ -155,6 +157,8 @@ type DispatchInboundParams = {
     }) => Promise<void> | void;
     onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
     onCommandOutput?: (payload: {
+      itemId?: string;
+      toolCallId?: string;
       phase?: string;
       name?: string;
       title?: string;
@@ -2782,6 +2786,50 @@ describe("processDiscordMessage draft streaming", () => {
     expect(updates).not.toContain("NO_REPLY");
   });
 
+  it.each([
+    ["active", true],
+    ["inactive", false],
+  ])(
+    "renders Discord commentary in the draft exactly when durable verbose progress is %s",
+    async (_label, durableLaneActive) => {
+      const draftStream = createMockDraftStreamForTest();
+
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        params?.replyOptions?.onVerboseProgressVisibility?.(() => durableLaneActive);
+        await params?.replyOptions?.onItemEvent?.({
+          itemId: "preamble-1",
+          kind: "preamble",
+          progressText: "Checking the current weather source before summarizing.",
+        });
+        return createNoQueuedDispatchResult();
+      });
+
+      const ctx = await createAutomaticSourceDeliveryContext({
+        discordConfig: {
+          streaming: {
+            mode: "progress",
+            progress: {
+              label: false,
+              toolProgress: false,
+              commentary: true,
+            },
+          },
+        },
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+      if (durableLaneActive) {
+        // The durable verbose lane owns commentary: the ephemeral draft must
+        // not render it a second time.
+        expect(updates).toBe("");
+      } else {
+        expect(updates).toContain("Checking the current weather source");
+      }
+    },
+  );
+
   it("keeps Discord progress drafts usable after the last commentary line becomes silent", async () => {
     const draftStream = createMockDraftStreamForTest();
 
@@ -2907,6 +2955,45 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
     expectPreviewEditContent("done");
+  });
+
+  it("replaces Discord command progress items with matching command output", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool:call-1",
+        toolCallId: "call-1",
+        kind: "command",
+        name: "exec",
+        progressText: "install dependencies",
+      });
+      await params?.replyOptions?.onCommandOutput?.({
+        itemId: "tool:call-1-output",
+        toolCallId: "call-1",
+        phase: "end",
+        name: "exec",
+        exitCode: 0,
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const lastUpdate = draftStream.update.mock.calls.at(-1)?.[0];
+    expect(lastUpdate).toContain("completed");
+    expect(lastUpdate).not.toContain("install dependencies");
   });
 
   it("drops later tool warning finals after progress preview final replies", async () => {

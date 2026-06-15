@@ -7,6 +7,7 @@ import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
+  currentRunningSnapshotInfo,
   makeTempDir,
   parseBoolEnv,
   parseMode,
@@ -21,7 +22,9 @@ import {
   resolveSnapshot,
   run,
   say,
+  shouldSkipSnapshotRestore,
   shellQuote,
+  validateSnapshotRestoreMode,
   warn,
   withProgressOnStderr,
   writeJson,
@@ -33,7 +36,7 @@ import {
   type SnapshotInfo,
 } from "./common.ts";
 import { LinuxGuest } from "./guest-transports.ts";
-import { resolveUbuntuVmName, waitForVmStatus } from "./parallels-vm.ts";
+import { ensureVmRunning, resolveUbuntuVmName } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
   buildCommonSmokeSummary,
@@ -275,7 +278,10 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     this.tgzDir = await makeTempDir("openclaw-parallels-linux-tgz.");
     try {
       this.options.vmName = this.resolveVmName();
-      this.snapshot = resolveSnapshot(this.options.vmName, this.options.snapshotHint);
+      validateSnapshotRestoreMode(this.options.mode, "Linux smoke");
+      this.snapshot = shouldSkipSnapshotRestore()
+        ? currentRunningSnapshotInfo(this.options.vmName)
+        : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.guest = new LinuxGuest(this.options.vmName, this.phases);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       await this.prepareHost(
@@ -407,21 +413,20 @@ printf 'preflight.npmRoot=%s\n' "$(npm root -g 2>/dev/null || true)"`);
   }
 
   private restoreSnapshot(): void {
+    if (shouldSkipSnapshotRestore()) {
+      say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
+      this.waitForGuestReady();
+      return;
+    }
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
     run("prlctl", ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id], {
       quiet: true,
       timeoutMs: this.remainingPhaseTimeoutMs(),
     });
-    if (this.snapshot.state === "poweroff") {
-      waitForVmStatus(this.options.vmName, "stopped", 180, {
-        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
-      });
-      say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
-      });
-    }
+    ensureVmRunning(this.options.vmName, 180, {
+      probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      transitionTimeoutMs: () => this.remainingPhaseTimeoutMs(120_000),
+    });
     this.waitForGuestReady();
   }
 

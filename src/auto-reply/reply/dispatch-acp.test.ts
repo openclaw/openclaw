@@ -51,6 +51,10 @@ const channelPluginMocks = vi.hoisted(() => ({
       return undefined;
     }
     return {
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
       outbound: {
         shouldTreatDeliveredTextAsVisible: ({
           kind,
@@ -194,6 +198,11 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
 
 vi.mock("../../logging/diagnostic.js", () => ({
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
+  isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
+    config?.diagnostics?.enabled !== false,
+  requestStuckDiagnosticSessionRecovery: vi.fn(),
+  resolveStuckSessionWarnMs: () => 120_000,
+  resolveStuckSessionAbortMs: () => 360_000,
 }));
 
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
@@ -682,6 +691,34 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("skips media understanding for cached stickers while preserving their attachment", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("cached sticker");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const stickerPath = path.join(tempDir, "sticker.webp");
+    try {
+      await fs.writeFile(stickerPath, "image-bytes");
+
+      await runDispatch({
+        bodyForAgent: "[Sticker] Cached description",
+        ctxOverrides: {
+          MediaPath: stickerPath,
+          MediaPaths: [stickerPath],
+          MediaType: "image/webp",
+          MediaTypes: ["image/webp"],
+          Sticker: { cachedDescription: "Cached description" },
+          StickerMediaIncluded: true,
+          SkipStickerMediaUnderstanding: true,
+        },
+      });
+
+      expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+      expect(managerMocks.runTurn).toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("passes the ACP agent directory to media understanding", async () => {

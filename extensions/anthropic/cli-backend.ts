@@ -34,6 +34,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "always-on",
+    sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     config: {
       command: "claude",

@@ -68,6 +68,10 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     return "test";
   }
 
+  protected resolveProviderIndexIdentities() {
+    return [];
+  }
+
   protected async sync(): Promise<void> {}
 
   protected async withTimeout<T>(promise: Promise<T>): Promise<T> {
@@ -81,6 +85,8 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
   protected pruneEmbeddingCacheIfNeeded(): void {}
 
   protected resetProviderInitializationForRetry(): void {}
+
+  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
     _entry: MemoryIndexEntry,

@@ -1,11 +1,14 @@
 // ClawHub lifecycle tests cover registry metadata lookup and error handling.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const fetchClawHubSkillDetailMock = vi.fn();
 const fetchClawHubSkillInstallResolutionMock = vi.fn();
+const fetchClawHubSkillVerificationMock = vi.fn();
 const downloadClawHubSkillArchiveMock = vi.fn();
 const downloadClawHubSkillArchiveUrlMock = vi.fn();
 const downloadClawHubGitHubSkillArchiveMock = vi.fn();
@@ -19,10 +22,12 @@ const withExtractedArchiveRootMock = vi.fn();
 const installPackageDirMock = vi.fn();
 const evaluateSkillInstallPolicyMock = vi.fn();
 const pathExistsMock = vi.fn();
+const tempDirs = createTrackedTempDirs();
 
 vi.mock("../../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
   fetchClawHubSkillInstallResolution: fetchClawHubSkillInstallResolutionMock,
+  fetchClawHubSkillVerification: fetchClawHubSkillVerificationMock,
   downloadClawHubSkillArchive: downloadClawHubSkillArchiveMock,
   downloadClawHubSkillArchiveUrl: downloadClawHubSkillArchiveUrlMock,
   downloadClawHubGitHubSkillArchive: downloadClawHubGitHubSkillArchiveMock,
@@ -162,9 +167,14 @@ async function writeClawHubOriginFixture(params: {
 }
 
 describe("skills-clawhub", () => {
+  afterEach(async () => {
+    await tempDirs.cleanup();
+  });
+
   beforeEach(() => {
     fetchClawHubSkillDetailMock.mockReset();
     fetchClawHubSkillInstallResolutionMock.mockReset();
+    fetchClawHubSkillVerificationMock.mockReset();
     downloadClawHubSkillArchiveMock.mockReset();
     downloadClawHubSkillArchiveUrlMock.mockReset();
     downloadClawHubGitHubSkillArchiveMock.mockReset();
@@ -205,19 +215,36 @@ describe("skills-clawhub", () => {
         downloadUrl: "https://clawhub.ai/api/v1/download?slug=agentreceipt&version=1.0.0",
       },
     });
+    fetchClawHubSkillVerificationMock.mockResolvedValue({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      card: { available: true, sha256: "card-sha" },
+      artifact: { sourceFingerprint: "source-fp" },
+      provenance: { source: "unavailable" },
+      security: { status: "clean", signals: { staticScan: { engineVersion: "v2.4.24" } } },
+      signature: { status: "unsigned" },
+    });
     downloadClawHubSkillArchiveMock.mockResolvedValue({
       archivePath: "/tmp/agentreceipt.zip",
       integrity: "sha256-test",
+      sha256Hex: "a".repeat(64),
+      artifact: "archive",
       cleanup: archiveCleanupMock,
     });
     downloadClawHubSkillArchiveUrlMock.mockResolvedValue({
       archivePath: "/tmp/agentreceipt.zip",
       integrity: "sha256-test",
+      sha256Hex: "a".repeat(64),
+      artifact: "archive",
       cleanup: archiveCleanupMock,
     });
     downloadClawHubGitHubSkillArchiveMock.mockResolvedValue({
       archivePath: "/tmp/github-agentreceipt.zip",
       integrity: "sha256-github-test",
+      sha256Hex: "b".repeat(64),
+      artifact: "archive",
       cleanup: archiveCleanupMock,
     });
     reportClawHubSkillInstallTelemetryMock.mockResolvedValue(undefined);
@@ -263,13 +290,125 @@ describe("skills-clawhub", () => {
       baseUrl: undefined,
       root: "/tmp/workspace",
       skills: expect.objectContaining({
-        agentreceipt: {
+        agentreceipt: expect.objectContaining({
           version: "1.0.0",
           installedAt: expect.any(Number),
           registry: "https://clawhub.ai",
-        },
+        }),
       }),
     });
+    const telemetrySkills = reportClawHubSkillInstallTelemetryMock.mock.calls[0]?.[0]?.skills as
+      | Record<string, Record<string, unknown>>
+      | undefined;
+    expect(Object.keys(telemetrySkills?.agentreceipt ?? {}).toSorted()).toEqual([
+      "installedAt",
+      "registry",
+      "version",
+    ]);
+  });
+
+  it("persists install artifact and verification provenance in the ClawHub lockfile", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
+    const skillContent = "---\nname: agentreceipt\ndescription: Receipt helper\n---\n";
+    const skillSha256 = createHash("sha256").update(skillContent).digest("hex");
+    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), skillContent, "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    try {
+      const result = await installSkillFromClawHub({
+        workspaceDir,
+        slug: "agentreceipt",
+      });
+
+      expectInstalledSkill(result, {
+        slug: "agentreceipt",
+        version: "1.0.0",
+        targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
+      });
+      expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+        slug: "agentreceipt",
+        version: "1.0.0",
+        baseUrl: undefined,
+      });
+      const lock = JSON.parse(
+        await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
+      ) as { skills: Record<string, Record<string, unknown>> };
+      expect(lock.skills.agentreceipt).toMatchObject({
+        version: "1.0.0",
+        registry: "https://clawhub.ai",
+        artifact: {
+          kind: "archive",
+          sha256: "a".repeat(64),
+          integrity: "sha256-test",
+        },
+        skillFile: {
+          path: "SKILL.md",
+          sha256: skillSha256,
+        },
+        verification: {
+          schema: "clawhub.skill.verify.v1",
+          ok: true,
+          decision: "pass",
+          reasons: [],
+          provenance: { source: "unavailable" },
+          security: { status: "clean", signals: { staticScan: { engineVersion: "v2.4.24" } } },
+        },
+      });
+      const origin = JSON.parse(
+        await fs.readFile(
+          path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+      expect(origin).toMatchObject({
+        version: 1,
+        slug: "agentreceipt",
+        installedVersion: "1.0.0",
+        artifact: {
+          kind: "archive",
+          sha256: "a".repeat(64),
+          integrity: "sha256-test",
+        },
+        skillFile: {
+          path: "SKILL.md",
+          sha256: skillSha256,
+        },
+      });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps installing when the ClawHub verification snapshot is unavailable", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
+    fetchClawHubSkillVerificationMock.mockRejectedValueOnce(new Error("verification down"));
+    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
+      await fs.mkdir(params.targetDir, { recursive: true });
+      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# AgentReceipt\n", "utf8");
+      return { ok: true, targetDir: params.targetDir };
+    });
+
+    try {
+      const result = await installSkillFromClawHub({
+        workspaceDir,
+        slug: "agentreceipt",
+      });
+
+      expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
+      const lock = JSON.parse(
+        await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
+      ) as { skills: Record<string, Record<string, unknown>> };
+      expect(lock.skills.agentreceipt?.verification).toBeUndefined();
+      expect(lock.skills.agentreceipt?.artifact).toMatchObject({
+        sha256: "a".repeat(64),
+        integrity: "sha256-test",
+      });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("installs GitHub-backed ClawHub skills from the pinned resolver source path", async () => {

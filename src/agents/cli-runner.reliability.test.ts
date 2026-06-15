@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   testing as replyRunTesting,
   createReplyOperation,
@@ -16,6 +17,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -24,7 +26,10 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
-import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import {
+  resolveCliNoOutputTimeoutMs,
+  resolveCliRunTimeoutOverrideMs,
+} from "./cli-runner/helpers.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import { MAX_CLI_SESSION_HISTORY_MESSAGES } from "./cli-runner/session-history.js";
@@ -40,6 +45,7 @@ vi.mock("../tts/tts.js", () => ({
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 type HookRunnerGlobalStateForTest = {
   hookRunner: unknown;
@@ -65,7 +71,8 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
   // Session files use the real JSONL shape so transcript/history readers stay
   // covered without spinning up a full CLI process.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  sessionFileEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+  setTestEnvValue("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
   const storePath = path.join(path.dirname(sessionFile), "sessions.json");
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
@@ -136,6 +143,7 @@ function buildPreparedContext(params?: {
   openClawHistoryPrompt?: string;
   provider?: string;
   model?: string;
+  executionMode?: PreparedCliRunContext["params"]["executionMode"];
   allowEmptyAssistantReplyAsSilent?: boolean;
 }): PreparedCliRunContext {
   // Common prepared context fixture for runPreparedCliAgent reliability branches.
@@ -163,6 +171,7 @@ function buildPreparedContext(params?: {
       timeoutMs: 1_000,
       runId: params?.runId ?? "run-2",
       lane: params?.lane,
+      executionMode: params?.executionMode,
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
     started: Date.now(),
@@ -274,6 +283,8 @@ describe("runCliAgent reliability", () => {
     mockGetGlobalHookRunner.mockReset();
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
+    sessionFileEnvSnapshot?.restore();
+    sessionFileEnvSnapshot = undefined;
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {
@@ -361,6 +372,38 @@ describe("runCliAgent reliability", () => {
       reason: "cli:watchdog:stall",
       sessionKey: "agent:main:main",
     });
+  });
+
+  it("does not enqueue watchdog system events for side-question no-output timeouts", async () => {
+    enqueueSystemEventMock.mockClear();
+    requestHeartbeatMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedContext({
+          sessionKey: "agent:main:main",
+          cliSessionId: "thread-123",
+          executionMode: "side-question",
+          runId: "run-side-question-timeout",
+        }),
+        "thread-123",
+      ),
+    ).rejects.toThrow("produced no output");
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("fails with timeout when overall timeout trips", async () => {
@@ -1268,7 +1311,7 @@ describe("runCliAgent reliability", () => {
     releaseAgentEnd();
   });
 
-  it("persists approved CLI user turns before model execution", async () => {
+  it("persists approved CLI user turns and successful assistant output", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "exit",
@@ -1281,7 +1324,7 @@ describe("runCliAgent reliability", () => {
         noOutputTimedOut: false,
       }),
     );
-    const { dir, sessionFile } = createSessionFile();
+    const { dir, sessionFile, storePath } = createSessionFile();
     const onUserMessagePersisted = vi.fn();
 
     try {
@@ -1297,6 +1340,8 @@ describe("runCliAgent reliability", () => {
           sessionFile,
           workspaceDir: dir,
           prompt: "runtime prompt",
+          persistAssistantTranscript: true,
+          storePath,
           userTurnTranscriptRecorder: createCliUserTurnRecorder({
             text: "display prompt",
             sessionFile,
@@ -1308,6 +1353,9 @@ describe("runCliAgent reliability", () => {
       });
 
       expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+        assistantTranscriptOwned: true,
+      });
       expect(onUserMessagePersisted).toHaveBeenCalledOnce();
       expect(onUserMessagePersisted).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1323,7 +1371,180 @@ describe("runCliAgent reliability", () => {
           content: "display prompt",
         }),
       );
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "hello from cli" }],
+          api: "cli",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          idempotencyKey: "cli-assistant:run-persist-cli",
+        }),
+      );
       expect(JSON.stringify(messages)).not.toContain("runtime prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets before_message_write block CLI assistant persistence without delivery fallback", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_message_write"),
+      runBeforeMessageWrite: vi.fn(() => ({ block: true })),
+    };
+    setHookRunnerForTest(hookRunner);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "secret CLI output",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile, storePath } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-blocked-cli",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          persistAssistantTranscript: true,
+          storePath,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "secret CLI output" }]);
+      expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+        assistantTranscriptOwned: true,
+      });
+      expect(readTranscriptMessages(sessionFile)).toEqual([]);
+      expect(hookRunner.runBeforeMessageWrite).toHaveBeenCalledOnce();
+      expect(
+        callArg(hookRunner.runBeforeMessageWrite, 0, 1, "before_message_write context"),
+      ).toEqual({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not append late CLI output after the session key is rebound", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "late CLI output",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile, storePath } = createSessionFile();
+    const replacementFile = path.join(path.dirname(sessionFile), "s2.jsonl");
+    fs.writeFileSync(
+      replacementFile,
+      `${JSON.stringify({
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "s2",
+        timestamp: new Date(0).toISOString(),
+        cwd: dir,
+      })}\n`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "s2",
+          sessionFile: replacementFile,
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-rebound-cli",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          persistAssistantTranscript: true,
+          storePath,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "late CLI output" }]);
+      expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+        assistantTranscriptOwned: true,
+      });
+      expect(readTranscriptMessages(sessionFile)).toEqual([]);
+      expect(readTranscriptMessages(replacementFile)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not persist private room-event assistant output", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "private ambient output",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile, storePath } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-private-room-event",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          persistAssistantTranscript: true,
+          storePath,
+          currentInboundEventKind: "room_event",
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "private ambient output" }]);
+      expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+        assistantTranscriptOwned: true,
+      });
+      expect(readTranscriptMessages(sessionFile)).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1692,6 +1913,76 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("forwards channel identity context to CLI before_agent_run hooks", async () => {
+    supervisorSpawnMock.mockClear();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
+      runBeforeAgentRun: vi.fn(async () => ({
+        pluginId: "policy-plugin",
+        decision: {
+          outcome: "block" as const,
+          reason: "sender scoped policy",
+          message: "The agent cannot read this message.",
+        },
+      })),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:telegram:chat-1",
+        runId: "run-cli-channel-before-agent-run",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "sender scoped prompt",
+          messageChannel: "telegram",
+          messageProvider: "telegram",
+          currentChannelId: "telegram:chat-1",
+          senderId: "user-42",
+          senderIsOwner: true,
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "sender scoped prompt",
+            sessionFile,
+            sessionKey: "agent:main:telegram:chat-1",
+            workspaceDir: dir,
+          }),
+        },
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          isError: true,
+        },
+      ]);
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      const beforeRunEvent = requireRecord(
+        callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
+        "before_agent_run event",
+      );
+      expect(beforeRunEvent.channelId).toBe("chat-1");
+      expect(beforeRunEvent.senderId).toBe("user-42");
+      expect(beforeRunEvent.senderIsOwner).toBe(true);
+      const beforeRunContext = requireRecord(
+        callArg(hookRunner.runBeforeAgentRun, 0, 1, "before_agent_run context"),
+        "before_agent_run context",
+      );
+      expect(beforeRunContext.channel).toBe("telegram");
+      expect(beforeRunContext.chatId).toBe("chat-1");
+      expect(beforeRunContext.channelId).toBe("chat-1");
+      expect(beforeRunContext.senderId).toBe("user-42");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not emit llm_output when the CLI run returns no assistant text", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
@@ -2025,5 +2316,58 @@ describe("resolveCliNoOutputTimeoutMs", () => {
       trigger: "cron",
     });
     expect(timeoutMs).toBe(480_000);
+  });
+
+  it("lets explicit embedded run timeouts lift the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      runTimeoutOverrideMs: 600_000,
+      useResume: true,
+      trigger: "user",
+    });
+    expect(timeoutMs).toBe(480_000);
+  });
+
+  it("lets configured agent default timeouts lift the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      runTimeoutOverrideMs: 600_000,
+      useResume: true,
+      trigger: "user",
+    });
+    expect(timeoutMs).toBe(480_000);
+  });
+
+  it("keeps inherited user resume timeouts on the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      useResume: true,
+      trigger: "user",
+    });
+    expect(timeoutMs).toBe(180_000);
+  });
+});
+
+describe("resolveCliRunTimeoutOverrideMs", () => {
+  it("preserves configured timeouts for normal channel runs", () => {
+    expect(
+      resolveCliRunTimeoutOverrideMs({
+        config: { agents: { defaults: { timeoutSeconds: 600 } } },
+        timeoutMs: 600_000,
+      }),
+    ).toBe(600_000);
+  });
+
+  it("does not treat configured timeouts as subagent overrides", () => {
+    expect(
+      resolveCliRunTimeoutOverrideMs({
+        config: { agents: { defaults: { timeoutSeconds: 600 } } },
+        lane: "subagent",
+        timeoutMs: 600_000,
+      }),
+    ).toBeUndefined();
   });
 });

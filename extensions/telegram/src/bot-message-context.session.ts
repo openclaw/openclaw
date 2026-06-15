@@ -1,4 +1,5 @@
 // Telegram plugin module implements bot message context.session behavior.
+import path from "node:path";
 import {
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
@@ -134,8 +135,42 @@ function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReply
   return withoutForwarded;
 }
 
+function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
+  const toInboundMediaPath = (id: string): string | undefined => {
+    if (
+      !id ||
+      id === "." ||
+      id === ".." ||
+      id.includes("/") ||
+      id.includes("\\") ||
+      id.includes("\0")
+    ) {
+      return undefined;
+    }
+    return `media://inbound/${encodeURIComponent(id)}`;
+  };
+  const decodeInboundMediaId = (id: string): string | undefined => {
+    try {
+      return decodeURIComponent(id);
+    } catch {
+      return undefined;
+    }
+  };
+  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
+  if (canonicalMatch?.[1]) {
+    const id = decodeInboundMediaId(canonicalMatch[1]);
+    return id ? toInboundMediaPath(id) : undefined;
+  }
+  const normalized = mediaPath.replace(/\\/g, "/");
+  if (!normalized.includes("/media/inbound/")) {
+    return undefined;
+  }
+  return toInboundMediaPath(path.posix.basename(normalized));
+}
+
 function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): string {
   const forwardedAt = timestampMsToIsoString(entry.forwardedDate);
+  const mediaPath = entry.mediaPath ? resolveTelegramPromptMediaPath(entry.mediaPath) : undefined;
   const labels = [
     `${index + 1}. ${entry.sender ?? "unknown sender"}`,
     entry.messageId ? `id:${entry.messageId}` : undefined,
@@ -148,7 +183,7 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
       : undefined,
     entry.isQuote && entry.body ? `"${entry.body}"` : entry.body,
     entry.mediaType ? `<media:${entry.mediaType}>` : undefined,
-    entry.mediaPath ? `[media_path:${entry.mediaPath}]` : undefined,
+    mediaPath ? `[media_path:${mediaPath}]` : undefined,
     entry.mediaRef ? `[media_ref:${entry.mediaRef}]` : undefined,
   ].filter(Boolean);
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
@@ -178,9 +213,9 @@ export async function buildTelegramInboundContextPayload(params: {
   groupHistories: Map<string, HistoryEntry[]>;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
-  stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
   hasControlCommand: boolean;
+  stickerCacheHit?: boolean;
   audioTranscribedMediaIndex?: number;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
@@ -227,9 +262,9 @@ export async function buildTelegramInboundContextPayload(params: {
     groupHistories,
     groupConfig,
     topicConfig,
-    stickerCacheHit,
     effectiveWasMentioned,
     hasControlCommand,
+    stickerCacheHit,
     audioTranscribedMediaIndex,
     commandAuthorized,
     locationData,
@@ -410,7 +445,6 @@ export async function buildTelegramInboundContextPayload(params: {
           limit: historyLimit,
         })
       : undefined;
-  const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const replyHead = visibleReplyChain[0];
   const toInboundMedia = (media: TelegramMediaRef, index?: number) => ({
     path: media.path,
@@ -418,7 +452,7 @@ export async function buildTelegramInboundContextPayload(params: {
     contentType: media.contentType,
     transcribed: index !== undefined && audioTranscribedMediaIndex === index,
   });
-  const currentMediaFacts = currentMediaForContext.map(toInboundMedia);
+  const currentMediaFacts = allMedia.map(toInboundMedia);
   const replyMediaFacts =
     visibleReplyChain.length > 0
       ? visibleReplyChain.flatMap((entry) =>
@@ -434,7 +468,9 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
-  const commandSource = options?.commandSource;
+  const commandSource =
+    options?.commandSource ??
+    (commandAuthorized && hasControlCommand ? ("text" as const) : undefined);
   const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
     cfg,
     agentId: route.agentId,
@@ -559,7 +595,8 @@ export async function buildTelegramInboundContextPayload(params: {
       ForwardedFromMessageId: visibleForwardOrigin?.fromMessageId,
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       Sticker: allMedia[0]?.stickerMetadata,
-      StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
+      StickerMediaIncluded: allMedia[0]?.stickerMetadata ? currentMediaFacts.length > 0 : undefined,
+      SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,
       ...locationContext,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,

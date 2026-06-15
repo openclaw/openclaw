@@ -32,6 +32,17 @@ function expectZaiModelFields(expected: ExpectedZaiModelFields) {
 }
 
 describe("zai model definitions", () => {
+  it("uses official GLM-5.2 Coding Plan metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5.2",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
   it("uses current OpenClaw metadata for the new GLM-5.1 model", () => {
     expectZaiModelFields({
       id: "glm-5.1",

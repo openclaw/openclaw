@@ -1,3 +1,4 @@
+import { readQaSuiteFailedScenarioCountFromFile } from "../../suite-summary.js";
 // Qa Lab plugin module implements cli behavior.
 import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import type { LiveTransportQaCommandOptions } from "../shared/live-transport-cli.js";
@@ -21,12 +22,11 @@ export async function runQaTelegramCommand(opts: LiveTransportQaCommandOptions) 
   printLiveTransportQaArtifacts("Telegram QA", {
     report: result.reportPath,
     summary: result.summaryPath,
-    "observed messages": result.observedMessagesPath,
   });
-  if (
-    !runOptions.allowFailures &&
-    result.scenarios.some((scenario) => scenario.status === "fail")
-  ) {
-    process.exitCode = 1;
+  if (!runOptions.allowFailures) {
+    const failedScenarioCount = await readQaSuiteFailedScenarioCountFromFile(result.summaryPath);
+    if (failedScenarioCount > 0) {
+      process.exitCode = 1;
+    }
   }
 }

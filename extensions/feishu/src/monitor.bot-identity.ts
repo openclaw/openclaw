@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { RuntimeEnv } from "../runtime-api.js";
 import { waitForAbortableDelay } from "./async.js";
 import { fetchBotIdentityForMonitor, type FeishuMonitorBotIdentity } from "./monitor.startup.js";
-import { botNames, botOpenIds } from "./monitor.state.js";
+import { setFeishuBotIdentityState } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 // Delays must be >= PROBE_ERROR_TTL_MS (60s) so each retry makes a real network request
@@ -17,12 +17,7 @@ export function applyBotIdentityState(
   const botOpenId = normalizeOptionalString(identity.botOpenId);
   const botName = normalizeOptionalString(identity.botName);
 
-  botOpenIds.set(accountId, botOpenId ?? "");
-  if (botName) {
-    botNames.set(accountId, botName);
-  } else {
-    botNames.delete(accountId);
-  }
+  setFeishuBotIdentityState(accountId, { botOpenId: botOpenId ?? "", botName });
 
   return { botOpenId, botName };
 }

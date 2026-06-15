@@ -214,6 +214,59 @@ permission boundary. Dangerous plugin node commands still require explicit
 After a node changes its declared command list, reject the old device pairing
 and approve the new request so the gateway stores the updated command snapshot.
 
+## Config (`openclaw.json`)
+
+Node-related settings live under `gateway.nodes` and `tools.exec`:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      // Auto-approve first-time node pairing from trusted networks (CIDR list).
+      // Disabled when unset. Only applies to first-time role:node requests
+      // with no requested scopes; does not auto-approve upgrades.
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+      // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
+      allowCommands: ["camera.snap", "screen.record"],
+      // Block exact command names even if defaults or allowCommands include them.
+      denyCommands: ["camera.clip"],
+    },
+  },
+  tools: {
+    exec: {
+      // Default exec host: "node" routes all exec calls to a paired node.
+      host: "node",
+      // Security mode for node exec: allow only approved/allowlisted commands.
+      security: "allowlist",
+      // Pin exec to a specific node (id or name). Omit to allow any node.
+      node: "build-node",
+    },
+  },
+}
+```
+
+Use exact node command names. `denyCommands` removes a command even when a
+platform default or `allowCommands` entry would otherwise allow it. See
+[Gateway configuration reference](/gateway/configuration-reference#gateway-field-details)
+for gateway node pairing and command-policy field details.
+
+Per-agent exec node override:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        tools: { exec: { node: "build-node" } },
+      },
+    ],
+  },
+}
+```
+
 ## Screenshots (canvas snapshots)
 
 If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format, base64 }`.
@@ -381,7 +434,7 @@ Notes:
 - For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
 - On Windows node hosts in allowlist mode, shell-wrapper runs via `cmd.exe /c` require approval (allowlist entry alone does not auto-allow the wrapper form).
 - `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
-- Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
+- Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `BASHOPTS`, `FPATH`, `KSH_ENV`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`, `TCLLIBPATH`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
 - On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
   Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - On headless node host, `system.run` is gated by exec approvals (`~/.openclaw/exec-approvals.json`).

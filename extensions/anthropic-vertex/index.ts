@@ -14,6 +14,7 @@ import {
   resolveAnthropicVertexConfigApiKey,
   resolveImplicitAnthropicVertexProvider,
 } from "./api.js";
+import { normalizeAnthropicVertexResolvedModel } from "./provider-catalog.js";
 
 const PROVIDER_ID = "anthropic-vertex";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
@@ -48,7 +49,10 @@ export default definePluginEntry({
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
       ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
-      resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
+      normalizeResolvedModel: ({ modelId, model }) =>
+        normalizeAnthropicVertexResolvedModel(modelId, model),
+      resolveThinkingProfile: ({ modelId, params }) =>
+        resolveClaudeThinkingProfile(modelId, params, { includeNativeMax: true }),
       resolveSyntheticAuth: () => {
         if (!hasAnthropicVertexAvailableAuth()) {
           return undefined;

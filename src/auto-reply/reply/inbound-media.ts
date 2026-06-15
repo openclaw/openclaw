@@ -8,6 +8,7 @@ export type InboundMediaContext = {
   CommandBody?: unknown;
   MediaType?: unknown;
   StickerMediaIncluded?: unknown;
+  SkipStickerMediaUnderstanding?: unknown;
   Sticker?: unknown;
   MediaPath?: unknown;
   MediaUrl?: unknown;
@@ -31,6 +32,16 @@ export function hasInboundMedia(ctx: InboundMediaContext): boolean {
     hasNormalizedStringEntry(ctx.MediaPaths) ||
     hasNormalizedStringEntry(ctx.MediaUrls) ||
     (Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length > 0),
+  );
+}
+
+/** Returns true when current-turn media still needs automatic understanding. */
+export function hasInboundMediaForUnderstanding(ctx: InboundMediaContext): boolean {
+  if (!ctx.SkipStickerMediaUnderstanding) {
+    return hasInboundMedia(ctx);
+  }
+  return [ctx.MediaPaths, ctx.MediaUrls, ctx.MediaTypes].some(
+    (values) => Array.isArray(values) && values.length > 1,
   );
 }
 
