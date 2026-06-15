@@ -32,7 +32,9 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
 /** Version salt for CLI auth epoch encoding semantics. */
-export const CLI_AUTH_EPOCH_VERSION = 5;
+export const CLI_AUTH_EPOCH_VERSION = 6;
+
+const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 
 /** Overrides credential readers for auth-epoch unit tests. */
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
@@ -159,7 +161,7 @@ function encodeAuthProfileEpochPart(
   credential: AuthProfileCredential,
 ): string {
   const credentialHash = hashCliAuthEpochPart(encodeAuthProfileCredential(credential));
-  if (hasOAuthAccountIdentity(credential)) {
+  if (hasOAuthAccountIdentity(credential) && credential.provider !== GEMINI_CLI_PROVIDER_ID) {
     return `profile:oauth-identity:${credentialHash}`;
   }
   return `profile:${authProfileId}:${credentialHash}`;
