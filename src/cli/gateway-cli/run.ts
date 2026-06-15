@@ -546,6 +546,21 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   void maybeLogPendingControlUiBuild(cfg).catch((err: unknown) => {
     gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
   });
+  // Gateway fast path skips ensureCliExecutionBootstrap, so the normal state migration
+  // preflight never runs. Without this the scheduler loads 0 jobs from empty SQLite.
+  try {
+    const { repairLegacyCronStoreWithoutPrompt } =
+      await import("../../commands/doctor/cron/index.js");
+    const cronMigration = await repairLegacyCronStoreWithoutPrompt({ cfg });
+    for (const change of cronMigration.changes) {
+      gatewayLog.info(change);
+    }
+    for (const warning of cronMigration.warnings) {
+      gatewayLog.warn(warning);
+    }
+  } catch (err) {
+    gatewayLog.warn(`Cron store migration check failed: ${formatErrorMessage(err)}`);
+  }
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error(formatInvalidPortOption("--port"));
