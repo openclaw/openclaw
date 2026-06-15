@@ -78,22 +78,18 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         capabilities: ["image", "video"],
         defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
         autoPriority: { video: 20 },
-        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
       },
       qwencloud: {
         capabilities: ["image", "video"],
         defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
-        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
       },
       modelstudio: {
         capabilities: ["image", "video"],
         defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
-        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
       },
       dashscope: {
         capabilities: ["image", "video"],
         defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
-        modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
       },
       xai: { capabilities: ["audio"], autoPriority: { audio: 25 } },
       zai: { capabilities: ["image"], autoPriority: { image: 60 } },

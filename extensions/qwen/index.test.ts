@@ -18,6 +18,20 @@ function requireCatalogProvider(result: ProviderCatalogResult): ModelProviderCon
   return result.provider;
 }
 
+function qwenProviderMetadata(provider: unknown): {
+  modelCapabilityOverrides?: {
+    nonImageModels?: string[];
+    nonImageModelFamilies?: string[];
+  };
+} {
+  return provider as {
+    modelCapabilityOverrides?: {
+      nonImageModels?: string[];
+      nonImageModelFamilies?: string[];
+    };
+  };
+}
+
 async function registerQwenProvider() {
   const { providers } = await registerProviderPlugin({
     plugin: qwenPlugin,
@@ -59,7 +73,7 @@ describe("qwen provider plugin", () => {
     ]);
     for (const provider of captured.mediaUnderstandingProviders) {
       expect(provider.defaultModels?.image).toBe("qwen-vl-max-latest");
-      expect(provider.modelCapabilityOverrides).toEqual({
+      expect(qwenProviderMetadata(provider).modelCapabilityOverrides).toEqual({
         nonImageModelFamilies: ["qwen3.7-max"],
       });
       expect(provider.autoPriority).toEqual(provider.id === "qwen" ? { video: 15 } : undefined);

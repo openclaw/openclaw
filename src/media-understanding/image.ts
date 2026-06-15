@@ -25,13 +25,14 @@ import {
 } from "../plugin-sdk/provider-auth.js";
 import { isKnownNonImageModel } from "./known-model-capabilities.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
+import type { MediaUnderstandingProviderModelCapabilities } from "./model-capability-overrides.js";
+import { providerModelCapabilities } from "./model-capability-overrides.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
-  MediaUnderstandingProvider,
 } from "./types.js";
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
@@ -68,7 +69,7 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
 
 function modelSupportsImage(
   model: Model,
-  provider?: Pick<MediaUnderstandingProvider, "modelCapabilityOverrides">,
+  provider?: MediaUnderstandingProviderModelCapabilities,
 ): boolean {
   return model.input.includes("image") && !isKnownNonImageModel({ modelId: model.id, provider });
 }
@@ -79,6 +80,18 @@ function removeReasoningInclude(value: unknown): unknown {
   }
   const next = value.filter((entry) => entry !== "reasoning.encrypted_content");
   return next.length > 0 ? next : undefined;
+}
+
+type RuntimeProviderMetadataRequest = {
+  providerMetadata?: MediaUnderstandingProviderModelCapabilities;
+};
+
+function runtimeProviderMetadata(
+  params: unknown,
+): MediaUnderstandingProviderModelCapabilities | undefined {
+  return providerModelCapabilities(
+    (params as RuntimeProviderMetadataRequest | undefined)?.providerMetadata,
+  );
 }
 
 function disableReasoningForImageRetryPayload(payload: unknown, model: Model): unknown {
@@ -149,14 +162,16 @@ async function resolveImageRuntime(params: {
   preferredProfile?: string;
   authStore?: ImageDescriptionRequest["authStore"];
   workspaceDir?: string;
+  providerMetadata?: MediaUnderstandingProviderModelCapabilities;
 }): Promise<{ apiKey: string; model: Model }> {
   // Fast static resolution avoids provider runtime hooks during tool discovery;
   // execution falls back to full model discovery when the static path lacks image metadata.
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const providerMetadata = buildMediaUnderstandingManifestMetadataRegistry(
+  const manifestProviderMetadata = buildMediaUnderstandingManifestMetadataRegistry(
     params.cfg,
     params.workspaceDir,
   ).get(normalizeMediaProviderId(resolvedRef.provider));
+  const providerMetadata = params.providerMetadata ?? manifestProviderMetadata;
   const fastResolved = await resolveModelAsync(
     resolvedRef.provider,
     resolvedRef.model,
@@ -498,7 +513,7 @@ async function withImageDescriptionTimeout<T>(params: {
 }
 
 async function describeImagesWithModelInternal(
-  params: ImagesDescriptionRequest,
+  params: ImagesDescriptionRequest & RuntimeProviderMetadataRequest,
   options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
@@ -633,6 +648,7 @@ export async function describeImagesWithModelPayloadTransform(
 export async function describeImageWithModel(
   params: ImageDescriptionRequest,
 ): Promise<ImageDescriptionResult> {
+  const providerMetadata = runtimeProviderMetadata(params);
   return await describeImagesWithModel({
     images: [
       {
@@ -651,6 +667,7 @@ export async function describeImageWithModel(
     authStore: params.authStore,
     agentDir: params.agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(providerMetadata ? { providerMetadata } : {}),
     cfg: params.cfg,
   });
 }
@@ -659,6 +676,7 @@ export async function describeImageWithModelPayloadTransform(
   params: ImageDescriptionRequest,
   onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImageDescriptionResult> {
+  const providerMetadata = runtimeProviderMetadata(params);
   return await describeImagesWithModelPayloadTransform(
     {
       images: [
@@ -678,6 +696,7 @@ export async function describeImageWithModelPayloadTransform(
       authStore: params.authStore,
       agentDir: params.agentDir,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      ...(providerMetadata ? { providerMetadata } : {}),
       cfg: params.cfg,
     },
     onPayload,

@@ -2,8 +2,8 @@
 // media-understanding auto-registration.
 import type { OpenClawConfig } from "../config/types.js";
 import { configuredModelInputSupportsImage } from "./known-model-capabilities.js";
+import type { MediaUnderstandingProviderModelCapabilities } from "./model-capability-overrides.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 type ConfigProvider = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
@@ -14,7 +14,7 @@ type ConfigProviderModel = NonNullable<ConfigProvider["models"]>[number];
 function hasImageCapableModel(params: {
   providerId: string;
   providerCfg: ConfigProvider;
-  providerRegistry?: Map<string, Pick<MediaUnderstandingProvider, "modelCapabilityOverrides">>;
+  providerRegistry?: Map<string, MediaUnderstandingProviderModelCapabilities>;
 }): boolean {
   const models = params.providerCfg.models ?? [];
   return models.some((model: ConfigProviderModel) => {
@@ -33,7 +33,7 @@ function hasImageCapableModel(params: {
 /** Finds configured model providers that can be auto-registered for image understanding. */
 export function resolveImageCapableConfigProviderIds(
   cfg?: OpenClawConfig,
-  providerRegistry?: Map<string, Pick<MediaUnderstandingProvider, "modelCapabilityOverrides">>,
+  providerRegistry?: Map<string, MediaUnderstandingProviderModelCapabilities>,
 ): string[] {
   const configProviders = cfg?.models?.providers;
   if (!configProviders || typeof configProviders !== "object") {

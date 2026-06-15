@@ -13,6 +13,7 @@ import {
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
 import { matchesMediaEntryCapability } from "../../media-understanding/entry-capabilities.js";
+import type { MediaUnderstandingProviderModelCapabilities } from "../../media-understanding/model-capability-overrides.js";
 import { normalizeMediaProviderId } from "../../media-understanding/provider-id.js";
 import {
   buildMediaUnderstandingRegistry as buildProviderRegistry,
@@ -58,6 +59,7 @@ import {
   decodeDataUrl,
   hasImageReasoningOnlyResponse,
   type ImageModelConfig,
+  imageModelConfigNeedsProviderRegistry,
   resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
@@ -230,6 +232,7 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
  */
 export function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
+  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>;
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
@@ -242,10 +245,16 @@ export function resolveImageModelConfigForTool(params: {
   if (hasToolModelConfig(explicit)) {
     return resolveConfiguredImageModelRefs({
       cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
+      providerRegistry: imageModelConfigNeedsProviderRegistry(explicit)
+        ? (params.providerRegistry ??
+          imageToolProviderDeps.buildProviderRegistry(undefined, params.cfg))
+        : params.providerRegistry,
       imageModelConfig: explicit,
     });
   }
+
+  const providerRegistry =
+    params.providerRegistry ?? imageToolProviderDeps.buildProviderRegistry(undefined, params.cfg);
 
   const primary = resolveDefaultModelRef(params.cfg);
   let verifiedSubstituteProvider: string | undefined;
@@ -275,7 +284,7 @@ export function resolveImageModelConfigForTool(params: {
 
   const providerVisionFromConfig = resolveProviderVisionModelFromConfig({
     cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
+    providerRegistry,
     provider: primary.provider,
   });
   const primaryCandidates = (() => {
@@ -361,6 +370,7 @@ export function resolveImageModelConfigForTool(params: {
 
 function resolveImageModelConfigForOverride(params: {
   cfg?: OpenClawConfig;
+  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>;
   modelOverride?: string;
 }): ImageModelConfig | null {
   const model = params.modelOverride?.trim();
@@ -369,6 +379,7 @@ function resolveImageModelConfigForOverride(params: {
   }
   return resolveConfiguredImageModelRefs({
     cfg: params.cfg,
+    providerRegistry: params.providerRegistry,
     imageModelConfig: { primary: model },
   });
 }
@@ -386,16 +397,19 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
 
 function resolveCompressionModelCandidates(params: {
   cfg?: OpenClawConfig;
+  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>;
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
 }): Array<{ provider: string; model: string }> {
   const overrideConfig = resolveImageModelConfigForOverride({
     cfg: params.cfg,
+    providerRegistry: params.providerRegistry,
     modelOverride: params.modelOverride,
   });
   const configuredImageModelConfig = params.imageModelConfig
     ? resolveConfiguredImageModelRefs({
         cfg: params.cfg,
+        providerRegistry: params.providerRegistry,
         imageModelConfig: params.imageModelConfig,
       })
     : null;
@@ -540,6 +554,7 @@ async function resolveCompressionModelPolicy(params: {
 
 async function resolveImageCompressionPolicy(params: {
   cfg?: OpenClawConfig;
+  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>;
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
   imageCount: number;
@@ -596,7 +611,10 @@ function matchesImageTimeoutEntry(params: {
   const normalizedConfiguredModel = configuredModel.startsWith(providerPrefix)
     ? configuredModel.slice(providerPrefix.length)
     : configuredModel;
-  return normalizedConfiguredModel === params.model;
+  const normalizedSelectedModel = params.model.startsWith(providerPrefix)
+    ? params.model.slice(providerPrefix.length)
+    : params.model;
+  return normalizedConfiguredModel === normalizedSelectedModel;
 }
 
 function resolveImageToolTimeoutMs(params: {
@@ -777,10 +795,19 @@ export function createImageTool(options?: {
     }
     return null;
   }
+  let providerRegistry:
+    | ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>
+    | undefined;
+  const getProviderRegistry = () => {
+    providerRegistry ??= imageToolProviderDeps.buildProviderRegistry(undefined, options?.config);
+    return providerRegistry;
+  };
   const explicitImageModelConfig = hasToolModelConfig(explicit)
     ? resolveConfiguredImageModelRefs({
         cfg: options?.config,
-        workspaceDir: options?.workspaceDir,
+        providerRegistry: imageModelConfigNeedsProviderRegistry(explicit)
+          ? getProviderRegistry()
+          : undefined,
         imageModelConfig: explicit,
       })
     : null;
@@ -789,6 +816,7 @@ export function createImageTool(options?: {
   const resolvedImageModelConfig = shouldResolveAutoImageModel
     ? resolveImageModelConfigForTool({
         cfg: options?.config,
+        providerRegistry: getProviderRegistry(),
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
@@ -880,10 +908,12 @@ export function createImageTool(options?: {
         resolvedImageModelConfig ??
         resolveImageModelConfigForOverride({
           cfg: options?.config,
+          providerRegistry: getProviderRegistry(),
           modelOverride,
         }) ??
         resolveImageModelConfigForTool({
           cfg: options?.config,
+          providerRegistry: getProviderRegistry(),
           agentDir,
           workspaceDir: options?.workspaceDir,
           authStore: options?.authProfileStore,
@@ -895,6 +925,9 @@ export function createImageTool(options?: {
       }
       const imageCompression = await imageToolProviderDeps.resolveImageCompressionPolicy({
         cfg: options?.config,
+        providerRegistry: imageModelConfigNeedsProviderRegistry(imageModelConfig)
+          ? getProviderRegistry()
+          : undefined,
         imageModelConfig,
         modelOverride,
         imageCount: imageInputs.length,

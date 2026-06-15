@@ -133,6 +133,10 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
 }));
 
 const { describeImageWithModel } = await import("./image.js");
+const { buildQwenMediaUnderstandingProvider } =
+  await import("../../extensions/qwen/media-understanding-provider.js");
+const { buildMediaUnderstandingRegistry, getMediaUnderstandingProvider } =
+  await import("./provider-registry.js");
 
 describe("describeImageWithModel", () => {
   afterEach(() => {
@@ -1335,8 +1339,17 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "should not run" }],
     });
 
+    const registry = buildMediaUnderstandingRegistry(
+      { qwen: buildQwenMediaUnderstandingProvider("qwen") },
+      { plugins: { enabled: false } } as never,
+    );
+    const provider = getMediaUnderstandingProvider("qwen", registry);
+    if (!provider?.describeImage) {
+      throw new Error("expected Qwen image provider hook");
+    }
+
     await expect(
-      describeImageWithModel({
+      provider.describeImage({
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         provider: "qwen",
@@ -1348,6 +1361,60 @@ describe("describeImageWithModel", () => {
         timeoutMs: 1000,
       }),
     ).rejects.toThrow("Model does not support images: qwen/qwen3.7-max");
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects runtime provider-owned non-image models without manifest metadata", async () => {
+    const runtimeOnlyModel = {
+      provider: "runtime-only",
+      id: "atlas-chat",
+      input: ["text", "image"],
+      api: "openai-completions",
+      baseUrl: "https://example.test/v1",
+    };
+    resolveModelAsyncMock.mockResolvedValue({
+      authStorage: { setRuntimeApiKey: setRuntimeApiKeyMock },
+      model: runtimeOnlyModel,
+      modelRegistry: { find: vi.fn(() => runtimeOnlyModel) },
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "runtime-only",
+      model: "atlas-chat",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "should not run" }],
+    });
+    const cfg = { plugins: { enabled: false } } as never;
+    const registry = buildMediaUnderstandingRegistry(
+      {
+        "runtime-only": {
+          id: "runtime-only",
+          capabilities: ["image"],
+          modelCapabilityOverrides: { nonImageModels: ["atlas-chat"] },
+        },
+      },
+      cfg,
+    );
+    const provider = getMediaUnderstandingProvider("runtime-only", registry);
+    if (!provider?.describeImage) {
+      throw new Error("expected runtime-only image provider hook");
+    }
+
+    await expect(
+      provider.describeImage({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "runtime-only",
+        model: "atlas-chat",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Model does not support images: runtime-only/atlas-chat");
     expect(completeMock).not.toHaveBeenCalled();
   });
 

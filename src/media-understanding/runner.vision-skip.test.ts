@@ -12,9 +12,13 @@ import { testing as loaderTesting } from "../plugins/loader.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { MediaUnderstandingProviderModelCapabilities } from "./model-capability-overrides.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { withMediaFixture } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
+
+type MediaUnderstandingTestProvider = MediaUnderstandingProvider &
+  MediaUnderstandingProviderModelCapabilities;
 
 type TestCatalogEntry = {
   id: string;
@@ -566,17 +570,18 @@ describe("runCapability image skip", () => {
       },
     } as unknown as OpenClawConfig;
     const pluginRegistry = createEmptyPluginRegistry();
+    const qwenProvider: MediaUnderstandingTestProvider = {
+      id: "qwen",
+      capabilities: ["image"],
+      defaultModels: { image: "qwen-vl-max-latest" },
+      modelCapabilityOverrides: { nonImageModels: ["qwen3.7-max"] },
+      describeImage: async (req) => ({ text: "qwen image ok", model: req.model }),
+    };
     pluginRegistry.mediaUnderstandingProviders.push({
       pluginId: "qwen",
       pluginName: "Qwen Provider",
       source: "test",
-      provider: {
-        id: "qwen",
-        capabilities: ["image"],
-        defaultModels: { image: "qwen-vl-max-latest" },
-        modelCapabilityOverrides: { nonImageModels: ["qwen3.7-max"] },
-        describeImage: async (req) => ({ text: "qwen image ok", model: req.model }),
-      },
+      provider: qwenProvider,
     });
     setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
 
@@ -593,6 +598,61 @@ describe("runCapability image skip", () => {
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("uses provider-owned metadata to reject catalog text-only image metadata", async () => {
+    catalog = [
+      {
+        id: "atlas-chat",
+        name: "Atlas Chat",
+        provider: "atlas",
+        input: ["text", "image"] as const,
+      },
+      {
+        id: "atlas-vision",
+        name: "Atlas Vision",
+        provider: "atlas",
+        input: ["text", "image"] as const,
+      },
+    ];
+    const cfg = {
+      models: {
+        providers: {
+          atlas: {
+            apiKey: "atlas-test",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    const atlasProvider: MediaUnderstandingTestProvider = {
+      id: "atlas",
+      capabilities: ["image"],
+      modelCapabilityOverrides: { nonImageModels: ["atlas-chat"] },
+      describeImage: async (req) => ({ text: "atlas image ok", model: req.model }),
+    };
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "atlas",
+      pluginName: "Atlas Provider",
+      source: "test",
+      provider: atlasProvider,
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await expect(
+        resolveAutoImageModel({
+          cfg,
+          activeModel: { provider: "atlas", model: "atlas-chat" },
+        }),
+      ).resolves.toEqual({
+        provider: "atlas",
+        model: "atlas-vision",
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
     }
   });
 
@@ -621,17 +681,18 @@ describe("runCapability image skip", () => {
       },
     } as unknown as OpenClawConfig;
     const pluginRegistry = createEmptyPluginRegistry();
+    const atlasProvider: MediaUnderstandingTestProvider = {
+      id: "atlas",
+      capabilities: ["image"],
+      defaultModels: { image: "atlas-vision" },
+      modelCapabilityOverrides: { nonImageModels: ["atlas-chat"] },
+      describeImage: async (req) => ({ text: "atlas image ok", model: req.model }),
+    };
     pluginRegistry.mediaUnderstandingProviders.push({
       pluginId: "atlas",
       pluginName: "Atlas Provider",
       source: "test",
-      provider: {
-        id: "atlas",
-        capabilities: ["image"],
-        defaultModels: { image: "atlas-vision" },
-        modelCapabilityOverrides: { nonImageModels: ["atlas-chat"] },
-        describeImage: async (req) => ({ text: "atlas image ok", model: req.model }),
-      },
+      provider: atlasProvider,
     });
     setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
 

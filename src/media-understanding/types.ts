@@ -12,7 +12,6 @@ export type MediaUnderstandingCapabilityRegistry = Map<
   string,
   {
     capabilities?: MediaUnderstandingCapability[];
-    modelCapabilityOverrides?: MediaUnderstandingModelCapabilityOverrides;
   }
 >;
 
@@ -245,11 +244,6 @@ export type MediaUnderstandingProviderSyntheticAuthResult = {
   mode: "api-key";
 };
 
-export type MediaUnderstandingModelCapabilityOverrides = {
-  nonImageModels?: string[];
-  nonImageModelFamilies?: string[];
-};
-
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
@@ -257,7 +251,6 @@ export type MediaUnderstandingProvider = {
   autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
   documentModels?: Partial<Record<"pdf", MediaUnderstandingDocumentModelDefaults>>;
-  modelCapabilityOverrides?: MediaUnderstandingModelCapabilityOverrides;
   resolveAuth?: (
     ctx: MediaUnderstandingProviderAuthContext,
   ) => MediaUnderstandingProviderAuthResult | null | undefined;

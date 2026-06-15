@@ -6,16 +6,16 @@ import { resolveImageCapableConfigProviderIds } from "./config-provider-models.j
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingCapabilityRegistry, MediaUnderstandingProvider } from "./types.js";
 
+type CapabilityProvider = Pick<MediaUnderstandingProvider, "id" | "capabilities">;
+
 function mergeProviderCapabilities(
   registry: MediaUnderstandingCapabilityRegistry,
-  provider: Pick<MediaUnderstandingProvider, "id" | "capabilities" | "modelCapabilityOverrides">,
+  provider: CapabilityProvider,
 ) {
   const normalizedKey = normalizeMediaProviderId(provider.id);
   const existing = registry.get(normalizedKey);
   registry.set(normalizedKey, {
     capabilities: provider.capabilities ?? existing?.capabilities,
-    modelCapabilityOverrides:
-      provider.modelCapabilityOverrides ?? existing?.modelCapabilityOverrides,
   });
 }
 
@@ -32,7 +32,7 @@ export function buildMediaUnderstandingCapabilityRegistry(
     mergeProviderCapabilities(registry, provider);
   }
 
-  for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg, registry)) {
+  for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
     // Plugin declarations own provider capability truth; config auto-registration only fills gaps.
     if (!registry.has(normalizedKey)) {
       mergeProviderCapabilities(registry, {

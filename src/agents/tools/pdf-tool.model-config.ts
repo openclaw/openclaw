@@ -11,13 +11,18 @@ import {
   resolveDocumentMediaModel,
 } from "../../media-understanding/defaults.js";
 import { configuredModelInputSupportsImage } from "../../media-understanding/known-model-capabilities.js";
-import { buildMediaUnderstandingManifestMetadataRegistry } from "../../media-understanding/manifest-metadata.js";
+import {
+  QWEN_MODEL_CAPABILITY_OVERRIDES,
+  QWEN_MODEL_CAPABILITY_PROVIDER_IDS,
+} from "../../media-understanding/model-capability-overrides.js";
 import { normalizeMediaProviderId } from "../../media-understanding/provider-id.js";
+import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { findNormalizedProviderValue } from "../model-selection.js";
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
+  imageModelConfigNeedsProviderRegistry,
   resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
@@ -40,6 +45,54 @@ function localModelIdForProvider(providerId: string, modelId: string): string {
   return modelId.trim();
 }
 
+function configuredProviderHasModelEntries(params: {
+  cfg?: OpenClawConfig;
+  providerId: string;
+}): boolean {
+  const providerCfg = findNormalizedProviderValue(
+    params.cfg?.models?.providers,
+    params.providerId,
+  ) as { models?: unknown[] } | undefined;
+  return Array.isArray(providerCfg?.models) && providerCfg.models.length > 0;
+}
+
+function configuredProviderRuntimeCapabilityRegistry(params: {
+  cfg?: OpenClawConfig;
+  providerId: string;
+}) {
+  if (!configuredProviderHasModelEntries(params)) {
+    return undefined;
+  }
+  const providerId = normalizeMediaProviderId(params.providerId);
+  const qwenProviderIds: readonly string[] = QWEN_MODEL_CAPABILITY_PROVIDER_IDS;
+  if (!qwenProviderIds.includes(providerId)) {
+    return undefined;
+  }
+  return new Map([
+    [
+      providerId,
+      {
+        id: providerId,
+        modelCapabilityOverrides: QWEN_MODEL_CAPABILITY_OVERRIDES,
+      },
+    ],
+  ]);
+}
+
+function resolveConfiguredImageRefsForPdf(params: {
+  cfg?: OpenClawConfig;
+  getProviderRegistry: () => ReturnType<typeof buildMediaUnderstandingRegistry>;
+  imageModelConfig: ImageModelConfig;
+}): ImageModelConfig {
+  return resolveConfiguredImageModelRefs({
+    cfg: params.cfg,
+    providerRegistry: imageModelConfigNeedsProviderRegistry(params.imageModelConfig)
+      ? params.getProviderRegistry()
+      : undefined,
+    imageModelConfig: params.imageModelConfig,
+  });
+}
+
 function resolveConfiguredTextModelFromConfig(params: {
   cfg?: OpenClawConfig;
   providerId: string;
@@ -60,10 +113,12 @@ function resolveConfiguredTextModelFromConfig(params: {
 
 function resolveImageCandidateRefs(params: {
   cfg?: OpenClawConfig;
+  getProviderRegistry: () => ReturnType<typeof buildMediaUnderstandingRegistry>;
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
   filter?: (providerId: string) => boolean;
+  includeProviderDefaults?: boolean;
 }): string[] {
   // Candidate refs only include providers with usable auth so the tool avoids dead fallbacks.
   return resolveAutoMediaKeyProviders({
@@ -92,19 +147,31 @@ function resolveImageCandidateRefs(params: {
       if (documentImageModel === false) {
         return null;
       }
-      const modelId =
-        documentImageModel ??
-        resolveProviderVisionModelFromConfig({
+      const providerHasConfiguredModels = configuredProviderHasModelEntries({
+        cfg: params.cfg,
+        providerId,
+      });
+      const providerVision = resolveProviderVisionModelFromConfig({
+        cfg: params.cfg,
+        providerRegistry: configuredProviderRuntimeCapabilityRegistry({
           cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          provider: providerId,
-        })?.split("/")[1] ??
-        resolveDefaultMediaModel({
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
           providerId,
-          capability: "image",
-        });
+        }),
+        provider: providerId,
+      });
+      const providerVisionModel = providerVision
+        ? localModelIdForProvider(providerId, providerVision)
+        : undefined;
+      const providerDefaultModel =
+        params.includeProviderDefaults && !providerHasConfiguredModels
+          ? resolveDefaultMediaModel({
+              cfg: params.cfg,
+              workspaceDir: params.workspaceDir,
+              providerId,
+              capability: "image",
+            })
+          : undefined;
+      const modelId = documentImageModel ?? providerVisionModel ?? providerDefaultModel;
       return modelId ? formatProviderModelRef(providerId, modelId) : null;
     })
     .filter((value): value is string => Boolean(value));
@@ -201,21 +268,26 @@ export function resolvePdfModelConfigForTool(params: {
   workspaceDir?: string;
   authStore?: AuthProfileStore;
 }): ImageModelConfig | null {
+  let providerRegistry: ReturnType<typeof buildMediaUnderstandingRegistry> | undefined;
+  const getProviderRegistry = () => {
+    providerRegistry ??= buildMediaUnderstandingRegistry(undefined, params.cfg);
+    return providerRegistry;
+  };
   const explicitPdf = coercePdfModelConfig(params.cfg);
   if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
     // PDF-specific config wins over generic image model config.
-    return resolveConfiguredImageModelRefs({
+    return resolveConfiguredImageRefsForPdf({
       cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
+      getProviderRegistry,
       imageModelConfig: explicitPdf,
     });
   }
 
   const explicitImage = coerceImageModelConfig(params.cfg);
   if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
-    return resolveConfiguredImageModelRefs({
+    return resolveConfiguredImageRefsForPdf({
       cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
+      getProviderRegistry,
       imageModelConfig: explicitImage,
     });
   }
@@ -246,19 +318,32 @@ export function resolvePdfModelConfigForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
-  const providerVision = resolveProviderVisionModelFromConfig({
+  const primaryProviderHasConfiguredModels = configuredProviderHasModelEntries({
     cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    provider: primary.provider,
+    providerId: primary.provider,
   });
-  const providerDefault =
-    providerVision?.split("/")[1] ??
-    resolveDefaultMediaModel({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      providerId: primary.provider,
-      capability: "image",
-    });
+  const primaryProviderRegistry = configuredProviderRuntimeCapabilityRegistry({
+    cfg: params.cfg,
+    providerId: primary.provider,
+  });
+  const providerVision = providerOk
+    ? resolveProviderVisionModelFromConfig({
+        cfg: params.cfg,
+        providerRegistry: primaryProviderRegistry,
+        provider: primary.provider,
+      })
+    : null;
+  const providerDefault = providerOk
+    ? (providerVision ? localModelIdForProvider(primary.provider, providerVision) : "") ||
+      (primaryProviderHasConfiguredModels
+        ? undefined
+        : resolveDefaultMediaModel({
+            cfg: params.cfg,
+            workspaceDir: params.workspaceDir,
+            providerId: primary.provider,
+            capability: "image",
+          }))
+    : undefined;
   const primarySupportsNativePdf = providerSupportsNativePdfDocument({
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -266,9 +351,11 @@ export function resolvePdfModelConfigForTool(params: {
   });
   const nativePdfCandidates = resolveImageCandidateRefs({
     cfg: params.cfg,
+    getProviderRegistry,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
+    includeProviderDefaults: true,
     filter: (providerId) =>
       providerSupportsNativePdfDocument({
         cfg: params.cfg,
@@ -278,9 +365,11 @@ export function resolvePdfModelConfigForTool(params: {
   });
   const genericImageCandidates = resolveImageCandidateRefs({
     cfg: params.cfg,
+    getProviderRegistry,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
+    includeProviderDefaults: true,
   });
   const textExtractionCandidates = resolveTextExtractionCandidateRefs({
     cfg: params.cfg,
@@ -289,10 +378,6 @@ export function resolvePdfModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     authStore: params.authStore,
   });
-  const mediaProviderRegistry = buildMediaUnderstandingManifestMetadataRegistry(
-    params.cfg,
-    params.workspaceDir,
-  );
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
@@ -322,6 +407,10 @@ export function resolvePdfModelConfigForTool(params: {
       ) {
         continue;
       }
+      const providerMetadata = configuredProviderRuntimeCapabilityRegistry({
+        cfg: params.cfg,
+        providerId,
+      })?.get(normalizeMediaProviderId(providerId));
       const models = providerCfg?.models ?? [];
       const modelId = models
         .find((model) => {
@@ -331,7 +420,7 @@ export function resolvePdfModelConfigForTool(params: {
             configuredModelInputSupportsImage({
               modelId: candidateModelId,
               input: model?.input,
-              provider: mediaProviderRegistry.get(normalizeMediaProviderId(providerId)),
+              provider: providerMetadata,
             }),
           );
         })

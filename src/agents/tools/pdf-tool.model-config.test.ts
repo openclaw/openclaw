@@ -279,6 +279,35 @@ describe("resolvePdfModelConfigForTool", () => {
     });
   });
 
+  it("preserves provider image model ids that contain slashes for PDF fallback", () => {
+    const cfg = {
+      ...withDefaultModel("openrouter/anthropic/claude-sonnet-4"),
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKey: "openrouter-test",
+            models: [
+              {
+                id: "meta-llama/llama-4-scout",
+                name: "Llama 4 Scout",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_000,
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "openrouter/meta-llama/llama-4-scout",
+    });
+  });
+
   it("uses a config-authenticated custom provider image model as a PDF fallback", () => {
     const cfg = {
       ...withDefaultModel("hatchery/text-1"),

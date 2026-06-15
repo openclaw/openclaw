@@ -8,6 +8,7 @@ import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { MediaUnderstandingProviderModelCapabilities } from "../../media-understanding/model-capability-overrides.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
@@ -62,6 +63,9 @@ const publicSurfaceLoaderMocks = vi.hoisted(() => ({
 
 vi.mock("../../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
 
+type ImageToolTestProvider = MediaUnderstandingProvider &
+  MediaUnderstandingProviderModelCapabilities;
+
 type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
   config?: OpenClawConfig;
@@ -88,15 +92,15 @@ const agentToolsHarness = vi.hoisted(() => ({
 }));
 
 const imageProviderHarness = vi.hoisted(() => {
-  let providers = new Map<string, MediaUnderstandingProvider>();
+  let providers = new Map<string, ImageToolTestProvider>();
   return {
-    setProviders(next: MediaUnderstandingProvider[]) {
+    setProviders(next: ImageToolTestProvider[]) {
       providers = new Map(next.map((provider) => [provider.id.toLowerCase(), provider]));
     },
     reset() {
       providers = new Map();
     },
-    buildProviderRegistry(overrides?: Record<string, MediaUnderstandingProvider>) {
+    buildProviderRegistry(overrides?: Record<string, ImageToolTestProvider>) {
       const registry = new Map(providers);
       for (const [id, provider] of Object.entries(overrides ?? {})) {
         registry.set(id.toLowerCase(), provider);
@@ -105,7 +109,7 @@ const imageProviderHarness = vi.hoisted(() => {
     },
     getMediaUnderstandingProvider(
       id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
+      registry: Map<string, ImageToolTestProvider>,
     ): MediaUnderstandingProvider | undefined {
       return registry.get(id.toLowerCase()) ?? providers.get(id.toLowerCase());
     },
@@ -364,12 +368,10 @@ async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenCla
     ["zai", "glm-4.6v"],
   ]);
   testing.setProviderDepsForTest({
-    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+    buildProviderRegistry: (overrides?: Record<string, ImageToolTestProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
-    getMediaUnderstandingProvider: (
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    getMediaUnderstandingProvider: (id: string, registry: Map<string, ImageToolTestProvider>) =>
+      imageProviderHarness.getMediaUnderstandingProvider(id, registry),
     describeImageWithModel: describeGenericImageWithModel,
     describeImagesWithModel: describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders: ({ capability }) =>
@@ -702,7 +704,7 @@ const moonshotProvider = {
 } satisfies MediaUnderstandingProvider;
 
 function installImageUnderstandingProviderDeps(
-  providers: MediaUnderstandingProvider[],
+  providers: ImageToolTestProvider[],
   options?: {
     describeImageWithModel?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
@@ -735,12 +737,10 @@ function installImageUnderstandingProviderDeps(
     ["zai", "glm-4.6v"],
   ]);
   testing.setProviderDepsForTest({
-    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+    buildProviderRegistry: (overrides?: Record<string, ImageToolTestProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
-    getMediaUnderstandingProvider: (
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    getMediaUnderstandingProvider: (id: string, registry: Map<string, ImageToolTestProvider>) =>
+      imageProviderHarness.getMediaUnderstandingProvider(id, registry),
     describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
     describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders: ({ capability }) =>
@@ -757,7 +757,7 @@ function installImageUnderstandingProviderDeps(
   });
 }
 
-function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
+function installImageUnderstandingProviderStubs(...providers: ImageToolTestProvider[]) {
   installImageUnderstandingProviderDeps(providers);
 }
 
@@ -1194,12 +1194,10 @@ describe("image tool implicit imageModel config", () => {
       const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
       const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
       testing.setProviderDepsForTest({
-        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+        buildProviderRegistry: (overrides?: Record<string, ImageToolTestProvider>) =>
           imageProviderHarness.buildProviderRegistry(overrides),
-        getMediaUnderstandingProvider: (
-          id: string,
-          registry: Map<string, MediaUnderstandingProvider>,
-        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        getMediaUnderstandingProvider: (id: string, registry: Map<string, ImageToolTestProvider>) =>
+          imageProviderHarness.getMediaUnderstandingProvider(id, registry),
         describeImageWithModel: describeGenericImageWithModel,
         describeImagesWithModel: describeGenericImagesWithModel,
         resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
@@ -1366,12 +1364,10 @@ describe("image tool implicit imageModel config", () => {
         ["openai", "gpt-5.4-mini"],
       ]);
       testing.setProviderDepsForTest({
-        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+        buildProviderRegistry: (overrides?: Record<string, ImageToolTestProvider>) =>
           imageProviderHarness.buildProviderRegistry(overrides),
-        getMediaUnderstandingProvider: (
-          id: string,
-          registry: Map<string, MediaUnderstandingProvider>,
-        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        getMediaUnderstandingProvider: (id: string, registry: Map<string, ImageToolTestProvider>) =>
+          imageProviderHarness.getMediaUnderstandingProvider(id, registry),
         describeImageWithModel: describeGenericImageWithModel,
         describeImagesWithModel: describeGenericImagesWithModel,
         resolveAutoMediaKeyProviders: ({ capability }) =>
@@ -1409,12 +1405,10 @@ describe("image tool implicit imageModel config", () => {
   it("keeps canonical MiniMax fallback when configured CN alias has no image candidate", async () => {
     await withTempAgentDir(async (agentDir) => {
       testing.setProviderDepsForTest({
-        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+        buildProviderRegistry: (overrides?: Record<string, ImageToolTestProvider>) =>
           imageProviderHarness.buildProviderRegistry(overrides),
-        getMediaUnderstandingProvider: (
-          id: string,
-          registry: Map<string, MediaUnderstandingProvider>,
-        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        getMediaUnderstandingProvider: (id: string, registry: Map<string, ImageToolTestProvider>) =>
+          imageProviderHarness.getMediaUnderstandingProvider(id, registry),
         describeImageWithModel: describeGenericImageWithModel,
         describeImagesWithModel: describeGenericImagesWithModel,
         resolveAutoMediaKeyProviders: ({ capability }) =>
@@ -1455,11 +1449,18 @@ describe("image tool implicit imageModel config", () => {
           text: "ok",
           model: params.model,
         }));
-        installImageUnderstandingProviderStubs({
-          id: "ollama",
-          capabilities: ["image"],
-          describeImage,
-        });
+        installImageUnderstandingProviderDeps(
+          [
+            {
+              id: "ollama",
+              capabilities: ["image"],
+              describeImage,
+            },
+          ],
+          {
+            resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
+          },
+        );
         const cfg: OpenClawConfig = {
           agents: {
             defaults: {
@@ -1488,11 +1489,18 @@ describe("image tool implicit imageModel config", () => {
           text: "ok",
           model: params.model,
         }));
-        installImageUnderstandingProviderStubs({
-          id: "ollama",
-          capabilities: ["image"],
-          describeImage,
-        });
+        installImageUnderstandingProviderDeps(
+          [
+            {
+              id: "ollama",
+              capabilities: ["image"],
+              describeImage,
+            },
+          ],
+          {
+            resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
+          },
+        );
         const cfg: OpenClawConfig = {
           agents: {
             defaults: {
@@ -1560,12 +1568,10 @@ describe("image tool implicit imageModel config", () => {
       });
       const defaultImageModels = new Map<string, string>([["qwen", "qwen-vl-max-latest"]]);
       testing.setProviderDepsForTest({
-        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+        buildProviderRegistry: (overrides?: Record<string, ImageToolTestProvider>) =>
           imageProviderHarness.buildProviderRegistry(overrides),
-        getMediaUnderstandingProvider: (
-          id: string,
-          registry: Map<string, MediaUnderstandingProvider>,
-        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        getMediaUnderstandingProvider: (id: string, registry: Map<string, ImageToolTestProvider>) =>
+          imageProviderHarness.getMediaUnderstandingProvider(id, registry),
         describeImageWithModel: describeGenericImageWithModel,
         describeImagesWithModel: describeGenericImagesWithModel,
         resolveAutoMediaKeyProviders: ({ capability }) => (capability === "image" ? ["qwen"] : []),
@@ -1800,11 +1806,18 @@ describe("image tool implicit imageModel config", () => {
         text: `ok ${params.model}`,
         model: params.model,
       }));
-      installImageUnderstandingProviderStubs({
-        id: "ollama",
-        capabilities: ["image"],
-        describeImage,
-      });
+      installImageUnderstandingProviderDeps(
+        [
+          {
+            id: "ollama",
+            capabilities: ["image"],
+            describeImage,
+          },
+        ],
+        {
+          resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
+        },
+      );
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {

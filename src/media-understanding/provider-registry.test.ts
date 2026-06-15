@@ -1,6 +1,8 @@
 // Provider registry tests cover runtime provider loading, normalization aliases,
 // manifest-only hook hydration, and config-derived image providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingProviderModelCapabilities } from "./model-capability-overrides.js";
+import { providerModelCapabilities } from "./model-capability-overrides.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -15,7 +17,8 @@ vi.mock("../plugins/capability-provider-runtime.js", () => ({
 
 function createMediaProvider(
   params: Pick<MediaUnderstandingProvider, "id" | "capabilities"> &
-    Partial<MediaUnderstandingProvider>,
+    Partial<MediaUnderstandingProvider> &
+    MediaUnderstandingProviderModelCapabilities,
 ): MediaUnderstandingProvider {
   return params;
 }
@@ -129,10 +132,34 @@ describe("media-understanding provider registry", () => {
     const provider = requireMediaProvider(registry, "dashscope");
 
     expect(provider.defaultModels?.image).toBe("qwen-vl-max-latest");
-    expect(provider.modelCapabilityOverrides).toEqual({
+    expect(providerModelCapabilities(provider)?.modelCapabilityOverrides).toEqual({
       nonImageModelFamilies: ["qwen3.7-max"],
     });
     expect(provider.capabilities).toEqual(["image"]);
+  });
+
+  it("uses runtime overrides before config auto-registration", () => {
+    const cfg = {
+      models: {
+        providers: {
+          dashscope: {
+            models: [{ id: "qwen3.7-max", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(
+      {
+        dashscope: {
+          id: "dashscope",
+          modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+        },
+      },
+      cfg,
+    );
+
+    expect(requireMediaProvider(registry, "dashscope").capabilities).toBeUndefined();
   });
 
   it("does not override capability providers when config also has image-capable models", async () => {

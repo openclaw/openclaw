@@ -46,6 +46,7 @@ import {
   configuredModelInputSupportsImage,
   isKnownNonImageModel,
 } from "./known-model-capabilities.js";
+import type { MediaUnderstandingProviderModelCapabilities } from "./model-capability-overrides.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
@@ -186,11 +187,13 @@ function resolveCatalogImageModelId(params: {
   providerId: string;
   catalog: ModelCatalog;
   modelSupportsVision: ModelCatalogApi["modelSupportsVision"];
+  provider?: MediaUnderstandingProviderModelCapabilities;
 }): string | undefined {
   const matches = params.catalog.filter(
     (entry) =>
       normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(params.providerId) &&
-      params.modelSupportsVision(entry),
+      params.modelSupportsVision(entry) &&
+      !isKnownNonImageModel({ modelId: entry.id, provider: params.provider }),
   );
   if (matches.length === 0) {
     return undefined;
@@ -326,6 +329,7 @@ async function resolveAutoImageModelId(params: {
     providerId: params.providerId,
     catalog,
     modelSupportsVision,
+    provider: params.providerRegistry.get(normalizeMediaProviderId(params.providerId)),
   });
 }
 
