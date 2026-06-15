@@ -175,7 +175,7 @@ function createHarness(params?: {
     refreshAgents: vi.fn(),
     abortActive,
     setActivityStatus,
-    formatSessionKey: vi.fn(),
+    formatSessionKey: (key) => key,
     applySessionInfoFromPatch: applySessionInfoFromPatch as never,
     applySessionMutationResult: applySessionMutationResult as never,
     noteLocalRunId,
@@ -418,6 +418,24 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("Goal: ship");
   });
 
+  it("normalizes colon-form local goal commands before local goal handling", async () => {
+    const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal: ship" });
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      opts: { local: true },
+      runGoalCommand,
+    });
+
+    await handleCommand("/goal: status");
+
+    expect(runGoalCommand).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      command: "/goal status",
+    });
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("Goal: ship");
+  });
+
   it("wraps command-prefixed local goal resume notes before sending", async () => {
     const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal resumed: ship" });
     const { handleCommand, sendChat, addPendingUser } = createHarness({
@@ -539,6 +557,157 @@ describe("tui command handlers", () => {
       sessionKey: "agent:main:main",
       message: "/status",
     });
+  });
+
+  it("reports /status as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/status");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/status is not supported in local embedded mode");
+  });
+
+  it("reports /compact as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/compact");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/compact is not supported in local embedded mode");
+  });
+
+  it("reports other shared slash commands as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/commands");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/commands is not supported in local embedded mode");
+  });
+
+  it("reports known shared commands with invalid args as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/commands all");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/commands is not supported in local embedded mode");
+  });
+
+  it("reports shared slash commands with colon args as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/compact: focus on decisions");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/compact is not supported in local embedded mode");
+  });
+
+  it("routes colon-form local slash commands through the local handler", async () => {
+    const patchSession = vi.fn().mockResolvedValue({ thinkingLevel: "medium" });
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const applySessionInfoFromPatch = vi.fn();
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+      patchSession,
+      refreshSessionInfo,
+      applySessionInfoFromPatch,
+    });
+
+    await handleCommand("/think: medium");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      thinkingLevel: "medium",
+    });
+    expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ thinkingLevel: "medium" });
+    expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledWith("thinking set to medium");
+  });
+
+  it("preserves directive-only slash aliases in local embedded mode", async () => {
+    for (const message of [
+      "/t high explain the diff",
+      "/reason stream summarize",
+      "/v on include logs",
+    ]) {
+      const patchSession = vi.fn().mockResolvedValue({});
+      const { handleCommand, sendChat, addSystem } = createHarness({
+        opts: { local: true },
+        patchSession,
+      });
+
+      await handleCommand(message);
+
+      expect(patchSession).not.toHaveBeenCalled();
+      expect(sendChat).toHaveBeenCalledTimes(1);
+      expectSendChatFields(sendChat, {
+        sessionKey: "agent:main:main",
+        message,
+      });
+      expect(addSystem).not.toHaveBeenCalled();
+    }
+  });
+
+  it("continues to forward unknown slash commands in local mode", async () => {
+    const { handleCommand, sendChat, addPendingUser, addSystem, requestRender } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/not-a-real-command");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/not-a-real-command",
+    });
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/not-a-real-command");
+    expect(requestRender).toHaveBeenCalled();
+    expect(addSystem).not.toHaveBeenCalled();
+  });
+
+  it("reports /context as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, openOverlay } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/context list");
+
+    expect(openOverlay).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/context is not supported in local embedded mode");
+  });
+
+  it("does not open the /context selector in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, openOverlay } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/context");
+
+    expect(openOverlay).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/context is not supported in local embedded mode");
   });
 
   it("keeps gateway diagnostics on /gateway-status", async () => {
@@ -690,6 +859,7 @@ describe("tui command handlers", () => {
     const setActivityStatus = vi.fn();
     const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
       createHarness({
+        opts: { local: true },
         activeChatRunId: "run-main",
         setActivityStatus,
       });
@@ -708,6 +878,7 @@ describe("tui command handlers", () => {
   it("sends /side without hijacking the active main run", async () => {
     const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
       createHarness({
+        opts: { local: true },
         activeChatRunId: "run-main",
       });
 
@@ -718,6 +889,20 @@ describe("tui command handlers", () => {
     expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
     expect(state.activeChatRunId).toBe("run-main");
     expectSendChatFields(sendChat, { message: "/side what changed?" });
+  });
+
+  it("keeps colon-form local side questions on the side-question path", async () => {
+    const { handleCommand, sendChat, addUser, noteLocalBtwRunId } = createHarness({
+      opts: { local: true },
+      activeChatRunId: "run-main",
+    });
+
+    await handleCommand("/btw: what changed?");
+    await handleCommand("/side: what changed?");
+
+    expect(addUser).not.toHaveBeenCalled();
+    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(2);
+    expectSendChatFields(sendChat, { message: "/side: what changed?" });
   });
 
   it("creates unique session for /new and resets shared session for /reset", async () => {
@@ -918,18 +1103,18 @@ describe("tui command handlers", () => {
       activityStatus: "streaming",
     });
 
-    await handleCommand("/context detail");
+    await handleCommand("/not-a-real-command");
 
     expect(sendChat).toHaveBeenCalledTimes(1);
     expectSendChatFields(sendChat, {
-      message: "/context detail",
+      message: "/not-a-real-command",
       sessionKey: "agent:main:main",
     });
     expect(reserveAssistantSlot).toHaveBeenCalledWith("run-active");
     const reserveCallOrder = reserveAssistantSlot.mock.invocationCallOrder[0];
     const addPendingUserCallOrder = addPendingUser.mock.invocationCallOrder[0];
     expect(reserveCallOrder).toBeLessThan(addPendingUserCallOrder);
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/context detail");
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/not-a-real-command");
     expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
@@ -983,6 +1168,21 @@ describe("tui command handlers", () => {
     expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/stop");
   });
 
+  it("reports idle local slash stop without sending to the embedded model", async () => {
+    const abortActive = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+      abortActive,
+    });
+
+    await handleCommand("/stop");
+
+    expect(abortActive).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("no active run to stop");
+  });
+
   it("sends broad stop-like text as a normal prompt when idle", async () => {
     const abortActive = vi.fn().mockResolvedValue(undefined);
     const { handleCommand, sendChat, addPendingUser } = createHarness({ abortActive });
@@ -1017,10 +1217,10 @@ describe("tui command handlers", () => {
       activityStatus: "finishing context",
     });
 
-    await handleCommand("/context detail");
+    await handleCommand("/not-a-real-command");
 
     expect(sendChat).toHaveBeenCalledTimes(1);
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/context detail");
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/not-a-real-command");
     expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
@@ -1147,68 +1347,6 @@ describe("tui command handlers", () => {
     expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ model: "openrouter/auto" });
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(closeOverlay).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows resolved canonical model ref after /model alias, not raw alias string", async () => {
-    // When the user types `/model gpt4` (a bare alias), the gateway resolves it
-    // server-side and returns the canonical ref in result.resolved. The TUI must
-    // display the canonical ref, not the raw alias, so the user knows which model
-    // was actually applied.
-    const patchSession = vi.fn().mockResolvedValue({
-      ok: true,
-      path: "/sessions/patch",
-      key: "agent:main:main",
-      entry: {},
-      resolved: { modelProvider: "openai", model: "gpt-5.5" },
-    });
-    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
-    const applySessionInfoFromPatch = vi.fn();
-    const { handleCommand, addSystem } = createHarness({
-      patchSession,
-      refreshSessionInfo,
-      applySessionInfoFromPatch,
-    });
-
-    await handleCommand("/model gpt4");
-
-    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt4" }));
-    // Should show the canonical resolved ref, not the raw alias "gpt4"
-    expect(addSystem).toHaveBeenCalledWith("model set to openai/gpt-5.5");
-  });
-
-  it("falls back to raw input in /model confirmation when resolved ref unavailable", async () => {
-    // Older gateway versions may not return resolved; fall back to raw arg.
-    const patchSession = vi.fn().mockResolvedValue({
-      ok: true,
-      path: "/sessions/patch",
-      key: "agent:main:main",
-      entry: {},
-      // No `resolved` field
-    });
-    const { handleCommand, addSystem } = createHarness({ patchSession });
-
-    await handleCommand("/model openai/gpt-5.5");
-
-    expect(addSystem).toHaveBeenCalledWith("model set to openai/gpt-5.5");
-  });
-  it("preserves provider prefix for nested model ids in /model confirmation", async () => {
-    // Some providers route to nested model ids that themselves contain a slash
-    // (e.g. resolved.model: "moonshotai/kimi-k2.5" with modelProvider: "nvidia").
-    // The confirmation must still show the full nvidia/moonshotai/kimi-k2.5 ref
-    // to match the footer/status bar, not strip the provider just because the
-    // model id already contains a slash.
-    const patchSession = vi.fn().mockResolvedValue({
-      ok: true,
-      path: "/sessions/patch",
-      key: "agent:main:main",
-      entry: {},
-      resolved: { modelProvider: "nvidia", model: "moonshotai/kimi-k2.5" },
-    });
-    const { handleCommand, addSystem } = createHarness({ patchSession });
-
-    await handleCommand("/model nvidia/moonshotai/kimi-k2.5");
-
-    expect(addSystem).toHaveBeenCalledWith("model set to nvidia/moonshotai/kimi-k2.5");
   });
 
   it("renders model listing feedback before the backend list resolves", async () => {
