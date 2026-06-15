@@ -198,6 +198,14 @@ export function resolveAuthProfileEligibility(params: {
     ) {
       return { eligible: true, reasonCode: "ok" };
     }
+    // Profile defined in config (auth.profiles) but not yet in the persisted
+    // SQLite store.  For api_key / token modes the actual credential value can
+    // come from env vars (addEnvBackedAgentCredentials) or secret refs, so the
+    // profile is still eligible — a missing store entry is not a hard failure.
+    const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
+    if (profileConfig && (profileConfig.mode === "api_key" || profileConfig.mode === "token")) {
+      return { eligible: true, reasonCode: "ok" };
+    }
     return { eligible: false, reasonCode: "profile_missing" };
   }
   if (

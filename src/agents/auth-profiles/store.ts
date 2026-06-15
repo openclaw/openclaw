@@ -794,6 +794,35 @@ function loadAuthProfileStoreForAgent(
     profiles: {},
   };
 
+  // When no persisted store exists, inherit profile metadata from global
+  // config auth.profiles so that the default agent (which may never have
+  // had per-agent JSON files) still has its profiles visible to the
+  // eligibility/order system.  Actual credential values (api keys, tokens)
+  // are resolved later from env vars, secret refs, or OAuth files.
+  const configProfiles = options?.config?.auth?.profiles;
+  if (configProfiles && Object.keys(configProfiles).length > 0) {
+    for (const [profileId, profile] of Object.entries(configProfiles)) {
+      if (!store.profiles[profileId]) {
+        // Only api_key/token profiles make sense here — OAuth credentials
+        // come from the OAuth file flow above.  The credential fields stay
+        // empty; runtime resolvers check env vars / secret refs as fallback.
+        if (profile.mode === "api_key") {
+          store.profiles[profileId] = {
+            type: "api_key",
+            provider: profile.provider,
+            ...(profile.email ? { email: profile.email } : {}),
+          };
+        } else if (profile.mode === "token") {
+          store.profiles[profileId] = {
+            type: "token",
+            provider: profile.provider,
+            ...(profile.email ? { email: profile.email } : {}),
+          };
+        }
+      }
+    }
+  }
+
   const mergedOAuth = mergeOAuthFileIntoStore(store);
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && mergedOAuth;
