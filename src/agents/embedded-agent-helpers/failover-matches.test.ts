@@ -103,6 +103,21 @@ describe("Z.ai vendor error codes (#48988)", () => {
   });
 });
 
+describe("Zhipu (GLM) overload error (#93211)", () => {
+  // Zhipu returns HTTP 200 with the error in the body, so failover keys on the
+  // message phrase rather than a status code.
+  const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
+
+  it("classifies the GLM overload body as overloaded so failover triggers", () => {
+    expect(isOverloadedErrorMessage(ZHIPU_OVERLOAD)).toBe(true);
+  });
+
+  it("does not misclassify the GLM overload body as rate limit or auth", () => {
+    expect(isRateLimitErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+    expect(isAuthErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+  });
+});
+
 describe("Volcengine Coding Plan subscription errors", () => {
   it("classifies InvalidSubscription JSON body as billing", () => {
     const raw =
