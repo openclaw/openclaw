@@ -30,6 +30,14 @@ function buildTemplatePayloadAction(action: TemplatePayloadAction): Action {
   return messageAction(action.label, action.data ?? action.label);
 }
 
+function resolveTemplateTextLimit(params: {
+  title?: string;
+  thumbnailImageUrl?: string;
+  textOnlyLimit: number;
+}): number {
+  return params.title?.trim() || params.thumbnailImageUrl?.trim() ? 60 : params.textOnlyLimit;
+}
+
 /**
  * Create a confirm template (yes/no style dialog)
  */
@@ -68,8 +76,11 @@ export function createButtonTemplate(
     altText?: string;
   },
 ): TemplateMessage {
-  const hasThumbnail = Boolean(options?.thumbnailImageUrl?.trim());
-  const textLimit = hasThumbnail ? 160 : 60;
+  const textLimit = resolveTemplateTextLimit({
+    title,
+    thumbnailImageUrl: options?.thumbnailImageUrl,
+    textOnlyLimit: 160,
+  });
   const template: ButtonsTemplate = {
     type: "buttons",
     title: title.slice(0, 40), // LINE limit
@@ -129,7 +140,7 @@ export function createCarouselColumn(params: {
   // title or thumbnail image, and 120 chars otherwise. Sending an over-length
   // text makes LINE reject the whole carousel, so mirror the conditional limit
   // the buttons template already applies above.
-  const textLimit = params.title?.trim() || params.thumbnailImageUrl?.trim() ? 60 : 120;
+  const textLimit = resolveTemplateTextLimit({ ...params, textOnlyLimit: 120 });
   return {
     title: params.title?.slice(0, 40),
     text: params.text.slice(0, textLimit),

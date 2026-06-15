@@ -51,13 +51,13 @@ describe("createButtonTemplate", () => {
     expect((template.template as { text: string }).text.length).toBe(60);
   });
 
-  it("keeps longer text when thumbnail is provided", () => {
+  it("truncates text to 60 chars when title and thumbnail are provided", () => {
     const longText = "x".repeat(100);
     const template = createButtonTemplate("Title", longText, [messageAction("OK")], {
       thumbnailImageUrl: "https://example.com/thumb.jpg",
     });
 
-    expect((template.template as { text: string }).text.length).toBe(100);
+    expect((template.template as { text: string }).text.length).toBe(60);
   });
 });
 
