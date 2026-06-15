@@ -783,7 +783,7 @@ export function markdownToTelegramRichHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode } = {},
 ): string {
-  const tableMode = options.tableMode === "off" ? "off" : "block";
+  const tableMode = options.tableMode ?? "block";
   const { ir, tables } = markdownToIRWithMeta(
     preserveTelegramListBoundarySpacing(normalizeTelegramRichMarkdownMedia(markdown ?? "")),
     {

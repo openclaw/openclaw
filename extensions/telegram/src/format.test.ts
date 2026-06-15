@@ -137,6 +137,8 @@ describe("markdownToTelegramHtml", () => {
 
     expect(markdownToTelegramRichHtml(table(20))).toContain("<table>");
     expect(markdownToTelegramRichHtml(table(21))).toContain("<pre><code>");
+    expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).toContain("<pre><code>");
+    expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).not.toContain("<table>");
   });
 
   it("preserves inline markdown inside rich table cells", () => {
