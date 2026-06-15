@@ -987,6 +987,74 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 1.0k/66k");
   });
 
+  it("ignores stale session contextTokens after the default model changes", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "ollama-cloud/kimi-k2.7-code",
+        contextTokens: 262_144,
+      },
+      explicitConfiguredContextTokens: 262_144,
+      sessionEntry: {
+        sessionId: "default-model-context-window",
+        updatedAt: 0,
+        modelProvider: "ollama-cloud",
+        model: "deepseek-v4-pro",
+        totalTokens: 501,
+        totalTokensFresh: true,
+        contextTokens: 1_000_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: ollama-cloud/kimi-k2.7-code");
+    expect(normalized).toContain("Context: 501/262k");
+    expect(normalized).not.toContain("Context: 501/1.0m");
+  });
+
+  it("uses the selected model window when a stale runtime snapshot is smaller", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              models: [
+                { id: "deepseek-v4-pro", contextWindow: 1_000_000 },
+                { id: "kimi-k2.7-code", contextWindow: 262_144 },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "ollama-cloud/deepseek-v4-pro",
+        contextTokens: 1_000_000,
+      },
+      explicitConfiguredContextTokens: 1_000_000,
+      sessionEntry: {
+        sessionId: "default-model-context-window-larger",
+        updatedAt: 0,
+        modelProvider: "ollama-cloud",
+        model: "kimi-k2.7-code",
+        totalTokens: 0,
+        totalTokensFresh: true,
+        contextTokens: 262_144,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: ollama-cloud/deepseek-v4-pro");
+    expect(normalized).toContain("Context: 0/1.0m");
+    expect(normalized).not.toContain("Context: 0/262k");
+  });
+
   it("recomputes context window from the active fallback model when session contextTokens are stale", () => {
     const text = buildStatusMessage({
       config: {
