@@ -106,6 +106,7 @@ describe("agent role eval harness", () => {
     expect(AGENT_ROLE_CONTRACT_BY_ID.has("judge")).toBe(true);
     expect(AGENT_ROLE_CONTRACT_BY_ID.has("memory-knowledge-curator")).toBe(true);
     expect(AGENT_ROLE_CONTRACT_BY_ID.has("session-steward")).toBe(true);
+    expect(AGENT_ROLE_CONTRACT_BY_ID.has("credential-steward")).toBe(true);
     expect(AGENT_ROLE_CONTRACT_BY_ID.has("openbrain-local-smoke")).toBe(true);
   });
 
@@ -115,7 +116,7 @@ describe("agent role eval harness", () => {
     expect(result).toMatchObject({
       ok: true,
       contractCount: AGENT_ROLE_CONTRACTS.length,
-      criticalContractCount: 9,
+      criticalContractCount: 10,
       issues: [],
     });
   });
@@ -131,6 +132,20 @@ describe("agent role eval harness", () => {
     expect(contract.prompt).toContain("Unknown");
     expect(contract.prompt).toContain("exact session-boundary decision");
     expect(contract.prompt).toContain("cross-session mutation");
+  });
+
+  it("prompts Credential Steward evals to enforce credential redaction", () => {
+    const contract = AGENT_ROLE_CONTRACT_BY_ID.get("credential-steward")!;
+
+    expect(contract.prompt).toContain("credential");
+    expect(contract.prompt).toContain("secret");
+    expect(contract.prompt).toContain("token");
+    expect(contract.prompt).toContain("redact");
+    expect(contract.prompt).toContain("approval");
+    expect(contract.prompt).toContain("telemetry");
+    expect(contract.prompt).toContain("Unknown");
+    expect(contract.prompt).toContain("exact credential-exposure decision");
+    expect(contract.prompt).toContain("avoid raw credential material");
   });
 
   it("prompts live evals to emit exact role signals", () => {

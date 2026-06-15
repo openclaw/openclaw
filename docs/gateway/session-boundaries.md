@@ -21,7 +21,8 @@ Gateway into hostile multi-tenant isolation.
 
 Related: [Security](/gateway/security), [Operator scopes](/gateway/operator-scopes),
 [Tools invoke HTTP API](/gateway/tools-invoke-http-api), and
-[OpenTelemetry](/gateway/opentelemetry).
+[OpenTelemetry](/gateway/opentelemetry). For credential resolution semantics,
+see [Auth credential semantics](/auth-credential-semantics).
 
 ## Boundary kinds
 
@@ -114,10 +115,14 @@ and [Prometheus label policy](/gateway/prometheus#label-policy).
 
 The combined Browser / Session / Credential Steward remains active for browser
 runtime compatibility. Browser-side checks use exact owner classification and
-redacted session metadata for Browser Steward decisions.
+redacted session metadata for Browser Steward decisions. Credential-side checks
+classify credential-like request data, block raw credential exposure before
+approval, and keep Browser Steward diagnostics limited to redacted credential
+classes and reason codes.
 
-Credential Steward behavior is intentionally deferred until Session Steward
-boundaries are stable. Do not treat this page as a Credential Steward contract.
+Credential Steward redaction policy does not resolve credentials, migrate auth
+profiles, or change credential storage. It is a safety boundary for deciding
+whether credential material may be handled or reported.
 
 ## Troubleshooting
 

@@ -15,6 +15,11 @@ This document defines the canonical credential eligibility and resolution semant
 
 The goal is to keep selection-time and runtime behavior aligned.
 
+Credential Steward redaction is a separate runtime safety boundary. It
+classifies and redacts credential exposure in request/diagnostic surfaces, but
+does not resolve SecretRefs, choose auth profiles, migrate credential stores, or
+change the eligibility rules below.
+
 ## Stable probe reason codes
 
 - `ok`

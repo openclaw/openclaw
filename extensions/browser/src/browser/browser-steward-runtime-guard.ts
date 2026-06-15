@@ -4,6 +4,8 @@ export type BrowserStewardRuntimeDecision = {
   affectedBrowserProfile: string;
   affectedSession: string;
   sessionBoundary: BrowserStewardSessionBoundary;
+  credentialExposureKind: BrowserStewardCredentialExposureKind;
+  credentialExposureReasonCode: BrowserStewardCredentialExposureReasonCode;
   credentialClassesInvolved: string[];
   dataSensitivity: "low" | "medium" | "high" | "critical";
   approvalRequired: boolean;
@@ -34,7 +36,32 @@ export type BrowserStewardSessionBoundary = {
   affectedSession: string;
 };
 
+export type BrowserStewardCredentialExposureKind =
+  | "none"
+  | "credential_like"
+  | "credential_material";
+
+export type BrowserStewardCredentialExposureReasonCode =
+  | "no_credential_material"
+  | "credential_like_label"
+  | "credential_material_detected";
+
+type BrowserStewardCredentialExposure = {
+  exposureKind: BrowserStewardCredentialExposureKind;
+  reasonCode: BrowserStewardCredentialExposureReasonCode;
+  classes: string[];
+  blocked: boolean;
+};
+
 const NON_SECRET_READ_ACTIONS = new Set(["status", "profiles", "doctor"]);
+const CREDENTIAL_CLASS_ORDER = Object.freeze([
+  "api key",
+  "password",
+  "token",
+  "cookie",
+  "private key",
+  "secret",
+]);
 
 const ACTION_CREDENTIAL_CLASSES: Record<string, string[]> = {
   start: ["browser profile"],
@@ -174,23 +201,165 @@ function normalizeAction(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function containsSecretLikeValue(value: unknown): boolean {
-  if (typeof value === "string") {
-    return /(?:password|token|cookie|secret|private[-_ ]?key|api[-_ ]?key|wallet|bearer\s+[a-z0-9._-]+)/i.test(
+function classifyCredentialLabel(value: string): string | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (/api[-_ ]?key/.test(normalized)) {
+    return "api key";
+  }
+  if (/password|passphrase|passwd/.test(normalized)) {
+    return "password";
+  }
+  if (/authorization|bearer|access[-_ ]?token|refresh[-_ ]?token|\btoken\b/.test(normalized)) {
+    return "token";
+  }
+  if (/cookie|session[-_ ]?cookie/.test(normalized)) {
+    return "cookie";
+  }
+  if (/private[-_ ]?key|wallet/.test(normalized)) {
+    return "private key";
+  }
+  if (/secret|credential/.test(normalized)) {
+    return "secret";
+  }
+  return undefined;
+}
+
+function classifyCredentialMaterial(value: string): string | undefined {
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)) {
+    return "private key";
+  }
+  if (/\bbearer\s+[a-z0-9._~+/=-]{4,}/i.test(value)) {
+    return "token";
+  }
+  if (
+    /\b(?:authorization|access[-_ ]?token|refresh[-_ ]?token|token)\s*[:=]\s*["']?[^\s"']{4,}/i.test(
       value,
-    );
+    )
+  ) {
+    return "token";
+  }
+  if (/\bpassword\s*[:=]\s*["']?[^\s"']{4,}/i.test(value)) {
+    return "password";
+  }
+  if (/\bcookie\s*[:=]\s*["']?[^\s"']{4,}/i.test(value)) {
+    return "cookie";
+  }
+  if (/\bapi[-_ ]?key\s*[:=]\s*["']?[^\s"']{4,}/i.test(value)) {
+    return "api key";
+  }
+  if (/\bsecret\s*[:=]\s*["']?[^\s"']{4,}/i.test(value)) {
+    return "secret";
+  }
+  if (/\b(?:sk|pk)-[a-z0-9][a-z0-9._-]{8,}/i.test(value)) {
+    return "api key";
+  }
+  if (/\b(?:xox[baprs]-|gh[pousr]_|glpat-)[a-z0-9_-]{8,}/i.test(value)) {
+    return "token";
+  }
+  return undefined;
+}
+
+function hasConcreteCredentialValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
   }
   if (Array.isArray(value)) {
-    return value.some((entry) => containsSecretLikeValue(entry));
+    return value.some((entry) => hasConcreteCredentialValue(entry));
   }
   if (value && typeof value === "object") {
-    return Object.entries(value).some(
-      ([key, entry]) =>
-        /(?:password|token|cookie|secret|privateKey|apiKey|wallet)/i.test(key) ||
-        containsSecretLikeValue(entry),
-    );
+    return Object.values(value).some((entry) => hasConcreteCredentialValue(entry));
   }
   return false;
+}
+
+function evaluateBrowserCredentialExposure(value: unknown): BrowserStewardCredentialExposure {
+  const classes = new Set<string>();
+  let credentialLike = false;
+  let material = false;
+  const scan = (entry: unknown): void => {
+    if (typeof entry === "string") {
+      const materialClass = classifyCredentialMaterial(entry);
+      if (materialClass) {
+        classes.add(materialClass);
+        material = true;
+      }
+      return;
+    }
+    if (Array.isArray(entry)) {
+      for (const item of entry) {
+        scan(item);
+      }
+      return;
+    }
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const labels = Array.isArray(record.labels) ? record.labels : [];
+    for (const label of labels) {
+      if (typeof label !== "string") {
+        continue;
+      }
+      const labelClass = classifyCredentialLabel(label);
+      if (!labelClass) {
+        continue;
+      }
+      classes.add(labelClass);
+      credentialLike = true;
+      if (hasConcreteCredentialValue(record.value)) {
+        material = true;
+      }
+    }
+    for (const [key, nested] of Object.entries(entry)) {
+      const labelClass = classifyCredentialLabel(key);
+      if (labelClass) {
+        classes.add(labelClass);
+        credentialLike = true;
+        if (hasConcreteCredentialValue(nested)) {
+          material = true;
+        }
+      }
+      scan(nested);
+    }
+  };
+  scan(value);
+  const sortedClasses = CREDENTIAL_CLASS_ORDER.filter((entry) => classes.has(entry));
+  if (material) {
+    return {
+      exposureKind: "credential_material",
+      reasonCode: "credential_material_detected",
+      classes: sortedClasses,
+      blocked: true,
+    };
+  }
+  if (credentialLike) {
+    return {
+      exposureKind: "credential_like",
+      reasonCode: "credential_like_label",
+      classes: sortedClasses,
+      blocked: false,
+    };
+  }
+  return {
+    exposureKind: "none",
+    reasonCode: "no_credential_material",
+    classes: [],
+    blocked: false,
+  };
+}
+
+function uniqueCredentialClasses(values: string[]): string[] {
+  const unique = new Set(values);
+  return values.filter((value) => {
+    if (!unique.has(value)) {
+      return false;
+    }
+    unique.delete(value);
+    return true;
+  });
 }
 
 export function evaluateBrowserStewardRuntimeGuard(
@@ -199,8 +368,12 @@ export function evaluateBrowserStewardRuntimeGuard(
   const action = normalizeAction(request.action);
   const profile = request.profile?.trim() || "UNKNOWN";
   const sessionBoundary = resolveBrowserStewardSessionBoundary(request.agentSessionKey);
-  const credentialClasses = ACTION_CREDENTIAL_CLASSES[action] ?? ["browser session"];
-  const readOnlyAllowed = NON_SECRET_READ_ACTIONS.has(action) && !containsSecretLikeValue(request);
+  const credentialExposure = evaluateBrowserCredentialExposure(request);
+  const credentialClasses = uniqueCredentialClasses([
+    ...(ACTION_CREDENTIAL_CLASSES[action] ?? ["browser session"]),
+    ...credentialExposure.classes,
+  ]);
+  const readOnlyAllowed = NON_SECRET_READ_ACTIONS.has(action) && !credentialExposure.blocked;
   const approved = request.approved === true || request.delegated === true;
   const allow = readOnlyAllowed || approved;
   return {
@@ -209,15 +382,19 @@ export function evaluateBrowserStewardRuntimeGuard(
     affectedBrowserProfile: profile,
     affectedSession: sessionBoundary.affectedSession,
     sessionBoundary,
+    credentialExposureKind: credentialExposure.exposureKind,
+    credentialExposureReasonCode: credentialExposure.reasonCode,
     credentialClassesInvolved: credentialClasses,
-    dataSensitivity: readOnlyAllowed ? "low" : "high",
+    dataSensitivity: readOnlyAllowed ? "low" : credentialExposure.blocked ? "critical" : "high",
     approvalRequired: !allow,
     safeNextAction: allow
       ? "proceed with redacted Browser Steward runtime guard metadata"
-      : "block and hand off to Control Director for explicit approval or delegation",
+      : credentialExposure.blocked
+        ? "block credential exposure and hand off to Control Director for explicit approval or delegation"
+        : "block and hand off to Control Director for explicit approval or delegation",
     telemetryEvent: allow
       ? "browser_steward.boundary_decision"
-      : containsSecretLikeValue(request)
+      : credentialExposure.blocked
         ? "browser_steward.blocked_credential_exposure"
         : "browser_steward.approval_gate",
   };

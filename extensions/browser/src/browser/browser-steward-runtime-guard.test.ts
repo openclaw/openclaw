@@ -18,9 +18,27 @@ type BrowserStewardBoundaryFixture = {
   rawMustNotContain?: string[];
 };
 
+type CredentialStewardFixture = {
+  name: string;
+  value?: unknown;
+  labels?: string[];
+  expected: {
+    exposureKind: "none" | "credential_like" | "credential_material";
+    credentialClassesInvolved: string[];
+    dataSensitivity: "low" | "medium" | "critical";
+    blocked: boolean;
+    reasonCode: "no_credential_material" | "credential_like_label" | "credential_material_detected";
+    redactedSummary: string;
+  };
+  rawMustNotContain?: string[];
+};
+
 const boundaryFixtures = JSON.parse(
   readFileSync("test/fixtures/session-steward-boundary-cases.json", "utf8"),
 ) as BrowserStewardBoundaryFixture[];
+const credentialFixtures = JSON.parse(
+  readFileSync("test/fixtures/credential-steward-redaction-cases.json", "utf8"),
+) as CredentialStewardFixture[];
 const browserBoundaryFixtures = boundaryFixtures.filter(
   (
     fixture,
@@ -114,6 +132,8 @@ describe("Browser Steward runtime guard", () => {
       boundaryDecision: "allow",
       approvalRequired: false,
       dataSensitivity: "low",
+      credentialExposureKind: "none",
+      credentialExposureReasonCode: "no_credential_material",
     });
   });
 
@@ -136,8 +156,38 @@ describe("Browser Steward runtime guard", () => {
     expect(decision).toMatchObject({
       approvalRequired: true,
       telemetryEvent: "browser_steward.blocked_credential_exposure",
+      credentialExposureKind: "credential_material",
+      credentialExposureReasonCode: "credential_material_detected",
+      dataSensitivity: "critical",
     });
     expect(JSON.stringify(decision)).not.toContain("SHOULD_NOT_APPEAR");
+  });
+
+  it.each(credentialFixtures)("matches shared credential fixture: $name", (fixture) => {
+    const decision = evaluateBrowserStewardRuntimeGuard({
+      action: "status",
+      request: {
+        ...(fixture.labels ? { labels: fixture.labels } : {}),
+        value: fixture.value,
+      },
+    });
+
+    expect(decision).toMatchObject({
+      credentialExposureKind: fixture.expected.exposureKind,
+      credentialExposureReasonCode: fixture.expected.reasonCode,
+      dataSensitivity: fixture.expected.blocked ? "critical" : "low",
+      approvalRequired: fixture.expected.blocked,
+      telemetryEvent: fixture.expected.blocked
+        ? "browser_steward.blocked_credential_exposure"
+        : "browser_steward.boundary_decision",
+    });
+    expect(decision.credentialClassesInvolved).toEqual([
+      "browser session",
+      ...fixture.expected.credentialClassesInvolved,
+    ]);
+    for (const rawValue of fixture.rawMustNotContain ?? []) {
+      expect(JSON.stringify(decision)).not.toContain(rawValue);
+    }
   });
 
   it("documents backup scope exclusions for browser/session sensitive state", () => {

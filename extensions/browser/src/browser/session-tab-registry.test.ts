@@ -239,6 +239,8 @@ describe("session tab registry", () => {
           ownerAgentId: "browser-session-credential-steward",
           affectedSession: "agent:browser-session-credential-steward:REDACTED",
         },
+        credentialExposureKind: "none",
+        credentialExposureReasonCode: "no_credential_material",
         credentialClassesInvolved: ["browser session"],
         dataSensitivity: "high",
         approvalRequired: false,
