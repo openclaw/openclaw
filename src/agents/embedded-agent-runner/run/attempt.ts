@@ -2115,11 +2115,18 @@ export async function runEmbeddedAttempt(
       timeoutMs: sessionWriteLockOptions.maxHoldMs,
       signal: params.abortSignal,
     });
+    let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
       lockOptions: {
         sessionFile: params.sessionFile,
         ...sessionWriteLockOptions,
+      },
+      mergePromptReleasedSessionEntries: (entries) => {
+        if (!sessionManager) {
+          throw new Error("session manager unavailable during prompt-released entry merge");
+        }
+        sessionManager.mergePromptReleasedSessionEntries(entries);
       },
     });
     releaseRetainedSessionLock = () => sessionLockController.dispose();
@@ -2141,7 +2148,6 @@ export async function runEmbeddedAttempt(
       );
     armExternalAbortSignal();
 
-    let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;

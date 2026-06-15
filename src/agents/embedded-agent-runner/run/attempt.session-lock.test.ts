@@ -743,9 +743,11 @@ describe("embedded attempt session lock lifecycle", () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
     const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const mergePromptReleasedSessionEntries = vi.fn();
     const controller = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock: acquireSessionWriteLockLocal,
       lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
     });
 
     await controller.releaseForPrompt();
@@ -787,9 +789,124 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
     expect(controller.hasSessionTakeover()).toBe(false);
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({ type: "custom", id: "model-snapshot" }),
+      expect.objectContaining({ type: "label", id: "label-change" }),
+      expect.objectContaining({ type: "session_info", id: "session-info" }),
+      expect.objectContaining({ type: "session_info", id: "session-info-clear" }),
+    ]);
 
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
+  });
+
+  it("rejects global metadata when the active session manager cannot resync", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session_info",
+        id: "session-info",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        name: "session title",
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("preserves an unflushed first user turn while merging global metadata", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-first-turn-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "first-turn",
+        timestamp: new Date().toISOString(),
+        cwd: dir,
+      })}\n`,
+      "utf8",
+    );
+    const staleManager = SessionManager.open(sessionFile, dir, dir);
+    staleManager.appendMessage({
+      role: "user",
+      content: "question",
+      timestamp: 1,
+    });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) =>
+        staleManager.mergePromptReleasedSessionEntries(entries),
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "custom",
+          id: "model-snapshot",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          customType: "model-snapshot",
+          data: { provider: "openai", modelId: "gpt-5.1" },
+        }),
+        JSON.stringify({
+          type: "session_info",
+          id: "session-info",
+          parentId: "model-snapshot",
+          timestamp: new Date().toISOString(),
+          name: "first turn",
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    await controller.withSessionWriteLock(() => {
+      staleManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        api: "messages",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 2,
+      });
+    });
+
+    const reopened = SessionManager.open(sessionFile, dir, dir);
+    expect(reopened.buildSessionContext().messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(reopened.getSessionName()).toBe("first turn");
+    expect(reopened.getEntry("model-snapshot")).toMatchObject({
+      type: "custom",
+      customType: "model-snapshot",
+    });
   });
 
   it("preserves globally resolved metadata when a stale manager appends the reply branch", async () => {
@@ -826,6 +943,8 @@ describe("embedded attempt session lock lifecycle", () => {
     const controller = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) =>
+        staleManager.mergePromptReleasedSessionEntries(entries),
     });
 
     await controller.releaseForPrompt();
@@ -856,6 +975,11 @@ describe("embedded attempt session lock lifecycle", () => {
         timestamp: 3,
       });
     });
+    (
+      staleManager as unknown as {
+        rewriteFile: () => void;
+      }
+    ).rewriteFile();
 
     const reopened = SessionManager.open(sessionFile, dir, dir);
     expect(reopened.getSessionName()).toBe("session title");
@@ -864,6 +988,154 @@ describe("embedded attempt session lock lifecycle", () => {
       type: "custom",
       customType: "model-snapshot",
     });
+    expect(reopened.buildSessionContext().messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+    ]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+  });
+
+  it("preserves mixed delivery and metadata side branches across a stale-manager rewrite", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-delivery-"));
+    tempDirs.push(dir);
+    const initialManager = SessionManager.create(dir, dir);
+    initialManager.appendMessage({
+      role: "user",
+      content: "question",
+      timestamp: 1,
+    });
+    initialManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "first answer" }],
+      api: "messages",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const sessionFile = initialManager.getSessionFile();
+    if (!sessionFile) {
+      throw new Error("expected persisted session file");
+    }
+    const staleManager = SessionManager.open(sessionFile, dir, dir);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries: (entries) =>
+        staleManager.mergePromptReleasedSessionEntries(entries),
+    });
+
+    await controller.releaseForPrompt();
+    const sessionKey = "agent:main:delivery-side-branch";
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey,
+        withSessionWriteLock: (operation, options) =>
+          controller.withSessionWriteLock(operation, options),
+      },
+      async () =>
+        await runWithOwnedSessionTranscriptWritePublication(
+          { sessionFile, sessionKey },
+          async () => {
+            await fs.appendFile(
+              sessionFile,
+              [
+                JSON.stringify({
+                  type: "message",
+                  id: "delivery-mirror",
+                  parentId: null,
+                  timestamp: new Date().toISOString(),
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "mirrored delivery" }],
+                    api: "messages",
+                    provider: "openclaw",
+                    model: "delivery-mirror",
+                    usage: {
+                      input: 0,
+                      output: 0,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      totalTokens: 0,
+                      cost: {
+                        input: 0,
+                        output: 0,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        total: 0,
+                      },
+                    },
+                    stopReason: "stop",
+                    timestamp: 3,
+                  },
+                }),
+                JSON.stringify({
+                  type: "label",
+                  id: "delivery-label",
+                  parentId: "delivery-mirror",
+                  timestamp: new Date().toISOString(),
+                  targetId: "delivery-mirror",
+                  label: "delivered",
+                }),
+                JSON.stringify({
+                  type: "session_info",
+                  id: "session-info",
+                  parentId: "delivery-label",
+                  timestamp: new Date().toISOString(),
+                  name: "delivery session",
+                }),
+              ].join("\n") + "\n",
+              "utf8",
+            );
+          },
+        ),
+    );
+
+    await controller.withSessionWriteLock(() => {
+      staleManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "current answer" }],
+        api: "messages",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 4,
+      });
+    });
+    (
+      staleManager as unknown as {
+        rewriteFile: () => void;
+      }
+    ).rewriteFile();
+
+    const reopened = SessionManager.open(sessionFile, dir, dir);
+    expect(reopened.getEntry("delivery-mirror")).toMatchObject({
+      type: "message",
+      message: expect.objectContaining({ model: "delivery-mirror" }),
+    });
+    expect(reopened.getLabel("delivery-mirror")).toBe("delivered");
+    expect(reopened.getSessionName()).toBe("delivery session");
     expect(reopened.buildSessionContext().messages.map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -1001,9 +1273,11 @@ describe("embedded attempt session lock lifecycle", () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
     const acquireSessionWriteLockLocal11 = vi.fn(async () => ({ release }));
+    const mergePromptReleasedSessionEntries = vi.fn();
     const controller = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock: acquireSessionWriteLockLocal11,
       lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
     });
 
     await controller.releaseForPrompt();
@@ -1022,7 +1296,68 @@ describe("embedded attempt session lock lifecycle", () => {
     await cleanupLock.release();
 
     expect(controller.hasSessionTakeover()).toBe(false);
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ model: "delivery-mirror" }),
+      }),
+    ]);
     expect(release).toHaveBeenCalledTimes(3);
+  });
+
+  it("allows mixed delivery mirror and global metadata appends", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          id: "delivery-mirror",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+          },
+        }),
+        JSON.stringify({
+          type: "label",
+          id: "delivery-label",
+          parentId: "delivery-mirror",
+          timestamp: new Date().toISOString(),
+          targetId: "delivery-mirror",
+          label: "delivered",
+        }),
+        JSON.stringify({
+          type: "session_info",
+          id: "session-info",
+          parentId: "delivery-label",
+          timestamp: new Date().toISOString(),
+          name: "session title",
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({ type: "message", id: "delivery-mirror" }),
+      expect.objectContaining({
+        type: "label",
+        id: "delivery-label",
+        targetId: "delivery-mirror",
+      }),
+      expect.objectContaining({ type: "session_info", id: "session-info" }),
+    ]);
   });
 
   it("allows delivery mirror appends that migrate legacy linear transcripts", async () => {
@@ -1038,9 +1373,11 @@ describe("embedded attempt session lock lifecycle", () => {
     );
     const release = vi.fn(async () => {});
     const acquireSessionWriteLockLocal10 = vi.fn(async () => ({ release }));
+    const mergePromptReleasedSessionEntries = vi.fn();
     const controller = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock: acquireSessionWriteLockLocal10,
       lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
     });
 
     await controller.releaseForPrompt();
@@ -1053,12 +1390,90 @@ describe("embedded attempt session lock lifecycle", () => {
         model: "delivery-mirror",
       },
     });
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session_info",
+        id: "session-info",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        name: "migrated title",
+      })}\n`,
+      "utf8",
+    );
 
     await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
 
     await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain('"parentId"');
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ model: "delivery-mirror" }),
+      }),
+      expect.objectContaining({ type: "session_info", id: "session-info" }),
+    ]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("allows parentless delivery mirrors appended to large legacy linear transcripts", async () => {
+    const sessionFile = await createTempSessionFile();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "large-legacy-user",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "x".repeat(8 * 1024 * 1024) }],
+        },
+      })}\n`,
+      "utf8",
+    );
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+
+    await controller.releaseForPrompt();
+    const sessionKey = "agent:main:large-linear-delivery";
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey,
+        withSessionWriteLock: (operation, options) =>
+          controller.withSessionWriteLock(operation, options),
+      },
+      async () =>
+        await runWithOwnedSessionTranscriptWritePublication(
+          { sessionFile, sessionKey },
+          async () =>
+            await appendSessionTranscriptMessage({
+              transcriptPath: sessionFile,
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "mirrored large transcript delivery" }],
+                provider: "openclaw",
+                model: "delivery-mirror",
+              },
+            }),
+        ),
+    );
+
+    const lastLine = (await fs.readFile(sessionFile, "utf8")).trimEnd().split("\n").at(-1);
+    expect(lastLine).toBeDefined();
+    expect(JSON.parse(lastLine ?? "{}")).not.toHaveProperty("parentId");
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({
+        type: "message",
+        parentId: null,
+        message: expect.objectContaining({ model: "delivery-mirror" }),
+      }),
+    ]);
     expect(controller.hasSessionTakeover()).toBe(false);
   });
 
@@ -1738,9 +2153,11 @@ describe("embedded attempt session lock lifecycle", () => {
         releases.push("release");
       }),
     }));
+    const mergePromptReleasedSessionEntries = vi.fn();
     const firstController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock: acquireSessionWriteLockLocal2,
       lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
     });
 
     await firstController.releaseForPrompt();
@@ -1764,7 +2181,21 @@ describe("embedded attempt session lock lifecycle", () => {
         await runWithOwnedSessionTranscriptWritePublication(
           { sessionFile, sessionKey: "agent:main:slack:channel:456" },
           async () => {
-            await fs.appendFile(sessionFile, '{"type":"message","id":"same-process"}\n', "utf8");
+            await fs.appendFile(
+              sessionFile,
+              `${JSON.stringify({
+                type: "message",
+                id: "same-process",
+                parentId: null,
+                timestamp: new Date().toISOString(),
+                message: {
+                  role: "assistant",
+                  provider: "openclaw",
+                  model: "delivery-mirror",
+                },
+              })}\n`,
+              "utf8",
+            );
           },
         ),
     );
@@ -1778,6 +2209,9 @@ describe("embedded attempt session lock lifecycle", () => {
     ).resolves.toBe("post-write");
 
     expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({ type: "message", id: "same-process" }),
+    ]);
     expect(acquireSessionWriteLockLocal2).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
   });

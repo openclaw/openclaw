@@ -130,6 +130,12 @@ export interface SessionInfoEntry extends SessionEntryBase {
   name?: string;
 }
 
+export type PromptReleasedSessionEntry =
+  | SessionMessageEntry
+  | CustomEntry
+  | LabelEntry
+  | SessionInfoEntry;
+
 /**
  * Custom message entry for extensions to inject messages into LLM context.
  * Use customType to identify your extension's entries.
@@ -1491,6 +1497,42 @@ export class SessionManager {
     this.sessionFileSnapshot = rememberedWrite.snapshot;
     if (rememberedWrite.verifiedWrite) {
       publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+    }
+  }
+
+  /**
+   * Preserve entries appended while the active prompt released its file lock.
+   * Attach them as a side branch so rewrites retain external state without
+   * moving the prepared reply branch or adding delivery mirrors to its context.
+   */
+  mergePromptReleasedSessionEntries(entries: readonly PromptReleasedSessionEntry[]): void {
+    let sideBranchParentId = this.leafId;
+    for (const sourceEntry of entries) {
+      if (this.byId.has(sourceEntry.id)) {
+        throw new Error(`Entry ${sourceEntry.id} already exists`);
+      }
+      if (sourceEntry.type === "label" && !this.byId.has(sourceEntry.targetId)) {
+        throw new Error(`Entry ${sourceEntry.targetId} not found`);
+      }
+      const entry: PromptReleasedSessionEntry = {
+        ...sourceEntry,
+        parentId: sideBranchParentId,
+      };
+      this.fileEntries.push(entry);
+      this.byId.set(entry.id, entry);
+      sideBranchParentId = entry.id;
+      if (entry.type === "label") {
+        if (entry.label) {
+          this.labelsById.set(entry.targetId, entry.label);
+          this.labelTimestampsById.set(entry.targetId, entry.timestamp);
+        } else {
+          this.labelsById.delete(entry.targetId);
+          this.labelTimestampsById.delete(entry.targetId);
+        }
+      }
+    }
+    if (this.sessionFile) {
+      this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
     }
   }
 

@@ -14,6 +14,12 @@ import {
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
+import type {
+  CustomEntry,
+  LabelEntry,
+  SessionInfoEntry,
+  SessionMessageEntry,
+} from "../../sessions/session-manager.js";
 import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
@@ -120,24 +126,42 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isTranscriptOnlyOpenClawAssistantLine(line: string): boolean {
+function parseTranscriptOnlyOpenClawAssistantLine(line: string): SessionMessageEntry | undefined {
   try {
     const parsed = JSON.parse(line) as unknown;
-    if (!isJsonRecord(parsed)) {
-      return false;
+    if (
+      !isJsonRecord(parsed) ||
+      typeof parsed.id !== "string" ||
+      parsed.id.trim().length === 0 ||
+      typeof parsed.timestamp !== "string" ||
+      parsed.timestamp.trim().length === 0 ||
+      (parsed.parentId !== undefined &&
+        parsed.parentId !== null &&
+        typeof parsed.parentId !== "string")
+    ) {
+      return undefined;
     }
     const message = parsed.message;
     if (!isJsonRecord(message)) {
-      return false;
+      return undefined;
     }
-    return (
+    const isTranscriptOnlyAssistant =
       message.role === "assistant" &&
       message.provider === "openclaw" &&
       typeof message.model === "string" &&
-      TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS.has(message.model)
-    );
+      TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS.has(message.model);
+    if (!isTranscriptOnlyAssistant) {
+      return undefined;
+    }
+    return {
+      type: "message",
+      id: parsed.id,
+      parentId: parsed.parentId ?? null,
+      timestamp: parsed.timestamp,
+      message: message as unknown as SessionMessageEntry["message"],
+    };
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -151,36 +175,97 @@ function hasSessionEntryBase(record: Record<string, unknown>): boolean {
   );
 }
 
-function isPromptReleasedGlobalMetadataLine(line: string): boolean {
+export type PromptReleasedSessionMetadataEntry = CustomEntry | LabelEntry | SessionInfoEntry;
+
+export type PromptReleasedSessionEntry = SessionMessageEntry | PromptReleasedSessionMetadataEntry;
+
+function parsePromptReleasedGlobalMetadataLine(
+  line: string,
+): PromptReleasedSessionMetadataEntry | undefined {
   try {
     const parsed = JSON.parse(line) as unknown;
     if (!isJsonRecord(parsed) || !hasSessionEntryBase(parsed)) {
-      return false;
+      return undefined;
     }
+    const base = {
+      id: parsed.id as string,
+      parentId: parsed.parentId as string | null,
+      timestamp: parsed.timestamp as string,
+    };
     // These records are resolved globally rather than through the active branch.
     // Accepting them keeps an in-flight reply alive without losing branch-scoped
     // model or thinking state when the active SessionManager is stale.
     switch (parsed.type) {
       case "custom":
-        return typeof parsed.customType === "string" && parsed.customType.trim().length > 0;
+        return typeof parsed.customType === "string" && parsed.customType.trim().length > 0
+          ? {
+              ...base,
+              type: "custom",
+              customType: parsed.customType,
+              ...(Object.hasOwn(parsed, "data") ? { data: parsed.data } : {}),
+            }
+          : undefined;
       case "label":
-        return (
-          typeof parsed.targetId === "string" &&
+        return typeof parsed.targetId === "string" &&
           parsed.targetId.trim().length > 0 &&
           (parsed.label === undefined || typeof parsed.label === "string")
-        );
+          ? {
+              ...base,
+              type: "label",
+              targetId: parsed.targetId,
+              label: parsed.label,
+            }
+          : undefined;
       case "session_info":
-        return parsed.name === undefined || typeof parsed.name === "string";
+        return parsed.name === undefined || typeof parsed.name === "string"
+          ? {
+              ...base,
+              type: "session_info",
+              ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
+            }
+          : undefined;
       default:
-        return false;
+        return undefined;
     }
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-function isBenignPromptReleasedSessionLine(line: string): boolean {
-  return isTranscriptOnlyOpenClawAssistantLine(line) || isPromptReleasedGlobalMetadataLine(line);
+type PromptReleasedSessionChange =
+  | {
+      kind: "transcript-only";
+      entries: SessionMessageEntry[];
+    }
+  | {
+      kind: "global-metadata";
+      entries: PromptReleasedSessionEntry[];
+    };
+
+function classifyPromptReleasedSessionLines(
+  lines: string[],
+): PromptReleasedSessionChange | undefined {
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const entries: PromptReleasedSessionEntry[] = [];
+  let hasGlobalMetadata = false;
+  for (const line of lines) {
+    const transcriptEntry = parseTranscriptOnlyOpenClawAssistantLine(line);
+    if (transcriptEntry) {
+      entries.push(transcriptEntry);
+      continue;
+    }
+    const metadataEntry = parsePromptReleasedGlobalMetadataLine(line);
+    if (!metadataEntry) {
+      return undefined;
+    }
+    entries.push(metadataEntry);
+    hasGlobalMetadata = true;
+  }
+  return hasGlobalMetadata
+    ? { kind: "global-metadata", entries }
+    : { kind: "transcript-only", entries: entries as SessionMessageEntry[] };
 }
 
 function normalizeTranscriptEntryId(value: unknown): string | undefined {
@@ -323,17 +408,17 @@ async function readSessionFileDigest(sessionFile: string): Promise<string | unde
   });
 }
 
-async function sessionFenceAdvanceIsBenign(params: {
+async function classifySessionFenceAdvance(params: {
   sessionFile: string;
   previous: SessionFileFenceSnapshot | undefined;
   current: SessionFileFingerprint;
-}): Promise<boolean> {
+}): Promise<PromptReleasedSessionChange | undefined> {
   if (
     !params.previous?.fingerprint.exists ||
     !params.current.exists ||
     !sameSessionFileIdentity(params.previous.fingerprint, params.current)
   ) {
-    return false;
+    return undefined;
   }
   const text = await readAppendedSessionFileText({
     sessionFile: params.sessionFile,
@@ -341,10 +426,10 @@ async function sessionFenceAdvanceIsBenign(params: {
     current: params.current,
   });
   if (!text?.endsWith("\n")) {
-    return false;
+    return undefined;
   }
   const lines = normalizeStringEntries(text.split("\n"));
-  return lines.length > 0 && lines.every(isBenignPromptReleasedSessionLine);
+  return classifyPromptReleasedSessionLines(lines);
 }
 
 async function sessionFenceCtimeDriftIsBenign(params: {
@@ -374,11 +459,11 @@ async function sessionFenceCtimeDriftIsBenign(params: {
   }
 }
 
-async function sessionFenceRewriteIsBenign(params: {
+async function classifySessionFenceRewrite(params: {
   sessionFile: string;
   previous: SessionFileFenceSnapshot | undefined;
   current: SessionFileFingerprint;
-}): Promise<boolean> {
+}): Promise<PromptReleasedSessionChange | undefined> {
   if (
     !params.previous?.fingerprint.exists ||
     !params.current.exists ||
@@ -387,21 +472,21 @@ async function sessionFenceRewriteIsBenign(params: {
     params.current.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES) ||
     params.current.size > MAX_SAFE_FILE_OFFSET
   ) {
-    return false;
+    return undefined;
   }
   let currentText: string;
   try {
     currentText = await fs.readFile(params.sessionFile, "utf8");
   } catch {
-    return false;
+    return undefined;
   }
   if (!currentText.endsWith("\n")) {
-    return false;
+    return undefined;
   }
   const previousLines = splitSessionFileLines(params.previous.text);
   const currentLines = splitSessionFileLines(currentText);
   if (currentLines.length <= previousLines.length) {
-    return false;
+    return undefined;
   }
   let expectedParentId: string | null = null;
   for (let index = 0; index < previousLines.length; index += 1) {
@@ -411,12 +496,20 @@ async function sessionFenceRewriteIsBenign(params: {
       expectedParentId,
     });
     if (!lineMatch.ok) {
-      return false;
+      return undefined;
     }
     expectedParentId = lineMatch.nextPreviousId ?? expectedParentId;
   }
   const appendedLines = currentLines.slice(previousLines.length);
-  return appendedLines.every(isBenignPromptReleasedSessionLine);
+  return classifyPromptReleasedSessionLines(appendedLines);
+}
+
+async function classifySessionFenceChange(params: {
+  sessionFile: string;
+  previous: SessionFileFenceSnapshot | undefined;
+  current: SessionFileFingerprint;
+}): Promise<PromptReleasedSessionChange | undefined> {
+  return (await classifySessionFenceAdvance(params)) ?? (await classifySessionFenceRewrite(params));
 }
 
 type OwnedSessionFileWrite = {
@@ -727,6 +820,9 @@ export type EmbeddedAttemptSessionLockController = {
 export async function createEmbeddedAttemptSessionLockController(params: {
   acquireSessionWriteLock: AcquireSessionWriteLock;
   lockOptions: LockOptions;
+  mergePromptReleasedSessionEntries?: (
+    entries: readonly PromptReleasedSessionEntry[],
+  ) => Promise<void> | void;
 }): Promise<EmbeddedAttemptSessionLockController> {
   const acquireLock = async (): Promise<SessionLock> =>
     await params.acquireSessionWriteLock({
@@ -749,6 +845,35 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let heldLockDrainOwner: symbol | undefined;
   const heldLockDrainWaiters = new Set<() => void>();
   const sessionFileFenceKey = resolveSessionFileFenceKey(params.lockOptions.sessionFile);
+
+  async function mergePromptReleasedSessionChange(
+    previous: SessionFileFenceSnapshot | undefined,
+    current: SessionFileFingerprint,
+  ): Promise<SessionFileFenceSnapshot | undefined> {
+    if (!params.mergePromptReleasedSessionEntries) {
+      return undefined;
+    }
+    const change = await classifySessionFenceChange({
+      sessionFile: params.lockOptions.sessionFile,
+      previous,
+      current,
+    });
+    if (!change) {
+      return undefined;
+    }
+    try {
+      await params.mergePromptReleasedSessionEntries(change.entries);
+    } catch (error) {
+      takeoverDetected = true;
+      throw error;
+    }
+    const refreshedSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+    if (!sameSessionFileFingerprint(current, refreshedSnapshot.fingerprint)) {
+      takeoverDetected = true;
+      throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    }
+    return refreshedSnapshot;
+  }
 
   function beginRetainedLockUse(): () => void {
     retainedLockUseCount += 1;
@@ -857,8 +982,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       ownedWrite.generation > fenceGeneration &&
       sameSessionFileFingerprint(ownedWrite.fingerprint, current)
     ) {
+      const mergedSnapshot = await mergePromptReleasedSessionChange(fenceSnapshot, current);
       fenceFingerprint = current;
-      fenceSnapshot = { fingerprint: current };
+      fenceSnapshot = mergedSnapshot ?? { fingerprint: current };
       fenceGeneration = ownedWrite.generation;
       return;
     }
@@ -876,43 +1002,33 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return;
     }
 
-    if (
-      (await sessionFenceAdvanceIsBenign({
-        sessionFile: params.lockOptions.sessionFile,
-        previous: fenceSnapshot,
-        current,
-      })) ||
-      (await sessionFenceRewriteIsBenign({
-        sessionFile: params.lockOptions.sessionFile,
-        previous: fenceSnapshot,
-        current,
-      }))
-    ) {
+    const changeKind = await classifySessionFenceChange({
+      sessionFile: params.lockOptions.sessionFile,
+      previous: fenceSnapshot,
+      current,
+    });
+    if (changeKind?.kind === "transcript-only" && !params.mergePromptReleasedSessionEntries) {
       fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
       fenceFingerprint = fenceSnapshot.fingerprint;
       fenceGeneration = trustSessionFileState(sessionFileFenceKey, current) ?? fenceGeneration;
       return;
     }
+    if (changeKind && params.mergePromptReleasedSessionEntries) {
+      const refreshedSnapshot = await mergePromptReleasedSessionChange(fenceSnapshot, current);
+      if (!refreshedSnapshot) {
+        takeoverDetected = true;
+        throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+      }
+      fenceSnapshot = refreshedSnapshot;
+      fenceFingerprint = refreshedSnapshot.fingerprint;
+      fenceGeneration =
+        trustSessionFileState(sessionFileFenceKey, refreshedSnapshot.fingerprint) ??
+        fenceGeneration;
+      return;
+    }
 
     takeoverDetected = true;
     throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
-  }
-
-  async function publishOwnedSessionFileWriteIfChanged(
-    beforeWrite: SessionFileFingerprint,
-  ): Promise<{
-    fingerprint: SessionFileFingerprint;
-    generation: number;
-  } | null> {
-    const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-    if (sameSessionFileFingerprint(beforeWrite, fingerprint)) {
-      return null;
-    }
-    if (!isTrustedSessionFileState(sessionFileFenceKey, beforeWrite)) {
-      return null;
-    }
-    const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, fingerprint);
-    return { fingerprint, generation };
   }
 
   async function refreshSessionFileFence(beforeWrite: SessionFileFingerprint): Promise<void> {
@@ -926,15 +1042,41 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   }
 
-  async function publishOwnedSessionFileFence(beforeWrite: SessionFileFingerprint): Promise<void> {
+  async function captureOwnedSessionFileWriteStart(): Promise<SessionFileFenceSnapshot> {
+    const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+    const currentFenceSnapshot = fenceSnapshot;
+    if (
+      currentFenceSnapshot &&
+      sameSessionFileFingerprint(currentFenceSnapshot.fingerprint, fingerprint)
+    ) {
+      return currentFenceSnapshot;
+    }
+    return { fingerprint };
+  }
+
+  async function publishOwnedSessionFileFence(
+    beforeWrite: SessionFileFenceSnapshot,
+  ): Promise<void> {
     if (takeoverDetected) {
       return;
     }
-    const ownedWrite = await publishOwnedSessionFileWriteIfChanged(beforeWrite);
-    if (ownedWrite && fenceActive) {
-      fenceFingerprint = ownedWrite.fingerprint;
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceGeneration = ownedWrite.generation;
+    const current = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+    if (sameSessionFileFingerprint(beforeWrite.fingerprint, current)) {
+      return;
+    }
+    const beforeWriteIsTrusted =
+      (fenceActive && sameSessionFileFingerprint(fenceFingerprint, beforeWrite.fingerprint)) ||
+      isTrustedSessionFileState(sessionFileFenceKey, beforeWrite.fingerprint);
+    if (!beforeWriteIsTrusted) {
+      return;
+    }
+    const mergedSnapshot = await mergePromptReleasedSessionChange(beforeWrite, current);
+    const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, current);
+    if (fenceActive) {
+      fenceFingerprint = current;
+      fenceSnapshot =
+        mergedSnapshot ?? (await readSessionFileFenceSnapshot(params.lockOptions.sessionFile));
+      fenceGeneration = generation;
     }
   }
 
@@ -1209,7 +1351,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (options?.publishOwnedWrite !== true) {
           return await run();
         }
-        const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+        const beforeWrite = await captureOwnedSessionFileWriteStart();
         try {
           return await run();
         } finally {
@@ -1220,16 +1362,20 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       try {
         const runLockedOperation = async () => {
           await assertSessionFileFence();
-          const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
           const runWithLock = async () => {
+            if (options?.publishOwnedWrite === true) {
+              const beforeWrite = await captureOwnedSessionFileWriteStart();
+              try {
+                return await run();
+              } finally {
+                await publishOwnedSessionFileFence(beforeWrite);
+              }
+            }
+            const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
             try {
               return await run();
             } finally {
-              if (options?.publishOwnedWrite === true) {
-                await publishOwnedSessionFileFence(beforeWrite);
-              } else {
-                await refreshSessionFileFence(beforeWrite);
-              }
+              await refreshSessionFileFence(beforeWrite);
             }
           };
           return await runWithLock();
