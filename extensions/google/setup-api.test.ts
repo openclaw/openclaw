@@ -52,11 +52,11 @@ function buildGeminiApiKeyPrepareContext(workspaceDir: string): GeminiPrepareCon
     agentDir,
     provider: "google-gemini-cli",
     modelId: "gemini-3.1-flash-lite",
-    authProfileId: "google-gemini-cli:api-key",
+    authProfileId: "google:api-key",
     // Private bundled-runtime bridge, not public Plugin SDK surface.
     authCredential: {
       type: "api_key",
-      provider: "google-gemini-cli",
+      provider: "google",
       key: "gemini-api-key",
       email: "user@example.test",
     },
@@ -141,7 +141,7 @@ describe("google gemini cli backend auth bridge", () => {
     }
   });
 
-  it("prepares selected Gemini API-key credentials and removes stale OAuth state for that profile home", async () => {
+  it("prepares selected canonical Google API-key credentials and removes stale OAuth state for that profile home", async () => {
     const backend = buildGoogleGeminiCliBackend();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
     let home: string | undefined;

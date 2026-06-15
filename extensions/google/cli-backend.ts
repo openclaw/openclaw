@@ -14,6 +14,7 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
 };
 const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3-flash-preview";
 const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
+const GOOGLE_PROVIDER_ID = "google";
 const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 const GEMINI_CLI_CREDENTIALS_FILENAME = "gemini-credentials.json";
 const GEMINI_CLI_GCA_AUTH_ENV = [
@@ -68,7 +69,7 @@ type GeminiOAuthCredential = GeminiAuthProfileCredential & {
 
 type GeminiApiKeyCredential = GeminiAuthProfileCredential & {
   type: "api_key";
-  provider: typeof GEMINI_CLI_PROVIDER_ID;
+  provider: typeof GEMINI_CLI_PROVIDER_ID | typeof GOOGLE_PROVIDER_ID;
   key: string;
 };
 
@@ -154,7 +155,10 @@ function requireGeminiApiKeyCredential(
   if (credential.type !== "api_key") {
     return null;
   }
-  if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
+  if (
+    credential.provider !== GEMINI_CLI_PROVIDER_ID &&
+    credential.provider !== GOOGLE_PROVIDER_ID
+  ) {
     throwUnsupportedGeminiCredential(credential);
   }
 
@@ -166,7 +170,7 @@ function requireGeminiApiKeyCredential(
   return {
     ...credential,
     type: "api_key",
-    provider: GEMINI_CLI_PROVIDER_ID,
+    provider: credential.provider,
     key,
   };
 }
