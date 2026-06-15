@@ -14,6 +14,7 @@ import {
   MODELS_CONFIG_IMPLICIT_ENV_VARS,
   unsetEnv,
 } from "./models-config.e2e-harness.js";
+import type { ResolveImplicitProvidersForModelsJson } from "./models-config.plan.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -53,14 +54,20 @@ vi.mock("../plugins/provider-runtime.js", () => ({
  * short-circuits subsequent calls when inputs have not meaningfully changed.
  */
 let resolveImplicitProvidersCallCount = 0;
+let resolveImplicitProvidersHook:
+  | ((params: Parameters<ResolveImplicitProvidersForModelsJson>[0]) => void | Promise<void>)
+  | undefined;
 vi.mock("./models-config.providers.js", async () => {
   const actual = await vi.importActual<typeof import("./models-config.providers.js")>(
     "./models-config.providers.js",
   );
   return {
     ...actual,
-    resolveImplicitProviders: async () => {
+    resolveImplicitProviders: async (
+      params: Parameters<ResolveImplicitProvidersForModelsJson>[0],
+    ) => {
       resolveImplicitProvidersCallCount += 1;
+      await resolveImplicitProvidersHook?.(params);
       return {};
     },
   };
@@ -72,6 +79,7 @@ let clearConfigCache: typeof import("../config/io.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/io.js").clearRuntimeConfigSnapshot;
 let buildModelsJsonSourceFingerprint: typeof import("./models-config.js").buildModelsJsonSourceFingerprint;
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let prepareOpenClawModelsJsonSource: typeof import("./models-config.js").prepareOpenClawModelsJsonSource;
 let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
 
 const fixtureSuite = createFixtureSuite("openclaw-models-fingerprint-");
@@ -104,6 +112,7 @@ beforeAll(async () => {
   ({
     buildModelsJsonSourceFingerprint,
     ensureOpenClawModelsJson,
+    prepareOpenClawModelsJsonSource,
     resetModelsJsonReadyCacheForTest,
   } = await import("./models-config.js"));
 });
@@ -113,6 +122,7 @@ afterEach(() => {
   clearConfigCache();
   resetModelsJsonReadyCacheForTest();
   resolveImplicitProvidersCallCount = 0;
+  resolveImplicitProvidersHook = undefined;
   unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS]);
 });
 
@@ -261,6 +271,49 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     await ensureOpenClawModelsJson(cfg, agentDir);
     // Structural change (new profile) must invalidate the cache.
     expect(resolveImplicitProvidersCallCount).toBe(firstCount + 1);
+  });
+
+  it("returns the post-ensure source fingerprint when provider discovery mutates auth profiles", async () => {
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "before-provider-discovery", // pragma: allowlist secret
+        },
+      },
+    });
+    const preEnsureFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir);
+    if (!preEnsureFingerprint.cacheable) {
+      throw new Error("expected the pre-ensure auth store to be cacheable");
+    }
+
+    resolveImplicitProvidersHook = (params) => {
+      writeAuthProfiles(params.agentDir, {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            token: "after-provider-discovery", // pragma: allowlist secret
+          },
+        },
+      });
+    };
+
+    const prepared = await prepareOpenClawModelsJsonSource(cfg, agentDir);
+    const postEnsureFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir);
+    if (!prepared.cacheable || !postEnsureFingerprint.cacheable) {
+      throw new Error("expected the post-ensure auth store to be cacheable");
+    }
+
+    expect(prepared.fingerprint).toBe(postEnsureFingerprint.fingerprint);
+    expect(prepared.fingerprint).not.toBe(preEnsureFingerprint.fingerprint);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
   });
 
   it("invalidates the cache when the config changes", async () => {

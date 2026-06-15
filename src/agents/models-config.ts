@@ -1896,10 +1896,8 @@ export async function prepareOpenClawModelsJsonSource(
   agentDirOverride?: string,
   options: EnsureOpenClawModelsJsonOptions = {},
 ): Promise<PreparedOpenClawModelsJsonSource> {
-  const [sourceInfo, result] = await Promise.all([
-    buildModelsJsonSourceFingerprint(config, agentDirOverride, options),
-    ensureOpenClawModelsJson(config, agentDirOverride, options),
-  ]);
+  const result = await ensureOpenClawModelsJson(config, agentDirOverride, options);
+  const sourceInfo = await buildModelsJsonSourceFingerprint(config, agentDirOverride, options);
   if (!sourceInfo.cacheable) {
     return {
       ...result,
