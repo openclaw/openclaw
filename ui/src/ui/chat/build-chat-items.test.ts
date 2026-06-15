@@ -142,6 +142,109 @@ describe("buildChatItems", () => {
     expect(groups[0].messages[0].duplicateCount).toBe(3);
   });
 
+  it("deduplicates relay-labeled assistant copies by source message id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "reply-1",
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival There it is." }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          id: "reply-1",
+          role: "assistant",
+          content: [{ type: "text", text: "There it is." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "There it is." },
+    ]);
+  });
+
+  it("deduplicates relay-labeled assistant copies by event messageId", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          messageId: "reply-2",
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival Found it." }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          messageId: "reply-2",
+          role: "assistant",
+          content: [{ type: "text", text: "Found it." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "Found it." }]);
+  });
+
+  it("deduplicates relay-labeled assistant copies by OpenClaw transcript metadata id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-3" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival On it." }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-3" },
+          role: "assistant",
+          content: [{ type: "text", text: "On it." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "On it." }]);
+  });
+
+  it("keeps identical assistant text separate when source message ids differ", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "reply-4",
+          role: "assistant",
+          content: [{ type: "text", text: "Same update" }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          id: "reply-5",
+          role: "assistant",
+          content: [{ type: "text", text: "Same update" }],
+          senderLabel: "Parzival",
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(2);
+    expect(groups[0].messages[0].duplicateCount).toBeUndefined();
+    expect(groups[0].messages[1].duplicateCount).toBeUndefined();
+  });
+
   it("suppresses assistant HEARTBEAT_OK acknowledgements before rendering history", () => {
     const groups = messageGroups({
       messages: [

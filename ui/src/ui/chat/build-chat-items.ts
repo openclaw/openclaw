@@ -232,9 +232,54 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+function isPendingSendMessage(message: unknown): boolean {
+  return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
+}
+
+function sourceMessageId(message: unknown): string | null {
+  const record = asRecord(message);
+  if (!record) {
+    return null;
+  }
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  if (id) {
+    return id;
+  }
+  const messageId = typeof record.messageId === "string" ? record.messageId.trim() : "";
+  if (messageId) {
+    return messageId;
+  }
+  const openclawId = asRecord(record["__openclaw"])?.id;
+  return typeof openclawId === "string" && openclawId.trim() ? openclawId.trim() : null;
+}
+
+function collapseDuplicateSourceKey(message: unknown): string | null {
+  if (isPendingSendMessage(message)) {
+    return null;
+  }
+  const normalized = safeNormalizeMessage(message);
+  if (!normalized) {
+    return null;
+  }
+  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+  if (role !== "user" && role !== "assistant") {
+    return null;
+  }
+  const id = sourceMessageId(message);
+  return id ? `${role}:${id}` : null;
+}
+
+function prefersNativeChatSurface(message: unknown): boolean {
+  const normalized = safeNormalizeMessage(message);
+  if (!normalized) {
+    return false;
+  }
+  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+  return (role === "user" || role === "assistant") && !(normalized.senderLabel ?? "").trim();
+}
+
 function collapseDuplicateDisplaySignature(message: unknown): string | null {
-  const marker = asRecord(message)?.["__openclaw"];
-  if (asRecord(marker)?.kind === "pending-send") {
+  if (isPendingSendMessage(message)) {
     return null;
   }
   const normalized = safeNormalizeMessage(message);
@@ -267,21 +312,37 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
 function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
   const collapsed: ChatItem[] = [];
   let previousSignature: string | null = null;
+  let previousSourceKey: string | null = null;
 
   for (const item of items) {
     if (item.kind !== "message") {
       collapsed.push(item);
       previousSignature = null;
+      previousSourceKey = null;
       continue;
     }
     const signature = collapseDuplicateDisplaySignature(item.message);
+    const sourceKey = collapseDuplicateSourceKey(item.message);
     const previous = collapsed[collapsed.length - 1];
-    if (signature && previousSignature === signature && previous?.kind === "message") {
+    if (sourceKey && previousSourceKey === sourceKey && previous?.kind === "message") {
+      if (!prefersNativeChatSurface(previous.message) && prefersNativeChatSurface(item.message)) {
+        collapsed[collapsed.length - 1] = item;
+        previousSignature = signature;
+      }
+      continue;
+    }
+    if (
+      signature &&
+      previousSignature === signature &&
+      previous?.kind === "message" &&
+      !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey)
+    ) {
       previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
       continue;
     }
     collapsed.push(item);
     previousSignature = signature;
+    previousSourceKey = sourceKey;
   }
 
   return collapsed;
