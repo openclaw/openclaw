@@ -1,17 +1,44 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mattermostPlugin } from "../../extensions/mattermost/src/channel.js";
 import { getMatchingMessagingToolReplyTargets } from "../auto-reply/reply/reply-payloads-dedupe.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
 } from "./embedded-agent-subscribe.tools.js";
 
-function registerMattermost(): void {
+const PARTIAL_RESULT_PROVIDER = "partialthreadprovider";
+
+function createPartialResultPlugin(): unknown {
+  return {
+    ...createChannelTestPluginBase({ id: PARTIAL_RESULT_PROVIDER }),
+    actions: {
+      extractToolSend: ({ args }: { args: Record<string, unknown> }) =>
+        args.action === "send" && typeof args.to === "string"
+          ? { to: args.to, threadImplicit: true }
+          : null,
+      extractToolSendResult: ({ result }: { result: unknown }) => {
+        const toolSend = (result as { details?: { toolSend?: Record<string, unknown> } })?.details
+          ?.toolSend;
+        const to = typeof toolSend?.to === "string" ? toolSend.to : undefined;
+        if (!to) {
+          return null;
+        }
+        const threadId = typeof toolSend?.threadId === "string" ? toolSend.threadId : undefined;
+        return { to, ...(threadId ? { threadId } : {}) };
+      },
+    },
+    threading: {
+      resolveAutoThreadId: ({ toolContext }: { toolContext?: { currentThreadTs?: string } }) =>
+        toolContext?.currentThreadTs,
+    },
+  };
+}
+
+function registerPartialResultProvider(): void {
   setActivePluginRegistry(
     createTestRegistry([
-      { pluginId: mattermostPlugin.id, source: "test", plugin: mattermostPlugin },
+      { pluginId: PARTIAL_RESULT_PROVIDER, source: "test", plugin: createPartialResultPlugin() },
     ]),
   );
 }
@@ -22,11 +49,11 @@ describe("extractMessagingToolSendResult thread evidence", () => {
   });
 
   it("preserves implicit thread evidence when the provider result omits it", () => {
-    registerMattermost();
+    registerPartialResultProvider();
 
     const pending = extractMessagingToolSend(
       "message",
-      { action: "send", provider: "mattermost", to: "channel:abc", message: "answer" },
+      { action: "send", provider: PARTIAL_RESULT_PROVIDER, to: "channel:abc", message: "answer" },
       {
         currentChannelId: "channel:abc",
         currentMessagingTarget: "channel:abc",
@@ -44,7 +71,7 @@ describe("extractMessagingToolSendResult thread evidence", () => {
     expect(confirmed.threadId).toBe("root-1");
 
     const matches = getMatchingMessagingToolReplyTargets({
-      messageProvider: "mattermost",
+      messageProvider: PARTIAL_RESULT_PROVIDER,
       originatingTo: "channel:abc",
       originatingThreadId: "root-1",
       messagingToolSentTargets: [confirmed],
@@ -53,10 +80,15 @@ describe("extractMessagingToolSendResult thread evidence", () => {
   });
 
   it("lets an explicit provider-reported thread override pending implicit evidence", () => {
-    registerMattermost();
+    registerPartialResultProvider();
 
     const confirmed = extractMessagingToolSendResult(
-      { tool: "message", provider: "mattermost", to: "channel:abc", threadImplicit: true },
+      {
+        tool: "message",
+        provider: PARTIAL_RESULT_PROVIDER,
+        to: "channel:abc",
+        threadImplicit: true,
+      },
       { details: { toolSend: { to: "channel:abc", threadId: "root-9" } } },
     );
     expect(confirmed.threadId).toBe("root-9");
