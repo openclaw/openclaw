@@ -81,9 +81,6 @@ export async function writeGeminiSystemSettings(
     ) as BundleMcpConfig["mcpServers"],
   };
   const settings = applyMergePatch(base, {
-    security: {
-      auth: null,
-    },
     mcp: {
       allowed: Object.keys(normalizedConfig.mcpServers),
     },
