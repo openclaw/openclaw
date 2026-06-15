@@ -700,42 +700,20 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
   sessionManager: ReturnType<typeof guardSessionManager>;
 }): void {
   const messages = params.activeSession.agent.state.messages;
-  if (isMidTurnPrecheckAssistantError(messages.at(-1))) {
+  const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
+  if (removedActiveError) {
     params.activeSession.agent.state.messages = messages.slice(0, -1);
   }
 
-  const mutableSessionManager = params.sessionManager as unknown as {
-    fileEntries?: Array<{
-      type?: string;
-      id?: string;
-      parentId?: string | null;
-      message?: AgentMessage;
-    }>;
-    byId?: Map<string, unknown>;
-    leafId?: string | null;
-    rewriteFile?: () => void;
-  };
-  const lastEntry = mutableSessionManager.fileEntries?.at(-1);
-  if (lastEntry?.type !== "message" || !isMidTurnPrecheckAssistantError(lastEntry.message)) {
-    if (isMidTurnPrecheckAssistantError(params.activeSession.agent.state.messages.at(-1))) {
-      log.warn(
-        "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
-      );
-    }
-    return;
-  }
-  if (typeof mutableSessionManager.rewriteFile !== "function") {
+  const removedPersistedError =
+    params.sessionManager.removeTrailingEntries(
+      (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
+    ) > 0;
+  if (removedActiveError && !removedPersistedError) {
     log.warn(
-      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager rewrite hook is unavailable",
+      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
     );
-    return;
   }
-  mutableSessionManager.fileEntries?.pop();
-  if (lastEntry.id) {
-    mutableSessionManager.byId?.delete(lastEntry.id);
-  }
-  mutableSessionManager.leafId = lastEntry.parentId ?? null;
-  mutableSessionManager.rewriteFile();
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {

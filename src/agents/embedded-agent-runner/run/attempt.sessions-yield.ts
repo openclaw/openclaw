@@ -180,47 +180,26 @@ export function stripSessionsYieldArtifacts(activeSession: {
 
   const sessionManager = activeSession.sessionManager as
     | {
-        fileEntries?: Array<{
-          type?: string;
-          id?: string;
-          parentId?: string | null;
-          message?: { role?: string; stopReason?: string };
-          customType?: string;
-        }>;
-        byId?: Map<string, { id: string }>;
-        leafId?: string | null;
-        rewriteFile?: () => void;
+        removeTrailingEntries?: (
+          predicate: (entry: {
+            type?: string;
+            message?: { role?: string; stopReason?: string };
+            customType?: string;
+          }) => boolean,
+        ) => number;
       }
     | undefined;
-  const fileEntries = sessionManager?.fileEntries;
-  const byId = sessionManager?.byId;
-  if (!fileEntries || !byId) {
+  if (typeof sessionManager?.removeTrailingEntries !== "function") {
     return;
   }
 
-  let changed = false;
-  while (fileEntries.length > 1) {
-    const last = fileEntries.at(-1);
-    if (!last || last.type === "session") {
-      break;
-    }
+  sessionManager.removeTrailingEntries((entry) => {
     const isYieldAbortAssistant =
-      last.type === "message" &&
-      last.message?.role === "assistant" &&
-      last.message?.stopReason === "aborted";
+      entry.type === "message" &&
+      entry.message?.role === "assistant" &&
+      entry.message?.stopReason === "aborted";
     const isYieldInterruptMessage =
-      last.type === "custom_message" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-    if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
-      break;
-    }
-    fileEntries.pop();
-    if (last.id) {
-      byId.delete(last.id);
-    }
-    sessionManager.leafId = last.parentId ?? null;
-    changed = true;
-  }
-  if (changed) {
-    sessionManager.rewriteFile?.();
-  }
+      entry.type === "custom_message" && entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
+    return isYieldAbortAssistant || isYieldInterruptMessage;
+  });
 }

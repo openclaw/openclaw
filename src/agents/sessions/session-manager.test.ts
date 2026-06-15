@@ -70,6 +70,7 @@ describe("SessionManager.open", () => {
     const sessionManager = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
 
     expect(sessionManager.getEntries()).toEqual([userEntry, assistantEntry]);
+    expect(sessionManager.getChildren(userEntry.id)).toEqual([assistantEntry]);
     expect(await fs.readFile(sessionFile, "utf8")).toContain("important question");
     expect(await fs.readFile(sessionFile, "utf8")).toContain("important answer");
     await expect(fs.readFile(sessionFile, "utf8")).resolves.not.toBe(originalTranscript);
@@ -1360,6 +1361,263 @@ describe("SessionManager.open", () => {
     expect(sessionManager.getEntries()).toEqual([assistantEntry]);
   });
 
+  it("bridges parent-linked opaque rows without exposing them as session entries", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const userEntry = {
+      type: "message",
+      id: "user-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "user", content: "question" },
+    };
+    const metadata = {
+      type: "metadata",
+      id: "metadata-1",
+      parentId: userEntry.id,
+      payload: { source: "plugin" },
+    };
+    await fs.writeFile(
+      sessionFile,
+      [buildSessionHeader(dir, "session-1"), userEntry, metadata]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    expect(sessionManager.getLeafEntry()).toEqual(userEntry);
+    const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    const assistantEntry = sessionManager.getEntry(assistantId);
+
+    expect(assistantEntry).toEqual(expect.objectContaining({ parentId: userEntry.id }));
+    const persistedAssistant = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null })
+      .find((entry) => entry.id === assistantId);
+    expect(persistedAssistant).toEqual(expect.objectContaining({ parentId: metadata.id }));
+    expect(sessionManager.getEntries()).toEqual([userEntry, assistantEntry]);
+    expect(sessionManager.getBranch()).toEqual([
+      userEntry,
+      expect.objectContaining({ id: assistantId, parentId: userEntry.id }),
+    ]);
+    expect(sessionManager.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "question" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+    ]);
+
+    sessionManager.branch(metadata.id);
+    expect(sessionManager.getLeafId()).toBe(userEntry.id);
+    sessionManager.branch(assistantId);
+    const branchedFile = sessionManager.createBranchedSession(assistantId);
+    expect(branchedFile).toBeDefined();
+    expect(
+      SessionManager.open(branchedFile!, dir, dir).buildSessionContext().messages,
+    ).toMatchObject([
+      { role: "user", content: "question" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+    ]);
+  });
+
+  it("repairs compaction boundaries that point through opaque rows", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const userEntry = {
+      type: "message",
+      id: "user-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "user", content: "question" },
+    };
+    const metadata = {
+      type: "metadata",
+      id: "metadata-1",
+      parentId: userEntry.id,
+      payload: { source: "plugin" },
+    };
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-1",
+      parentId: metadata.id,
+      timestamp: "2026-06-04T00:00:02.000Z",
+      message: buildAssistantMessage("answer"),
+    };
+    const compactionEntry = {
+      type: "compaction",
+      id: "compaction-1",
+      parentId: assistantEntry.id,
+      timestamp: "2026-06-04T00:00:03.000Z",
+      summary: "summary",
+      firstKeptEntryId: metadata.id,
+      tokensBefore: 200,
+    };
+    await fs.writeFile(
+      sessionFile,
+      [buildSessionHeader(dir, "session-1"), userEntry, metadata, assistantEntry, compactionEntry]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+
+    expect(sessionManager.getEntry(compactionEntry.id)).toEqual(
+      expect.objectContaining({ firstKeptEntryId: userEntry.id }),
+    );
+    expect(sessionManager.buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "summary" },
+      { role: "user", content: "question" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+    ]);
+  });
+
+  it("repairs opaque compaction boundaries on the active branch", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const opaqueRoot = { type: "metadata", id: "opaque-root", parentId: null };
+    const branchAUser = {
+      type: "message",
+      id: "branch-a-user",
+      parentId: opaqueRoot.id,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "user", content: "branch a" },
+    };
+    const branchBUser = {
+      type: "message",
+      id: "branch-b-user",
+      parentId: opaqueRoot.id,
+      timestamp: "2026-06-04T00:00:02.000Z",
+      message: { role: "user", content: "branch b" },
+    };
+    const branchBAssistant = {
+      type: "message",
+      id: "branch-b-assistant",
+      parentId: branchBUser.id,
+      timestamp: "2026-06-04T00:00:03.000Z",
+      message: buildAssistantMessage("branch b answer"),
+    };
+    const compactionEntry = {
+      type: "compaction",
+      id: "compaction-1",
+      parentId: branchBAssistant.id,
+      timestamp: "2026-06-04T00:00:04.000Z",
+      summary: "summary",
+      firstKeptEntryId: opaqueRoot.id,
+      tokensBefore: 200,
+    };
+    await fs.writeFile(
+      sessionFile,
+      [
+        buildSessionHeader(dir, "session-1"),
+        opaqueRoot,
+        branchAUser,
+        branchBUser,
+        branchBAssistant,
+        compactionEntry,
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+
+    expect(sessionManager.getEntry(compactionEntry.id)).toEqual(
+      expect.objectContaining({ firstKeptEntryId: branchBUser.id }),
+    );
+    expect(sessionManager.buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "summary" },
+      { role: "user", content: "branch b" },
+      { role: "assistant", content: [{ type: "text", text: "branch b answer" }] },
+    ]);
+  });
+
+  it("does not use session events as append parents", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const userEntry = {
+      type: "message",
+      id: "user-1",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "user", content: "question" },
+    };
+    const sessionEvent = {
+      type: "session",
+      id: "event-1",
+      parentId: userEntry.id,
+      sessionId: "external-session-event",
+    };
+    await fs.writeFile(
+      sessionFile,
+      [buildSessionHeader(dir, "session-1"), userEntry, sessionEvent]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+    const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+
+    expect(sessionManager.getEntry(assistantId)).toEqual(
+      expect.objectContaining({ parentId: userEntry.id }),
+    );
+    expect(sessionManager.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "question" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+    ]);
+  });
+
+  it("repairs descendants linked through persisted leaf records", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const rootEntry = {
+      type: "message",
+      id: "root-user",
+      parentId: null,
+      timestamp: "2026-06-04T00:00:01.000Z",
+      message: { role: "user", content: "root question" },
+    };
+    const abandonedEntry = {
+      type: "message",
+      id: "abandoned-assistant",
+      parentId: rootEntry.id,
+      timestamp: "2026-06-04T00:00:02.000Z",
+      message: buildAssistantMessage("abandoned answer"),
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "leaf-1",
+      parentId: abandonedEntry.id,
+      timestamp: "2026-06-04T00:00:03.000Z",
+      targetId: rootEntry.id,
+    };
+    const replacementEntry = {
+      type: "message",
+      id: "replacement-assistant",
+      parentId: leafEntry.id,
+      timestamp: "2026-06-04T00:00:04.000Z",
+      message: buildAssistantMessage("replacement answer"),
+    };
+    await fs.writeFile(
+      sessionFile,
+      [buildSessionHeader(dir, "session-1"), rootEntry, abandonedEntry, leafEntry, replacementEntry]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const reopened = SessionManager.open(sessionFile, dir, dir);
+    expect(reopened.getEntry(replacementEntry.id)).toEqual(
+      expect.objectContaining({ parentId: rootEntry.id }),
+    );
+    expect(reopened.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "root question" },
+      { role: "assistant", content: [{ type: "text", text: "replacement answer" }] },
+    ]);
+  });
+
   it("preserves trailing opaque rows when cleanup removes the preceding entry", async () => {
     const dir = await makeTempDir();
     const sessionManager = SessionManager.create(dir, dir);
@@ -1371,18 +1629,9 @@ describe("SessionManager.open", () => {
       { type: "prompt_released_opaque", record: metadata },
     ]);
 
-    const mutableManager = sessionManager as unknown as {
-      fileEntries: Array<{ id?: string }>;
-      byId: Map<string, unknown>;
-      leafId: string | null;
-      rewriteFile: () => void;
-    };
-    mutableManager.fileEntries.pop();
-    mutableManager.byId.delete(temporaryErrorId);
-    mutableManager.leafId = baseAnswerId;
-    mutableManager.rewriteFile();
+    expect(sessionManager.removeTrailingEntries((entry) => entry.id === temporaryErrorId)).toBe(1);
+    expect(sessionManager.getLeafId()).toBe(baseAnswerId);
     const replacementId = sessionManager.appendMessage(buildAssistantMessage("replacement answer"));
-    mutableManager.rewriteFile();
 
     const sessionFile = sessionManager.getSessionFile();
     expect(sessionFile).toBeDefined();

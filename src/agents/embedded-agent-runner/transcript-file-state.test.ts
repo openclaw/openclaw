@@ -970,6 +970,68 @@ describe("readTranscriptFileState", () => {
     ).not.toThrow();
   });
 
+  it("applies leaf controls to active state and marker-linked descendants", async () => {
+    const root = await makeRoot("openclaw-transcript-state-leaf-");
+    const sessionFile = path.join(root, "session.jsonl");
+    const header = {
+      type: "session",
+      version: 3,
+      id: "session-1",
+      timestamp: "2026-05-16T00:00:00.000Z",
+      cwd: root,
+    };
+    const rootEntry = {
+      type: "message",
+      id: "root-user",
+      parentId: null,
+      timestamp: "2026-05-16T00:00:01.000Z",
+      message: { role: "user", content: "root question" },
+    };
+    const abandonedEntry = {
+      type: "message",
+      id: "abandoned-assistant",
+      parentId: rootEntry.id,
+      timestamp: "2026-05-16T00:00:02.000Z",
+      message: { role: "assistant", content: "abandoned answer" },
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "leaf-1",
+      parentId: abandonedEntry.id,
+      timestamp: "2026-05-16T00:00:03.000Z",
+      targetId: rootEntry.id,
+    };
+    await fs.writeFile(
+      sessionFile,
+      [header, rootEntry, abandonedEntry, leafEntry]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+
+    const selectedState = await readTranscriptFileState(sessionFile);
+    expect(selectedState.getLeafId()).toBe(rootEntry.id);
+    expect(selectedState.getBranch().map((entry) => entry.id)).toEqual([rootEntry.id]);
+
+    const replacementEntry = {
+      type: "message",
+      id: "replacement-assistant",
+      parentId: leafEntry.id,
+      timestamp: "2026-05-16T00:00:04.000Z",
+      message: { role: "assistant", content: "replacement answer" },
+    };
+    await fs.appendFile(sessionFile, `${JSON.stringify(replacementEntry)}\n`, "utf8");
+
+    const reopened = await readTranscriptFileState(sessionFile);
+    expect(reopened.getEntries().find((entry) => entry.id === replacementEntry.id)).toEqual(
+      expect.objectContaining({ parentId: rootEntry.id }),
+    );
+    expect(reopened.getBranch().map((entry) => entry.id)).toEqual([
+      rootEntry.id,
+      replacementEntry.id,
+    ]);
+  });
+
   it("keeps legacy roots that are missing tree metadata", async () => {
     const root = await makeRoot("openclaw-transcript-state-legacy-root-");
     const sessionFile = path.join(root, "session.jsonl");

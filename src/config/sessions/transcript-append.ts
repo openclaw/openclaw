@@ -36,23 +36,53 @@ type TranscriptLeafInfo = {
   nonSessionEntryCount: number;
 };
 
+type TranscriptLineInfo = {
+  isNonSessionEntry: boolean;
+  hasParentLinkedEntry: boolean;
+  leafUpdate?: { leafId: string | null };
+};
+
 async function yieldTranscriptAppendScan(): Promise<void> {
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
 }
 
-function lineParentLinkedEntryId(line: string): string | undefined {
+function readTranscriptLineInfo(line: string): TranscriptLineInfo {
   if (!line.trim()) {
-    return undefined;
+    return { isNonSessionEntry: false, hasParentLinkedEntry: false };
   }
   try {
-    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
-    return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed
-      ? parsed.id
-      : undefined;
+    const parsed = JSON.parse(line) as {
+      type?: unknown;
+      id?: unknown;
+      parentId?: unknown;
+      targetId?: unknown;
+    };
+    if (parsed.type === "session") {
+      return { isNonSessionEntry: false, hasParentLinkedEntry: false };
+    }
+    const entryId = typeof parsed.id === "string" ? parsed.id : undefined;
+    if (!entryId || !("parentId" in parsed)) {
+      return { isNonSessionEntry: true, hasParentLinkedEntry: false };
+    }
+    if (parsed.type === "leaf") {
+      const targetId = parsed.targetId;
+      return targetId === null || typeof targetId === "string"
+        ? {
+            isNonSessionEntry: true,
+            hasParentLinkedEntry: true,
+            leafUpdate: { leafId: targetId },
+          }
+        : { isNonSessionEntry: true, hasParentLinkedEntry: true };
+    }
+    return {
+      isNonSessionEntry: true,
+      hasParentLinkedEntry: true,
+      leafUpdate: { leafId: entryId },
+    };
   } catch {
-    return undefined;
+    return { isNonSessionEntry: false, hasParentLinkedEntry: false };
   }
 }
 
@@ -91,26 +121,30 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
       const lines = text.split(/\r?\n/);
       carry = lines.pop() ?? "";
       for (const line of lines) {
-        if (lineHasNonSessionEntry(line)) {
+        const lineInfo = readTranscriptLineInfo(line);
+        if (lineInfo.isNonSessionEntry) {
           nonSessionEntryCount += 1;
         }
-        const id = lineParentLinkedEntryId(line);
-        if (id) {
-          leafId = id;
+        if (lineInfo.hasParentLinkedEntry) {
           hasParentLinkedEntries = true;
+        }
+        if (lineInfo.leafUpdate) {
+          leafId = lineInfo.leafUpdate.leafId ?? undefined;
         }
       }
       // Large transcripts are scanned cooperatively so appends do not monopolize the event loop.
       await yieldTranscriptAppendScan();
     }
     const tail = carry + decoder.end();
-    if (lineHasNonSessionEntry(tail)) {
+    const tailInfo = readTranscriptLineInfo(tail);
+    if (tailInfo.isNonSessionEntry) {
       nonSessionEntryCount += 1;
     }
-    const id = lineParentLinkedEntryId(tail);
-    if (id) {
-      leafId = id;
+    if (tailInfo.hasParentLinkedEntry) {
       hasParentLinkedEntries = true;
+    }
+    if (tailInfo.leafUpdate) {
+      leafId = tailInfo.leafUpdate.leafId ?? undefined;
     }
     return {
       ...(leafId ? { leafId } : {}),
@@ -119,18 +153,6 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
     };
   } finally {
     await handle.close();
-  }
-}
-
-function lineHasNonSessionEntry(line: string): boolean {
-  if (!line.trim()) {
-    return false;
-  }
-  try {
-    const parsed = JSON.parse(line) as { type?: unknown };
-    return parsed.type !== "session";
-  } catch {
-    return false;
   }
 }
 
@@ -298,6 +320,8 @@ export async function appendSessionTranscriptMessage<TMessage>(
           ...(publishedHeader ? [{ kind: "header" as const, serialized: publishedHeader }] : []),
           ...(result?.appended === true ? [{ kind: "id" as const, id: result.messageId }] : []),
         ],
+        resolvePublishedEntriesAfterFailure: () =>
+          publishedHeader ? [{ kind: "header", serialized: publishedHeader }] : [],
       },
     );
   }

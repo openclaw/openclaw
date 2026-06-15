@@ -137,14 +137,24 @@ export abstract class BaseSessionStorage<
     if (!current) {
       throw new SessionError("not_found", `Entry ${leafId} not found`);
     }
+    const seen = new Set<string>();
     while (current) {
-      path.unshift(current);
-      if (!current.parentId) {
+      if (seen.has(current.id)) {
+        throw new SessionError("invalid_session", `Cycle found at entry ${current.id}`);
+      }
+      seen.add(current.id);
+      if (current.type !== "leaf") {
+        path.unshift(current);
+      }
+      // Leaf rows are control records. Descendants written by older appenders
+      // may point at the marker, but their visible ancestry starts at its target.
+      const parentId = current.type === "leaf" ? current.targetId : current.parentId;
+      if (!parentId) {
         break;
       }
-      const parent = this.byId.get(current.parentId);
+      const parent = this.byId.get(parentId);
       if (!parent) {
-        throw new SessionError("invalid_session", `Entry ${current.parentId} not found`);
+        throw new SessionError("invalid_session", `Entry ${parentId} not found`);
       }
       current = parent;
     }

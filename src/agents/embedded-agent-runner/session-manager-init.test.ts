@@ -71,6 +71,63 @@ describe("prepareSessionManagerForRun", () => {
     expect(await fs.readFile(sessionFile, "utf-8")).toBe("");
   });
 
+  it("clears the append parent when resetting a real user-only manager", async () => {
+    const sessionFile = await makeTempFile();
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "old-session",
+          timestamp: "2026-05-27T00:00:00.000Z",
+          cwd: "/old/cwd",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "old-user",
+          parentId: null,
+          timestamp: "2026-05-27T00:00:01.000Z",
+          message: { role: "user", content: "old prompt" },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const sessionManager = SessionManager.open(sessionFile, path.dirname(sessionFile), "/old/cwd");
+
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "new-session",
+      cwd: "/tmp/task-repo",
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "response" }],
+      api: "messages",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+
+    const entries = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; parentId?: string | null });
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toEqual(expect.objectContaining({ type: "message", parentId: null }));
+  });
+
   it("rewrites forked transcript headers with copied assistant messages to the runtime cwd", async () => {
     // Forked sessions keep copied assistant context but rewrite the session
     // header to the child run id and active workspace cwd.

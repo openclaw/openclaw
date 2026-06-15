@@ -980,6 +980,38 @@ type PreservedOpaqueFileEntry = {
   record: unknown;
 };
 
+function parseParentLinkedOpaqueEntry(
+  record: unknown,
+): { id: string; parentId: string | null } | undefined {
+  if (
+    !isJsonRecord(record) ||
+    record.type === "session" ||
+    record.type === "leaf" ||
+    typeof record.id !== "string" ||
+    record.id.length === 0 ||
+    (record.parentId !== null && typeof record.parentId !== "string")
+  ) {
+    return undefined;
+  }
+  return { id: record.id, parentId: record.parentId };
+}
+
+function parseOpaqueLeafEntry(
+  record: unknown,
+): { id: string; targetId: string | null } | undefined {
+  if (
+    !isJsonRecord(record) ||
+    record.type !== "leaf" ||
+    typeof record.id !== "string" ||
+    record.id.length === 0
+  ) {
+    return undefined;
+  }
+  return record.targetId === null || typeof record.targetId === "string"
+    ? { id: record.id, targetId: record.targetId }
+    : undefined;
+}
+
 function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   fileEntries: FileEntry[];
   opaqueEntries: PreservedOpaqueFileEntry[];
@@ -1331,9 +1363,11 @@ export class SessionManager {
   private fileEntries: FileEntry[] = [];
   private opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
+  private opaqueParentsById: Map<string, string | null> = new Map();
   private labelsById: Map<string, string> = new Map();
   private labelTimestampsById: Map<string, string> = new Map();
   private leafId: string | null = null;
+  private appendParentId: string | null = null;
   private recoveredCorruptHeader = false;
   private sessionFileSnapshot: SessionFileSnapshot | undefined;
 
@@ -1443,8 +1477,10 @@ export class SessionManager {
     this.fileEntries = [header];
     this.opaqueFileEntries = [];
     this.byId.clear();
+    this.opaqueParentsById.clear();
     this.labelsById.clear();
     this.leafId = null;
+    this.appendParentId = null;
     this.flushed = false;
 
     if (this.shouldPersist) {
@@ -1456,15 +1492,43 @@ export class SessionManager {
 
   private buildIndex(): void {
     this.byId.clear();
+    this.opaqueParentsById.clear();
     this.labelsById.clear();
     this.labelTimestampsById.clear();
     this.leafId = null;
-    for (const entry of this.fileEntries) {
+    this.appendParentId = null;
+    let opaqueIndex = 0;
+    for (let index = 0; index <= this.fileEntries.length; index += 1) {
+      while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
+        const opaqueRecord = this.opaqueFileEntries[opaqueIndex]?.record;
+        const leafEntry = parseOpaqueLeafEntry(opaqueRecord);
+        if (leafEntry) {
+          const canonicalLeafId =
+            leafEntry.targetId === null
+              ? null
+              : this.byId.has(leafEntry.targetId)
+                ? leafEntry.targetId
+                : this.resolveCanonicalParentId(leafEntry.targetId);
+          this.opaqueParentsById.set(leafEntry.id, canonicalLeafId);
+          this.leafId = canonicalLeafId;
+          this.appendParentId = canonicalLeafId;
+          opaqueIndex += 1;
+          continue;
+        }
+        const link = parseParentLinkedOpaqueEntry(opaqueRecord);
+        if (link) {
+          this.opaqueParentsById.set(link.id, link.parentId);
+          this.appendParentId = link.id;
+        }
+        opaqueIndex += 1;
+      }
+      const entry = this.fileEntries[index];
       if (!isIndexedSessionEntry(entry)) {
         continue;
       }
       this.byId.set(entry.id, entry);
       this.leafId = entry.id;
+      this.appendParentId = entry.id;
       if (entry.type === "label") {
         if (entry.label) {
           this.labelsById.set(entry.targetId, entry.label);
@@ -1477,10 +1541,95 @@ export class SessionManager {
     }
   }
 
-  private getPersistedFileEntries(): unknown[] {
-    // Tail cleanup removes canonical entries before rewriting. Clamp opaque
-    // anchors now so later appends stay after records that the rewrite moved
-    // to the new tail instead of crossing them on the next full rewrite.
+  private resolveCanonicalParentId(parentId: string | null): string | null {
+    const seen = new Set<string>();
+    let currentId = parentId;
+    while (currentId && !this.byId.has(currentId)) {
+      if (seen.has(currentId)) {
+        return null;
+      }
+      seen.add(currentId);
+      currentId = this.opaqueParentsById.get(currentId) ?? null;
+    }
+    return currentId;
+  }
+
+  private normalizeEntryParent(entry: SessionEntry): SessionEntry {
+    const parentId = this.resolveCanonicalParentId(entry.parentId);
+    let normalized = parentId === entry.parentId ? entry : { ...entry, parentId };
+    if (
+      normalized.type === "compaction" &&
+      !this.byId.has(normalized.firstKeptEntryId) &&
+      this.opaqueParentsById.has(normalized.firstKeptEntryId)
+    ) {
+      const resolvedFirstKeptParent = this.resolveCanonicalParentId(normalized.firstKeptEntryId);
+      const firstKeptEntryId =
+        resolvedFirstKeptParent ??
+        this.findFirstCanonicalDescendantOnBranch(
+          normalized.firstKeptEntryId,
+          normalized.parentId,
+        ) ??
+        this.findFirstCanonicalDescendant(normalized.firstKeptEntryId) ??
+        parentId;
+      if (firstKeptEntryId && firstKeptEntryId !== normalized.firstKeptEntryId) {
+        normalized = { ...normalized, firstKeptEntryId };
+      }
+    }
+    return normalized;
+  }
+
+  private findFirstCanonicalDescendantOnBranch(
+    opaqueId: string,
+    leafId: string | null,
+  ): string | undefined {
+    const seen = new Set<string>();
+    let currentId = leafId;
+    let firstCanonicalDescendant: string | undefined;
+    while (currentId && !seen.has(currentId)) {
+      if (currentId === opaqueId) {
+        return firstCanonicalDescendant;
+      }
+      seen.add(currentId);
+      const entry = this.byId.get(currentId);
+      if (entry) {
+        firstCanonicalDescendant = entry.id;
+        currentId = entry.parentId;
+      } else {
+        currentId = this.opaqueParentsById.get(currentId) ?? null;
+      }
+    }
+    return undefined;
+  }
+
+  private findFirstCanonicalDescendant(opaqueId: string): string | undefined {
+    for (const entry of this.fileEntries) {
+      if (!isIndexedSessionEntry(entry)) {
+        continue;
+      }
+      const seen = new Set<string>();
+      let parentId = entry.parentId;
+      while (parentId && this.opaqueParentsById.has(parentId) && !seen.has(parentId)) {
+        if (parentId === opaqueId) {
+          return entry.id;
+        }
+        seen.add(parentId);
+        parentId = this.opaqueParentsById.get(parentId) ?? null;
+      }
+    }
+    return undefined;
+  }
+
+  private resolveBranchTargetId(branchFromId: string): string | null | undefined {
+    if (this.byId.has(branchFromId)) {
+      return branchFromId;
+    }
+    if (!this.opaqueParentsById.has(branchFromId)) {
+      return undefined;
+    }
+    return this.resolveCanonicalParentId(branchFromId);
+  }
+
+  private clampOpaqueFileEntryIndexes(): void {
     let previousOpaqueIndex = 0;
     for (const opaqueEntry of this.opaqueFileEntries) {
       opaqueEntry.index = Math.max(
@@ -1489,6 +1638,13 @@ export class SessionManager {
       );
       previousOpaqueIndex = opaqueEntry.index;
     }
+  }
+
+  private getPersistedFileEntries(): unknown[] {
+    // Tail cleanup removes canonical entries before rewriting. Clamp opaque
+    // anchors now so later appends stay after records that the rewrite moved
+    // to the new tail instead of crossing them on the next full rewrite.
+    this.clampOpaqueFileEntryIndexes();
 
     const entries: unknown[] = [];
     let opaqueIndex = 0;
@@ -1515,6 +1671,8 @@ export class SessionManager {
 
   clearPreservedOpaqueFileEntries(): void {
     this.opaqueFileEntries = [];
+    this.opaqueParentsById.clear();
+    this.appendParentId = null;
   }
 
   private writeFullFile(): string {
@@ -1558,6 +1716,35 @@ export class SessionManager {
 
   getSessionFile(): string | undefined {
     return this.sessionFile;
+  }
+
+  /**
+   * Remove matching entries from the canonical tail and rewrite once.
+   * Opaque records stay in file order, while the next append keeps the raw
+   * parent of the oldest removed entry so branch/control links remain intact.
+   */
+  removeTrailingEntries(predicate: (entry: SessionEntry) => boolean): number {
+    let removedParentId: string | null | undefined;
+    let removedCount = 0;
+    while (this.fileEntries.length > 1) {
+      const entry = this.fileEntries.at(-1);
+      if (!isIndexedSessionEntry(entry) || !predicate(entry)) {
+        break;
+      }
+      this.fileEntries.pop();
+      removedParentId = entry.parentId;
+      removedCount += 1;
+    }
+    if (removedCount === 0) {
+      return 0;
+    }
+
+    this.clampOpaqueFileEntryIndexes();
+    this.buildIndex();
+    this.leafId = this.resolveCanonicalParentId(removedParentId ?? null);
+    this.appendParentId = removedParentId ?? null;
+    this.rewriteFile();
+    return removedCount;
   }
 
   persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
@@ -1652,6 +1839,10 @@ export class SessionManager {
           index: this.fileEntries.length,
           record: sourceEntry.record,
         });
+        const link = parseParentLinkedOpaqueEntry(sourceEntry.record);
+        if (link) {
+          this.opaqueParentsById.set(link.id, link.parentId);
+        }
         continue;
       }
       if (this.byId.has(sourceEntry.id)) {
@@ -1686,6 +1877,7 @@ export class SessionManager {
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
+    this.appendParentId = entry.id;
     this.persist(entry, options);
   }
 
@@ -1704,7 +1896,7 @@ export class SessionManager {
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       message,
     };
@@ -1720,7 +1912,7 @@ export class SessionManager {
     const entry: ThinkingLevelChangeEntry = {
       type: "thinking_level_change",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       thinkingLevel,
     };
@@ -1733,7 +1925,7 @@ export class SessionManager {
     const entry: ModelChangeEntry = {
       type: "model_change",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       provider,
       modelId,
@@ -1753,7 +1945,7 @@ export class SessionManager {
     const entry: CompactionEntry = {
       type: "compaction",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       summary,
       firstKeptEntryId,
@@ -1774,7 +1966,7 @@ export class SessionManager {
       customType,
       data,
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
     };
     this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
@@ -1786,7 +1978,7 @@ export class SessionManager {
     const entry: SessionInfoEntry = {
       type: "session_info",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       name: name.trim(),
     };
@@ -1829,7 +2021,7 @@ export class SessionManager {
       display,
       details,
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
     };
     this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
@@ -1845,11 +2037,12 @@ export class SessionManager {
   }
 
   getLeafEntry(): SessionEntry | undefined {
-    return this.leafId ? this.byId.get(this.leafId) : undefined;
+    return this.leafId ? this.getEntry(this.leafId) : undefined;
   }
 
   getEntry(id: string): SessionEntry | undefined {
-    return this.byId.get(id);
+    const entry = this.byId.get(id);
+    return entry ? this.normalizeEntryParent(entry) : undefined;
   }
 
   /**
@@ -1858,8 +2051,8 @@ export class SessionManager {
   getChildren(parentId: string): SessionEntry[] {
     const children: SessionEntry[] = [];
     for (const entry of this.byId.values()) {
-      if (entry.parentId === parentId) {
-        children.push(entry);
+      if (this.resolveCanonicalParentId(entry.parentId) === parentId) {
+        children.push(this.normalizeEntryParent(entry));
       }
     }
     return children;
@@ -1884,7 +2077,7 @@ export class SessionManager {
     const entry: LabelEntry = {
       type: "label",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       targetId,
       label,
@@ -1908,10 +2101,17 @@ export class SessionManager {
   getBranch(fromId?: string): SessionEntry[] {
     const path: SessionEntry[] = [];
     const startId = fromId ?? this.leafId;
-    let current = startId ? this.byId.get(startId) : undefined;
-    while (current) {
-      path.unshift(current);
-      current = current.parentId ? this.byId.get(current.parentId) : undefined;
+    const seen = new Set<string>();
+    let currentId = startId;
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId);
+      const current = this.byId.get(currentId);
+      if (current) {
+        path.unshift(this.normalizeEntryParent(current));
+        currentId = current.parentId;
+      } else {
+        currentId = this.opaqueParentsById.get(currentId) ?? null;
+      }
     }
     return path;
   }
@@ -1921,7 +2121,7 @@ export class SessionManager {
    * Uses tree traversal from current leaf.
    */
   buildSessionContext(): SessionContext {
-    return buildSessionContext(this.getEntries(), this.leafId, this.byId);
+    return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
   }
 
   /**
@@ -1938,7 +2138,9 @@ export class SessionManager {
    * change the leaf pointer. Entries cannot be modified or deleted.
    */
   getEntries(): SessionEntry[] {
-    return this.fileEntries.filter((e): e is SessionEntry => e.type !== "session");
+    return this.fileEntries
+      .filter((entry): entry is SessionEntry => entry.type !== "session")
+      .map((entry) => this.normalizeEntryParent(entry));
   }
 
   /**
@@ -1961,10 +2163,11 @@ export class SessionManager {
     // Build tree
     for (const entry of entries) {
       const node = nodeMap.get(entry.id)!;
-      if (entry.parentId === null || entry.parentId === entry.id) {
+      const parentId = this.resolveCanonicalParentId(entry.parentId);
+      if (parentId === null || parentId === entry.id) {
         roots.push(node);
       } else {
-        const parent = nodeMap.get(entry.parentId);
+        const parent = nodeMap.get(parentId);
         if (parent) {
           parent.children.push(node);
         } else {
@@ -1999,10 +2202,12 @@ export class SessionManager {
    * are not modified or deleted.
    */
   branch(branchFromId: string): void {
-    if (!this.byId.has(branchFromId)) {
+    const branchTargetId = this.resolveBranchTargetId(branchFromId);
+    if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
-    this.leafId = branchFromId;
+    this.leafId = branchTargetId;
+    this.appendParentId = branchTargetId;
   }
 
   /**
@@ -2012,6 +2217,7 @@ export class SessionManager {
    */
   resetLeaf(): void {
     this.leafId = null;
+    this.appendParentId = null;
   }
 
   /**
@@ -2025,16 +2231,18 @@ export class SessionManager {
     details?: unknown,
     fromHook?: boolean,
   ): string {
-    if (branchFromId !== null && !this.byId.has(branchFromId)) {
+    const branchTargetId = branchFromId === null ? null : this.resolveBranchTargetId(branchFromId);
+    if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
-    this.leafId = branchFromId;
+    this.leafId = branchTargetId;
+    this.appendParentId = branchTargetId;
     const entry: BranchSummaryEntry = {
       type: "branch_summary",
       id: generateId(this.byId),
-      parentId: branchFromId,
+      parentId: branchTargetId,
       timestamp: new Date().toISOString(),
-      fromId: branchFromId ?? "root",
+      fromId: branchTargetId ?? "root",
       summary,
       details,
       fromHook,

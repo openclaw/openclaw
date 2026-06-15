@@ -16,6 +16,7 @@ type OwnedSessionTranscriptWriteContext = {
 export type OwnedSessionTranscriptWriteOptions<T> = {
   publishOwnedWrite?: boolean;
   resolvePublishedEntries?: (result: T) => readonly OwnedSessionTranscriptPublishedEntry[];
+  resolvePublishedEntriesAfterFailure?: () => readonly OwnedSessionTranscriptPublishedEntry[];
 };
 
 export type OwnedSessionTranscriptPublishedEntry =

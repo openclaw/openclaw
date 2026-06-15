@@ -276,9 +276,39 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
   return false;
 }
 
+function parseLeafControlEntry(
+  entry: unknown,
+): { id: string; targetId: string | null } | undefined {
+  if (!isRecord(entry) || entry.type !== "leaf") {
+    return undefined;
+  }
+  const candidate = entry as {
+    id?: unknown;
+    parentId?: unknown;
+    targetId?: unknown;
+    timestamp?: unknown;
+  };
+  if (
+    !isString(candidate.id) ||
+    (candidate.parentId !== undefined &&
+      candidate.parentId !== null &&
+      !isString(candidate.parentId)) ||
+    (candidate.timestamp !== undefined && !isString(candidate.timestamp)) ||
+    (candidate.targetId !== null && typeof candidate.targetId !== "string")
+  ) {
+    return undefined;
+  }
+  return { id: candidate.id, targetId: candidate.targetId };
+}
+
+type ReadableSessionState = {
+  entries: SessionEntry[];
+  leafId: string | null;
+};
+
 // Keep every readable entry while repairing links through rejected rows. This
 // preserves usable branches from partially written or migrated transcripts.
-function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
+function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
   const entries: SessionEntry[] = [];
   const acceptedIds = new Set<string>();
   const acceptedEntryById = new Map<string, SessionEntry>();
@@ -286,6 +316,7 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
   const rejectedParentById = new Map<string, string | null>();
   const firstReadableDescendantByRejectedId = new Map<string, string>();
   const rejectedAncestorsByAcceptedId = new Map<string, string[]>();
+  let effectiveLeafId: string | null = null;
   const acceptedPath = (leafId: string | null | undefined): SessionEntry[] => {
     const pathLocal: SessionEntry[] = [];
     let id = leafId ?? null;
@@ -386,6 +417,15 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
     }
     const entry = rawEntry as FileEntry;
     const id = rawEntry.id;
+    const leafEntry = parseLeafControlEntry(rawEntry);
+    if (leafEntry) {
+      rejectedIds.add(leafEntry.id);
+      rejectedParentById.set(leafEntry.id, leafEntry.targetId);
+      const resolvedTargetId = resolveRejectedParent(leafEntry.targetId);
+      effectiveLeafId =
+        resolvedTargetId !== null && acceptedIds.has(resolvedTargetId) ? resolvedTargetId : null;
+      continue;
+    }
     if (!isSessionEntry(entry)) {
       if (isString(id)) {
         rejectedIds.add(id);
@@ -406,8 +446,9 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
     entries.push(repaired);
     acceptedIds.add(repaired.id);
     acceptedEntryById.set(repaired.id, repaired);
+    effectiveLeafId = repaired.id;
   }
-  return entries;
+  return { entries, leafId: effectiveLeafId };
 }
 
 function sessionHeaderVersion(header: SessionHeader | null): number {
@@ -453,15 +494,16 @@ export class TranscriptFileState {
   constructor(params: {
     header: SessionHeader | null;
     entries: SessionEntry[];
+    leafId?: string | null;
     migrated?: boolean;
   }) {
     this.header = params.header;
     this.entries = [...params.entries];
     this.migrated = params.migrated === true;
-    this.rebuildIndex();
+    this.rebuildIndex(params.leafId);
   }
 
-  private rebuildIndex(): void {
+  private rebuildIndex(leafId?: string | null): void {
     this.byId.clear();
     this.labelsById.clear();
     this.labelTimestampsById.clear();
@@ -478,6 +520,9 @@ export class TranscriptFileState {
           this.labelTimestampsById.delete(entry.targetId);
         }
       }
+    }
+    if (leafId !== undefined) {
+      this.leafId = leafId;
     }
   }
 
@@ -687,8 +732,13 @@ export async function readTranscriptFileState(sessionFile: string): Promise<Tran
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = readableSessionEntries(fileEntries);
-  return new TranscriptFileState({ header, entries, migrated });
+  const readable = readableSessionState(fileEntries);
+  return new TranscriptFileState({
+    header,
+    entries: readable.entries,
+    leafId: readable.leafId,
+    migrated,
+  });
 }
 
 /** Rewrite the full transcript through the private-file store. */

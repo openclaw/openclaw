@@ -1520,16 +1520,24 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   async function runPublishingOwnedSessionFileWrite<T>(
     run: () => Promise<T> | T,
     resolvePublishedEntries?: (result: T) => readonly OwnedSessionTranscriptPublishedEntry[],
+    resolvePublishedEntriesAfterFailure?: () => readonly OwnedSessionTranscriptPublishedEntry[],
   ): Promise<T> {
     const parentLockState = activeWriteLock.getStore();
     if (parentLockState?.publishingOwnedWrite) {
-      const result = await run();
-      const nestedEntries = resolvePublishedEntries?.(result);
-      if (nestedEntries !== undefined) {
-        parentLockState.publishedEntries ??= [];
-        parentLockState.publishedEntries.push(...nestedEntries);
+      let nestedEntries: readonly OwnedSessionTranscriptPublishedEntry[] | undefined;
+      try {
+        const result = await run();
+        nestedEntries = resolvePublishedEntries?.(result);
+        return result;
+      } catch (error) {
+        nestedEntries = resolvePublishedEntriesAfterFailure?.();
+        throw error;
+      } finally {
+        if (nestedEntries !== undefined) {
+          parentLockState.publishedEntries ??= [];
+          parentLockState.publishedEntries.push(...nestedEntries);
+        }
       }
-      return result;
     }
     let releaseQueue!: () => void;
     const currentQueueEntry = new Promise<void>((resolve) => {
@@ -1550,19 +1558,22 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       };
       try {
         return await activeWriteLock.run(publicationLockState, async () => {
-          let expectedPublishedEntries: readonly OwnedSessionTranscriptPublishedEntry[] | undefined;
+          let ownEntries: readonly OwnedSessionTranscriptPublishedEntry[] | undefined;
           try {
             const result = await run();
-            const ownEntries = resolvePublishedEntries?.(result);
+            ownEntries = resolvePublishedEntries?.(result);
+            return result;
+          } catch (error) {
+            ownEntries = resolvePublishedEntriesAfterFailure?.();
+            throw error;
+          } finally {
             const nestedEntries = publicationLockState.publishedEntries;
-            expectedPublishedEntries =
+            const expectedPublishedEntries =
               nestedEntries === undefined
                 ? ownEntries
                 : ownEntries === undefined
                   ? nestedEntries
                   : [...nestedEntries, ...ownEntries];
-            return result;
-          } finally {
             await publishOwnedSessionFileFence(beforeWrite, expectedPublishedEntries);
           }
         });
@@ -1696,7 +1707,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (options?.publishOwnedWrite !== true) {
           return await run();
         }
-        return await runPublishingOwnedSessionFileWrite(run, options.resolvePublishedEntries);
+        return await runPublishingOwnedSessionFileWrite(
+          run,
+          options.resolvePublishedEntries,
+          options.resolvePublishedEntriesAfterFailure,
+        );
       }
       const { lock, owned, releaseRetainedUse } = await acquireWriteLock();
       try {
@@ -1704,7 +1719,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           await assertSessionFileFence();
           const runWithLock = async () => {
             if (options?.publishOwnedWrite === true) {
-              return await runPublishingOwnedSessionFileWrite(run, options.resolvePublishedEntries);
+              return await runPublishingOwnedSessionFileWrite(
+                run,
+                options.resolvePublishedEntries,
+                options.resolvePublishedEntriesAfterFailure,
+              );
             }
             const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
             try {

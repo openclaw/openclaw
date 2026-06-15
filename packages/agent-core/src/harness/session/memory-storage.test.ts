@@ -60,4 +60,30 @@ describe("InMemorySessionStorage", () => {
       targetId: "root",
     });
   });
+
+  it("traverses descendants of leaf markers through the selected target", async () => {
+    const leafEntry: SessionTreeEntry = {
+      type: "leaf",
+      id: "leaf-1",
+      parentId: "child",
+      timestamp: "2026-01-01T00:00:02.000Z",
+      targetId: "root",
+    };
+    const replacementEntry: SessionTreeEntry = {
+      type: "custom",
+      id: "replacement",
+      parentId: leafEntry.id,
+      timestamp: "2026-01-01T00:00:03.000Z",
+      customType: "replacement",
+    };
+    const storage = new InMemorySessionStorage({
+      entries: [rootEntry, childEntry, leafEntry, replacementEntry],
+    });
+
+    expect((await storage.getPathToRoot(replacementEntry.id)).map((entry) => entry.id)).toEqual([
+      "root",
+      "replacement",
+    ]);
+    expect((await storage.getPathToRoot(leafEntry.id)).map((entry) => entry.id)).toEqual(["root"]);
+  });
 });

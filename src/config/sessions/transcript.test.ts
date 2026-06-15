@@ -1353,6 +1353,64 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(message?.timestamp).toBe("2026-05-30T12:00:00.000Z");
   });
 
+  it("appends after the target selected by a leaf control record", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "leaf-target-transcript-session",
+      fixture.sessionsDir(),
+    );
+    const rootEntry = {
+      type: "message",
+      id: "root-user",
+      parentId: null,
+      timestamp: "2026-05-30T12:00:00.000Z",
+      message: { role: "user", content: "root question" },
+    };
+    const abandonedEntry = {
+      type: "message",
+      id: "abandoned-assistant",
+      parentId: rootEntry.id,
+      timestamp: "2026-05-30T12:00:01.000Z",
+      message: { role: "assistant", content: "abandoned answer" },
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "leaf-1",
+      parentId: abandonedEntry.id,
+      timestamp: "2026-05-30T12:00:02.000Z",
+      targetId: rootEntry.id,
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: "leaf-target-transcript-session",
+          timestamp: "2026-05-30T12:00:00.000Z",
+          cwd: fixture.sessionsDir(),
+        },
+        rootEntry,
+        abandonedEntry,
+        leafEntry,
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "assistant", content: "replacement answer" },
+    });
+
+    const appendedEntry = fs
+      .readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null })
+      .find((entry) => entry.id === appended.messageId);
+    expect(appendedEntry?.parentId).toBe(rootEntry.id);
+  });
+
   it("redacts structured message content before transcript persistence", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir(
       "redacted-transcript-session",

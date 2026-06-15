@@ -2393,6 +2393,43 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.dispose();
   });
 
+  it("preserves a created first-turn header when the owned append throws", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-failed-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "failed-first-turn.jsonl");
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+    await controller.releaseForPrompt();
+
+    await expect(
+      withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          withSessionWriteLock: (operation, options) =>
+            controller.withSessionWriteLock(operation, options),
+        },
+        async () =>
+          await appendSessionTranscriptMessage({
+            transcriptPath: sessionFile,
+            sessionId: "failed-first-turn",
+            cwd: dir,
+            message: { role: "assistant", content: "blocked" },
+            prepareMessageAfterIdempotencyCheck: () => {
+              throw new Error("expected append failure");
+            },
+          }),
+      ),
+    ).rejects.toThrow("expected append failure");
+
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([]);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await controller.dispose();
+  });
+
   it("rejects unowned rows added beside a blocked first-turn append", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-blocked-"));
     tempDirs.push(dir);
