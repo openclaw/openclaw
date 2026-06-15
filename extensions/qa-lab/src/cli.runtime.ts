@@ -656,7 +656,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   );
   if (scenarios.length === 0) {
     throw new Error(
-      `qa run --profile ${profile} did not resolve any executable QA scenarios for provider mode ${normalizedProviderMode}.`,
+      `qa run --qa-profile ${profile} did not resolve any executable QA scenarios for provider mode ${normalizedProviderMode}.`,
     );
   }
 
@@ -687,7 +687,7 @@ function normalizeQaRunProfile(value: string, profileIds: readonly string[]) {
   if (profileIds.includes(normalized)) {
     return normalized;
   }
-  throw new Error(`--profile must be one of ${profileIds.join(", ")}, got "${value}".`);
+  throw new Error(`--qa-profile must be one of ${profileIds.join(", ")}, got "${value}".`);
 }
 
 function defaultQaRunProfileProviderMode(profile: string): QaProviderModeInput {
@@ -717,7 +717,7 @@ function formatQaRunProfileNoMatchMessage(
   opts: Pick<QaProfileCommandOptions, "profile" | "surface" | "category">,
 ) {
   const filters = [
-    `--profile ${opts.profile}`,
+    `--qa-profile ${opts.profile}`,
     opts.surface?.trim() ? `--surface ${opts.surface.trim()}` : null,
     opts.category?.trim() ? `--category ${opts.category.trim()}` : null,
   ].filter((filter): filter is string => filter !== null);

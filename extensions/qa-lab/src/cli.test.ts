@@ -201,7 +201,7 @@ describe("qa cli registration", () => {
     expect(runQaProfileCommand).not.toHaveBeenCalled();
   });
 
-  it("routes qa run profile flags into the taxonomy-backed profile command", async () => {
+  it("routes qa run qa-profile flags into the taxonomy-backed profile command", async () => {
     await program.parseAsync([
       "node",
       "openclaw",
@@ -211,7 +211,7 @@ describe("qa cli registration", () => {
       "/tmp/openclaw-repo",
       "--output-dir",
       ".artifacts/qa-e2e/smoke-ci",
-      "--profile",
+      "--qa-profile",
       "smoke-ci",
       "--surface",
       "agent-runtime-and-provider-execution",

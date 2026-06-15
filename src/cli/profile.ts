@@ -15,21 +15,6 @@ type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
-// `qa run --profile` reuses the root flag spelling only for these taxonomy profiles.
-// Other values remain root OpenClaw profiles so existing self-check invocations keep working.
-const QA_RUN_PROFILE_IDS = new Set(["smoke-ci", "release"]);
-
-function isCommandLocalProfileOption(out: string[], value: string | null | undefined): boolean {
-  const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
-  if (primary !== "qa") {
-    return false;
-  }
-  if (secondary === "matrix") {
-    return true;
-  }
-  return secondary === "run" && typeof value === "string" && QA_RUN_PROFILE_IDS.has(value);
-}
-
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
@@ -52,7 +37,8 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     if (arg === "--profile" || arg.startsWith("--profile=")) {
       const next = args[index + 1];
       const { value, consumedNext } = takeCliRootOptionValue(arg, next);
-      if (isCommandLocalProfileOption(out, value)) {
+      const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
+      if (primary === "qa" && secondary === "matrix") {
         out.push(arg);
         if (consumedNext) {
           out.push(next);

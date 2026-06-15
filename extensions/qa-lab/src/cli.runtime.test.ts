@@ -397,7 +397,7 @@ describe("qa cli runtime", () => {
         surface: "unknown-surface",
       }),
     ).rejects.toThrow(
-      "qa run did not find taxonomy categories for --profile smoke-ci --surface unknown-surface.",
+      "qa run did not find taxonomy categories for --qa-profile smoke-ci --surface unknown-surface.",
     );
     expect(runQaSuite).not.toHaveBeenCalled();
   });
@@ -408,7 +408,7 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         profile: "nightly",
       }),
-    ).rejects.toThrow('--profile must be one of smoke-ci, release, got "nightly".');
+    ).rejects.toThrow('--qa-profile must be one of smoke-ci, release, got "nightly".');
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 

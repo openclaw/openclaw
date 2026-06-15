@@ -37,7 +37,7 @@ type QaScenarioRunCliOptions = {
 
 type QaRunCliOptions = QaLabSelfCheckCommandOptions &
   QaScenarioRunCliOptions & {
-    profile?: QaProfileCommandOptions["profile"];
+    qaProfile?: QaProfileCommandOptions["profile"];
     surface?: QaProfileCommandOptions["surface"];
     category?: QaProfileCommandOptions["category"];
   };
@@ -313,9 +313,9 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output <path>", "Report output path")
     .option("--output-dir <path>", "Profile run artifact directory")
-    .option("--profile <id>", "Run the QA scorecard profile from taxonomy.yaml")
-    .option("--surface <id>", "Limit --profile to a taxonomy surface id")
-    .option("--category <id>", "Limit --profile to a taxonomy category id")
+    .option("--qa-profile <id>", "Run the QA profile from taxonomy.yaml")
+    .option("--surface <id>", "Limit --qa-profile to a taxonomy surface id")
+    .option("--category <id>", "Limit --qa-profile to a taxonomy category id")
     .option("--transport <id>", "QA transport id", "qa-channel")
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
@@ -330,11 +330,11 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--fast", "Enable provider fast mode where supported", false)
     .action(async (opts: QaRunCliOptions) => {
-      if (opts.profile?.trim()) {
+      if (opts.qaProfile?.trim()) {
         await runQaProfile({
           repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
-          profile: opts.profile,
+          profile: opts.qaProfile,
           surface: opts.surface,
           category: opts.category,
           transportId: opts.transport,
