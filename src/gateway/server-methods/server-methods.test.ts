@@ -735,6 +735,21 @@ describe("injectTimestamp", () => {
 
     expect(result).toMatch(/^\[Fri 2025-07-04 12:00 EDT\]/);
   });
+
+  it("leaves messages bare when config disables envelope timestamps", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          envelopeTimestamp: "off",
+          userTimezone: "America/New_York",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(injectTimestamp("cache sensitive prompt", timestampOptsFromConfig(cfg))).toBe(
+      "cache sensitive prompt",
+    );
+  });
 });
 
 describe("sanitizeChatHistoryMessages", () => {
