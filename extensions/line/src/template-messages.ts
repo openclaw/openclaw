@@ -38,6 +38,10 @@ function resolveTemplateTextLimit(params: {
   return params.title?.trim() || params.thumbnailImageUrl?.trim() ? 60 : params.textOnlyLimit;
 }
 
+function truncateTemplateText(text: string, limit: number): string {
+  return Array.from(text).slice(0, limit).join("");
+}
+
 /**
  * Create a confirm template (yes/no style dialog)
  */
@@ -84,7 +88,7 @@ export function createButtonTemplate(
   const template: ButtonsTemplate = {
     type: "buttons",
     title: title.slice(0, 40), // LINE limit
-    text: text.slice(0, textLimit), // LINE limit (60 if no thumbnail, 160 with thumbnail)
+    text: truncateTemplateText(text, textLimit),
     actions: actions.slice(0, 4), // LINE limit: max 4 actions
     thumbnailImageUrl: options?.thumbnailImageUrl,
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
@@ -143,7 +147,7 @@ export function createCarouselColumn(params: {
   const textLimit = resolveTemplateTextLimit({ ...params, textOnlyLimit: 120 });
   return {
     title: params.title?.slice(0, 40),
-    text: params.text.slice(0, textLimit),
+    text: truncateTemplateText(params.text, textLimit),
     actions: params.actions.slice(0, 3), // LINE limit: max 3 actions per column
     thumbnailImageUrl: params.thumbnailImageUrl,
     imageBackgroundColor: params.imageBackgroundColor,
