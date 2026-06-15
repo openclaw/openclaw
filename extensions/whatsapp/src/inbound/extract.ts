@@ -5,6 +5,7 @@ import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
+import { lookupInboundMessageMetaForTarget } from "../quoted-message.js";
 import { jidToE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
 import type { WhatsAppStructuredContactContext } from "./types.js";
@@ -403,22 +404,34 @@ export function extractLocationData(
 
 export function describeReplyContext(
   rawMessage: proto.IMessage | undefined,
+  ctx?: { accountId?: string; remoteJid?: string },
 ): WhatsAppReplyContext | null {
   const message = unwrapMessage(rawMessage);
   if (!message) {
     return null;
   }
   const contextInfo = extractContextInfo(message);
+  const id = contextInfo?.stanzaId || undefined;
   const quoted = normalizeMessage(contextInfo?.quotedMessage as proto.IMessage | undefined);
-  if (!quoted) {
+  if (!contextInfo || (!quoted && !id)) {
     return null;
   }
-  const location = extractLocationData(quoted);
+  // When WA strips the quoted payload (old/cross-device/forwarded messages),
+  // fall back to the inbound message cache so reply context is never silently lost.
+  const cached =
+    id && ctx?.accountId && ctx.remoteJid
+      ? lookupInboundMessageMetaForTarget(ctx.accountId, ctx.remoteJid, id)
+      : undefined;
+  const location = quoted ? extractLocationData(quoted) : undefined;
   const locationText = location ? formatLocationText(location) : undefined;
-  const text = extractText(quoted);
-  let body: string | undefined = [text, locationText].filter(Boolean).join("\n").trim();
+  const text = quoted ? extractText(quoted) : undefined;
+  let body: string | undefined =
+    [text, locationText].filter(Boolean).join("\n").trim() || cached?.body;
   if (!body) {
-    body = extractMediaPlaceholder(quoted);
+    body = quoted ? extractMediaPlaceholder(quoted) : undefined;
+  }
+  if (!body && id) {
+    body = "[Quoted message unavailable]";
   }
   if (!body) {
     const quotedType = quoted ? getMessageContentType(quoted) : undefined;
@@ -427,13 +440,14 @@ export function describeReplyContext(
     );
     return null;
   }
-  const senderJid = contextInfo?.participant ?? undefined;
+  const senderJid = contextInfo?.participant ?? cached?.participant ?? undefined;
   const sender = resolveComparableIdentity({
     jid: senderJid,
+    e164: cached?.participantE164,
     label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
   });
   return {
-    id: contextInfo?.stanzaId || undefined,
+    id,
     body,
     sender,
   };

@@ -25,6 +25,7 @@ import {
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
+import { cacheInboundMessageMeta } from "./quoted-message.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const { imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -1394,5 +1395,59 @@ describe("web monitor inbox", () => {
         message: { conversation: "original" },
       },
     });
+  });
+
+  it("recovers reply context from inbound cache when quotedMessage payload is stripped", async () => {
+    // WhatsApp sometimes omits the quotedMessage payload for old/cross-device/forwarded
+    // messages while still sending contextInfo.stanzaId. Pre-populate the cache so
+    // describeReplyContext can recover the body and sender from it.
+    const remoteJid = "999@s.whatsapp.net";
+    const cachedMsgId = nextMessageId("cached-original");
+    cacheInboundMessageMeta(DEFAULT_ACCOUNT_ID, remoteJid, cachedMsgId, {
+      body: "cached original text",
+      participant: "111@s.whatsapp.net",
+      participantE164: "+111",
+      fromMe: false,
+    });
+
+    const onMessage = vi.fn(async (msg) => {
+      await msg.platform.reply("pong");
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("stripped-reply"),
+            fromMe: false,
+            remoteJid,
+          },
+          message: {
+            extendedTextMessage: {
+              text: "reply to something old",
+              contextInfo: {
+                stanzaId: cachedMsgId,
+                participant: "111@s.whatsapp.net",
+                // quotedMessage intentionally absent — simulates WA stripping the payload
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.quote?.id).toBe(cachedMsgId);
+    expect(inbound.quote?.body).toBe("cached original text");
+    expect(inbound.quote?.sender?.e164).toBe("+111");
+
+    await listener.close();
   });
 });

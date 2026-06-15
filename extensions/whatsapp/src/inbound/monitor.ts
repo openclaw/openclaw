@@ -1013,7 +1013,10 @@ export async function attachWebInboxToSocket(
         return null;
       }
     }
-    const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
+    const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined, {
+      accountId: options.accountId,
+      remoteJid: msg.key.remoteJid ?? undefined,
+    });
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
