@@ -365,6 +365,29 @@ jobs:
               return;
             }
 
+            const workflowRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: run.workflow_id,
+              event: "pull_request",
+              head_sha: run.head_sha,
+              per_page: 100,
+            });
+            const supersedingRun = workflowRuns.find(
+              (candidate) =>
+                (candidate.id === run.id ||
+                  candidate.pull_requests?.some(
+                    (candidatePull) => candidatePull.number === pr.number,
+                  )) &&
+                (candidate.run_number > run.run_number ||
+                  (candidate.run_number === run.run_number &&
+                    candidate.run_attempt > run.run_attempt)),
+            );
+            if (supersedingRun) {
+              core.info(`Skipping superseded run ${run.id} attempt ${run.run_attempt}; run ${supersedingRun.id} attempt ${supersedingRun.run_attempt} is newer.`);
+              return;
+            }
+
             if (existing) {
               await github.rest.issues.updateComment({
                 owner,

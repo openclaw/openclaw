@@ -50,6 +50,15 @@ type ExistingComment = {
   };
 };
 
+type WorkflowRun = {
+  head_sha: string;
+  id: number;
+  pull_requests?: Array<{ number: number }>;
+  run_attempt: number;
+  run_number: number;
+  workflow_id: number;
+};
+
 function commenterScript(): string {
   const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as Workflow;
   const step = workflow.jobs?.comment?.steps?.find(
@@ -71,6 +80,7 @@ async function runCommenter(
     liveHeadShaAfter?: string;
     runHeadSha?: string;
     runAttempt?: number;
+    workflowRuns?: WorkflowRun[];
   } = {},
 ) {
   const script = commenterScript();
@@ -93,6 +103,7 @@ async function runCommenter(
     rest: {
       actions: {
         listWorkflowRunArtifacts() {},
+        listWorkflowRuns() {},
         async downloadArtifact() {
           downloadCount += 1;
           return { data: archiveData };
@@ -131,6 +142,19 @@ async function runCommenter(
         artifactListCount += 1;
         return [{ ...artifact, name: artifact.name || ARTIFACT_NAME }];
       }
+      if (params.workflow_id === 999) {
+        return (
+          options.workflowRuns ?? [
+            {
+              head_sha: options.runHeadSha ?? "head-sha",
+              id: 12345,
+              run_attempt: options.runAttempt ?? 2,
+              run_number: 8,
+              workflow_id: 999,
+            },
+          ]
+        );
+      }
       if (params.issue_number === 123) {
         return options.existingComments ?? [];
       }
@@ -147,6 +171,8 @@ async function runCommenter(
         pull_requests: [{ number: 123 }],
         repository: { full_name: "openclaw/openclaw" },
         run_attempt: options.runAttempt ?? 2,
+        run_number: 8,
+        workflow_id: 999,
       },
     },
     repo: {
@@ -441,6 +467,119 @@ describe("iOS Periphery comment workflow", () => {
     expect(result.downloadCount).toBe(1);
     expect(result.pullGetCount).toBe(2);
     expect(result.createdBodies).toEqual([]);
+    expect(result.updatedBodies).toEqual([]);
+  });
+
+  it("does not publish findings from a superseded workflow attempt", async () => {
+    const archive = makeZip({
+      "periphery.json": JSON.stringify([
+        {
+          kind: "function",
+          location: "Sources/Test.swift:12",
+          name: "unused",
+        },
+      ]),
+      "periphery.status": "1\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: "ios-periphery-dead-code-12345-1",
+        size_in_bytes: archive.length,
+      },
+      archive,
+      {
+        runAttempt: 1,
+        workflowRuns: [
+          {
+            head_sha: "head-sha",
+            id: 12345,
+            run_attempt: 2,
+            run_number: 8,
+            workflow_id: 999,
+          },
+        ],
+      },
+    );
+
+    expect(result.downloadCount).toBe(1);
+    expect(result.pullGetCount).toBe(2);
+    expect(result.createdBodies).toEqual([]);
+    expect(result.updatedBodies).toEqual([]);
+  });
+
+  it("does not publish findings from a newer run for the same pull request", async () => {
+    const archive = makeZip({
+      "periphery.json": JSON.stringify([
+        {
+          kind: "function",
+          location: "Sources/Test.swift:12",
+          name: "unused",
+        },
+      ]),
+      "periphery.status": "1\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: ARTIFACT_NAME,
+        size_in_bytes: archive.length,
+      },
+      archive,
+      {
+        workflowRuns: [
+          {
+            head_sha: "head-sha",
+            id: 54321,
+            pull_requests: [{ number: 123 }],
+            run_attempt: 1,
+            run_number: 9,
+            workflow_id: 999,
+          },
+        ],
+      },
+    );
+
+    expect(result.createdBodies).toEqual([]);
+    expect(result.updatedBodies).toEqual([]);
+  });
+
+  it("does not treat a run for another pull request as superseding", async () => {
+    const archive = makeZip({
+      "periphery.json": JSON.stringify([
+        {
+          kind: "function",
+          location: "Sources/Test.swift:12",
+          name: "unused",
+        },
+      ]),
+      "periphery.status": "1\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: ARTIFACT_NAME,
+        size_in_bytes: archive.length,
+      },
+      archive,
+      {
+        workflowRuns: [
+          {
+            head_sha: "head-sha",
+            id: 54321,
+            pull_requests: [{ number: 456 }],
+            run_attempt: 1,
+            run_number: 9,
+            workflow_id: 999,
+          },
+        ],
+      },
+    );
+
+    expect(result.createdBodies).toHaveLength(1);
     expect(result.updatedBodies).toEqual([]);
   });
 
