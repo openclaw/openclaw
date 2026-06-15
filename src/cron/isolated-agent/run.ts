@@ -500,6 +500,7 @@ type PreparedCronRunContext = {
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
   sourceDelivery: SourceDeliveryPlan;
+  messageToolPromptEnabled: boolean;
   suppressExecNotifyOnExit: boolean;
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
@@ -829,13 +830,14 @@ async function prepareCronRunContext(params: {
   } else {
     commandBody = `${base}\n${timeLine}`.trim();
   }
+  const messageToolPromptEnabled = canPromptForMessageTool({
+    sourceDelivery,
+    toolsAllow: agentPayload?.toolsAllow,
+  });
   commandBody = appendCronDeliveryInstruction({
     commandBody,
     deliveryRequested,
-    messageToolEnabled: canPromptForMessageTool({
-      sourceDelivery,
-      toolsAllow: agentPayload?.toolsAllow,
-    }),
+    messageToolEnabled: messageToolPromptEnabled,
     resolvedDeliveryOk: resolvedDelivery.ok,
     requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
   });
@@ -929,6 +931,7 @@ async function prepareCronRunContext(params: {
       resolvedDelivery,
       deliveryRequested,
       sourceDelivery,
+      messageToolPromptEnabled,
       suppressExecNotifyOnExit: deliveryPlan.mode === "none",
       skillsSnapshot,
       liveSelection,
@@ -1367,8 +1370,10 @@ export async function runCronIsolatedAgentTurn(params: {
         accountId: prepared.context.resolvedDelivery.accountId,
         threadId: prepared.context.resolvedDelivery.threadId,
       },
+      resolvedDeliveryOk: prepared.context.resolvedDelivery.ok,
       deliveryRequested: prepared.context.deliveryRequested,
       sourceDelivery: prepared.context.sourceDelivery,
+      messageToolPromptEnabled: prepared.context.messageToolPromptEnabled,
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
       useSubagentFallbacks: prepared.context.useSubagentFallbacks,

@@ -25,21 +25,37 @@ let readCachedAgentModelCatalogMock: ReturnType<typeof vi.fn>;
 let writeCachedAgentModelCatalogMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
-  shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
-    isSuppressedModel(params.provider, params.id),
-  buildShouldSuppressBuiltInModel: () => (params: { provider?: string; id?: string }) =>
-    isSuppressedModel(params.provider, params.id),
+  shouldSuppressBuiltInModel: (params: { provider?: string; id?: string; baseUrl?: string }) =>
+    isSuppressedModel(params.provider, params.id, params.baseUrl),
+  buildShouldSuppressBuiltInModel:
+    () => (params: { provider?: string; id?: string; baseUrl?: string }) =>
+      isSuppressedModel(params.provider, params.id, params.baseUrl),
 }));
 
-function isSuppressedModel(provider?: string, id?: string): boolean {
+function isDirectOpenAiBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return true;
+  }
+  try {
+    return new URL(trimmed).hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+function isSuppressedModel(provider?: string, id?: string, baseUrl?: string): boolean {
   const modelId = id?.trim().toLowerCase();
   if (!modelId) {
     return false;
   }
-  return (
-    (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
-    modelId === "gpt-5.3-codex-spark"
-  );
+  if (modelId !== "gpt-5.3-codex-spark") {
+    return false;
+  }
+  if (provider === "azure-openai-responses") {
+    return true;
+  }
+  return provider === "openai" && isDirectOpenAiBaseUrl(baseUrl);
 }
 
 function mockCatalogImportFailThenRecover() {
@@ -1308,6 +1324,31 @@ describe("loadModelCatalog", () => {
     expectNoCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
     expectNoCatalogEntry(result, "azure-openai-responses", "gpt-5.3-codex-spark");
     expectNoCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
+  });
+
+  it("keeps custom endpoint gpt-5.3-codex-spark rows in the catalog", async () => {
+    mockAgentDiscoveryModels([
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        name: "GPT-5.3 Codex Spark",
+        contextWindow: 128000,
+        input: ["text"],
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "openai",
+        baseUrl: "https://proxy.example.com/v1",
+        name: "GPT-5.3 Codex Spark Proxy",
+        contextWindow: 128000,
+        input: ["text"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    const entry = requireCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
+    expect(entry.name).toBe("GPT-5.3 Codex Spark Proxy");
   });
 
   it("keeps available openai 5.1/5.2/5.3 built-ins in the catalog", async () => {
