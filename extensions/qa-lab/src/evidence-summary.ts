@@ -2,7 +2,10 @@
 import { z } from "zod";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
-import { readQaScorecardProfileOptions } from "./scorecard-taxonomy.js";
+import {
+  readQaScorecardProfileOptions,
+  type QaScorecardEvidenceMode,
+} from "./scorecard-taxonomy.js";
 
 export const QA_EVIDENCE_SUMMARY_KIND = "openclaw.qa.evidence-summary";
 export const QA_EVIDENCE_FILENAME = "qa-evidence.json";
@@ -187,6 +190,7 @@ export const qaEvidenceSummarySchema = z
     kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
     schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
     generatedAt: nonEmptyStringSchema,
+    isCompact: z.boolean(),
     entries: z.array(qaEvidenceSummaryEntrySchema),
     profile: qaEvidenceProfileIdSchema.optional(),
     scorecard: qaEvidenceScorecardSchema.optional(),
@@ -275,6 +279,7 @@ type QaEvidenceArtifactInput = {
 
 type QaEvidenceBuildBase = {
   artifactPaths: readonly QaEvidenceArtifactInput[];
+  evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
   generatedAt: string;
   primaryModel: string;
@@ -492,14 +497,15 @@ function resultForEvidence(
 
 function buildQaEvidenceSummary(params: {
   entries: QaEvidenceSummaryEntry[];
-  excludeTestExecution?: boolean;
+  evidenceMode?: QaScorecardEvidenceMode;
   generatedAt: string;
   profile?: QaEvidenceProfile;
   scorecard?: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
   const profileOptions = readQaScorecardProfileOptions(params.profile);
-  const excludeTestExecution = params.excludeTestExecution ?? profileOptions.excludeTestExecution;
-  const entries = excludeTestExecution
+  const evidenceMode = params.evidenceMode ?? profileOptions.evidenceMode;
+  const isCompact = evidenceMode === "compact";
+  const entries = isCompact
     ? params.entries.map((entry) => {
         const { execution: _execution, ...withoutExecution } = entry;
         return withoutExecution;
@@ -509,6 +515,7 @@ function buildQaEvidenceSummary(params: {
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
+    isCompact,
     entries,
     profile: params.profile,
     scorecard: params.scorecard,
@@ -520,14 +527,14 @@ export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSumma
 }
 
 export function attachQaEvidenceScorecard(params: {
-  excludeTestExecution?: boolean;
+  evidenceMode?: QaScorecardEvidenceMode;
   summary: QaEvidenceSummaryJson;
   profile: QaEvidenceProfile;
   scorecard: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
   return buildQaEvidenceSummary({
     entries: params.summary.entries,
-    excludeTestExecution: params.excludeTestExecution,
+    evidenceMode: params.evidenceMode,
     generatedAt: params.summary.generatedAt,
     profile: params.profile,
     scorecard: params.scorecard,
@@ -597,7 +604,12 @@ export function buildQaSuiteEvidenceSummary(
       result: resultForEvidence(result, timing),
     };
   });
-  return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries, profile });
+  return buildQaEvidenceSummary({
+    entries,
+    evidenceMode: params.evidenceMode,
+    generatedAt: params.generatedAt,
+    profile,
+  });
 }
 
 function buildTestRunnerEvidenceSummary(
@@ -656,7 +668,12 @@ function buildTestRunnerEvidenceSummary(
       result: resultForEvidence(result, timing),
     };
   });
-  return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries, profile });
+  return buildQaEvidenceSummary({
+    entries,
+    evidenceMode: params.evidenceMode,
+    generatedAt: params.generatedAt,
+    profile,
+  });
 }
 
 export function buildVitestEvidenceSummary(
@@ -749,5 +766,10 @@ export function buildLiveTransportEvidenceSummary(
       result: resultForEvidence(check, timing),
     };
   });
-  return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries, profile });
+  return buildQaEvidenceSummary({
+    entries,
+    evidenceMode: params.evidenceMode,
+    generatedAt: params.generatedAt,
+    profile,
+  });
 }

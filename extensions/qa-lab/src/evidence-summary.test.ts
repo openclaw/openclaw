@@ -47,6 +47,7 @@ describe("evidence summary", () => {
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
     expect(evidence.schemaVersion).toBe(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION);
+    expect(evidence.isCompact).toBe(false);
     expect(evidence.profile).toBeUndefined();
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]).toMatchObject({
@@ -440,7 +441,7 @@ describe("evidence summary", () => {
     expect(evidence.profile).toBe("experimental-profile");
   });
 
-  it("omits execution for taxonomy profiles that exclude test execution", () => {
+  it("uses compact evidence for taxonomy profiles that request compact mode", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
       profile: "smoke-ci",
@@ -462,10 +463,11 @@ describe("evidence summary", () => {
 
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.profile).toBe("smoke-ci");
+    expect(evidence.isCompact).toBe(true);
     expect(evidence.entries[0]).not.toHaveProperty("execution");
   });
 
-  it("keeps execution for taxonomy profiles that include test execution", () => {
+  it("keeps full evidence for taxonomy profiles that use full mode", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [{ kind: "summary", path: QA_EVIDENCE_FILENAME }],
       profile: "release",
@@ -485,12 +487,42 @@ describe("evidence summary", () => {
 
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.profile).toBe("release");
+    expect(evidence.isCompact).toBe(false);
     expect(evidence.entries[0]?.execution).toMatchObject({
       runner: "host",
       channel: {
         id: "telegram",
         live: true,
       },
+    });
+  });
+
+  it("lets explicit full evidence override a compact profile default", () => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
+      evidenceMode: "full",
+      profile: "smoke-ci",
+      scenarioDefinitions: [
+        {
+          id: "dm-chat-baseline",
+          title: "DM baseline conversation",
+          coverage: {
+            primary: ["channels.dm"],
+          },
+        },
+      ],
+      channelId: "qa-channel",
+      generatedAt: "2026-06-07T12:09:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
+    });
+
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.profile).toBe("smoke-ci");
+    expect(evidence.isCompact).toBe(false);
+    expect(evidence.entries[0]?.execution).toMatchObject({
+      runner: "host",
     });
   });
 

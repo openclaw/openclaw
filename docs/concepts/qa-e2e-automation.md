@@ -59,10 +59,12 @@ selected-category counts and missing coverage IDs; the individual evidence
 entries remain the source of truth for the tests, coverage roles, and results.
 Full evidence entries include `execution` metadata with provider, package, and
 artifact details; transport-backed entries also include channel details when the
-runner reports them. The `smoke-ci` profile uses compact evidence by default
-and intentionally omits that per-entry `execution` block to keep PR and merge
-artifacts small. Use `--exclude-test-execution-evidence` on any profile run to
-request the same compact evidence shape for that run:
+runner reports them. Compact evidence sets top-level `isCompact: true` and
+intentionally omits that per-entry `execution` block to keep PR and merge
+artifacts small. The `smoke-ci` profile uses compact evidence by default. Use
+`--evidence-mode compact` on any profile run to request the same compact shape,
+or `--evidence-mode full` when a compact profile run needs per-entry execution
+metadata:
 
 ```bash
 pnpm openclaw qa run \
@@ -73,11 +75,10 @@ pnpm openclaw qa run \
 ```
 
 Use `smoke-ci` for deterministic no-live-service proof and `release` for the
-Stable/LTS proof lane. Use `release` or any profile run without
-`--exclude-test-execution-evidence` when operators or downstream consumers need
-per-entry provider, package, artifact, or available channel metadata. When a
-command also needs an OpenClaw root profile, put the root profile before the QA
-command:
+Stable/LTS proof lane. Use `release` or `--evidence-mode full` when operators
+or downstream consumers need per-entry provider, package, artifact, or
+available channel metadata. When a command also needs an OpenClaw root profile,
+put the root profile before the QA command:
 
 ```bash
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
@@ -954,7 +955,8 @@ per-scenario logs. When `qa suite` is reached through
 scorecard summary for the selected taxonomy categories. Full entries carry
 provider, package, artifact, and optional channel metadata under `execution`;
 compact profile evidence, including the default `smoke-ci` profile and runs
-with `--exclude-test-execution-evidence`, intentionally omits that block.
+with `--evidence-mode compact`, sets top-level `isCompact: true` and
+intentionally omits that block.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model

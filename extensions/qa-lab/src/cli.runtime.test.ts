@@ -124,6 +124,7 @@ function makeQaEvidence(entries: unknown[] = []) {
     kind: "openclaw.qa.evidence-summary",
     schemaVersion: 2,
     generatedAt: "2026-06-14T00:00:00.000Z",
+    isCompact: false,
     entries,
   };
 }
@@ -442,6 +443,7 @@ describe("qa cli runtime", () => {
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
         entries?: unknown[];
+        isCompact?: unknown;
         profile?: unknown;
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
@@ -454,6 +456,7 @@ describe("qa cli runtime", () => {
         };
       };
       expect(evidence.profile).toBe("smoke-ci");
+      expect(evidence.isCompact).toBe(true);
       expect(evidence.scorecard).toMatchObject({
         run: {
           evidenceEntryCount: 1,
@@ -482,7 +485,7 @@ describe("qa cli runtime", () => {
     }
   });
 
-  it("lets qa profile runs force compact execution-free evidence", async () => {
+  it("lets qa profile runs force compact evidence", async () => {
     runQaSuite.mockImplementationOnce(async () => {
       await fs.writeFile(
         suiteEvidencePath,
@@ -551,15 +554,106 @@ describe("qa cli runtime", () => {
       primaryModel: "mock-openai/gpt-5.5",
       transportId: "qa-channel",
       allowFailures: true,
-      excludeTestExecutionEvidence: true,
+      evidenceMode: "compact",
     });
 
     const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
       entries?: unknown[];
+      isCompact?: unknown;
       profile?: unknown;
     };
     expect(evidence.profile).toBe("release");
+    expect(evidence.isCompact).toBe(true);
     expect(evidence.entries?.[0]).not.toHaveProperty("execution");
+  });
+
+  it("lets qa profile runs force full evidence for compact profiles", async () => {
+    runQaSuite.mockImplementationOnce(async () => {
+      await fs.writeFile(
+        suiteEvidencePath,
+        JSON.stringify(
+          makeQaEvidence([
+            {
+              test: {
+                kind: "qa-scenario",
+                id: "dm-chat-baseline",
+                title: "DM baseline conversation",
+                source: {
+                  path: "qa/scenarios/channels/dm-chat-baseline.yaml",
+                },
+              },
+              coverage: [
+                {
+                  id: "channels.dm",
+                  role: "primary",
+                },
+              ],
+              execution: {
+                runner: "host",
+                environment: {
+                  ref: null,
+                  os: process.platform,
+                  nodeVersion: process.version,
+                },
+                provider: {
+                  id: "openai",
+                  live: false,
+                  model: {
+                    name: "gpt-5.5",
+                    ref: "mock-openai/gpt-5.5",
+                  },
+                  fixture: "mock-openai",
+                },
+                channel: {
+                  id: "qa-channel",
+                  live: false,
+                },
+                packageSource: {
+                  kind: "source-checkout",
+                },
+                artifacts: [],
+              },
+              result: {
+                status: "pass",
+              },
+            },
+          ]),
+        ),
+        "utf8",
+      );
+      return flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      });
+    });
+
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa-e2e/smoke-ci",
+      profile: "smoke-ci",
+      category: "agent-runtime-and-provider-execution.agent-turn-execution",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      transportId: "qa-channel",
+      allowFailures: true,
+      evidenceMode: "full",
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.evidenceMode).toBe("full");
+    const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+      entries?: Array<{ execution?: unknown }>;
+      isCompact?: unknown;
+      profile?: unknown;
+    };
+    expect(evidence.profile).toBe("smoke-ci");
+    expect(evidence.isCompact).toBe(false);
+    expect(evidence.entries?.[0]?.execution).toMatchObject({
+      runner: "host",
+      provider: {
+        id: "openai",
+      },
+    });
   });
 
   it("rejects qa profile runs that do not match taxonomy categories", async () => {

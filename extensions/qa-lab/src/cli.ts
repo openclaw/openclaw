@@ -1,5 +1,5 @@
 // Qa Lab plugin module implements cli behavior.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { collectString } from "./cli-options.js";
 import type {
@@ -40,13 +40,15 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     qaProfile?: QaProfileCommandOptions["profile"];
     surface?: QaProfileCommandOptions["surface"];
     category?: QaProfileCommandOptions["category"];
-    excludeTestExecutionEvidence?: QaProfileCommandOptions["excludeTestExecutionEvidence"];
+    evidenceMode?: QaProfileCommandOptions["evidenceMode"];
+    excludeTestExecutionEvidence?: boolean;
   };
 
 const QA_RUN_PROFILE_ONLY_OPTIONS = [
   { optionName: "outputDir", flag: "--output-dir" },
   { optionName: "surface", flag: "--surface" },
   { optionName: "category", flag: "--category" },
+  { optionName: "evidenceMode", flag: "--evidence-mode" },
   { optionName: "excludeTestExecutionEvidence", flag: "--exclude-test-execution-evidence" },
   { optionName: "transport", flag: "--transport" },
   { optionName: "providerMode", flag: "--provider-mode" },
@@ -97,6 +99,26 @@ function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
     throw invalidQaCliArgument(`${flag} must be a positive integer.`);
   }
   return parsed;
+}
+
+function parseQaEvidenceModeOption(value: string): QaProfileCommandOptions["evidenceMode"] {
+  const evidenceMode = value.trim();
+  if (evidenceMode === "full" || evidenceMode === "compact") {
+    return evidenceMode;
+  }
+  throw invalidQaCliArgument("--evidence-mode must be one of full, compact.");
+}
+
+function resolveQaEvidenceModeOptions(opts: QaRunCliOptions) {
+  if (opts.excludeTestExecutionEvidence === true) {
+    if (opts.evidenceMode === "full") {
+      throw new Error(
+        "--exclude-test-execution-evidence cannot be combined with --evidence-mode full.",
+      );
+    }
+    return "compact";
+  }
+  return opts.evidenceMode;
 }
 
 function collectCliSuppliedQaRunFlags(
@@ -371,9 +393,17 @@ export function registerQaLabCli(program: Command) {
     .option("--surface <id>", "Limit --qa-profile to a taxonomy surface id")
     .option("--category <id>", "Limit --qa-profile to a taxonomy category id")
     .option(
-      "--exclude-test-execution-evidence",
-      "Omit execution metadata from qa-evidence.json entries for this profile run",
-      false,
+      "--evidence-mode <mode>",
+      "Set profile qa-evidence.json mode: full or compact",
+      parseQaEvidenceModeOption,
+    )
+    .addOption(
+      new Option(
+        "--exclude-test-execution-evidence",
+        "Deprecated alias for --evidence-mode compact",
+      )
+        .default(false)
+        .hideHelp(),
     )
     .option("--transport <id>", "QA transport id", "qa-channel")
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
@@ -397,9 +427,7 @@ export function registerQaLabCli(program: Command) {
           profile: opts.qaProfile,
           surface: opts.surface,
           category: opts.category,
-          ...(opts.excludeTestExecutionEvidence === true
-            ? { excludeTestExecutionEvidence: true }
-            : {}),
+          evidenceMode: resolveQaEvidenceModeOptions(opts),
           transportId: opts.transport,
           providerMode: opts.providerMode,
           primaryModel: opts.model,

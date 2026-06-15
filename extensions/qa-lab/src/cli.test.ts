@@ -217,7 +217,8 @@ describe("qa cli registration", () => {
       "agent-runtime-and-provider-execution",
       "--category",
       "agent-runtime-and-provider-execution.agent-turn-execution",
-      "--exclude-test-execution-evidence",
+      "--evidence-mode",
+      "compact",
       "--transport",
       "qa-channel",
       "--provider-mode",
@@ -238,7 +239,7 @@ describe("qa cli registration", () => {
       profile: "smoke-ci",
       surface: "agent-runtime-and-provider-execution",
       category: "agent-runtime-and-provider-execution.agent-turn-execution",
-      excludeTestExecutionEvidence: true,
+      evidenceMode: "compact",
       transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
@@ -250,10 +251,30 @@ describe("qa cli registration", () => {
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
   });
 
+  it("keeps the previous compact evidence flag as a hidden alias", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--qa-profile",
+      "release",
+      "--exclude-test-execution-evidence",
+    ]);
+
+    expect(runQaProfileCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: "release",
+        evidenceMode: "compact",
+      }),
+    );
+  });
+
   it.each([
     ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
     ["--surface", ["agent-runtime-and-provider-execution"]],
     ["--category", ["agent-runtime-and-provider-execution.agent-turn-execution"]],
+    ["--evidence-mode", ["compact"]],
     ["--exclude-test-execution-evidence", []],
     ["--transport", ["qa-channel"]],
     ["--provider-mode", ["mock-openai"]],
@@ -268,6 +289,52 @@ describe("qa cli registration", () => {
     ).rejects.toThrow(`qa run ${flag} requires --qa-profile`);
 
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown qa evidence modes", async () => {
+    const invalidProgram = new Command();
+    invalidProgram.exitOverride();
+    invalidProgram.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerQaLabCli(invalidProgram);
+
+    await expect(
+      invalidProgram.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "smoke-ci",
+        "--evidence-mode",
+        "tiny",
+      ]),
+    ).rejects.toThrow("--evidence-mode must be one of full, compact.");
+
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting qa evidence mode flags", async () => {
+    await expect(
+      program.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "release",
+        "--evidence-mode",
+        "full",
+        "--exclude-test-execution-evidence",
+      ]),
+    ).rejects.toThrow(
+      "--exclude-test-execution-evidence cannot be combined with --evidence-mode full.",
+    );
+
     expect(runQaProfileCommand).not.toHaveBeenCalled();
   });
 

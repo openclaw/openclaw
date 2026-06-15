@@ -72,6 +72,7 @@ import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js"
 import {
   readQaScorecardTaxonomyReport,
   type QaScorecardCategoryCoverageReport,
+  type QaScorecardEvidenceMode,
 } from "./scorecard-taxonomy.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
 import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
@@ -115,6 +116,7 @@ type QaScenarioProviderCommandOptions = {
 };
 
 type QaScenarioRunCommandOptions = QaScenarioProviderCommandOptions & {
+  evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   outputDir?: string;
   concurrency?: number;
@@ -125,7 +127,6 @@ export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
   profile: string;
   surface?: string;
   category?: string;
-  excludeTestExecutionEvidence?: boolean;
 };
 
 export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
@@ -670,6 +671,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     const suiteResult = await runQaSuiteCommand({
       repoRoot,
       outputDir: opts.outputDir,
+      evidenceMode: opts.evidenceMode,
       transportId: opts.transportId,
       providerMode,
       primaryModel: opts.primaryModel,
@@ -687,7 +689,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   }
   await attachQaProfileScorecardEvidenceToFile({
     evidencePath,
-    excludeTestExecution: opts.excludeTestExecutionEvidence,
+    evidenceMode: opts.evidenceMode,
     profile,
     filters: {
       surface: opts.surface,
@@ -851,6 +853,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     runQaSuite({
       repoRoot,
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+      evidenceMode: opts.evidenceMode,
       transportId,
       ...(opts.providerMode !== undefined ? { providerMode } : {}),
       primaryModel,
