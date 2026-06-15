@@ -256,7 +256,7 @@ async function handleChallenge(payload) {
     id: generateId(),
     method: "connect",
     params: {
-      minProtocol: 4,
+      minProtocol: 3,
       maxProtocol: 4,
       client: { id: CLIENT_ID, version: "1.0.0", platform: "chrome-extension", mode: CLIENT_MODE },
       role: ROLE,
