@@ -43,7 +43,7 @@ run_logged_print_heartbeat() {
   local log_file
   log_file="$(docker_e2e_run_log "$label")"
   local command_uses_process_group=0
-  if command -v setsid >/dev/null 2>&1; then
+  if command -v setsid >/dev/null 2>&1 && [ "$(type -t "$1" 2>/dev/null || true)" != "function" ]; then
     setsid "$@" >"$log_file" 2>&1 &
     command_uses_process_group=1
   else
