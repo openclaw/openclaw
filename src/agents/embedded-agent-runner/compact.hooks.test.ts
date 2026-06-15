@@ -1012,6 +1012,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-primary",
+      authProfileId: "openai:work",
       config: {
         agents: {
           defaults: {
