@@ -242,7 +242,16 @@ async function buildGeminiCliSystemSettings(
 ): Promise<Record<string, unknown>> {
   const base = await readGeminiCliJsonObject(ctx.systemSettingsPath);
   const security = isRecord(base.security) ? { ...base.security } : {};
-  security.auth = { selectedType };
+  const auth = isRecord(security.auth) ? { ...security.auth } : {};
+  const enforcedType = normalizeString(
+    typeof auth.enforcedType === "string" ? auth.enforcedType : undefined,
+  );
+  if (enforcedType && enforcedType !== selectedType) {
+    throw new Error(
+      `Gemini CLI system settings enforce ${enforcedType} auth, but the selected OpenClaw profile requires ${selectedType}.`,
+    );
+  }
+  security.auth = { ...auth, selectedType };
   return {
     ...base,
     security,
@@ -414,8 +423,9 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
         {
           agentDir: ctx.agentDir,
           authProfileId: ctx.authProfileId,
-          systemSettingsPath: (ctx as typeof ctx & { env?: Record<string, string> }).env
-            ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
+          systemSettingsPath:
+            (ctx as typeof ctx & { env?: Record<string, string> }).env
+              ?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
         },
         (ctx as typeof ctx & { authCredential?: GeminiAuthProfileCredential }).authCredential,
       ),

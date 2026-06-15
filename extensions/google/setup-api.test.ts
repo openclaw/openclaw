@@ -104,7 +104,13 @@ describe("google gemini cli backend auth bridge", () => {
       await fs.writeFile(
         inheritedSettingsPath,
         `${JSON.stringify({
-          security: { auth: { selectedType: "vertex-ai" } },
+          security: {
+            auth: {
+              selectedType: "vertex-ai",
+              enforcedType: "oauth-personal",
+              useExternal: true,
+            },
+          },
           mcp: { allowed: ["openclaw"] },
           mcpServers: { openclaw: { url: "http://127.0.0.1:23119/mcp" } },
         })}\n`,
@@ -148,7 +154,13 @@ describe("google gemini cli backend auth bridge", () => {
       expect(JSON.parse(rootSettingsRaw)).toEqual(JSON.parse(nestedSettingsRaw));
       const systemSettingsRaw = await fs.readFile(systemSettingsPath ?? "", "utf8");
       expect(JSON.parse(systemSettingsRaw)).toEqual({
-        security: { auth: { selectedType: "oauth-personal" } },
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+            enforcedType: "oauth-personal",
+            useExternal: true,
+          },
+        },
         mcp: { allowed: ["openclaw"] },
         mcpServers: { openclaw: { url: "http://127.0.0.1:23119/mcp" } },
       });
@@ -225,6 +237,76 @@ describe("google gemini cli backend auth bridge", () => {
       for (const cleanup of cleanups.toReversed()) {
         await cleanup();
       }
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects inherited Gemini system settings that enforce a different auth type", async () => {
+    const backend = buildGoogleGeminiCliBackend();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
+
+    try {
+      const inheritedSettingsPath = path.join(workspaceDir, "generated-mcp-settings.json");
+      await fs.writeFile(
+        inheritedSettingsPath,
+        `${JSON.stringify({
+          security: { auth: { enforcedType: "gemini-api-key" } },
+        })}\n`,
+        "utf8",
+      );
+      const context = buildGeminiOAuthPrepareContext(workspaceDir);
+      context.env = { GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath };
+
+      await expect(backend.prepareExecution?.(context)).rejects.toThrow(/enforce gemini-api-key/);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("inherits process Gemini system settings when no generated settings path is present", async () => {
+    const backend = buildGoogleGeminiCliBackend();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
+    const originalSystemSettingsPath = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+    let prepared:
+      | Awaited<ReturnType<NonNullable<typeof backend.prepareExecution>>>
+      | null
+      | undefined;
+
+    try {
+      const inheritedSettingsPath = path.join(workspaceDir, "ambient-system-settings.json");
+      await fs.writeFile(
+        inheritedSettingsPath,
+        `${JSON.stringify({
+          security: {
+            auth: {
+              selectedType: "oauth-code-assist",
+              enforcedType: "oauth-personal",
+            },
+            folderTrust: { enabled: true },
+          },
+        })}\n`,
+        "utf8",
+      );
+      process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH = inheritedSettingsPath;
+
+      prepared = await backend.prepareExecution?.(buildGeminiOAuthPrepareContext(workspaceDir));
+
+      const systemSettingsRaw = await fs.readFile(
+        prepared?.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? "",
+        "utf8",
+      );
+      expect(JSON.parse(systemSettingsRaw)).toEqual({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+            enforcedType: "oauth-personal",
+          },
+          folderTrust: { enabled: true },
+        },
+      });
+    } finally {
+      restoreEnv("GEMINI_CLI_SYSTEM_SETTINGS_PATH", originalSystemSettingsPath);
+      await prepared?.cleanup?.();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
