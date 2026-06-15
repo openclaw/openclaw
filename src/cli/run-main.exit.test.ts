@@ -922,7 +922,6 @@ describe("runCli exit behavior", () => {
   });
 
   it("blocks a future service-mode candidate before pre-bootstrap suspicious recovery", async () => {
-    let recoveryAllowed: boolean | undefined;
     const currentSnapshot = {
       exists: true,
       valid: true,
@@ -930,7 +929,7 @@ describe("runCli exit behavior", () => {
     };
     readConfigFileSnapshotMock.mockImplementation(async (options) => {
       if (options?.recoverSuspicious) {
-        recoveryAllowed = await options.allowSuspiciousRecovery?.(
+        await options.allowSuspiciousRecovery?.(
           {
             env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
             gateway: { mode: "local" },
