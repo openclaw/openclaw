@@ -65,7 +65,7 @@ openclaw plugins enable diagnostics-otel
 ```
 
 <Note>
-`protocol` currently supports `http/protobuf` only. `grpc` is ignored.
+Only `http/protobuf` is supported. A config validation error is raised if `protocol` is set to `"grpc"`.
 </Note>
 
 ## Signals exported
@@ -92,7 +92,7 @@ are exported only when `diagnostics.otel.logs` is explicitly `true`.
       tracesEndpoint: "http://otel-collector:4318/v1/traces",
       metricsEndpoint: "http://otel-collector:4318/v1/metrics",
       logsEndpoint: "http://otel-collector:4318/v1/logs",
-      protocol: "http/protobuf", // grpc is ignored
+      protocol: "http/protobuf",
       serviceName: "openclaw-gateway",
       headers: { "x-collector-token": "..." },
       traces: true,
