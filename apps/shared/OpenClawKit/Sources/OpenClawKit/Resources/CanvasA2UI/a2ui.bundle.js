@@ -1,12 +1,12 @@
 // Bundled A2UI runtime resource embedded by OpenClawKit.
 const __defProp$1 = Object.defineProperty;
 const __exportAll = (all, no_symbols) => {
-	let target = {};
-	for (var name in all) __defProp$1(target, name, {
+	const target = {};
+	for (let name in all) {__defProp$1(target, name, {
 		get: all[name],
 		enumerable: true
-	});
-	if (!no_symbols) __defProp$1(target, Symbol.toStringTag, { value: "Module" });
+	});}
+	if (!no_symbols) {__defProp$1(target, Symbol.toStringTag, { value: "Module" });}
 	return target;
 };
 const eventInit = {
@@ -85,8 +85,8 @@ function isResolvedButton(props) {
 }
 function isResolvedCard(props) {
 	if (!isObject(props)) {return false;}
-	if (!("child" in props)) {if (!("children" in props)) return false;
-	else return Array.isArray(props.children) && props.children.every(isAnyComponentNode);}
+	if (!("child" in props)) {if (!("children" in props)) {return false;}
+	else {return Array.isArray(props.children) && props.children.every(isAnyComponentNode);}}
 	return isAnyComponentNode(props.child);
 }
 function isResolvedCheckbox(props) {
@@ -198,11 +198,11 @@ let util;
 	};
 	util.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object) => {
 		const keys = [];
-		for (const key in object) {if (Object.prototype.hasOwnProperty.call(object, key)) keys.push(key);}
+		for (const key in object) {if (Object.hasOwn(object, key)) {keys.push(key);}}
 		return keys;
 	};
 	util.find = (arr, checker) => {
-		for (const item of arr) {if (checker(item)) return item;}
+		for (const item of arr) {if (checker(item)) {return item;}}
 	};
 	util.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
 	function joinValues(array, separator = " | ") {
@@ -297,8 +297,8 @@ const ZodError = class ZodError extends Error {
 			this.issues = [...this.issues, ...subs];
 		};
 		const actualProto = new.target.prototype;
-		if (Object.setPrototypeOf) Object.setPrototypeOf(this, actualProto);
-		else this.__proto__ = actualProto;
+		if (Object.setPrototypeOf) {Object.setPrototypeOf(this, actualProto);}
+		else {this.__proto__ = actualProto;}
 		this.name = "ZodError";
 		this.issues = issues;
 	}
@@ -308,7 +308,7 @@ const ZodError = class ZodError extends Error {
 		};
 		const fieldErrors = { _errors: [] };
 		const processError = (error) => {
-			for (const issue of error.issues) if (issue.code === "invalid_union") issue.unionErrors.map(processError);
+			for (const issue of error.issues) {if (issue.code === "invalid_union") issue.unionErrors.map(processError);
 			else if (issue.code === "invalid_return_type") processError(issue.returnTypeError);
 			else if (issue.code === "invalid_arguments") processError(issue.argumentsError);
 			else if (issue.path.length === 0) fieldErrors._errors.push(mapper(issue));
@@ -325,13 +325,13 @@ const ZodError = class ZodError extends Error {
 					curr = curr[el];
 					i++;
 				}
-			}
+			}}
 		};
 		processError(this);
 		return fieldErrors;
 	}
 	static assert(value) {
-		if (!(value instanceof ZodError)) throw new Error(`Not a ZodError: ${value}`);
+		if (!(value instanceof ZodError)) {throw new Error(`Not a ZodError: ${value}`);}
 	}
 	toString() {
 		return this.message;
@@ -345,11 +345,11 @@ const ZodError = class ZodError extends Error {
 	flatten(mapper = (issue) => issue.message) {
 		const fieldErrors = {};
 		const formErrors = [];
-		for (const sub of this.issues) if (sub.path.length > 0) {
+		for (const sub of this.issues) {if (sub.path.length > 0) {
 			const firstEl = sub.path[0];
 			fieldErrors[firstEl] = fieldErrors[firstEl] || [];
 			fieldErrors[firstEl].push(mapper(sub));
-		} else formErrors.push(mapper(sub));
+		} else formErrors.push(mapper(sub));}
 		return {
 			formErrors,
 			fieldErrors
@@ -396,10 +396,10 @@ const errorMap = (issue, _ctx) => {
 		case ZodIssueCode.invalid_string:
 			if (typeof issue.validation === "object") {if ("includes" in issue.validation) {
 				message = `Invalid input: must include "${issue.validation.includes}"`;
-				if (typeof issue.validation.position === "number") message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;
-			} else if ("startsWith" in issue.validation) message = `Invalid input: must start with "${issue.validation.startsWith}"`;
-			else if ("endsWith" in issue.validation) message = `Invalid input: must end with "${issue.validation.endsWith}"`;
-			else util.assertNever(issue.validation);}
+				if (typeof issue.validation.position === "number") {message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;}
+			} else if ("startsWith" in issue.validation) {message = `Invalid input: must start with "${issue.validation.startsWith}"`;}
+			else if ("endsWith" in issue.validation) {message = `Invalid input: must end with "${issue.validation.endsWith}"`;}
+			else {util.assertNever(issue.validation);}}
 			else if (issue.validation !== "regex") {message = `Invalid ${issue.validation}`;}
 			else {message = "Invalid";}
 			break;
@@ -485,16 +485,16 @@ const ParseStatus = class ParseStatus {
 		this.value = "valid";
 	}
 	dirty() {
-		if (this.value === "valid") this.value = "dirty";
+		if (this.value === "valid") {this.value = "dirty";}
 	}
 	abort() {
-		if (this.value !== "aborted") this.value = "aborted";
+		if (this.value !== "aborted") {this.value = "aborted";}
 	}
 	static mergeArray(status, results) {
 		const arrayValue = [];
 		for (const s of results) {
-			if (s.status === "aborted") return INVALID;
-			if (s.status === "dirty") status.dirty();
+			if (s.status === "aborted") {return INVALID;}
+			if (s.status === "dirty") {status.dirty();}
 			arrayValue.push(s.value);
 		}
 		return {
@@ -518,11 +518,11 @@ const ParseStatus = class ParseStatus {
 		const finalObject = {};
 		for (const pair of pairs) {
 			const { key, value } = pair;
-			if (key.status === "aborted") return INVALID;
-			if (value.status === "aborted") return INVALID;
-			if (key.status === "dirty") status.dirty();
-			if (value.status === "dirty") status.dirty();
-			if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) finalObject[key.value] = value.value;
+			if (key.status === "aborted") {return INVALID;}
+			if (value.status === "aborted") {return INVALID;}
+			if (key.status === "dirty") {status.dirty();}
+			if (value.status === "dirty") {status.dirty();}
+			if (key.value !== "__proto__" && (value.value !== undefined || pair.alwaysSet)) {finalObject[key.value] = value.value;}
 		}
 		return {
 			status: status.value,
@@ -557,8 +557,8 @@ const ParseInputLazyPath = class {
 		this._key = key;
 	}
 	get path() {
-		if (!this._cachedPath.length) if (Array.isArray(this._key)) this._cachedPath.push(...this._path, ...this._key);
-		else this._cachedPath.push(...this._path, this._key);
+		if (!this._cachedPath.length) {if (Array.isArray(this._key)) this._cachedPath.push(...this._path, ...this._key);
+		else this._cachedPath.push(...this._path, this._key);}
 		return this._cachedPath;
 	}
 };
@@ -567,7 +567,6 @@ const handleResult = (ctx, result) => {
 		success: true,
 		data: result.value
 	};}
-	else {
 		if (!ctx.common.issues.length) {throw new Error("Validation failed but no issues detected.");}
 		return {
 			success: false,
@@ -578,7 +577,7 @@ const handleResult = (ctx, result) => {
 				return this._error;
 			}
 		};
-	}
+	
 };
 function processCreateParams(params) {
 	if (!params) {return {};}
@@ -632,7 +631,7 @@ const ZodType = class {
 	}
 	_parseSync(input) {
 		const result = this._parse(input);
-		if (isAsync(result)) throw new Error("Synchronous parse encountered promise.");
+		if (isAsync(result)) {throw new Error("Synchronous parse encountered promise.");}
 		return result;
 	}
 	_parseAsync(input) {
@@ -641,7 +640,7 @@ const ZodType = class {
 	}
 	parse(data, params) {
 		const result = this.safeParse(data, params);
-		if (result.success) return result.data;
+		if (result.success) {return result.data;}
 		throw result.error;
 	}
 	safeParse(data, params) {
@@ -667,7 +666,7 @@ const ZodType = class {
 		const ctx = {
 			common: {
 				issues: [],
-				async: !!this["~standard"].async
+				async: Boolean(this["~standard"].async)
 			},
 			path: [],
 			schemaErrorMap: this._def.errorMap,
@@ -675,7 +674,7 @@ const ZodType = class {
 			data,
 			parsedType: getParsedType(data)
 		};
-		if (!this["~standard"].async) try {
+		if (!this["~standard"].async) {try {
 			const result = this._parseSync({
 				data,
 				path: [],
@@ -688,7 +687,7 @@ const ZodType = class {
 				issues: [],
 				async: true
 			};
-		}
+		}}
 		return this._parseAsync({
 			data,
 			path: [],
@@ -697,7 +696,7 @@ const ZodType = class {
 	}
 	async parseAsync(data, params) {
 		const result = await this.safeParseAsync(data, params);
-		if (result.success) return result.data;
+		if (result.success) {return result.data;}
 		throw result.error;
 	}
 	async safeParseAsync(data, params) {
@@ -722,9 +721,9 @@ const ZodType = class {
 	}
 	refine(check, message) {
 		const getIssueProperties = (val) => {
-			if (typeof message === "string" || typeof message === "undefined") return { message };
-			else if (typeof message === "function") return message(val);
-			else return message;
+			if (typeof message === "string" || message === undefined) {return { message };}
+			else if (typeof message === "function") {return message(val);}
+			else {return message;}
 		};
 		return this._refinement((val, ctx) => {
 			const result = check(val);
@@ -732,16 +731,16 @@ const ZodType = class {
 				code: ZodIssueCode.custom,
 				...getIssueProperties(val)
 			});
-			if (typeof Promise !== "undefined" && result instanceof Promise) return result.then((data) => {
+			if (typeof Promise !== "undefined" && result instanceof Promise) {return result.then((data) => {
 				if (!data) {
 					setError();
 					return false;
 				} else return true;
-			});
+			});}
 			if (!result) {
 				setError();
 				return false;
-			} else return true;
+			}return true;
 		});
 	}
 	refinement(check, refinementData) {
@@ -749,7 +748,7 @@ const ZodType = class {
 			if (!check(val)) {
 				ctx.addIssue(typeof refinementData === "function" ? refinementData(val, ctx) : refinementData);
 				return false;
-			} else return true;
+			}return true;
 		});
 	}
 	_refinement(refinement) {
@@ -940,7 +939,7 @@ function isValidCidr(ip, version) {
 }
 const ZodString = class ZodString extends ZodType {
 	_parse(input) {
-		if (this._def.coerce) input.data = String(input.data);
+		if (this._def.coerce) {input.data = String(input.data);}
 		if (this._getType(input) !== ZodParsedType.string) {
 			const ctx = this._getOrReturnCtx(input);
 			addIssueToContext(ctx, {
@@ -952,7 +951,7 @@ const ZodString = class ZodString extends ZodType {
 		}
 		const status = new ParseStatus();
 		let ctx = void 0;
-		for (const check of this._def.checks) if (check.kind === "min") {
+		for (const check of this._def.checks) {if (check.kind === "min") {
 			if (input.data.length < check.value) {
 				ctx = this._getOrReturnCtx(input, ctx);
 				addIssueToContext(ctx, {
@@ -1220,7 +1219,7 @@ const ZodString = class ZodString extends ZodType {
 				});
 				status.dirty();
 			}
-		} else util.assertNever(check);
+		} else util.assertNever(check);}
 		return {
 			status: status.value,
 			value: input.data
@@ -1318,16 +1317,16 @@ const ZodString = class ZodString extends ZodType {
 		});
 	}
 	datetime(options) {
-		if (typeof options === "string") return this._addCheck({
+		if (typeof options === "string") {return this._addCheck({
 			kind: "datetime",
 			precision: null,
 			offset: false,
 			local: false,
 			message: options
-		});
+		});}
 		return this._addCheck({
 			kind: "datetime",
-			precision: typeof options?.precision === "undefined" ? null : options?.precision,
+			precision: options?.precision === undefined ? null : options?.precision,
 			offset: options?.offset ?? false,
 			local: options?.local ?? false,
 			...errorUtil.errToObj(options?.message)
@@ -1340,14 +1339,14 @@ const ZodString = class ZodString extends ZodType {
 		});
 	}
 	time(options) {
-		if (typeof options === "string") return this._addCheck({
+		if (typeof options === "string") {return this._addCheck({
 			kind: "time",
 			precision: null,
 			message: options
-		});
+		});}
 		return this._addCheck({
 			kind: "time",
-			precision: typeof options?.precision === "undefined" ? null : options?.precision,
+			precision: options?.precision === undefined ? null : options?.precision,
 			...errorUtil.errToObj(options?.message)
 		});
 	}
@@ -1432,65 +1431,65 @@ const ZodString = class ZodString extends ZodType {
 		});
 	}
 	get isDatetime() {
-		return !!this._def.checks.find((ch) => ch.kind === "datetime");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "datetime"));
 	}
 	get isDate() {
-		return !!this._def.checks.find((ch) => ch.kind === "date");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "date"));
 	}
 	get isTime() {
-		return !!this._def.checks.find((ch) => ch.kind === "time");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "time"));
 	}
 	get isDuration() {
-		return !!this._def.checks.find((ch) => ch.kind === "duration");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "duration"));
 	}
 	get isEmail() {
-		return !!this._def.checks.find((ch) => ch.kind === "email");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "email"));
 	}
 	get isURL() {
-		return !!this._def.checks.find((ch) => ch.kind === "url");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "url"));
 	}
 	get isEmoji() {
-		return !!this._def.checks.find((ch) => ch.kind === "emoji");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "emoji"));
 	}
 	get isUUID() {
-		return !!this._def.checks.find((ch) => ch.kind === "uuid");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "uuid"));
 	}
 	get isNANOID() {
-		return !!this._def.checks.find((ch) => ch.kind === "nanoid");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "nanoid"));
 	}
 	get isCUID() {
-		return !!this._def.checks.find((ch) => ch.kind === "cuid");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "cuid"));
 	}
 	get isCUID2() {
-		return !!this._def.checks.find((ch) => ch.kind === "cuid2");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "cuid2"));
 	}
 	get isULID() {
-		return !!this._def.checks.find((ch) => ch.kind === "ulid");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "ulid"));
 	}
 	get isIP() {
-		return !!this._def.checks.find((ch) => ch.kind === "ip");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "ip"));
 	}
 	get isCIDR() {
-		return !!this._def.checks.find((ch) => ch.kind === "cidr");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "cidr"));
 	}
 	get isBase64() {
-		return !!this._def.checks.find((ch) => ch.kind === "base64");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "base64"));
 	}
 	get isBase64url() {
-		return !!this._def.checks.find((ch) => ch.kind === "base64url");
+		return Boolean(this._def.checks.find((ch) => ch.kind === "base64url"));
 	}
 	get minLength() {
 		let min = null;
-		for (const ch of this._def.checks) if (ch.kind === "min") {
+		for (const ch of this._def.checks) {if (ch.kind === "min") {
 			if (min === null || ch.value > min) min = ch.value;
-		}
+		}}
 		return min;
 	}
 	get maxLength() {
 		let max = null;
-		for (const ch of this._def.checks) if (ch.kind === "max") {
+		for (const ch of this._def.checks) {if (ch.kind === "max") {
 			if (max === null || ch.value < max) max = ch.value;
-		}
+		}}
 		return max;
 	}
 };
@@ -1516,7 +1515,7 @@ const ZodNumber = class ZodNumber extends ZodType {
 		this.step = this.multipleOf;
 	}
 	_parse(input) {
-		if (this._def.coerce) input.data = Number(input.data);
+		if (this._def.coerce) {input.data = Number(input.data);}
 		if (this._getType(input) !== ZodParsedType.number) {
 			const ctx = this._getOrReturnCtx(input);
 			addIssueToContext(ctx, {
@@ -1528,7 +1527,7 @@ const ZodNumber = class ZodNumber extends ZodType {
 		}
 		let ctx = void 0;
 		const status = new ParseStatus();
-		for (const check of this._def.checks) if (check.kind === "int") {
+		for (const check of this._def.checks) {if (check.kind === "int") {
 			if (!util.isInteger(input.data)) {
 				ctx = this._getOrReturnCtx(input, ctx);
 				addIssueToContext(ctx, {
@@ -1584,7 +1583,7 @@ const ZodNumber = class ZodNumber extends ZodType {
 				});
 				status.dirty();
 			}
-		} else util.assertNever(check);
+		} else util.assertNever(check);}
 		return {
 			status: status.value,
 			value: input.data
@@ -1685,30 +1684,30 @@ const ZodNumber = class ZodNumber extends ZodType {
 	}
 	get minValue() {
 		let min = null;
-		for (const ch of this._def.checks) if (ch.kind === "min") {
+		for (const ch of this._def.checks) {if (ch.kind === "min") {
 			if (min === null || ch.value > min) min = ch.value;
-		}
+		}}
 		return min;
 	}
 	get maxValue() {
 		let max = null;
-		for (const ch of this._def.checks) if (ch.kind === "max") {
+		for (const ch of this._def.checks) {if (ch.kind === "max") {
 			if (max === null || ch.value < max) max = ch.value;
-		}
+		}}
 		return max;
 	}
 	get isInt() {
-		return !!this._def.checks.find((ch) => ch.kind === "int" || ch.kind === "multipleOf" && util.isInteger(ch.value));
+		return Boolean(this._def.checks.find((ch) => ch.kind === "int" || ch.kind === "multipleOf" && util.isInteger(ch.value)));
 	}
 	get isFinite() {
 		let max = null;
 		let min = null;
-		for (const ch of this._def.checks) if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") return true;
+		for (const ch of this._def.checks) {if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") return true;
 		else if (ch.kind === "min") {
 			if (min === null || ch.value > min) min = ch.value;
 		} else if (ch.kind === "max") {
 			if (max === null || ch.value < max) max = ch.value;
-		}
+		}}
 		return Number.isFinite(min) && Number.isFinite(max);
 	}
 };
@@ -1727,15 +1726,15 @@ const ZodBigInt = class ZodBigInt extends ZodType {
 		this.max = this.lte;
 	}
 	_parse(input) {
-		if (this._def.coerce) try {
+		if (this._def.coerce) {try {
 			input.data = BigInt(input.data);
 		} catch {
 			return this._getInvalidInput(input);
-		}
-		if (this._getType(input) !== ZodParsedType.bigint) return this._getInvalidInput(input);
+		}}
+		if (this._getType(input) !== ZodParsedType.bigint) {return this._getInvalidInput(input);}
 		let ctx = void 0;
 		const status = new ParseStatus();
-		for (const check of this._def.checks) if (check.kind === "min") {
+		for (const check of this._def.checks) {if (check.kind === "min") {
 			if (check.inclusive ? input.data < check.value : input.data <= check.value) {
 				ctx = this._getOrReturnCtx(input, ctx);
 				addIssueToContext(ctx, {
@@ -1769,7 +1768,7 @@ const ZodBigInt = class ZodBigInt extends ZodType {
 				});
 				status.dirty();
 			}
-		} else util.assertNever(check);
+		} else util.assertNever(check);}
 		return {
 			status: status.value,
 			value: input.data
@@ -1854,16 +1853,16 @@ const ZodBigInt = class ZodBigInt extends ZodType {
 	}
 	get minValue() {
 		let min = null;
-		for (const ch of this._def.checks) if (ch.kind === "min") {
+		for (const ch of this._def.checks) {if (ch.kind === "min") {
 			if (min === null || ch.value > min) min = ch.value;
-		}
+		}}
 		return min;
 	}
 	get maxValue() {
 		let max = null;
-		for (const ch of this._def.checks) if (ch.kind === "max") {
+		for (const ch of this._def.checks) {if (ch.kind === "max") {
 			if (max === null || ch.value < max) max = ch.value;
-		}
+		}}
 		return max;
 	}
 };
@@ -1877,7 +1876,7 @@ ZodBigInt.create = (params) => {
 };
 const ZodBoolean = class extends ZodType {
 	_parse(input) {
-		if (this._def.coerce) input.data = Boolean(input.data);
+		if (this._def.coerce) {input.data = Boolean(input.data);}
 		if (this._getType(input) !== ZodParsedType.boolean) {
 			const ctx = this._getOrReturnCtx(input);
 			addIssueToContext(ctx, {
@@ -1899,7 +1898,7 @@ ZodBoolean.create = (params) => {
 };
 const ZodDate = class ZodDate extends ZodType {
 	_parse(input) {
-		if (this._def.coerce) input.data = new Date(input.data);
+		if (this._def.coerce) {input.data = new Date(input.data);}
 		if (this._getType(input) !== ZodParsedType.date) {
 			const ctx = this._getOrReturnCtx(input);
 			addIssueToContext(ctx, {
@@ -1915,7 +1914,7 @@ const ZodDate = class ZodDate extends ZodType {
 		}
 		const status = new ParseStatus();
 		let ctx = void 0;
-		for (const check of this._def.checks) if (check.kind === "min") {
+		for (const check of this._def.checks) {if (check.kind === "min") {
 			if (input.data.getTime() < check.value) {
 				ctx = this._getOrReturnCtx(input, ctx);
 				addIssueToContext(ctx, {
@@ -1941,10 +1940,10 @@ const ZodDate = class ZodDate extends ZodType {
 				});
 				status.dirty();
 			}
-		} else util.assertNever(check);
+		} else util.assertNever(check);}
 		return {
 			status: status.value,
-			value: new Date(input.data.getTime())
+			value: new Date(input.data)
 		};
 	}
 	_addCheck(check) {
@@ -1969,16 +1968,16 @@ const ZodDate = class ZodDate extends ZodType {
 	}
 	get minDate() {
 		let min = null;
-		for (const ch of this._def.checks) if (ch.kind === "min") {
+		for (const ch of this._def.checks) {if (ch.kind === "min") {
 			if (min === null || ch.value > min) min = ch.value;
-		}
+		}}
 		return min != null ? new Date(min) : null;
 	}
 	get maxDate() {
 		let max = null;
-		for (const ch of this._def.checks) if (ch.kind === "max") {
+		for (const ch of this._def.checks) {if (ch.kind === "max") {
 			if (max === null || ch.value < max) max = ch.value;
-		}
+		}}
 		return max != null ? new Date(max) : null;
 	}
 };
@@ -2171,11 +2170,11 @@ const ZodArray = class ZodArray extends ZodType {
 				status.dirty();
 			}
 		}
-		if (ctx.common.async) return Promise.all([...ctx.data].map((item, i) => {
+		if (ctx.common.async) {return Promise.all([...ctx.data].map((item, i) => {
 			return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
 		})).then((result) => {
 			return ParseStatus.mergeArray(status, result);
-		});
+		});}
 		const result = [...ctx.data].map((item, i) => {
 			return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
 		});
@@ -2242,8 +2241,7 @@ function deepPartialify(schema) {
 	});}
 	else if (schema instanceof ZodOptional) {return ZodOptional.create(deepPartialify(schema.unwrap()));}
 	else if (schema instanceof ZodNullable) {return ZodNullable.create(deepPartialify(schema.unwrap()));}
-	else if (schema instanceof ZodTuple) {return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));}
-	else {return schema;}
+	else if (schema instanceof ZodTuple) {return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));}return schema;
 }
 const ZodObject = class ZodObject extends ZodType {
 	constructor() {
@@ -2260,7 +2258,7 @@ const ZodObject = class ZodObject extends ZodType {
 		this.augment = this.extend;
 	}
 	_getCached() {
-		if (this._cached !== null) return this._cached;
+		if (this._cached !== null) {return this._cached;}
 		const shape = this._def.shape();
 		const keys = util.objectKeys(shape);
 		this._cached = {
@@ -2283,7 +2281,7 @@ const ZodObject = class ZodObject extends ZodType {
 		const { shape, keys: shapeKeys } = this._getCached();
 		const extraKeys = [];
 		if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
-			for (const key in ctx.data) if (!shapeKeys.includes(key)) extraKeys.push(key);
+			for (const key in ctx.data) {if (!shapeKeys.includes(key)) extraKeys.push(key);}
 		}
 		const pairs = [];
 		for (const key of shapeKeys) {
@@ -2300,7 +2298,7 @@ const ZodObject = class ZodObject extends ZodType {
 		}
 		if (this._def.catchall instanceof ZodNever) {
 			const unknownKeys = this._def.unknownKeys;
-			if (unknownKeys === "passthrough") for (const key of extraKeys) pairs.push({
+			if (unknownKeys === "passthrough") {for (const key of extraKeys) pairs.push({
 				key: {
 					status: "valid",
 					value: key
@@ -2309,7 +2307,7 @@ const ZodObject = class ZodObject extends ZodType {
 					status: "valid",
 					value: ctx.data[key]
 				}
-			});
+			});}
 			else if (unknownKeys === "strict") {
 				if (extraKeys.length > 0) {
 					addIssueToContext(ctx, {
@@ -2318,7 +2316,7 @@ const ZodObject = class ZodObject extends ZodType {
 					});
 					status.dirty();
 				}
-			} else if (unknownKeys === "strip") {} else throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);
+			} else if (unknownKeys === "strip") {} else {throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);}
 		} else {
 			const catchall = this._def.catchall;
 			for (const key of extraKeys) {
@@ -2333,7 +2331,7 @@ const ZodObject = class ZodObject extends ZodType {
 				});
 			}
 		}
-		if (ctx.common.async) return Promise.resolve().then(async () => {
+		if (ctx.common.async) {return Promise.resolve().then(async () => {
 			const syncPairs = [];
 			for (const pair of pairs) {
 				const key = await pair.key;
@@ -2347,8 +2345,8 @@ const ZodObject = class ZodObject extends ZodType {
 			return syncPairs;
 		}).then((syncPairs) => {
 			return ParseStatus.mergeObjectSync(status, syncPairs);
-		});
-		else return ParseStatus.mergeObjectSync(status, pairs);
+		});}
+		else {return ParseStatus.mergeObjectSync(status, pairs);}
 	}
 	get shape() {
 		return this._def.shape();
@@ -2360,7 +2358,7 @@ const ZodObject = class ZodObject extends ZodType {
 			unknownKeys: "strict",
 			...message !== void 0 ? { errorMap: (issue, ctx) => {
 				const defaultError = this._def.errorMap?.(issue, ctx).message ?? ctx.defaultError;
-				if (issue.code === "unrecognized_keys") return { message: errorUtil.errToObj(message).message ?? defaultError };
+				if (issue.code === "unrecognized_keys") {return { message: errorUtil.errToObj(message).message ?? defaultError };}
 				return { message: defaultError };
 			} } : {}
 		});
@@ -2413,7 +2411,7 @@ const ZodObject = class ZodObject extends ZodType {
 	}
 	pick(mask) {
 		const shape = {};
-		for (const key of util.objectKeys(mask)) if (mask[key] && this.shape[key]) shape[key] = this.shape[key];
+		for (const key of util.objectKeys(mask)) {if (mask[key] && this.shape[key]) shape[key] = this.shape[key];}
 		return new ZodObject({
 			...this._def,
 			shape: () => shape
@@ -2421,7 +2419,7 @@ const ZodObject = class ZodObject extends ZodType {
 	}
 	omit(mask) {
 		const shape = {};
-		for (const key of util.objectKeys(this.shape)) if (!mask[key]) shape[key] = this.shape[key];
+		for (const key of util.objectKeys(this.shape)) {if (!mask[key]) shape[key] = this.shape[key];}
 		return new ZodObject({
 			...this._def,
 			shape: () => shape
@@ -2437,8 +2435,8 @@ const ZodObject = class ZodObject extends ZodType {
 		const newShape = {};
 		for (const key of util.objectKeys(this.shape)) {
 			const fieldSchema = this.shape[key];
-			if (mask && !mask[key]) newShape[key] = fieldSchema;
-			else newShape[key] = fieldSchema.optional();
+			if (mask && !mask[key]) {newShape[key] = fieldSchema;}
+			else {newShape[key] = fieldSchema.optional();}
 		}
 		return new ZodObject({
 			...this._def,
@@ -2447,12 +2445,12 @@ const ZodObject = class ZodObject extends ZodType {
 	}
 	required(mask) {
 		const newShape = {};
-		for (const key of util.objectKeys(this.shape)) if (mask && !mask[key]) newShape[key] = this.shape[key];
+		for (const key of util.objectKeys(this.shape)) {if (mask && !mask[key]) newShape[key] = this.shape[key];
 		else {
 			let newField = this.shape[key];
 			while (newField instanceof ZodOptional) newField = newField._def.innerType;
 			newShape[key] = newField;
-		}
+		}}
 		return new ZodObject({
 			...this._def,
 			shape: () => newShape
@@ -2494,11 +2492,11 @@ const ZodUnion = class extends ZodType {
 		const { ctx } = this._processInputParams(input);
 		const options = this._def.options;
 		function handleResults(results) {
-			for (const result of results) if (result.result.status === "valid") return result.result;
-			for (const result of results) if (result.result.status === "dirty") {
+			for (const result of results) {if (result.result.status === "valid") return result.result;}
+			for (const result of results) {if (result.result.status === "dirty") {
 				ctx.common.issues.push(...result.ctx.common.issues);
 				return result.result;
-			}
+			}}
 			const unionErrors = results.map((result) => new ZodError(result.ctx.common.issues));
 			addIssueToContext(ctx, {
 				code: ZodIssueCode.invalid_union,
@@ -2506,7 +2504,7 @@ const ZodUnion = class extends ZodType {
 			});
 			return INVALID;
 		}
-		if (ctx.common.async) return Promise.all(options.map(async (option) => {
+		if (ctx.common.async) {return Promise.all(options.map(async (option) => {
 			const childCtx = {
 				...ctx,
 				common: {
@@ -2523,7 +2521,7 @@ const ZodUnion = class extends ZodType {
 				}),
 				ctx: childCtx
 			};
-		})).then(handleResults);
+		})).then(handleResults);}
 		else {
 			let dirty = void 0;
 			const issues = [];
@@ -2541,12 +2539,12 @@ const ZodUnion = class extends ZodType {
 					path: ctx.path,
 					parent: childCtx
 				});
-				if (result.status === "valid") return result;
-				else if (result.status === "dirty" && !dirty) dirty = {
+				if (result.status === "valid") {return result;}
+				else if (result.status === "dirty" && !dirty) {dirty = {
 					result,
 					ctx: childCtx
-				};
-				if (childCtx.common.issues.length) issues.push(childCtx.common.issues);
+				};}
+				if (childCtx.common.issues.length) {issues.push(childCtx.common.issues);}
 			}
 			if (dirty) {
 				ctx.common.issues.push(...dirty.ctx.common.issues);
@@ -2584,8 +2582,7 @@ const getDiscriminator = (type) => {
 	else if (type instanceof ZodNullable) {return [null, ...getDiscriminator(type.unwrap())];}
 	else if (type instanceof ZodBranded) {return getDiscriminator(type.unwrap());}
 	else if (type instanceof ZodReadonly) {return getDiscriminator(type.unwrap());}
-	else if (type instanceof ZodCatch) {return getDiscriminator(type._def.innerType);}
-	else {return [];}
+	else if (type instanceof ZodCatch) {return getDiscriminator(type._def.innerType);}return [];
 };
 const ZodDiscriminatedUnion = class ZodDiscriminatedUnion extends ZodType {
 	_parse(input) {
@@ -2609,16 +2606,16 @@ const ZodDiscriminatedUnion = class ZodDiscriminatedUnion extends ZodType {
 			});
 			return INVALID;
 		}
-		if (ctx.common.async) return option._parseAsync({
+		if (ctx.common.async) {return option._parseAsync({
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
-		});
-		else return option._parseSync({
+		});}
+		else {return option._parseSync({
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
-		});
+		});}
 	}
 	get discriminator() {
 		return this._def.discriminator;
@@ -2641,9 +2638,9 @@ const ZodDiscriminatedUnion = class ZodDiscriminatedUnion extends ZodType {
 		const optionsMap = /* @__PURE__ */ new Map();
 		for (const type of options) {
 			const discriminatorValues = getDiscriminator(type.shape[discriminator]);
-			if (!discriminatorValues.length) throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
+			if (!discriminatorValues.length) {throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);}
 			for (const value of discriminatorValues) {
-				if (optionsMap.has(value)) throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
+				if (optionsMap.has(value)) {throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);}
 				optionsMap.set(value, type);
 			}
 		}
@@ -2696,26 +2693,25 @@ function mergeValues(a, b) {
 	} else if (aType === ZodParsedType.date && bType === ZodParsedType.date && Number(a) === Number(b)) {return {
 		valid: true,
 		data: a
-	};}
-	else {return { valid: false };}
+	};}return { valid: false };
 }
 const ZodIntersection = class extends ZodType {
 	_parse(input) {
 		const { status, ctx } = this._processInputParams(input);
 		const handleParsed = (parsedLeft, parsedRight) => {
-			if (isAborted(parsedLeft) || isAborted(parsedRight)) return INVALID;
+			if (isAborted(parsedLeft) || isAborted(parsedRight)) {return INVALID;}
 			const merged = mergeValues(parsedLeft.value, parsedRight.value);
 			if (!merged.valid) {
 				addIssueToContext(ctx, { code: ZodIssueCode.invalid_intersection_types });
 				return INVALID;
 			}
-			if (isDirty(parsedLeft) || isDirty(parsedRight)) status.dirty();
+			if (isDirty(parsedLeft) || isDirty(parsedRight)) {status.dirty();}
 			return {
 				status: status.value,
 				value: merged.data
 			};
 		};
-		if (ctx.common.async) return Promise.all([this._def.left._parseAsync({
+		if (ctx.common.async) {return Promise.all([this._def.left._parseAsync({
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
@@ -2723,8 +2719,8 @@ const ZodIntersection = class extends ZodType {
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
-		})]).then(([left, right]) => handleParsed(left, right));
-		else return handleParsed(this._def.left._parseSync({
+		})]).then(([left, right]) => handleParsed(left, right));}
+		else {return handleParsed(this._def.left._parseSync({
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
@@ -2732,7 +2728,7 @@ const ZodIntersection = class extends ZodType {
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
-		}));
+		}));}
 	}
 };
 ZodIntersection.create = (left, right, params) => {
@@ -2776,13 +2772,13 @@ const ZodTuple = class ZodTuple extends ZodType {
 		}
 		const items = [...ctx.data].map((item, itemIndex) => {
 			const schema = this._def.items[itemIndex] || this._def.rest;
-			if (!schema) return null;
+			if (!schema) {return null;}
 			return schema._parse(new ParseInputLazyPath(ctx, item, ctx.path, itemIndex));
-		}).filter((x) => !!x);
-		if (ctx.common.async) return Promise.all(items).then((results) => {
+		}).filter((x) => Boolean(x));
+		if (ctx.common.async) {return Promise.all(items).then((results) => {
 			return ParseStatus.mergeArray(status, results);
-		});
-		else return ParseStatus.mergeArray(status, items);
+		});}
+		else {return ParseStatus.mergeArray(status, items);}
 	}
 	get items() {
 		return this._def.items;
@@ -2823,24 +2819,24 @@ const ZodRecord = class ZodRecord extends ZodType {
 		const pairs = [];
 		const keyType = this._def.keyType;
 		const valueType = this._def.valueType;
-		for (const key in ctx.data) pairs.push({
+		for (const key in ctx.data) {pairs.push({
 			key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, key)),
 			value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key], ctx.path, key)),
 			alwaysSet: key in ctx.data
-		});
-		if (ctx.common.async) return ParseStatus.mergeObjectAsync(status, pairs);
-		else return ParseStatus.mergeObjectSync(status, pairs);
+		});}
+		if (ctx.common.async) {return ParseStatus.mergeObjectAsync(status, pairs);}
+		else {return ParseStatus.mergeObjectSync(status, pairs);}
 	}
 	get element() {
 		return this._def.valueType;
 	}
 	static create(first, second, third) {
-		if (second instanceof ZodType) return new ZodRecord({
+		if (second instanceof ZodType) {return new ZodRecord({
 			keyType: first,
 			valueType: second,
 			typeName: ZodFirstPartyTypeKind.ZodRecord,
 			...processCreateParams(third)
-		});
+		});}
 		return new ZodRecord({
 			keyType: ZodString.create(),
 			valueType: first,
@@ -2880,8 +2876,8 @@ const ZodMap = class extends ZodType {
 				for (const pair of pairs) {
 					const key = await pair.key;
 					const value = await pair.value;
-					if (key.status === "aborted" || value.status === "aborted") return INVALID;
-					if (key.status === "dirty" || value.status === "dirty") status.dirty();
+					if (key.status === "aborted" || value.status === "aborted") {return INVALID;}
+					if (key.status === "dirty" || value.status === "dirty") {status.dirty();}
 					finalMap.set(key.value, value.value);
 				}
 				return {
@@ -2889,7 +2885,7 @@ const ZodMap = class extends ZodType {
 					value: finalMap
 				};
 			});
-		} else {
+		}
 			const finalMap = /* @__PURE__ */ new Map();
 			for (const pair of pairs) {
 				const key = pair.key;
@@ -2902,7 +2898,7 @@ const ZodMap = class extends ZodType {
 				status: status.value,
 				value: finalMap
 			};
-		}
+		
 	}
 };
 ZodMap.create = (keyType, valueType, params) => {
@@ -2955,8 +2951,8 @@ const ZodSet = class ZodSet extends ZodType {
 		function finalizeSet(elements) {
 			const parsedSet = /* @__PURE__ */ new Set();
 			for (const element of elements) {
-				if (element.status === "aborted") return INVALID;
-				if (element.status === "dirty") status.dirty();
+				if (element.status === "aborted") {return INVALID;}
+				if (element.status === "dirty") {status.dirty();}
 				parsedSet.add(element.value);
 			}
 			return {
@@ -2965,8 +2961,8 @@ const ZodSet = class ZodSet extends ZodType {
 			};
 		}
 		const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath(ctx, item, ctx.path, i)));
-		if (ctx.common.async) return Promise.all(elements).then((elements) => finalizeSet(elements));
-		else return finalizeSet(elements);
+		if (ctx.common.async) {return Promise.all(elements).then((elements) => finalizeSet(elements));}
+		else {return finalizeSet(elements);}
 	}
 	min(minSize, message) {
 		return new ZodSet({
@@ -3026,7 +3022,7 @@ const ZodFunction = class ZodFunction extends ZodType {
 					ctx.schemaErrorMap,
 					getErrorMap(),
 					errorMap
-				].filter((x) => !!x),
+				].filter((x) => Boolean(x)),
 				issueData: {
 					code: ZodIssueCode.invalid_arguments,
 					argumentsError: error
@@ -3042,7 +3038,7 @@ const ZodFunction = class ZodFunction extends ZodType {
 					ctx.schemaErrorMap,
 					getErrorMap(),
 					errorMap
-				].filter((x) => !!x),
+				].filter((x) => Boolean(x)),
 				issueData: {
 					code: ZodIssueCode.invalid_return_type,
 					returnTypeError: error
@@ -3065,7 +3061,7 @@ const ZodFunction = class ZodFunction extends ZodType {
 					throw error;
 				});
 			});
-		} else {
+		}
 			const me = this;
 			return OK(function(...args) {
 				const parsedArgs = me._def.args.safeParse(args, params);
@@ -3075,7 +3071,7 @@ const ZodFunction = class ZodFunction extends ZodType {
 				if (!parsedReturns.success) throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);
 				return parsedReturns.data;
 			});
-		}
+		
 	}
 	parameters() {
 		return this._def.args;
@@ -3176,7 +3172,7 @@ const ZodEnum = class ZodEnum extends ZodType {
 			});
 			return INVALID;
 		}
-		if (!this._cache) this._cache = new Set(this._def.values);
+		if (!this._cache) {this._cache = new Set(this._def.values);}
 		if (!this._cache.has(input.data)) {
 			const ctx = this._getOrReturnCtx(input);
 			const expectedValues = this._def.values;
@@ -3194,17 +3190,17 @@ const ZodEnum = class ZodEnum extends ZodType {
 	}
 	get enum() {
 		const enumValues = {};
-		for (const val of this._def.values) enumValues[val] = val;
+		for (const val of this._def.values) {enumValues[val] = val;}
 		return enumValues;
 	}
 	get Values() {
 		const enumValues = {};
-		for (const val of this._def.values) enumValues[val] = val;
+		for (const val of this._def.values) {enumValues[val] = val;}
 		return enumValues;
 	}
 	get Enum() {
 		const enumValues = {};
-		for (const val of this._def.values) enumValues[val] = val;
+		for (const val of this._def.values) {enumValues[val] = val;}
 		return enumValues;
 	}
 	extract(values, newDef = this._def) {
@@ -3234,7 +3230,7 @@ const ZodNativeEnum = class extends ZodType {
 			});
 			return INVALID;
 		}
-		if (!this._cache) this._cache = new Set(util.getValidEnumValues(this._def.values));
+		if (!this._cache) {this._cache = new Set(util.getValidEnumValues(this._def.values));}
 		if (!this._cache.has(input.data)) {
 			const expectedValues = util.objectValues(nativeEnumValues);
 			addIssueToContext(ctx, {
@@ -3299,8 +3295,8 @@ const ZodEffects = class extends ZodType {
 		const checkCtx = {
 			addIssue: (arg) => {
 				addIssueToContext(ctx, arg);
-				if (arg.fatal) status.abort();
-				else status.dirty();
+				if (arg.fatal) {status.abort();}
+				else {status.dirty();}
 			},
 			get path() {
 				return ctx.path;
@@ -3309,7 +3305,7 @@ const ZodEffects = class extends ZodType {
 		checkCtx.addIssue = checkCtx.addIssue.bind(checkCtx);
 		if (effect.type === "preprocess") {
 			const processed = effect.transform(ctx.data, checkCtx);
-			if (ctx.common.async) return Promise.resolve(processed).then(async (processed) => {
+			if (ctx.common.async) {return Promise.resolve(processed).then(async (processed) => {
 				if (status.value === "aborted") return INVALID;
 				const result = await this._def.schema._parseAsync({
 					data: processed,
@@ -3320,25 +3316,25 @@ const ZodEffects = class extends ZodType {
 				if (result.status === "dirty") return DIRTY(result.value);
 				if (status.value === "dirty") return DIRTY(result.value);
 				return result;
-			});
+			});}
 			else {
-				if (status.value === "aborted") return INVALID;
+				if (status.value === "aborted") {return INVALID;}
 				const result = this._def.schema._parseSync({
 					data: processed,
 					path: ctx.path,
 					parent: ctx
 				});
-				if (result.status === "aborted") return INVALID;
-				if (result.status === "dirty") return DIRTY(result.value);
-				if (status.value === "dirty") return DIRTY(result.value);
+				if (result.status === "aborted") {return INVALID;}
+				if (result.status === "dirty") {return DIRTY(result.value);}
+				if (status.value === "dirty") {return DIRTY(result.value);}
 				return result;
 			}
 		}
 		if (effect.type === "refinement") {
 			const executeRefinement = (acc) => {
 				const result = effect.refinement(acc, checkCtx);
-				if (ctx.common.async) return Promise.resolve(result);
-				if (result instanceof Promise) throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");
+				if (ctx.common.async) {return Promise.resolve(result);}
+				if (result instanceof Promise) {throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");}
 				return acc;
 			};
 			if (ctx.common.async === false) {
@@ -3347,14 +3343,14 @@ const ZodEffects = class extends ZodType {
 					path: ctx.path,
 					parent: ctx
 				});
-				if (inner.status === "aborted") return INVALID;
-				if (inner.status === "dirty") status.dirty();
+				if (inner.status === "aborted") {return INVALID;}
+				if (inner.status === "dirty") {status.dirty();}
 				executeRefinement(inner.value);
 				return {
 					status: status.value,
 					value: inner.value
 				};
-			} else return this._def.schema._parseAsync({
+			}return this._def.schema._parseAsync({
 				data: ctx.data,
 				path: ctx.path,
 				parent: ctx
@@ -3369,7 +3365,7 @@ const ZodEffects = class extends ZodType {
 				});
 			});
 		}
-		if (effect.type === "transform") if (ctx.common.async === false) {
+		if (effect.type === "transform") {if (ctx.common.async === false) {
 			const base = this._def.schema._parseSync({
 				data: ctx.data,
 				path: ctx.path,
@@ -3392,7 +3388,7 @@ const ZodEffects = class extends ZodType {
 				status: status.value,
 				value: result
 			}));
-		});
+		});}
 		util.assertNever(effect);
 	}
 };
@@ -3417,7 +3413,7 @@ ZodEffects.createWithPreprocess = (preprocess, schema, params) => {
 };
 const ZodOptional = class extends ZodType {
 	_parse(input) {
-		if (this._getType(input) === ZodParsedType.undefined) return OK(void 0);
+		if (this._getType(input) === ZodParsedType.undefined) {return OK(void 0);}
 		return this._def.innerType._parse(input);
 	}
 	unwrap() {
@@ -3433,7 +3429,7 @@ ZodOptional.create = (type, params) => {
 };
 const ZodNullable = class extends ZodType {
 	_parse(input) {
-		if (this._getType(input) === ZodParsedType.null) return OK(null);
+		if (this._getType(input) === ZodParsedType.null) {return OK(null);}
 		return this._def.innerType._parse(input);
 	}
 	unwrap() {
@@ -3451,7 +3447,7 @@ const ZodDefault = class extends ZodType {
 	_parse(input) {
 		const { ctx } = this._processInputParams(input);
 		let data = ctx.data;
-		if (ctx.parsedType === ZodParsedType.undefined) data = this._def.defaultValue();
+		if (ctx.parsedType === ZodParsedType.undefined) {data = this._def.defaultValue();}
 		return this._def.innerType._parse({
 			data,
 			path: ctx.path,
@@ -3485,7 +3481,7 @@ const ZodCatch = class extends ZodType {
 			path: newCtx.path,
 			parent: { ...newCtx }
 		});
-		if (isAsync(result)) return result.then((result) => {
+		if (isAsync(result)) {return result.then((result) => {
 			return {
 				status: "valid",
 				value: result.status === "valid" ? result.value : this._def.catchValue({
@@ -3495,8 +3491,8 @@ const ZodCatch = class extends ZodType {
 					input: newCtx.data
 				})
 			};
-		});
-		else return {
+		});}
+		else {return {
 			status: "valid",
 			value: result.status === "valid" ? result.value : this._def.catchValue({
 				get error() {
@@ -3504,7 +3500,7 @@ const ZodCatch = class extends ZodType {
 				},
 				input: newCtx.data
 			})
-		};
+		};}
 	}
 	removeCatch() {
 		return this._def.innerType;
@@ -3565,18 +3561,18 @@ const ZodPipeline = class ZodPipeline extends ZodType {
 					path: ctx.path,
 					parent: ctx
 				});
-				if (inResult.status === "aborted") return INVALID;
+				if (inResult.status === "aborted") {return INVALID;}
 				if (inResult.status === "dirty") {
 					status.dirty();
 					return DIRTY(inResult.value);
-				} else return this._def.out._parseAsync({
+				}return this._def.out._parseAsync({
 					data: inResult.value,
 					path: ctx.path,
 					parent: ctx
 				});
 			};
 			return handleAsync();
-		} else {
+		}
 			const inResult = this._def.in._parseSync({
 				data: ctx.data,
 				path: ctx.path,
@@ -3594,7 +3590,7 @@ const ZodPipeline = class ZodPipeline extends ZodType {
 				path: ctx.path,
 				parent: ctx
 			});
-		}
+		
 	}
 	static create(a, b) {
 		return new ZodPipeline({
@@ -3608,7 +3604,7 @@ const ZodReadonly = class extends ZodType {
 	_parse(input) {
 		const result = this._def.innerType._parse(input);
 		const freeze = (data) => {
-			if (isValid(data)) data.value = Object.freeze(data.value);
+			if (isValid(data)) {data.value = Object.freeze(data.value);}
 			return data;
 		};
 		return isAsync(result) ? result.then((data) => freeze(data)) : freeze(result);
@@ -3770,7 +3766,7 @@ const DataValueSchema = objectType({
 			});
 			return;
 		}
-		if (v.valueMap && Array.isArray(v.valueMap)) {for (const item of v.valueMap) checkDepth(item, currentDepth + 1);}
+		if (v.valueMap && Array.isArray(v.valueMap)) {for (const item of v.valueMap) {checkDepth(item, currentDepth + 1);}}
 	};
 	checkDepth(val, 1);
 });
@@ -4014,19 +4010,19 @@ const SurfaceUpdateMessageSchema = objectType({
 }).strict().superRefine((data, ctx) => {
 	const componentIds = /* @__PURE__ */ new Set();
 	for (const c of data.components) {if (c.id) {
-		if (componentIds.has(c.id)) ctx.addIssue({
+		if (componentIds.has(c.id)) {ctx.addIssue({
 			code: ZodIssueCode.custom,
 			message: `Duplicate component ID found: ${c.id}`,
 			path: ["components"]
-		});
+		});}
 		componentIds.add(c.id);
 	}}
 	const checkRefs = (ids, componentId) => {
-		for (const id of ids) {if (id && !componentIds.has(id)) ctx.addIssue({
+		for (const id of ids) {if (id && !componentIds.has(id)) {ctx.addIssue({
 			code: ZodIssueCode.custom,
 			message: `Component '${componentId}' references non-existent component ID '${id}'.`,
 			path: ["components"]
-		});}
+		});}}
 	};
 	for (const component of data.components) {
 		if (!component.id || !component.component) {continue;}
@@ -4054,7 +4050,7 @@ const SurfaceUpdateMessageSchema = objectType({
 				break;
 			case "Tabs":
 				if (properties.tabItems && Array.isArray(properties.tabItems)) {properties.tabItems.forEach((tab) => {
-					if (tab.child) checkRefs([tab.child], component.id);
+					if (tab.child) {checkRefs([tab.child], component.id);}
 				});}
 				break;
 			case "Modal":
@@ -4096,7 +4092,7 @@ const A2uiError = class extends Error {
 		super(message);
 		this.name = this.constructor.name;
 		this.code = code;
-		if (Error.captureStackTrace) Error.captureStackTrace(this, this.constructor);
+		if (Error.captureStackTrace) {Error.captureStackTrace(this, this.constructor);}
 	}
 };
 /**
@@ -4144,7 +4140,7 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 	getSurfaces() {
 		const allSurfaces = this.surfaces;
 		const visibleSurfaces = /* @__PURE__ */ new Map();
-		for (const [surfaceId, surface] of allSurfaces) if (surface.rootComponentId) visibleSurfaces.set(surfaceId, surface);
+		for (const [surfaceId, surface] of allSurfaces) {if (surface.rootComponentId) visibleSurfaces.set(surfaceId, surface);}
 		return visibleSurfaces;
 	}
 	clearSurfaces() {
@@ -4153,10 +4149,10 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 	processMessages(messages) {
 		for (const rawMessage of messages) {
 			const message = A2uiMessageSchema.parse(rawMessage);
-			if (message.beginRendering) this.handleBeginRendering(message.beginRendering, message.beginRendering.surfaceId);
-			if (message.surfaceUpdate) this.handleSurfaceUpdate(message.surfaceUpdate, message.surfaceUpdate.surfaceId);
-			if (message.dataModelUpdate) this.handleDataModelUpdate(message.dataModelUpdate, message.dataModelUpdate.surfaceId);
-			if (message.deleteSurface) this.handleDeleteSurface(message.deleteSurface);
+			if (message.beginRendering) {this.handleBeginRendering(message.beginRendering, message.beginRendering.surfaceId);}
+			if (message.surfaceUpdate) {this.handleSurfaceUpdate(message.surfaceUpdate, message.surfaceUpdate.surfaceId);}
+			if (message.dataModelUpdate) {this.handleDataModelUpdate(message.dataModelUpdate, message.dataModelUpdate.surfaceId);}
+			if (message.deleteSurface) {this.handleDeleteSurface(message.deleteSurface);}
 		}
 	}
 	/**
@@ -4166,10 +4162,10 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 	*/
 	getData(node, relativePath, surfaceId = A2uiMessageProcessor.DEFAULT_SURFACE_ID) {
 		const surface = this.getOrCreateSurface(surfaceId);
-		if (!surface) return null;
+		if (!surface) {return null;}
 		let finalPath;
-		if (relativePath === "." || relativePath === "") finalPath = node.dataContextPath ?? "/";
-		else finalPath = this.resolvePath(relativePath, node.dataContextPath);
+		if (relativePath === "." || relativePath === "") {finalPath = node.dataContextPath ?? "/";}
+		else {finalPath = this.resolvePath(relativePath, node.dataContextPath);}
 		return this.getDataByPath(surface.dataModel, finalPath);
 	}
 	setData(node, relativePath, value, surfaceId = A2uiMessageProcessor.DEFAULT_SURFACE_ID) {
@@ -4178,26 +4174,26 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 			return;
 		}
 		const surface = this.getOrCreateSurface(surfaceId);
-		if (!surface) return;
+		if (!surface) {return;}
 		let finalPath;
-		if (relativePath === "." || relativePath === "") finalPath = node.dataContextPath ?? "/";
-		else finalPath = this.resolvePath(relativePath, node.dataContextPath);
+		if (relativePath === "." || relativePath === "") {finalPath = node.dataContextPath ?? "/";}
+		else {finalPath = this.resolvePath(relativePath, node.dataContextPath);}
 		this.setDataByPath(surface.dataModel, finalPath, value);
 	}
 	resolvePath(path, dataContextPath) {
-		if (path.startsWith("/")) return path;
-		if (dataContextPath && dataContextPath !== "/") return dataContextPath.endsWith("/") ? `${dataContextPath}${path}` : `${dataContextPath}/${path}`;
+		if (path.startsWith("/")) {return path;}
+		if (dataContextPath && dataContextPath !== "/") {return dataContextPath.endsWith("/") ? `${dataContextPath}${path}` : `${dataContextPath}/${path}`;}
 		return `/${path}`;
 	}
 	parseIfJsonString(value) {
-		if (typeof value !== "string") return value;
+		if (typeof value !== "string") {return value;}
 		const trimmedValue = value.trim();
-		if (trimmedValue.startsWith("{") && trimmedValue.endsWith("}") || trimmedValue.startsWith("[") && trimmedValue.endsWith("]")) try {
+		if (trimmedValue.startsWith("{") && trimmedValue.endsWith("}") || trimmedValue.startsWith("[") && trimmedValue.endsWith("]")) {try {
 			return JSON.parse(value);
 		} catch (e) {
 			console.warn(`Failed to parse potential JSON string: "${value.substring(0, 50)}..."`, e);
 			return value;
-		}
+		}}
 		return value;
 	}
 	/**
@@ -4208,19 +4204,19 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 	convertKeyValueArrayToMap(arr) {
 		const map = new this.mapCtor();
 		for (const item of arr) {
-			if (!isObject(item) || !("key" in item)) continue;
+			if (!isObject(item) || !("key" in item)) {continue;}
 			const key = item.key;
 			const valueKey = this.findValueKey(item);
-			if (!valueKey) continue;
+			if (!valueKey) {continue;}
 			let value = item[valueKey];
-			if (valueKey === "valueMap" && Array.isArray(value)) value = this.convertKeyValueArrayToMap(value);
-			else if (typeof value === "string") value = this.parseIfJsonString(value);
+			if (valueKey === "valueMap" && Array.isArray(value)) {value = this.convertKeyValueArrayToMap(value);}
+			else if (typeof value === "string") {value = this.parseIfJsonString(value);}
 			this.setDataByPath(map, key, value);
 		}
 		return map;
 	}
 	setDataByPath(root, path, value) {
-		if (Array.isArray(value) && (value.length === 0 || isObject(value[0]) && "key" in value[0])) if (value.length === 1 && isObject(value[0]) && value[0].key === ".") {
+		if (Array.isArray(value) && (value.length === 0 || isObject(value[0]) && "key" in value[0])) {if (value.length === 1 && isObject(value[0]) && value[0].key === ".") {
 			const item = value[0];
 			const valueKey = this.findValueKey(item);
 			if (valueKey) {
@@ -4228,33 +4224,33 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 				if (valueKey === "valueMap" && Array.isArray(value)) value = this.convertKeyValueArrayToMap(value);
 				else if (typeof value === "string") value = this.parseIfJsonString(value);
 			} else value = this.convertKeyValueArrayToMap(value);
-		} else value = this.convertKeyValueArrayToMap(value);
+		} else value = this.convertKeyValueArrayToMap(value);}
 		const segments = this.normalizePath(path).split("/").filter((s) => s);
 		if (segments.length === 0) {
 			if (value instanceof Map || isObject(value)) {
-				if (!(value instanceof Map) && isObject(value)) value = new this.mapCtor(Object.entries(value));
+				if (!(value instanceof Map) && isObject(value)) {value = new this.mapCtor(Object.entries(value));}
 				root.clear();
-				for (const [key, v] of value.entries()) root.set(key, v);
-			} else console.error("Cannot set root of DataModel to a non-Map value.");
+				for (const [key, v] of value.entries()) {root.set(key, v);}
+			} else {console.error("Cannot set root of DataModel to a non-Map value.");}
 			return;
 		}
 		let current = root;
 		for (let i = 0; i < segments.length - 1; i++) {
 			const segment = segments[i];
 			let target;
-			if (current instanceof Map) target = current.get(segment);
-			else if (Array.isArray(current) && /^\d+$/.test(segment)) target = current[parseInt(segment, 10)];
+			if (current instanceof Map) {target = current.get(segment);}
+			else if (Array.isArray(current) && /^\d+$/.test(segment)) {target = current[parseInt(segment, 10)];}
 			if (target === void 0 || typeof target !== "object" || target === null) {
 				target = new this.mapCtor();
-				if (current instanceof this.mapCtor) current.set(segment, target);
-				else if (Array.isArray(current)) current[parseInt(segment, 10)] = target;
+				if (current instanceof this.mapCtor) {current.set(segment, target);}
+				else if (Array.isArray(current)) {current[parseInt(segment, 10)] = target;}
 			}
 			current = target;
 		}
 		const finalSegment = segments[segments.length - 1];
 		const storedValue = value;
-		if (current instanceof this.mapCtor) current.set(finalSegment, storedValue);
-		else if (Array.isArray(current) && /^\d+$/.test(finalSegment)) current[parseInt(finalSegment, 10)] = storedValue;
+		if (current instanceof this.mapCtor) {current.set(finalSegment, storedValue);}
+		else if (Array.isArray(current) && /^\d+$/.test(finalSegment)) {current[parseInt(finalSegment, 10)] = storedValue;}
 	}
 	/**
 	* Normalizes a path string into a consistent, slash-delimited format.
@@ -4269,11 +4265,11 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 		const segments = this.normalizePath(path).split("/").filter((s) => s);
 		let current = root;
 		for (const segment of segments) {
-			if (current === void 0 || current === null) return null;
-			if (current instanceof Map) current = current.get(segment);
-			else if (Array.isArray(current) && /^\d+$/.test(segment)) current = current[parseInt(segment, 10)];
-			else if (isObject(current)) current = current[segment];
-			else return null;
+			if (current === void 0 || current === null) {return null;}
+			if (current instanceof Map) {current = current.get(segment);}
+			else if (Array.isArray(current) && /^\d+$/.test(segment)) {current = current[parseInt(segment, 10)];}
+			else if (isObject(current)) {current = current[segment];}
+			else {return null;}
 		}
 		return current;
 	}
@@ -4299,7 +4295,7 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 	}
 	handleSurfaceUpdate(message, surfaceId) {
 		const surface = this.getOrCreateSurface(surfaceId);
-		for (const component of message.components) surface.components.set(component.id, component);
+		for (const component of message.components) {surface.components.set(component.id, component);}
 		this.rebuildComponentTree(surface);
 	}
 	handleDataModelUpdate(message, surfaceId) {
@@ -4337,15 +4333,15 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 	buildNodeRecursive(baseComponentId, surface, visited, dataContextPath, idSuffix = "") {
 		const fullId = `${baseComponentId}${idSuffix}`;
 		const { components } = surface;
-		if (!components.has(baseComponentId)) return null;
-		if (visited.has(fullId)) throw new A2uiStateError(`Circular dependency for component "${fullId}".`);
+		if (!components.has(baseComponentId)) {return null;}
+		if (visited.has(fullId)) {throw new A2uiStateError(`Circular dependency for component "${fullId}".`);}
 		visited.add(fullId);
 		const componentData = components.get(baseComponentId);
 		const componentProps = componentData.component ?? {};
 		const componentType = Object.keys(componentProps)[0];
 		const unresolvedProperties = componentProps[componentType];
 		const resolvedProperties = new this.objCtor();
-		if (isObject(unresolvedProperties)) for (const [key, value] of Object.entries(unresolvedProperties)) resolvedProperties[key] = this.resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix);
+		if (isObject(unresolvedProperties)) {for (const [key, value] of Object.entries(unresolvedProperties)) resolvedProperties[key] = this.resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix);}
 		visited.delete(fullId);
 		const baseNode = {
 			id: fullId,
@@ -4354,126 +4350,126 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 		};
 		switch (componentType) {
 			case "Text":
-				if (!isResolvedText(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedText(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Text",
 					properties: resolvedProperties
 				});
 			case "Image":
-				if (!isResolvedImage(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedImage(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Image",
 					properties: resolvedProperties
 				});
 			case "Icon":
-				if (!isResolvedIcon(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedIcon(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Icon",
 					properties: resolvedProperties
 				});
 			case "Video":
-				if (!isResolvedVideo(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedVideo(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Video",
 					properties: resolvedProperties
 				});
 			case "AudioPlayer":
-				if (!isResolvedAudioPlayer(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedAudioPlayer(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "AudioPlayer",
 					properties: resolvedProperties
 				});
 			case "Row":
-				if (!isResolvedRow(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedRow(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Row",
 					properties: resolvedProperties
 				});
 			case "Column":
-				if (!isResolvedColumn(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedColumn(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Column",
 					properties: resolvedProperties
 				});
 			case "List":
-				if (!isResolvedList(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedList(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "List",
 					properties: resolvedProperties
 				});
 			case "Card":
-				if (!isResolvedCard(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedCard(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Card",
 					properties: resolvedProperties
 				});
 			case "Tabs":
-				if (!isResolvedTabs(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedTabs(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Tabs",
 					properties: resolvedProperties
 				});
 			case "Divider":
-				if (!isResolvedDivider(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedDivider(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Divider",
 					properties: resolvedProperties
 				});
 			case "Modal":
-				if (!isResolvedModal(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedModal(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Modal",
 					properties: resolvedProperties
 				});
 			case "Button":
-				if (!isResolvedButton(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedButton(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Button",
 					properties: resolvedProperties
 				});
 			case "CheckBox":
-				if (!isResolvedCheckbox(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedCheckbox(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "CheckBox",
 					properties: resolvedProperties
 				});
 			case "TextField":
-				if (!isResolvedTextField(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedTextField(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "TextField",
 					properties: resolvedProperties
 				});
 			case "DateTimeInput":
-				if (!isResolvedDateTimeInput(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedDateTimeInput(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "DateTimeInput",
 					properties: resolvedProperties
 				});
 			case "MultipleChoice":
-				if (!isResolvedMultipleChoice(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedMultipleChoice(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "MultipleChoice",
 					properties: resolvedProperties
 				});
 			case "Slider":
-				if (!isResolvedSlider(resolvedProperties)) throw new A2uiValidationError(`Invalid data; expected ${componentType}`);
+				if (!isResolvedSlider(resolvedProperties)) {throw new A2uiValidationError(`Invalid data; expected ${componentType}`);}
 				return new this.objCtor({
 					...baseNode,
 					type: "Slider",
@@ -4492,27 +4488,27 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 	* children, or a template, these will be built out here.
 	*/
 	resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix = "") {
-		if (typeof value === "string" && surface.components.has(value)) return this.buildNodeRecursive(value, surface, visited, dataContextPath, idSuffix);
+		if (typeof value === "string" && surface.components.has(value)) {return this.buildNodeRecursive(value, surface, visited, dataContextPath, idSuffix);}
 		if (isComponentArrayReference(value)) {
-			if (value.explicitList) return value.explicitList.map((id) => this.buildNodeRecursive(id, surface, visited, dataContextPath, idSuffix));
+			if (value.explicitList) {return value.explicitList.map((id) => this.buildNodeRecursive(id, surface, visited, dataContextPath, idSuffix));}
 			if (value.template) {
 				const fullDataPath = this.resolvePath(value.template.dataBinding, dataContextPath);
 				const data = this.getDataByPath(surface.dataModel, fullDataPath);
 				const template = value.template;
-				if (Array.isArray(data)) return data.map((_, index) => {
+				if (Array.isArray(data)) {return data.map((_, index) => {
 					const newSuffix = `:${[...dataContextPath.split("/").filter((segment) => /^\d+$/.test(segment)), index].join(":")}`;
 					const childDataContextPath = `${fullDataPath}/${index}`;
 					return this.buildNodeRecursive(template.componentId, surface, visited, childDataContextPath, newSuffix);
-				});
-				if (data instanceof this.mapCtor) return Array.from(data.keys(), (key) => {
+				});}
+				if (data instanceof this.mapCtor) {return Array.from(data.keys(), (key) => {
 					const newSuffix = `:${key}`;
 					const childDataContextPath = `${fullDataPath}/${key}`;
 					return this.buildNodeRecursive(template.componentId, surface, visited, childDataContextPath, newSuffix);
-				});
+				});}
 				return new this.arrayCtor();
 			}
 		}
-		if (Array.isArray(value)) return value.map((item) => this.resolvePropertyValue(item, surface, visited, dataContextPath, idSuffix));
+		if (Array.isArray(value)) {return value.map((item) => this.resolvePropertyValue(item, surface, visited, dataContextPath, idSuffix));}
 		if (isObject(value)) {
 			const newObj = new this.objCtor();
 			for (const [key, propValue] of Object.entries(value)) {
@@ -4610,7 +4606,7 @@ function merge(...classes) {
 	for (const clazz of classes) {for (const [key, val] of Object.entries(clazz)) {
 		const prefix = key.split("-").with(-1, "").join("-");
 		const existingKeys = Object.keys(styles).filter((key) => key.startsWith(prefix));
-		for (const existingKey of existingKeys) delete styles[existingKey];
+		for (const existingKey of existingKeys) {delete styles[existingKey];}
 		styles[key] = val;
 	}}
 	return styles;
@@ -4620,13 +4616,13 @@ function appendToAll(target, exclusions, ...classes) {
 	for (const clazz of classes) {for (const key of Object.keys(clazz)) {
 		const prefix = key.split("-").with(-1, "").join("-");
 		for (const [tagName, classesToAdd] of Object.entries(updatedTarget)) {
-			if (exclusions.includes(tagName)) continue;
+			if (exclusions.includes(tagName)) {continue;}
 			let found = false;
-			for (let t = 0; t < classesToAdd.length; t++) if (classesToAdd[t].startsWith(prefix)) {
+			for (let t = 0; t < classesToAdd.length; t++) {if (classesToAdd[t].startsWith(prefix)) {
 				found = true;
 				classesToAdd[t] = key;
-			}
-			if (!found) classesToAdd.push(key);
+			}}
+			if (!found) {classesToAdd.push(key);}
 		}
 	}}
 	return updatedTarget;
@@ -5062,18 +5058,18 @@ const __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, {
 	value
 }) : obj[key] = value;
 const __publicField = (obj, key, value) => {
-	__defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+	__defNormalProp(obj, typeof key !== "symbol" ? String(key) : key, value);
 	return value;
 };
 const __accessCheck = (obj, member, msg) => {
-	if (!member.has(obj)) throw TypeError("Cannot " + msg);
+	if (!member.has(obj)) {throw TypeError("Cannot " + msg);}
 };
 const __privateIn = (member, obj) => {
-	if (Object(obj) !== obj) throw TypeError("Cannot use the \"in\" operator on this value");
+	if (Object(obj) !== obj) {throw TypeError("Cannot use the \"in\" operator on this value");}
 	return member.has(obj);
 };
 const __privateAdd = (obj, member, value) => {
-	if (member.has(obj)) throw TypeError("Cannot add the same private member more than once");
+	if (member.has(obj)) {throw TypeError("Cannot add the same private member more than once");}
 	member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
 };
 const __privateMethod = (obj, member, method) => {
@@ -5166,7 +5162,7 @@ function producerNotifyConsumers(node) {
 	const prev = inNotificationPhase;
 	inNotificationPhase = true;
 	try {
-		for (const consumer of node.liveConsumerNode) {if (!consumer.dirty) consumerMarkDirty(consumer);}
+		for (const consumer of node.liveConsumerNode) {if (!consumer.dirty) {consumerMarkDirty(consumer);}}
 	} finally {
 		inNotificationPhase = prev;
 	}
@@ -5187,7 +5183,7 @@ function consumerBeforeComputation(node) {
 function consumerAfterComputation(node, prevConsumer) {
 	setActiveConsumer(prevConsumer);
 	if (!node || node.producerNode === void 0 || node.producerIndexOfThis === void 0 || node.producerLastReadVersion === void 0) {return;}
-	if (consumerIsLive(node)) {for (let i = node.nextProducerIndex; i < node.producerNode.length; i++) producerRemoveLiveConsumerAtIndex(node.producerNode[i], node.producerIndexOfThis[i]);}
+	if (consumerIsLive(node)) {for (let i = node.nextProducerIndex; i < node.producerNode.length; i++) {producerRemoveLiveConsumerAtIndex(node.producerNode[i], node.producerIndexOfThis[i]);}}
 	while (node.producerNode.length > node.nextProducerIndex) {
 		node.producerNode.pop();
 		node.producerLastReadVersion.pop();
@@ -5527,7 +5523,7 @@ let Signal;
 		_brand3 = /* @__PURE__ */ new WeakSet();
 		_assertSignals = /* @__PURE__ */ new WeakSet();
 		assertSignals_fn = function(signals) {
-			for (const signal of signals) {if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) throw new TypeError("Called watch/unwatch without a Computed or State argument");}
+			for (const signal of signals) {if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) {throw new TypeError("Called watch/unwatch without a Computed or State argument");}}
 		};
 		Signal2.isWatcher = (w) => __privateIn(_brand3, w);
 		subtle2.Watcher = Watcher;
@@ -5604,9 +5600,9 @@ const SignalArray = class SignalArray {
 		return new SignalArray(arr);
 	}
 	constructor(arr = []) {
-		let clone = arr.slice();
-		let self = this;
-		let boundFns = /* @__PURE__ */ new Map();
+		const clone = arr.slice();
+		const self = this;
+		const boundFns = /* @__PURE__ */ new Map();
 		/**
 		Flag to track whether we have *just* intercepted a call to `.push()` or
 		`.unshift()`, since in those cases (and only those cases!) the `Array`
@@ -5615,18 +5611,18 @@ const SignalArray = class SignalArray {
 		let nativelyAccessingLengthFromPushOrUnshift = false;
 		return new Proxy(clone, {
 			get(target, prop) {
-				let index = convertToInt(prop);
+				const index = convertToInt(prop);
 				if (index !== null) {
 					self.#readStorageFor(index);
 					self.#collection.get();
 					return target[index];
 				}
 				if (prop === "length") {
-					if (nativelyAccessingLengthFromPushOrUnshift) nativelyAccessingLengthFromPushOrUnshift = false;
-					else self.#collection.get();
+					if (nativelyAccessingLengthFromPushOrUnshift) {nativelyAccessingLengthFromPushOrUnshift = false;}
+					else {self.#collection.get();}
 					return target[prop];
 				}
-				if (ARRAY_WRITE_THEN_READ_METHODS.has(prop)) nativelyAccessingLengthFromPushOrUnshift = true;
+				if (ARRAY_WRITE_THEN_READ_METHODS.has(prop)) {nativelyAccessingLengthFromPushOrUnshift = true;}
 				if (ARRAY_GETTER_METHODS.has(prop)) {
 					let fn = boundFns.get(prop);
 					if (fn === void 0) {
@@ -5642,11 +5638,11 @@ const SignalArray = class SignalArray {
 			},
 			set(target, prop, value) {
 				target[prop] = value;
-				let index = convertToInt(prop);
+				const index = convertToInt(prop);
 				if (index !== null) {
 					self.#dirtyStorageFor(index);
 					self.#collection.set(null);
-				} else if (prop === "length") self.#collection.set(null);
+				} else if (prop === "length") {self.#collection.set(null);}
 				return true;
 			},
 			getPrototypeOf() {
@@ -5666,7 +5662,7 @@ const SignalArray = class SignalArray {
 	}
 	#dirtyStorageFor(index) {
 		const storage = this.#storages.get(index);
-		if (storage) storage.set(null);
+		if (storage) {storage.set(null);}
 	}
 };
 Object.setPrototypeOf(SignalArray.prototype, Array.prototype);
@@ -5685,7 +5681,7 @@ const SignalMap = class {
 	}
 	dirtyStorageFor(key) {
 		const storage = this.storages.get(key);
-		if (storage) storage.set(null);
+		if (storage) {storage.set(null);}
 	}
 	constructor(existing) {
 		this.vals = existing ? new Map(existing) : /* @__PURE__ */ new Map();
@@ -5832,7 +5828,7 @@ const SignalSet = class {
 	}
 	dirtyStorageFor(key) {
 		const storage = this.storages.get(key);
-		if (storage) storage.set(null);
+		if (storage) {storage.set(null);}
 	}
 	constructor(existing) {
 		this.vals = new Set(existing);
@@ -5907,14 +5903,14 @@ const Data = {
 const t$7 = globalThis, e$13 = t$7.ShadowRoot && (void 0 === t$7.ShadyCSS || t$7.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, s$9 = Symbol(), o$14 = /* @__PURE__ */ new WeakMap();
 const n$13 = class {
 	constructor(t, e, o) {
-		if (this._$cssResult$ = !0, o !== s$9) throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");
+		if (this._$cssResult$ = !0, o !== s$9) {throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");}
 		this.cssText = t, this.t = e;
 	}
 	get styleSheet() {
 		let t = this.o;
 		const s = this.t;
 		if (e$13 && void 0 === t) {
-			const e = void 0 !== s && 1 === s.length;
+			const e = void 0 !== s && s.length === 1;
 			e && (t = o$14.get(s)), void 0 === t && ((this.o = t = new CSSStyleSheet()).replaceSync(this.cssText), e && o$14.set(s, t));
 		}
 		return t;
@@ -6018,20 +6014,20 @@ const y$1 = class extends HTMLElement {
 		return this.elementProperties.get(t) ?? b$1;
 	}
 	static _$Ei() {
-		if (this.hasOwnProperty(d$2("elementProperties"))) return;
+		if (this.hasOwnProperty(d$2("elementProperties"))) {return;}
 		const t = n$12(this);
 		t.finalize(), void 0 !== t.l && (this.l = [...t.l]), this.elementProperties = new Map(t.elementProperties);
 	}
 	static finalize() {
-		if (this.hasOwnProperty(d$2("finalized"))) return;
+		if (this.hasOwnProperty(d$2("finalized"))) {return;}
 		if (this.finalized = !0, this._$Ei(), this.hasOwnProperty(d$2("properties"))) {
 			const t = this.properties, s = [...r$10(t), ...o$13(t)];
-			for (const i of s) this.createProperty(i, t[i]);
+			for (const i of s) {this.createProperty(i, t[i]);}
 		}
 		const t = this[Symbol.metadata];
-		if (null !== t) {
+		if (t !== null) {
 			const s = litPropertyMetadata.get(t);
-			if (void 0 !== s) for (const [t, i] of s) this.elementProperties.set(t, i);
+			if (void 0 !== s) {for (const [t, i] of s) this.elementProperties.set(t, i);}
 		}
 		this._$Eh = /* @__PURE__ */ new Map();
 		for (const [t, s] of this.elementProperties) {
@@ -6043,14 +6039,14 @@ const y$1 = class extends HTMLElement {
 	static finalizeStyles(s) {
 		const i = [];
 		if (Array.isArray(s)) {
-			const e = new Set(s.flat(Infinity).reverse());
-			for (const s of e) i.unshift(c$7(s));
-		} else void 0 !== s && i.push(c$7(s));
+			const e = new Set(s.flat(Infinity).toReversed());
+			for (const s of e) {i.unshift(c$7(s));}
+		} else {void 0 !== s && i.push(c$7(s));}
 		return i;
 	}
 	static _$Eu(t, s) {
 		const i = s.attribute;
-		return !1 === i ? void 0 : "string" == typeof i ? i : "string" == typeof t ? t.toLowerCase() : void 0;
+		return !1 === i ? void 0 : typeof i == "string" ? i : typeof t == "string" ? t.toLowerCase() : void 0;
 	}
 	constructor() {
 		super(), this._$Ep = void 0, this.isUpdatePending = !1, this.hasUpdated = !1, this._$Em = null, this._$Ev();
@@ -6066,7 +6062,7 @@ const y$1 = class extends HTMLElement {
 	}
 	_$E_() {
 		const t = /* @__PURE__ */ new Map(), s = this.constructor.elementProperties;
-		for (const i of s.keys()) this.hasOwnProperty(i) && (t.set(i, this[i]), delete this[i]);
+		for (const i of s.keys()) {this.hasOwnProperty(i) && (t.set(i, this[i]), delete this[i]);}
 		t.size > 0 && (this._$Ep = t);
 	}
 	createRenderRoot() {
@@ -6087,13 +6083,13 @@ const y$1 = class extends HTMLElement {
 		const i = this.constructor.elementProperties.get(t), e = this.constructor._$Eu(t, i);
 		if (void 0 !== e && !0 === i.reflect) {
 			const h = (void 0 !== i.converter?.toAttribute ? i.converter : u$3).toAttribute(s, i.type);
-			this._$Em = t, null == h ? this.removeAttribute(e) : this.setAttribute(e, h), this._$Em = null;
+			this._$Em = t, h == null ? this.removeAttribute(e) : this.setAttribute(e, h), this._$Em = null;
 		}
 	}
 	_$AK(t, s) {
 		const i = this.constructor, e = i._$Eh.get(t);
 		if (void 0 !== e && this._$Em !== e) {
-			const t = i.getPropertyOptions(e), h = "function" == typeof t.converter ? { fromAttribute: t.converter } : void 0 !== t.converter?.fromAttribute ? t.converter : u$3;
+			const t = i.getPropertyOptions(e), h = typeof t.converter == "function" ? { fromAttribute: t.converter } : void 0 !== t.converter?.fromAttribute ? t.converter : u$3;
 			this._$Em = e;
 			const r = h.fromAttribute(s, t.type);
 			this[e] = r ?? this._$Ej?.get(e) ?? r, this._$Em = null;
@@ -6102,7 +6098,7 @@ const y$1 = class extends HTMLElement {
 	requestUpdate(t, s, i, e = !1, h) {
 		if (void 0 !== t) {
 			const r = this.constructor;
-			if (!1 === e && (h = this[t]), i ??= r.getPropertyOptions(t), !((i.hasChanged ?? f$3)(h, s) || i.useDefault && i.reflect && h === this._$Ej?.get(t) && !this.hasAttribute(r._$Eu(t, i)))) return;
+			if (!1 === e && (h = this[t]), i ??= r.getPropertyOptions(t), !((i.hasChanged ?? f$3)(h, s) || i.useDefault && i.reflect && h === this._$Ej?.get(t) && !this.hasAttribute(r._$Eu(t, i)))) {return;}
 			this.C(t, s, i);
 		}
 		!1 === this.isUpdatePending && (this._$ES = this._$EP());
@@ -6118,23 +6114,23 @@ const y$1 = class extends HTMLElement {
 			Promise.reject(t);
 		}
 		const t = this.scheduleUpdate();
-		return null != t && await t, !this.isUpdatePending;
+		return t != null && await t, !this.isUpdatePending;
 	}
 	scheduleUpdate() {
 		return this.performUpdate();
 	}
 	performUpdate() {
-		if (!this.isUpdatePending) return;
+		if (!this.isUpdatePending) {return;}
 		if (!this.hasUpdated) {
 			if (this.renderRoot ??= this.createRenderRoot(), this._$Ep) {
-				for (const [t, s] of this._$Ep) this[t] = s;
+				for (const [t, s] of this._$Ep) {this[t] = s;}
 				this._$Ep = void 0;
 			}
 			const t = this.constructor.elementProperties;
-			if (t.size > 0) for (const [s, i] of t) {
+			if (t.size > 0) {for (const [s, i] of t) {
 				const { wrapped: t } = i, e = this[s];
 				!0 !== t || this._$AL.has(s) || void 0 === e || this.C(s, void 0, i, e);
-			}
+			}}
 		}
 		let t = !1;
 		const s = this._$AL;
@@ -6179,7 +6175,7 @@ const t$6 = globalThis, i$8 = (t) => t, s$8 = t$6.trustedTypes, e$11 = s$8 ? s$8
 	values: s
 }), b = x(1), E = Symbol.for("lit-noChange"), A = Symbol.for("lit-nothing"), C = /* @__PURE__ */ new WeakMap(), P = l$3.createTreeWalker(l$3, 129);
 function V(t, i) {
-	if (!u$2(t) || !t.hasOwnProperty("raw")) {throw Error("invalid template strings array");}
+	if (!u$2(t) || !t.hasOwnProperty("raw")) {throw new Error("invalid template strings array");}
 	return void 0 !== e$11 ? e$11.createHTML(i) : i;
 }
 const N = (t, i) => {
@@ -6188,7 +6184,7 @@ const N = (t, i) => {
 	for (let i = 0; i < s; i++) {
 		const s = t[i];
 		let a, u, d = -1, f = 0;
-		for (; f < s.length && (c.lastIndex = f, u = c.exec(s), u !== null);) {f = c.lastIndex, c === v$1 ? "!--" === u[1] ? c = _ : void 0 !== u[1] ? c = m$3 : void 0 !== u[2] ? (y.test(u[2]) && (n = RegExp("</" + u[2], "g")), c = p$1) : void 0 !== u[3] && (c = p$1) : c === p$1 ? ">" === u[0] ? (c = n ?? v$1, d = -1) : void 0 === u[1] ? d = -2 : (d = c.lastIndex - u[2].length, a = u[1], c = void 0 === u[3] ? p$1 : "\"" === u[3] ? $ : g) : c === $ || c === g ? c = p$1 : c === _ || c === m$3 ? c = v$1 : (c = p$1, n = void 0);}
+		for (; f < s.length && (c.lastIndex = f, u = c.exec(s), u !== null);) {f = c.lastIndex, c === v$1 ? u[1] === "!--" ? c = _ : void 0 !== u[1] ? c = m$3 : void 0 !== u[2] ? (y.test(u[2]) && (n = RegExp("</" + u[2], "g")), c = p$1) : void 0 !== u[3] && (c = p$1) : c === p$1 ? u[0] === ">" ? (c = n ?? v$1, d = -1) : void 0 === u[1] ? d = -2 : (d = c.lastIndex - u[2].length, a = u[1], c = void 0 === u[3] ? p$1 : u[3] === "\"" ? $ : g) : c === $ || c === g ? c = p$1 : c === _ || c === m$3 ? c = v$1 : (c = p$1, n = void 0);}
 		const x = c === p$1 && t[i + 1].startsWith("/>") ? " " : "";
 		l += c === v$1 ? s + r$9 : d >= 0 ? (e.push(a), s.slice(0, d) + h$6 + s.slice(d) + o$12 + x) : s + o$12 + (d === -2 ? i : x);
 	}
@@ -6200,13 +6196,13 @@ const S = class S {
 		this.parts = [];
 		let l = 0, a = 0;
 		const u = t.length - 1, d = this.parts, [f, v] = N(t, i);
-		if (this.el = S.createElement(f, e), P.currentNode = this.el.content, 2 === i || 3 === i) {
+		if (this.el = S.createElement(f, e), P.currentNode = this.el.content, i === 2 || i === 3) {
 			const t = this.el.content.firstChild;
 			t.replaceWith(...t.childNodes);
 		}
-		for (; null !== (r = P.nextNode()) && d.length < u;) {
-			if (1 === r.nodeType) {
-				if (r.hasAttributes()) for (const t of r.getAttributeNames()) if (t.endsWith(h$6)) {
+		for (; (r = P.nextNode()) !== null && d.length < u;) {
+			if (r.nodeType === 1) {
+				if (r.hasAttributes()) {for (const t of r.getAttributeNames()) if (t.endsWith(h$6)) {
 					const i = v[a++], s = r.getAttribute(t).split(o$12), e = /([.?@])?(.*)/.exec(i);
 					d.push({
 						type: 1,
@@ -6218,19 +6214,19 @@ const S = class S {
 				} else t.startsWith(o$12) && (d.push({
 					type: 6,
 					index: l
-				}), r.removeAttribute(t));
+				}), r.removeAttribute(t));}
 				if (y.test(r.tagName)) {
 					const t = r.textContent.split(o$12), i = t.length - 1;
 					if (i > 0) {
 						r.textContent = s$8 ? s$8.emptyScript : "";
-						for (let s = 0; s < i; s++) r.append(t[s], c$5()), P.nextNode(), d.push({
+						for (let s = 0; s < i; s++) {r.append(t[s], c$5()), P.nextNode(), d.push({
 							type: 2,
 							index: ++l
-						});
+						});}
 						r.append(t[i], c$5());
 					}
 				}
-			} else if (8 === r.nodeType) if (r.data === n$11) d.push({
+			} else if (r.nodeType === 8) {if (r.data === n$11) d.push({
 				type: 2,
 				index: l
 			});
@@ -6240,7 +6236,7 @@ const S = class S {
 					type: 7,
 					index: l
 				}), t += o$12.length - 1;
-			}
+			}}
 			l++;
 		}
 	}
@@ -6272,7 +6268,7 @@ const R = class {
 		for (; void 0 !== r;) {
 			if (o === r.index) {
 				let i;
-				2 === r.type ? i = new k(h, h.nextSibling, this, t) : 1 === r.type ? i = new r.ctor(h, r.name, r.strings, this, t) : 6 === r.type && (i = new Z(h, this, t)), this._$AV.push(i), r = s[++n];
+				r.type === 2 ? i = new k(h, h.nextSibling, this, t) : r.type === 1 ? i = new r.ctor(h, r.name, r.strings, this, t) : r.type === 6 && (i = new Z(h, this, t)), this._$AV.push(i), r = s[++n];
 			}
 			o !== r?.index && (h = P.nextNode(), o++);
 		}
@@ -6280,7 +6276,7 @@ const R = class {
 	}
 	p(t) {
 		let i = 0;
-		for (const s of this._$AV) void 0 !== s && (void 0 !== s.strings ? (s._$AI(t, s, i), i += s.strings.length - 2) : s._$AI(t[i])), i++;
+		for (const s of this._$AV) {void 0 !== s && (void 0 !== s.strings ? (s._$AI(t, s, i), i += s.strings.length - 2) : s._$AI(t[i])), i++;}
 	}
 };
 const k = class k {
@@ -6293,7 +6289,7 @@ const k = class k {
 	get parentNode() {
 		let t = this._$AA.parentNode;
 		const i = this._$AM;
-		return void 0 !== i && 11 === t?.nodeType && (t = i.parentNode), t;
+		return void 0 !== i && t?.nodeType === 11 && (t = i.parentNode), t;
 	}
 	get startNode() {
 		return this._$AA;
@@ -6302,7 +6298,7 @@ const k = class k {
 		return this._$AB;
 	}
 	_$AI(t, i = this) {
-		t = M$1(this, t, i), a(t) ? t === A || null == t || "" === t ? (this._$AH !== A && this._$AR(), this._$AH = A) : t !== this._$AH && t !== E && this._(t) : void 0 !== t._$litType$ ? this.$(t) : void 0 !== t.nodeType ? this.T(t) : d$1(t) ? this.k(t) : this._(t);
+		t = M$1(this, t, i), a(t) ? t === A || t == null || t === "" ? (this._$AH !== A && this._$AR(), this._$AH = A) : t !== this._$AH && t !== E && this._(t) : void 0 !== t._$litType$ ? this.$(t) : void 0 !== t.nodeType ? this.T(t) : d$1(t) ? this.k(t) : this._(t);
 	}
 	O(t) {
 		return this._$AA.parentNode.insertBefore(t, this._$AB);
@@ -6314,8 +6310,8 @@ const k = class k {
 		this._$AH !== A && a(this._$AH) ? this._$AA.nextSibling.data = t : this.T(l$3.createTextNode(t)), this._$AH = t;
 	}
 	$(t) {
-		const { values: i, _$litType$: s } = t, e = "number" == typeof s ? this._$AC(t) : (void 0 === s.el && (s.el = S.createElement(V(s.h, s.h[0]), this.options)), s);
-		if (this._$AH?._$AD === e) this._$AH.p(i);
+		const { values: i, _$litType$: s } = t, e = typeof s == "number" ? this._$AC(t) : (void 0 === s.el && (s.el = S.createElement(V(s.h, s.h[0]), this.options)), s);
+		if (this._$AH?._$AD === e) {this._$AH.p(i);}
 		else {
 			const t = new R(e, this), s = t.u(this.options);
 			t.p(i), this.T(s), this._$AH = t;
@@ -6329,7 +6325,7 @@ const k = class k {
 		u$2(this._$AH) || (this._$AH = [], this._$AR());
 		const i = this._$AH;
 		let s, e = 0;
-		for (const h of t) e === i.length ? i.push(s = new k(this.O(c$5()), this.O(c$5()), this, this.options)) : s = i[e], s._$AI(h), e++;
+		for (const h of t) {e === i.length ? i.push(s = new k(this.O(c$5()), this.O(c$5()), this, this.options)) : s = i[e], s._$AI(h), e++;}
 		e < i.length && (this._$AR(s && s._$AB.nextSibling, e), i.length = e);
 	}
 	_$AR(t = this._$AA.nextSibling, s) {
@@ -6350,16 +6346,16 @@ const H = class {
 		return this._$AM._$AU;
 	}
 	constructor(t, i, s, e, h) {
-		this.type = 1, this._$AH = A, this._$AN = void 0, this.element = t, this.name = i, this._$AM = e, this.options = h, s.length > 2 || "" !== s[0] || "" !== s[1] ? (this._$AH = Array(s.length - 1).fill(/* @__PURE__ */ new String()), this.strings = s) : this._$AH = A;
+		this.type = 1, this._$AH = A, this._$AN = void 0, this.element = t, this.name = i, this._$AM = e, this.options = h, s.length > 2 || s[0] !== "" || s[1] !== "" ? (this._$AH = Array(s.length - 1).fill(/* @__PURE__ */ String()), this.strings = s) : this._$AH = A;
 	}
 	_$AI(t, i = this, s, e) {
 		const h = this.strings;
 		let o = !1;
-		if (void 0 === h) t = M$1(this, t, i, 0), o = !a(t) || t !== this._$AH && t !== E, o && (this._$AH = t);
+		if (void 0 === h) {t = M$1(this, t, i, 0), o = !a(t) || t !== this._$AH && t !== E, o && (this._$AH = t);}
 		else {
 			const e = t;
 			let n, r;
-			for (t = h[0], n = 0; n < h.length - 1; n++) r = M$1(this, e[s + n], i, n), r === E && (r = this._$AH[n]), o ||= !a(r) || r !== this._$AH[n], r === A ? t = A : t !== A && (t += (r ?? "") + h[n + 1]), this._$AH[n] = r;
+			for (t = h[0], n = 0; n < h.length - 1; n++) {r = M$1(this, e[s + n], i, n), r === E && (r = this._$AH[n]), o ||= !a(r) || r !== this._$AH[n], r === A ? t = A : t !== A && (t += (r ?? "") + h[n + 1]), this._$AH[n] = r;}
 		}
 		o && !e && this.j(t);
 	}
@@ -6380,7 +6376,7 @@ const L = class extends H {
 		super(...arguments), this.type = 4;
 	}
 	j(t) {
-		this.element.toggleAttribute(this.name, !!t && t !== A);
+		this.element.toggleAttribute(this.name, Boolean(t) && t !== A);
 	}
 };
 const z = class extends H {
@@ -6388,12 +6384,12 @@ const z = class extends H {
 		super(t, i, s, e, h), this.type = 5;
 	}
 	_$AI(t, i = this) {
-		if ((t = M$1(this, t, i, 0) ?? A) === E) return;
+		if ((t = M$1(this, t, i, 0) ?? A) === E) {return;}
 		const s = this._$AH, e = t === A && s !== A || t.capture !== s.capture || t.once !== s.once || t.passive !== s.passive, h = t !== A && (s === A || e);
 		e && this.element.removeEventListener(this.name, this, s), h && this.element.addEventListener(this.name, this, t), this._$AH = t;
 	}
 	handleEvent(t) {
-		"function" == typeof this._$AH ? this._$AH.call(this.options?.host ?? this.element, t) : this._$AH.handleEvent(t);
+		 typeof this._$AH == "function" ? this._$AH.call(this.options?.host ?? this.element, t) : this._$AH.handleEvent(t);
 	}
 };
 const Z = class {
@@ -6649,7 +6645,7 @@ function o$7(i) {
 			const e = new Signal.Computed(() => {
 				i();
 			});
-			return this.h.watch(e), this._$St.set(e, s), (h = null == s ? void 0 : s.beforeUpdate) !== null && void 0 !== h && h ? Signal.subtle.untrack(() => e.get()) : this.updateComplete.then(() => Signal.subtle.untrack(() => e.get())), () => {
+			return this.h.watch(e), this._$St.set(e, s), (h = s == null ? void 0 : s.beforeUpdate) !== null && void 0 !== h && h ? Signal.subtle.untrack(() => e.get()) : this.updateComplete.then(() => Signal.subtle.untrack(() => e.get())), () => {
 				this._$St.delete(e), this.h.unwatch(e), !1 === this.isConnected && this._$Sp();
 			};
 		}
@@ -6750,9 +6746,9 @@ function h$3(i) {
 }
 function n$5(i, t = !1, e = 0) {
 	const r = this._$AH, h = this._$AN;
-	if (void 0 !== h && h.size !== 0) {if (t) if (Array.isArray(r)) for (let i = e; i < r.length; i++) s$4(r[i], !1), o$6(r[i]);
-	else null != r && (s$4(r, !1), o$6(r));
-	else s$4(this, i);}
+	if (void 0 !== h && h.size !== 0) {if (t) {if (Array.isArray(r)) for (let i = e; i < r.length; i++) s$4(r[i], !1), o$6(r[i]);
+	else null != r && (s$4(r, !1), o$6(r));}
+	else {s$4(this, i);}}
 }
 const c$3 = (i) => {
 	i.type == t$3.CHILD && (i._$AP ??= n$5, i._$AQ ??= h$3);
@@ -6768,7 +6764,7 @@ const f = class extends i$5 {
 		i !== this.isConnected && (this.isConnected = i, i ? this.reconnected?.() : this.disconnected?.()), t && (s$4(this, i), o$6(this));
 	}
 	setValue(t) {
-		if (r$4(this._$Ct)) this._$Ct._$AI(t, this);
+		if (r$4(this._$Ct)) {this._$Ct._$AI(t, this);}
 		else {
 			const i = [...this._$Ct._$AH];
 			i[this._$Ci] = t, this._$Ct._$AI(i, this, 0);
@@ -6834,7 +6830,7 @@ function n$3(n) {
 		}, this.host = t, void 0 !== s.context) {
 			const t = s;
 			this.context = t.context, this.callback = t.callback, this.subscribe = t.subscribe ?? !1;
-		} else this.context = s, this.callback = i, this.subscribe = h ?? !1;
+		} else {this.context = s, this.callback = i, this.subscribe = h ?? !1;}
 		this.host.addController(this);
 	}
 	hostConnected() {
@@ -6865,11 +6861,11 @@ const s$1 = class {
 	}
 	constructor(s) {
 		this.subscriptions = /* @__PURE__ */ new Map(), this.updateObservers = () => {
-			for (const [s, { disposer: t }] of this.subscriptions) s(this.o, t);
+			for (const [s, { disposer: t }] of this.subscriptions) {s(this.o, t);}
 		}, void 0 !== s && (this.value = s);
 	}
 	addCallback(s, t, i) {
-		if (!i) return void s(this.value);
+		if (!i) {return void s(this.value);}
 		this.subscriptions.has(s) || this.subscriptions.set(s, {
 			disposer: () => {
 				this.subscriptions.delete(s);
@@ -6898,14 +6894,14 @@ const s$1 = class {
 const i$2 = class extends s$1 {
 	constructor(s, e, i) {
 		super(void 0 !== e.context ? e.initialValue : i), this.onContextRequest = (t) => {
-			if (t.context !== this.context) return;
+			if (t.context !== this.context) {return;}
 			const s = t.contextTarget ?? t.composedPath()[0];
 			s !== this.host && (t.stopPropagation(), this.addCallback(t.callback, s, t.subscribe));
 		}, this.onProviderRequest = (s) => {
-			if (s.context !== this.context) return;
-			if ((s.contextTarget ?? s.composedPath()[0]) === this.host) return;
+			if (s.context !== this.context) {return;}
+			if ((s.contextTarget ?? s.composedPath()[0]) === this.host) {return;}
 			const e = /* @__PURE__ */ new Set();
-			for (const [s, { consumerHost: i }] of this.subscriptions) e.has(s) || (e.add(s), i.dispatchEvent(new s$3(this.context, i, s, !0)));
+			for (const [s, { consumerHost: i }] of this.subscriptions) {e.has(s) || (e.add(s), i.dispatchEvent(new s$3(this.context, i, s, !0)));}
 			s.stopPropagation();
 		}, this.host = s, void 0 !== e.context ? this.context = e.context : this.context = e, this.attachListeners(), this.host.addController?.(this);
 	}
@@ -7011,95 +7007,95 @@ const ComponentRegistry = class {
 		this.registry = /* @__PURE__ */ new Map();
 	}
 	register(typeName, constructor, tagName, schema) {
-		if (!/^[a-zA-Z0-9]+$/.test(typeName)) throw new Error(`[Registry] Invalid typeName '${typeName}'. Must be alphanumeric.`);
+		if (!/^[a-zA-Z0-9]+$/.test(typeName)) {throw new Error(`[Registry] Invalid typeName '${typeName}'. Must be alphanumeric.`);}
 		this.registry.set(typeName, constructor);
-		if (schema) this.schemas.set(typeName, schema);
+		if (schema) {this.schemas.set(typeName, schema);}
 		const actualTagName = tagName || `a2ui-custom-${typeName.toLowerCase()}`;
 		const existingName = customElements.getName(constructor);
 		if (existingName) {
-			if (existingName !== actualTagName) throw new Error(`Component ${typeName} is already registered as ${existingName}, but requested as ${actualTagName}.`);
+			if (existingName !== actualTagName) {throw new Error(`Component ${typeName} is already registered as ${existingName}, but requested as ${actualTagName}.`);}
 			return;
 		}
-		if (!customElements.get(actualTagName)) customElements.define(actualTagName, constructor);
+		if (!customElements.get(actualTagName)) {customElements.define(actualTagName, constructor);}
 	}
 	get(typeName) {
 		return this.registry.get(typeName);
 	}
 	getInlineCatalog() {
 		const components = {};
-		for (const [key, value] of this.schemas) components[key] = value;
+		for (const [key, value] of this.schemas) {components[key] = value;}
 		return { components };
 	}
 };
 const componentRegistry = new ComponentRegistry();
 const __runInitializers$19 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 const __esDecorate$19 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const Root = (() => {
-	let _classDecorators = [t$5("a2ui-root")];
+	const _classDecorators = [t$5("a2ui-root")];
 	let _classDescriptor;
-	let _classExtraInitializers = [];
+	const _classExtraInitializers = [];
 	let _classThis;
-	let _classSuper = o$7(i$7);
-	let _instanceExtraInitializers = [];
+	const _classSuper = o$7(i$7);
+	const _instanceExtraInitializers = [];
 	let _surfaceId_decorators;
-	let _surfaceId_initializers = [];
-	let _surfaceId_extraInitializers = [];
+	const _surfaceId_initializers = [];
+	const _surfaceId_extraInitializers = [];
 	let _component_decorators;
-	let _component_initializers = [];
-	let _component_extraInitializers = [];
+	const _component_initializers = [];
+	const _component_extraInitializers = [];
 	let _theme_decorators;
-	let _theme_initializers = [];
-	let _theme_extraInitializers = [];
+	const _theme_initializers = [];
+	const _theme_extraInitializers = [];
 	let _childComponents_decorators;
-	let _childComponents_initializers = [];
-	let _childComponents_extraInitializers = [];
+	const _childComponents_initializers = [];
+	const _childComponents_extraInitializers = [];
 	let _processor_decorators;
-	let _processor_initializers = [];
-	let _processor_extraInitializers = [];
+	const _processor_initializers = [];
+	const _processor_extraInitializers = [];
 	let _dataContextPath_decorators;
-	let _dataContextPath_initializers = [];
-	let _dataContextPath_extraInitializers = [];
+	const _dataContextPath_initializers = [];
+	const _dataContextPath_extraInitializers = [];
 	let _enableCustomElements_decorators;
-	let _enableCustomElements_initializers = [];
-	let _enableCustomElements_extraInitializers = [];
+	const _enableCustomElements_initializers = [];
+	const _enableCustomElements_extraInitializers = [];
 	let _set_weight_decorators;
-	var Root = class extends _classSuper {
+	let Root = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
@@ -7672,7 +7668,7 @@ const Root = (() => {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const e$2 = e$6(class extends i$5 {
 	constructor(t) {
-		if (super(t), t.type !== t$3.ATTRIBUTE || t.name !== "class" || t.strings?.length > 2) {throw Error("`classMap()` can only be used in the `class` attribute and must be the only part in the attribute.");}
+		if (super(t), t.type !== t$3.ATTRIBUTE || t.name !== "class" || t.strings?.length > 2) {throw new Error("`classMap()` can only be used in the `class` attribute and must be the only part in the attribute.");}
 	}
 	render(t) {
 		return " " + Object.keys(t).filter((s) => t[s]).join(" ") + " ";
@@ -7698,7 +7694,7 @@ const Root = (() => {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const n$2 = "important", i$1 = " !important", o$2 = e$6(class extends i$5 {
 	constructor(t) {
-		if (super(t), t.type !== t$3.ATTRIBUTE || t.name !== "style" || t.strings?.length > 2) {throw Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");}
+		if (super(t), t.type !== t$3.ATTRIBUTE || t.name !== "style" || t.strings?.length > 2) {throw new Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");}
 	}
 	render(t) {
 		return Object.keys(t).reduce((e, r) => {
@@ -7709,7 +7705,7 @@ const Root = (() => {
 	update(e, [r]) {
 		const { style: s } = e.element;
 		if (void 0 === this.ft) {return this.ft = new Set(Object.keys(r)), this.render(r);}
-		for (const t of this.ft) r[t] == null && (this.ft.delete(t), t.includes("-") ? s.removeProperty(t) : s[t] = null);
+		for (const t of this.ft) {r[t] == null && (this.ft.delete(t), t.includes("-") ? s.removeProperty(t) : s[t] = null);}
 		for (const t in r) {
 			const e = r[t];
 			if (e != null) {
@@ -7723,40 +7719,40 @@ const Root = (() => {
 });
 const __esDecorate$18 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$18 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -7795,12 +7791,12 @@ const __runInitializers$18 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Audio = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#url_accessor_storage = __runInitializers$18(this, _url_initializers, null);
 		get url() {
@@ -7829,15 +7825,15 @@ const __runInitializers$18 = function(thisArg, initializers, value) {
     `];
 		}
 		#renderAudio() {
-			if (!this.url) return A;
+			if (!this.url) {return A;}
 			if (this.url && typeof this.url === "object") {
-				if ("literalString" in this.url) return b`<audio controls src=${this.url.literalString} />`;
-				else if ("literal" in this.url) return b`<audio controls src=${this.url.literal} />`;
+				if ("literalString" in this.url) {return b`<audio controls src=${this.url.literalString} />`;}
+				else if ("literal" in this.url) {return b`<audio controls src=${this.url.literal} />`;}
 				else if (this.url && "path" in this.url && this.url.path) {
-					if (!this.processor || !this.component) return b`(no processor)`;
+					if (!this.processor || !this.component) {return b`(no processor)`;}
 					const audioUrl = this.processor.getData(this.component, this.url.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-					if (!audioUrl) return b`Invalid audio URL`;
-					if (typeof audioUrl !== "string") return b`Invalid audio URL`;
+					if (!audioUrl) {return b`Invalid audio URL`;}
+					if (typeof audioUrl !== "string") {return b`Invalid audio URL`;}
 					return b`<audio controls src=${audioUrl} />`;
 				}
 			}
@@ -7863,40 +7859,40 @@ const __runInitializers$18 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$17 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$17 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -7953,12 +7949,12 @@ const __runInitializers$17 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Button = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#action_accessor_storage = __runInitializers$17(this, _action_initializers, null);
 		get action() {
@@ -7988,7 +7984,7 @@ const __runInitializers$17 = function(thisArg, initializers, value) {
       class=${e$2(this.theme.components.Button)}
       style=${this.theme.additionalStyles?.Button ? o$2(this.theme.additionalStyles?.Button) : A}
       @click=${() => {
-				if (!this.action) return;
+				if (!this.action) {return;}
 				const evt = new StateEvent({
 					eventType: "a2ui.action",
 					action: this.action,
@@ -8014,40 +8010,40 @@ const __runInitializers$17 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$16 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$16 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -8068,12 +8064,12 @@ const __runInitializers$16 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Card = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		static {
 			this.styles = [structuralStyles, i$10`
@@ -8147,40 +8143,40 @@ function extractNumberValue(val, component, processor, surfaceId) {
 }
 const __esDecorate$15 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$15 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -8237,12 +8233,12 @@ const __runInitializers$15 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Checkbox = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#value_accessor_storage = __runInitializers$15(this, _value_initializers, null);
 		get value() {
@@ -8283,9 +8279,9 @@ const __runInitializers$15 = function(thisArg, initializers, value) {
     `];
 		}
 		#setBoundValue(value) {
-			if (!this.value || !this.processor) return;
-			if (!("path" in this.value)) return;
-			if (!this.value.path) return;
+			if (!this.value || !this.processor) {return;}
+			if (!("path" in this.value)) {return;}
+			if (!this.value.path) {return;}
 			this.processor.setData(this.component, this.value.path, value, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 		}
 		#renderField(value) {
@@ -8297,7 +8293,7 @@ const __runInitializers$15 = function(thisArg, initializers, value) {
         class=${e$2(this.theme.components.CheckBox.element)}
         autocomplete="off"
         @input=${(evt) => {
-				if (!(evt.target instanceof HTMLInputElement)) return;
+				if (!(evt.target instanceof HTMLInputElement)) {return;}
 				this.#setBoundValue(evt.target.checked);
 			}}
         id="data"
@@ -8311,13 +8307,13 @@ const __runInitializers$15 = function(thisArg, initializers, value) {
 		}
 		render() {
 			if (this.value && typeof this.value === "object") {
-				if ("literalBoolean" in this.value && this.value.literalBoolean) return this.#renderField(this.value.literalBoolean);
-				else if ("literal" in this.value && this.value.literal !== void 0) return this.#renderField(this.value.literal);
+				if ("literalBoolean" in this.value && this.value.literalBoolean) {return this.#renderField(this.value.literalBoolean);}
+				else if ("literal" in this.value && this.value.literal !== void 0) {return this.#renderField(this.value.literal);}
 				else if (this.value && "path" in this.value && this.value.path) {
-					if (!this.processor || !this.component) return b`(no model)`;
+					if (!this.processor || !this.component) {return b`(no model)`;}
 					const textValue = this.processor.getData(this.component, this.value.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-					if (textValue === null) return b`Invalid label`;
-					if (typeof textValue !== "boolean") return b`Invalid label`;
+					if (textValue === null) {return b`Invalid label`;}
+					if (typeof textValue !== "boolean") {return b`Invalid label`;}
 					return this.#renderField(textValue);
 				}
 			}
@@ -8335,40 +8331,40 @@ const __runInitializers$15 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$14 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$14 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -8431,12 +8427,12 @@ const __runInitializers$14 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Column = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#alignment_accessor_storage = __runInitializers$14(this, _alignment_initializers, "stretch");
 		get alignment() {
@@ -8531,40 +8527,40 @@ const __runInitializers$14 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$13 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$13 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -8663,12 +8659,12 @@ const __runInitializers$13 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			DateTimeInput = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#value_accessor_storage = __runInitializers$13(this, _value_initializers, null);
 		get value() {
@@ -8721,9 +8717,9 @@ const __runInitializers$13 = function(thisArg, initializers, value) {
     `];
 		}
 		#setBoundValue(value) {
-			if (!this.value || !this.processor) return;
-			if (!("path" in this.value)) return;
-			if (!this.value.path) return;
+			if (!this.value || !this.processor) {return;}
+			if (!("path" in this.value)) {return;}
+			if (!this.value.path) {return;}
 			this.processor.setData(this.component, this.value.path, value, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 		}
 		#renderField(value) {
@@ -8736,7 +8732,7 @@ const __runInitializers$13 = function(thisArg, initializers, value) {
         class=${e$2(this.theme.components.DateTimeInput.element)}
         style=${this.theme.additionalStyles?.DateTimeInput ? o$2(this.theme.additionalStyles?.DateTimeInput) : A}
         @input=${(evt) => {
-				if (!(evt.target instanceof HTMLInputElement)) return;
+				if (!(evt.target instanceof HTMLInputElement)) {return;}
 				this.#setBoundValue(evt.target.value);
 			}}
         id="data"
@@ -8748,22 +8744,22 @@ const __runInitializers$13 = function(thisArg, initializers, value) {
     </section>`;
 		}
 		#getInputType() {
-			if (this.enableDate && this.enableTime) return "datetime-local";
-			else if (this.enableDate) return "date";
-			else if (this.enableTime) return "time";
+			if (this.enableDate && this.enableTime) {return "datetime-local";}
+			else if (this.enableDate) {return "date";}
+			else if (this.enableTime) {return "time";}
 			return "datetime-local";
 		}
 		#formatInputValue(value) {
 			const inputType = this.#getInputType();
 			const date = value ? new Date(value) : null;
-			if (!date || isNaN(date.getTime())) return "";
+			if (!date || isNaN(date.getTime())) {return "";}
 			const year = this.#padNumber(date.getFullYear());
 			const month = this.#padNumber(date.getMonth() + 1);
 			const day = this.#padNumber(date.getDate());
 			const hours = this.#padNumber(date.getHours());
 			const minutes = this.#padNumber(date.getMinutes());
-			if (inputType === "date") return `${year}-${month}-${day}`;
-			else if (inputType === "time") return `${hours}:${minutes}`;
+			if (inputType === "date") {return `${year}-${month}-${day}`;}
+			else if (inputType === "time") {return `${hours}:${minutes}`;}
 			return `${year}-${month}-${day}T${hours}:${minutes}`;
 		}
 		#padNumber(value) {
@@ -8771,18 +8767,18 @@ const __runInitializers$13 = function(thisArg, initializers, value) {
 		}
 		#getPlaceholderText() {
 			const inputType = this.#getInputType();
-			if (inputType === "date") return "Date";
-			else if (inputType === "time") return "Time";
+			if (inputType === "date") {return "Date";}
+			else if (inputType === "time") {return "Time";}
 			return "Date & Time";
 		}
 		render() {
 			if (this.value && typeof this.value === "object") {
-				if ("literalString" in this.value && this.value.literalString) return this.#renderField(this.value.literalString);
-				else if ("literal" in this.value && this.value.literal !== void 0) return this.#renderField(this.value.literal);
+				if ("literalString" in this.value && this.value.literalString) {return this.#renderField(this.value.literalString);}
+				else if ("literal" in this.value && this.value.literal !== void 0) {return this.#renderField(this.value.literal);}
 				else if (this.value && "path" in this.value && this.value.path) {
-					if (!this.processor || !this.component) return b`(no model)`;
+					if (!this.processor || !this.component) {return b`(no model)`;}
 					const textValue = this.processor.getData(this.component, this.value.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-					if (typeof textValue !== "string") return b`(invalid)`;
+					if (typeof textValue !== "string") {return b`(invalid)`;}
 					return this.#renderField(textValue);
 				}
 			}
@@ -8800,40 +8796,40 @@ const __runInitializers$13 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$12 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$12 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -8854,12 +8850,12 @@ const __runInitializers$12 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Divider = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		static {
 			this.styles = [structuralStyles, i$10`
@@ -8890,40 +8886,40 @@ const __runInitializers$12 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$11 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$11 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -8962,12 +8958,12 @@ const __runInitializers$11 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Icon = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#name_accessor_storage = __runInitializers$11(this, _name_initializers, null);
 		get name() {
@@ -9008,19 +9004,19 @@ const __runInitializers$11 = function(thisArg, initializers, value) {
     `];
 		}
 		#renderIcon() {
-			if (!this.name) return A;
+			if (!this.name) {return A;}
 			const render = (url) => {
 				url = url.replace(/([A-Z])/gm, "_$1").toLocaleLowerCase();
 				return b`<span class="g-icon">${url}</span>`;
 			};
 			if (this.name && typeof this.name === "object") {
-				if ("literalString" in this.name) return render(this.name.literalString ?? "");
-				else if ("literal" in this.name) return render(this.name.literal ?? "");
+				if ("literalString" in this.name) {return render(this.name.literalString ?? "");}
+				else if ("literal" in this.name) {return render(this.name.literal ?? "");}
 				else if (this.name && "path" in this.name && this.name.path) {
-					if (!this.processor || !this.component) return b`(no model)`;
+					if (!this.processor || !this.component) {return b`(no model)`;}
 					const iconName = this.processor.getData(this.component, this.name.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-					if (!iconName) return b`Invalid icon name`;
-					if (typeof iconName !== "string") return b`Invalid icon name`;
+					if (!iconName) {return b`Invalid icon name`;}
+					if (typeof iconName !== "string") {return b`Invalid icon name`;}
 					return render(iconName);
 				}
 			}
@@ -9046,40 +9042,40 @@ const __runInitializers$11 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$10 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$10 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -9172,12 +9168,12 @@ const __runInitializers$10 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Image = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#url_accessor_storage = __runInitializers$10(this, _url_initializers, null);
 		get url() {
@@ -9229,17 +9225,17 @@ const __runInitializers$10 = function(thisArg, initializers, value) {
     `];
 		}
 		#renderImage() {
-			if (!this.url) return A;
+			if (!this.url) {return A;}
 			const render = (url) => {
 				let resolvedAlt = "";
 				if (this.altText) {
 					if (typeof this.altText === "object") {
-						if ("literalString" in this.altText) resolvedAlt = this.altText.literalString ?? "";
-						else if ("literal" in this.altText) resolvedAlt = this.altText.literal ?? "";
+						if ("literalString" in this.altText) {resolvedAlt = this.altText.literalString ?? "";}
+						else if ("literal" in this.altText) {resolvedAlt = this.altText.literal ?? "";}
 						else if ("path" in this.altText && this.altText.path) {
 							if (this.processor && this.component) {
 								const data = this.processor.getData(this.component, this.altText.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-								if (typeof data === "string") resolvedAlt = data;
+								if (typeof data === "string") {resolvedAlt = data;}
 							}
 						}
 					}
@@ -9247,13 +9243,13 @@ const __runInitializers$10 = function(thisArg, initializers, value) {
 				return b`<img src=${url} alt=${resolvedAlt} />`;
 			};
 			if (this.url && typeof this.url === "object") {
-				if ("literalString" in this.url) return render(this.url.literalString ?? "");
-				else if ("literal" in this.url) return render(this.url.literal ?? "");
+				if ("literalString" in this.url) {return render(this.url.literalString ?? "");}
+				else if ("literal" in this.url) {return render(this.url.literal ?? "");}
 				else if (this.url && "path" in this.url && this.url.path) {
-					if (!this.processor || !this.component) return b`(no model)`;
+					if (!this.processor || !this.component) {return b`(no model)`;}
 					const imageUrl = this.processor.getData(this.component, this.url.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-					if (!imageUrl) return b`Invalid image URL`;
-					if (typeof imageUrl !== "string") return b`Invalid image URL`;
+					if (!imageUrl) {return b`Invalid image URL`;}
+					if (typeof imageUrl !== "string") {return b`Invalid image URL`;}
 					return render(imageUrl);
 				}
 			}
@@ -9263,7 +9259,7 @@ const __runInitializers$10 = function(thisArg, initializers, value) {
 			return b`<section
       class=${e$2(merge(this.theme.components.Image.all, this.usageHint ? this.theme.components.Image[this.usageHint] : {}))}
       style=${o$2({
-				...this.theme.additionalStyles?.Image ?? {},
+				...this.theme.additionalStyles?.Image,
 				"--object-fit": this.fit ?? "fill"
 			})}
     >
@@ -9282,40 +9278,40 @@ const __runInitializers$10 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$9 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$9 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -9357,12 +9353,12 @@ const __runInitializers$9 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			List = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#direction_accessor_storage = __runInitializers$9(this, _direction_initializers, "vertical");
 		get direction() {
@@ -9422,40 +9418,40 @@ const __runInitializers$9 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$8 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$8 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -9602,12 +9598,12 @@ const __runInitializers$8 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			MultipleChoice = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#description_accessor_storage = __runInitializers$8(this, _description_initializers, null);
 		get description() {
@@ -9876,21 +9872,21 @@ const __runInitializers$8 = function(thisArg, initializers, value) {
     `];
 		}
 		#setBoundValue(value) {
-			if (!this.selections || !this.processor) return;
-			if (!("path" in this.selections)) return;
-			if (!this.selections.path) return;
+			if (!this.selections || !this.processor) {return;}
+			if (!("path" in this.selections)) {return;}
+			if (!this.selections.path) {return;}
 			this.processor.setData(this.component, this.selections.path, value, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 		}
 		getCurrentSelections() {
-			if (Array.isArray(this.selections)) return this.selections;
-			if (!this.processor || !this.component) return [];
+			if (Array.isArray(this.selections)) {return this.selections;}
+			if (!this.processor || !this.component) {return [];}
 			const selectionValue = this.processor.getData(this.component, this.selections.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 			return Array.isArray(selectionValue) ? selectionValue : [];
 		}
 		toggleSelection(value) {
 			const current = this.getCurrentSelections();
-			if (current.includes(value)) this.#setBoundValue(current.filter((v) => v !== value));
-			else this.#setBoundValue([...current, value]);
+			if (current.includes(value)) {this.#setBoundValue(current.filter((v) => v !== value));}
+			else {this.#setBoundValue([...current, value]);}
 			this.requestUpdate();
 		}
 		#renderCheckIcon() {
@@ -9920,10 +9916,10 @@ const __runInitializers$8 = function(thisArg, initializers, value) {
 		render() {
 			const currentSelections = this.getCurrentSelections();
 			const filteredOptions = this.options.filter((option) => {
-				if (!this.filterText) return true;
+				if (!this.filterText) {return true;}
 				return extractStringValue(option.label, this.component, this.processor, this.surfaceId).toLowerCase().includes(this.filterText.toLowerCase());
 			});
-			if (this.variant === "chips") return b`
+			if (this.variant === "chips") {return b`
         <div class="container">
           ${this.description ? b`<div class="header-text" style="margin-bottom: 8px;">${this.description}</div>` : A}
           ${this.filterable ? this.#renderFilter() : A}
@@ -9951,7 +9947,7 @@ const __runInitializers$8 = function(thisArg, initializers, value) {
                 No options found
               </div>` : A}
         </div>
-      `;
+      `;}
 			const count = currentSelections.length;
 			return b`
       <div class="container">
@@ -10024,11 +10020,11 @@ const o$1 = /* @__PURE__ */ new WeakMap(), n$1 = e$6(class extends f {
 		return e && this.rt(void 0), (e || this.lt !== this.ct) && (this.G = s, this.ht = i.options?.host, this.rt(this.ct = i.element)), A;
 	}
 	rt(t) {
-		if (void 0 !== this.G) {if (this.isConnected || (t = void 0), "function" == typeof this.G) {
+		if (void 0 !== this.G) {if (this.isConnected || (t = void 0), typeof this.G == "function") {
 			const i = this.ht ?? globalThis;
 			let s = o$1.get(i);
 			void 0 === s && (s = /* @__PURE__ */ new WeakMap(), o$1.set(i, s)), void 0 !== s.get(this.G) && this.G.call(this.ht, void 0), s.set(this.G, t), void 0 !== t && this.G.call(this.ht, t);
-		} else this.G.value = t;}
+		} else {this.G.value = t;}}
 	}
 	get lt() {
 		return typeof this.G == "function" ? o$1.get(this.ht ?? globalThis)?.get(this.G) : this.G?.value;
@@ -10042,44 +10038,44 @@ const o$1 = /* @__PURE__ */ new WeakMap(), n$1 = e$6(class extends f {
 });
 const __esDecorate$7 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$7 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 const __setFunctionName = function(f, name, prefix) {
-	if (typeof name === "symbol") name = name.description ? "[".concat(name.description, "]") : "";
+	if (typeof name === "symbol") {name = name.description ? "[".concat(name.description, "]") : "";}
 	return Object.defineProperty(f, "name", {
 		configurable: true,
 		value: prefix ? "".concat(prefix, " ", name) : name
@@ -10155,12 +10151,12 @@ const __setFunctionName = function(f, name, prefix) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Modal = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		static {
 			this.styles = [structuralStyles, i$10`
@@ -10208,28 +10204,28 @@ const __setFunctionName = function(f, name, prefix) {
 			return _private_modalRef_descriptor.set.call(this, value);
 		}
 		#closeModal() {
-			if (!this.#modalRef) return;
-			if (this.#modalRef.open) this.#modalRef.close();
+			if (!this.#modalRef) {return;}
+			if (this.#modalRef.open) {this.#modalRef.close();}
 			this.#showModal = false;
 		}
 		render() {
-			if (!this.#showModal) return b`<section
+			if (!this.#showModal) {return b`<section
         @click=${() => {
 				this.#showModal = true;
 			}}
       >
         <slot name="entry"></slot>
-      </section>`;
+      </section>`;}
 			return b`<dialog
       class=${e$2(this.theme.components.Modal.backdrop)}
       @click=${(evt) => {
 				const [top] = evt.composedPath();
-				if (!(top instanceof HTMLDialogElement)) return;
+				if (!(top instanceof HTMLDialogElement)) {return;}
 				this.#closeModal();
 			}}
       ${n$1((el) => {
 				const showModalIfNeeded = () => {
-					if (!(el && el instanceof HTMLDialogElement) || el.open) return;
+					if (!(el && el instanceof HTMLDialogElement) || el.open) {return;}
 					el.showModal();
 				};
 				requestAnimationFrame(showModalIfNeeded);
@@ -10264,40 +10260,40 @@ const __setFunctionName = function(f, name, prefix) {
 })();
 const __esDecorate$6 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$6 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -10360,12 +10356,12 @@ const __runInitializers$6 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Row = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#alignment_accessor_storage = __runInitializers$6(this, _alignment_initializers, "stretch");
 		get alignment() {
@@ -10460,40 +10456,40 @@ const __runInitializers$6 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$5 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$5 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -10586,12 +10582,12 @@ const __runInitializers$5 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Slider = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#value_accessor_storage = __runInitializers$5(this, _value_initializers, null);
 		get value() {
@@ -10642,9 +10638,9 @@ const __runInitializers$5 = function(thisArg, initializers, value) {
     `];
 		}
 		#setBoundValue(value) {
-			if (!this.value || !this.processor) return;
-			if (!("path" in this.value)) return;
-			if (!this.value.path) return;
+			if (!this.value || !this.processor) {return;}
+			if (!("path" in this.value)) {return;}
+			if (!this.value.path) {return;}
 			this.processor.setData(this.component, this.value.path, value, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 		}
 		#renderField(value) {
@@ -10657,7 +10653,7 @@ const __runInitializers$5 = function(thisArg, initializers, value) {
         class=${e$2(this.theme.components.Slider.element)}
         style=${this.theme.additionalStyles?.Slider ? o$2(this.theme.additionalStyles?.Slider) : A}
         @input=${(evt) => {
-				if (!(evt.target instanceof HTMLInputElement)) return;
+				if (!(evt.target instanceof HTMLInputElement)) {return;}
 				this.#setBoundValue(evt.target.value);
 			}}
         id="data"
@@ -10674,13 +10670,13 @@ const __runInitializers$5 = function(thisArg, initializers, value) {
 		}
 		render() {
 			if (this.value && typeof this.value === "object") {
-				if ("literalNumber" in this.value && this.value.literalNumber) return this.#renderField(this.value.literalNumber);
-				else if ("literal" in this.value && this.value.literal !== void 0) return this.#renderField(this.value.literal);
+				if ("literalNumber" in this.value && this.value.literalNumber) {return this.#renderField(this.value.literalNumber);}
+				else if ("literal" in this.value && this.value.literal !== void 0) {return this.#renderField(this.value.literal);}
 				else if (this.value && "path" in this.value && this.value.path) {
-					if (!this.processor || !this.component) return b`(no processor)`;
+					if (!this.processor || !this.component) {return b`(no processor)`;}
 					const textValue = this.processor.getData(this.component, this.value.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-					if (textValue === null) return b`Invalid value`;
-					if (typeof textValue !== "string" && typeof textValue !== "number") return b`Invalid value`;
+					if (textValue === null) {return b`Invalid value`;}
+					if (typeof textValue !== "string" && typeof textValue !== "number") {return b`Invalid value`;}
 					return this.#renderField(textValue);
 				}
 			}
@@ -10698,40 +10694,40 @@ const __runInitializers$5 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$4 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$4 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -10824,12 +10820,12 @@ const __runInitializers$4 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Surface = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#surfaceId_accessor_storage = __runInitializers$4(this, _surfaceId_initializers, null);
 		get surfaceId() {
@@ -10878,7 +10874,7 @@ const __runInitializers$4 = function(thisArg, initializers, value) {
     `];
 		}
 		#renderLogo() {
-			if (!this.surface?.styles.logoUrl) return A;
+			if (!this.surface?.styles.logoUrl) {return A;}
 			return b`<div id="surface-logo">
       <img src=${this.surface.styles.logoUrl} />
     </div>`;
@@ -10892,7 +10888,7 @@ const __runInitializers$4 = function(thisArg, initializers, value) {
 		}
 		#renderSurface() {
 			const styles = {};
-			if (this.surface?.styles) for (const [key, value] of Object.entries(this.surface.styles)) switch (key) {
+			if (this.surface?.styles) {for (const [key, value] of Object.entries(this.surface.styles)) switch (key) {
 				case "primaryColor":
 					styles["--p-100"] = "#ffffff";
 					styles["--p-99"] = `color-mix(in srgb, ${value} 2%, white 98%)`;
@@ -10917,7 +10913,7 @@ const __runInitializers$4 = function(thisArg, initializers, value) {
 					styles["--font-family"] = value;
 					styles["--font-family-flex"] = value;
 					break;
-			}
+			}}
 			return b`<a2ui-root
       style=${o$2(styles)}
       .surfaceId=${this.surfaceId}
@@ -10927,7 +10923,7 @@ const __runInitializers$4 = function(thisArg, initializers, value) {
     ></a2ui-root>`;
 		}
 		render() {
-			if (!this.surface) return A;
+			if (!this.surface) {return A;}
 			return b`${[this.#renderLogo(), this.#renderSurface()]}`;
 		}
 		constructor() {
@@ -10951,7 +10947,7 @@ const u = (e, s, t) => {
 	return r;
 }, c$1 = e$6(class extends i$5 {
 	constructor(e) {
-		if (super(e), e.type !== t$3.CHILD) {throw Error("repeat() can only be used in text expressions");}
+		if (super(e), e.type !== t$3.CHILD) {throw new Error("repeat() can only be used in text expressions");}
 	}
 	dt(e, s, t) {
 		let r;
@@ -10972,21 +10968,21 @@ const u = (e, s, t) => {
 		if (!Array.isArray(d)) {return this.ut = a, p$3;}
 		const h = this.ut ??= [], v$2 = [];
 		let m, y, x = 0, j = d.length - 1, k = 0, w = p$3.length - 1;
-		for (; x <= j && k <= w;) {if (null === d[x]) x++;
-		else if (null === d[j]) j--;
-		else if (h[x] === a[k]) v$2[k] = u$1(d[x], p$3[k]), x++, k++;
-		else if (h[j] === a[w]) v$2[w] = u$1(d[j], p$3[w]), j--, w--;
-		else if (h[x] === a[w]) v$2[w] = u$1(d[x], p$3[w]), v(s, v$2[w + 1], d[x]), x++, w--;
-		else if (h[j] === a[k]) v$2[k] = u$1(d[j], p$3[k]), v(s, d[x], d[j]), j--, k++;
-		else if (void 0 === m && (m = u(a, k, w), y = u(h, x, j)), m.has(h[x])) if (m.has(h[j])) {
+		for (; x <= j && k <= w;) {if (d[x] === null) {x++;}
+		else if (d[j] === null) {j--;}
+		else if (h[x] === a[k]) {v$2[k] = u$1(d[x], p$3[k]), x++, k++;}
+		else if (h[j] === a[w]) {v$2[w] = u$1(d[j], p$3[w]), j--, w--;}
+		else if (h[x] === a[w]) {v$2[w] = u$1(d[x], p$3[w]), v(s, v$2[w + 1], d[x]), x++, w--;}
+		else if (h[j] === a[k]) {v$2[k] = u$1(d[j], p$3[k]), v(s, d[x], d[j]), j--, k++;}
+		else if (void 0 === m && (m = u(a, k, w), y = u(h, x, j)), m.has(h[x])) {if (m.has(h[j])) {
 			const e = y.get(a[k]), t = void 0 !== e ? d[e] : null;
 			if (null === t) {
 				const e = v(s, d[x]);
 				u$1(e, p$3[k]), v$2[k] = e;
 			} else v$2[k] = u$1(t, p$3[k]), v(s, d[x], t), d[e] = null;
 			k++;
-		} else h$4(d[j]), j--;
-		else h$4(d[x]), x++;}
+		} else h$4(d[j]), j--;}
+		else {h$4(d[x]), x++;}}
 		for (; k <= w;) {
 			const e = v(s, v$2[w + 1]);
 			u$1(e, p$3[k]), v$2[k++] = e;
@@ -11000,40 +10996,40 @@ const u = (e, s, t) => {
 });
 const __esDecorate$3 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$3 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -11090,12 +11086,12 @@ const __runInitializers$3 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Tabs = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#titles_accessor_storage = __runInitializers$3(this, _titles_initializers, null);
 		get titles() {
@@ -11122,28 +11118,28 @@ const __runInitializers$3 = function(thisArg, initializers, value) {
 		willUpdate(changedProperties) {
 			super.willUpdate(changedProperties);
 			if (changedProperties.has("selected")) {
-				for (const child of this.children) child.removeAttribute("slot");
+				for (const child of this.children) {child.removeAttribute("slot");}
 				const selectedChild = this.children[this.selected];
-				if (!selectedChild) return;
+				if (!selectedChild) {return;}
 				selectedChild.slot = "current";
 			}
 		}
 		#renderTabs() {
-			if (!this.titles) return A;
+			if (!this.titles) {return A;}
 			return b`<div id="buttons" class=${e$2(this.theme.components.Tabs.element)}>
       ${c$1(this.titles, (title, idx) => {
 				let titleString = "";
-				if ("literalString" in title && title.literalString) titleString = title.literalString;
-				else if ("literal" in title && title.literal !== void 0) titleString = title.literal;
+				if ("literalString" in title && title.literalString) {titleString = title.literalString;}
+				else if ("literal" in title && title.literal !== void 0) {titleString = title.literal;}
 				else if (title && "path" in title && title.path) {
-					if (!this.processor || !this.component) return b`(no model)`;
+					if (!this.processor || !this.component) {return b`(no model)`;}
 					const textValue = this.processor.getData(this.component, title.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-					if (typeof textValue !== "string") return b`(invalid)`;
+					if (typeof textValue !== "string") {return b`(invalid)`;}
 					titleString = textValue;
 				}
 				let classes;
-				if (this.selected === idx) classes = merge(this.theme.components.Tabs.controls.all, this.theme.components.Tabs.controls.selected);
-				else classes = { ...this.theme.components.Tabs.controls.all };
+				if (this.selected === idx) {classes = merge(this.theme.components.Tabs.controls.all, this.theme.components.Tabs.controls.selected);}
+				else {classes = { ...this.theme.components.Tabs.controls.all };}
 				return b`<button
           ?disabled=${this.selected === idx}
           class=${e$2(classes)}
@@ -11179,40 +11175,40 @@ const __runInitializers$3 = function(thisArg, initializers, value) {
 })();
 const __esDecorate$2 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$2 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -11305,12 +11301,12 @@ const __runInitializers$2 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			TextField = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#text_accessor_storage = __runInitializers$2(this, _text_initializers, null);
 		get text() {
@@ -11374,9 +11370,9 @@ const __runInitializers$2 = function(thisArg, initializers, value) {
     `];
 		}
 		#setBoundValue(value) {
-			if (!this.text || !this.processor) return;
-			if (!("path" in this.text)) return;
-			if (!this.text.path) return;
+			if (!this.text || !this.processor) {return;}
+			if (!("path" in this.text)) {return;}
+			if (!this.text.path) {return;}
 			this.processor.setData(this.component, this.text.path, value, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 		}
 		#renderField(value, label) {
@@ -11389,7 +11385,7 @@ const __runInitializers$2 = function(thisArg, initializers, value) {
         class=${e$2(this.theme.components.TextField.element)}
         style=${this.theme.additionalStyles?.TextField ? o$2(this.theme.additionalStyles?.TextField) : A}
         @input=${(evt) => {
-				if (!(evt.target instanceof HTMLInputElement)) return;
+				if (!(evt.target instanceof HTMLInputElement)) {return;}
 				this.dispatchEvent(new A2UIValidationEvent({
 					componentId: this.id,
 					value: evt.target.value,
@@ -11427,13 +11423,13 @@ const __runInitializers$2 = function(thisArg, initializers, value) {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const e = class extends i$5 {
 	constructor(i) {
-		if (super(i), this.it = A, i.type !== t$3.CHILD) throw Error(this.constructor.directiveName + "() can only be used in child bindings");
+		if (super(i), this.it = A, i.type !== t$3.CHILD) {throw Error(this.constructor.directiveName + "() can only be used in child bindings");}
 	}
 	render(r) {
-		if (r === A || null == r) return this._t = void 0, this.it = r;
-		if (r === E) return r;
-		if ("string" != typeof r) throw Error(this.constructor.directiveName + "() called with a non-string value");
-		if (r === this.it) return this._t;
+		if (r === A || r == null) {return this._t = void 0, this.it = r;}
+		if (r === E) {return r;}
+		if (typeof r != "string") {throw Error(this.constructor.directiveName + "() called with a non-string value");}
+		if (r === this.it) {return this._t;}
 		this.it = r;
 		const s = [r];
 		return s.raw = s, this._t = {
@@ -11498,9 +11494,9 @@ const c = class extends f {
 		this.isConnected || this.disconnected();
 		for (let t = 0; t < i.length && !(t > this._$Cwt); t++) {
 			const s = i[t];
-			if (!n(s)) return this._$Cwt = t, s;
+			if (!n(s)) {return this._$Cwt = t, s;}
 			t < r && s === e[t] || (this._$Cwt = h, r = 0, Promise.resolve(s).then(async (t) => {
-				for (; c.get();) await c.get();
+				for (; c.get();) {await c.get();}
 				const i = o.deref();
 				if (void 0 !== i) {
 					const e = i._$Cbt.indexOf(s);
@@ -11559,40 +11555,40 @@ const markdown$1 = e$6(class MarkdownDirective extends i$5 {
 const markdown = n$3(Symbol("A2UIMarkdown"));
 const __esDecorate$1 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers$1 = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -11670,12 +11666,12 @@ const __runInitializers$1 = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Text = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#text_accessor_storage = __runInitializers$1(this, _text_initializers, null);
 		get text() {
@@ -11718,15 +11714,15 @@ const __runInitializers$1 = function(thisArg, initializers, value) {
 		#renderText() {
 			let textValue = null;
 			if (this.text && typeof this.text === "object") {
-				if ("literalString" in this.text && this.text.literalString) textValue = this.text.literalString;
-				else if ("literal" in this.text && this.text.literal !== void 0) textValue = this.text.literal;
+				if ("literalString" in this.text && this.text.literalString) {textValue = this.text.literalString;}
+				else if ("literal" in this.text && this.text.literal !== void 0) {textValue = this.text.literal;}
 				else if (this.text && "path" in this.text && this.text.path) {
-					if (!this.processor || !this.component) return b`(no model)`;
+					if (!this.processor || !this.component) {return b`(no model)`;}
 					const value = this.processor.getData(this.component, this.text.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-					if (value !== null && value !== void 0) textValue = value.toString();
+					if (value !== null && value !== void 0) {textValue = value.toString();}
 				}
 			}
-			if (textValue === null || textValue === void 0) return b`(empty)`;
+			if (textValue === null || textValue === void 0) {return b`(empty)`;}
 			let markdownText = textValue;
 			switch (this.usageHint) {
 				case "h1":
@@ -11756,9 +11752,9 @@ const __runInitializers$1 = function(thisArg, initializers, value) {
 			], {}) })}`;
 		}
 		#areHintedStyles(styles) {
-			if (typeof styles !== "object") return false;
-			if (Array.isArray(styles)) return false;
-			if (!styles) return false;
+			if (typeof styles !== "object") {return false;}
+			if (Array.isArray(styles)) {return false;}
+			if (!styles) {return false;}
 			return [
 				"h1",
 				"h2",
@@ -11773,9 +11769,9 @@ const __runInitializers$1 = function(thisArg, initializers, value) {
 		#getAdditionalStyles() {
 			let additionalStyles = {};
 			const styles = this.theme.additionalStyles?.Text;
-			if (!styles) return additionalStyles;
-			if (this.#areHintedStyles(styles)) additionalStyles = styles[this.usageHint ?? "body"];
-			else additionalStyles = styles;
+			if (!styles) {return additionalStyles;}
+			if (this.#areHintedStyles(styles)) {additionalStyles = styles[this.usageHint ?? "body"];}
+			else {additionalStyles = styles;}
 			return additionalStyles;
 		}
 		render() {
@@ -11798,40 +11794,40 @@ const __runInitializers$1 = function(thisArg, initializers, value) {
 })();
 const __esDecorate = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
 	function accept(f) {
-		if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+		if (f !== void 0 && typeof f !== "function") {throw new TypeError("Function expected");}
 		return f;
 	}
-	var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-	var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-	var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-	var _, done = false;
-	for (var i = decorators.length - 1; i >= 0; i--) {
-		var context = {};
-		for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-		for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+	const kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+	const target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+	const descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+	let _, done = false;
+	for (let i = decorators.length - 1; i >= 0; i--) {
+		const context = {};
+		for (var p in contextIn) {context[p] = p === "access" ? {} : contextIn[p];}
+		for (var p in contextIn.access) {context.access[p] = contextIn.access[p];}
 		context.addInitializer = function(f) {
-			if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+			if (done) {throw new TypeError("Cannot add initializers after decoration has completed");}
 			extraInitializers.push(accept(f || null));
 		};
-		var result = (0, decorators[i])(kind === "accessor" ? {
+		const result = (0, decorators[i])(kind === "accessor" ? {
 			get: descriptor.get,
 			set: descriptor.set
 		} : descriptor[key], context);
 		if (kind === "accessor") {
-			if (result === void 0) continue;
-			if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-			if (_ = accept(result.get)) descriptor.get = _;
-			if (_ = accept(result.set)) descriptor.set = _;
-			if (_ = accept(result.init)) initializers.unshift(_);
-		} else if (_ = accept(result)) if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;
+			if (result === void 0) {continue;}
+			if (result === null || typeof result !== "object") {throw new TypeError("Object expected");}
+			if (_ = accept(result.get)) {descriptor.get = _;}
+			if (_ = accept(result.set)) {descriptor.set = _;}
+			if (_ = accept(result.init)) {initializers.unshift(_);}
+		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
+		else descriptor[key] = _;}
 	}
-	if (target) Object.defineProperty(target, contextIn.name, descriptor);
+	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
 };
 const __runInitializers = function(thisArg, initializers, value) {
-	var useValue = arguments.length > 2;
-	for (var i = 0; i < initializers.length; i++) value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+	const useValue = arguments.length > 2;
+	for (let i = 0; i < initializers.length; i++) {value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);}
 	return useValue ? value : void 0;
 };
 (() => {
@@ -11870,12 +11866,12 @@ const __runInitializers = function(thisArg, initializers, value) {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Video = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#url_accessor_storage = __runInitializers(this, _url_initializers, null);
 		get url() {
@@ -11904,15 +11900,15 @@ const __runInitializers = function(thisArg, initializers, value) {
     `];
 		}
 		#renderVideo() {
-			if (!this.url) return A;
+			if (!this.url) {return A;}
 			if (this.url && typeof this.url === "object") {
-				if ("literalString" in this.url) return b`<video controls src=${this.url.literalString} />`;
-				else if ("literal" in this.url) return b`<video controls src=${this.url.literal} />`;
+				if ("literalString" in this.url) {return b`<video controls src=${this.url.literalString} />`;}
+				else if ("literal" in this.url) {return b`<video controls src=${this.url.literal} />`;}
 				else if (this.url && "path" in this.url && this.url.path) {
-					if (!this.processor || !this.component) return b`(no processor)`;
+					if (!this.processor || !this.component) {return b`(no processor)`;}
 					const videoUrl = this.processor.getData(this.component, this.url.path, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
-					if (!videoUrl) return b`Invalid video URL`;
-					if (typeof videoUrl !== "string") return b`Invalid video URL`;
+					if (!videoUrl) {return b`Invalid video URL`;}
+					if (typeof videoUrl !== "string") {return b`Invalid video URL`;}
 					return b`<video controls src=${videoUrl} />`;
 				}
 			}
@@ -12309,13 +12305,13 @@ const OpenClawA2UIHost = class extends i$7 {
 		};
 		this.addEventListener("a2uiaction", (evt) => this.#handleA2UIAction(evt));
 		this.#statusListener = (evt) => this.#handleActionStatus(evt);
-		for (const eventName of ["openclaw:a2ui-action-status"]) globalThis.addEventListener(eventName, this.#statusListener);
+		for (const eventName of ["openclaw:a2ui-action-status"]) {globalThis.addEventListener(eventName, this.#statusListener);}
 		this.#syncSurfaces();
 	}
 	disconnectedCallback() {
 		super.disconnectedCallback();
 		if (this.#statusListener) {
-			for (const eventName of ["openclaw:a2ui-action-status"]) globalThis.removeEventListener(eventName, this.#statusListener);
+			for (const eventName of ["openclaw:a2ui-action-status"]) {globalThis.removeEventListener(eventName, this.#statusListener);}
 			this.#statusListener = null;
 		}
 	}
@@ -12339,13 +12335,13 @@ const OpenClawA2UIHost = class extends i$7 {
 	}
 	#handleActionStatus(evt) {
 		const detail = evt?.detail ?? null;
-		if (!detail || typeof detail.id !== "string") return;
-		if (!this.pendingAction || this.pendingAction.id !== detail.id) return;
-		if (detail.ok) this.pendingAction = {
+		if (!detail || typeof detail.id !== "string") {return;}
+		if (!this.pendingAction || this.pendingAction.id !== detail.id) {return;}
+		if (detail.ok) {this.pendingAction = {
 			...this.pendingAction,
 			phase: "sent",
 			sentAt: Date.now()
-		};
+		};}
 		else {
 			const msg = typeof detail.error === "string" && detail.error ? detail.error : "send failed";
 			this.pendingAction = {
@@ -12359,10 +12355,10 @@ const OpenClawA2UIHost = class extends i$7 {
 	}
 	#handleA2UIAction(evt) {
 		const payload = evt?.detail ?? evt?.payload ?? null;
-		if (!payload || payload.eventType !== "a2ui.action") return;
+		if (!payload || payload.eventType !== "a2ui.action") {return;}
 		const action = payload.action;
 		const name = action?.name;
-		if (!name) return;
+		if (!name) {return;}
 		const sourceComponentId = payload.sourceComponentId ?? "";
 		const surfaces = this.#processor.getSurfaces();
 		let surfaceId = null;
@@ -12380,7 +12376,7 @@ const OpenClawA2UIHost = class extends i$7 {
 		for (const item of ctxItems) {
 			const key = item?.key;
 			const value = item?.value ?? null;
-			if (!key || !value) continue;
+			if (!key || !value) {continue;}
 			if (typeof value.path === "string") {
 				context[key] = sourceNode ? this.#processor.getData(sourceNode, value.path, surfaceId ?? void 0) : null;
 				continue;
@@ -12416,7 +12412,7 @@ const OpenClawA2UIHost = class extends i$7 {
 		};
 		globalThis["__openclawLastA2UIAction"] = userAction;
 		const handler = globalThis.webkit?.messageHandlers?.openclawCanvasA2UIAction ?? globalThis.openclawCanvasA2UIAction;
-		if (handler?.postMessage) try {
+		if (handler?.postMessage) {try {
 			if (handler === globalThis.openclawCanvasA2UIAction) postNativeMessage(handler, JSON.stringify({ userAction }));
 			else postNativeMessage(handler, { userAction });
 		} catch (e) {
@@ -12429,7 +12425,7 @@ const OpenClawA2UIHost = class extends i$7 {
 				error: msg
 			};
 			this.#setToast(`Failed: ${msg}`, "error", 4500);
-		}
+		}}
 		else {
 			this.pendingAction = {
 				id: actionId,
@@ -12442,7 +12438,7 @@ const OpenClawA2UIHost = class extends i$7 {
 		}
 	}
 	applyMessages(messages) {
-		if (!Array.isArray(messages)) throw new Error("A2UI: expected messages array");
+		if (!Array.isArray(messages)) {throw new Error("A2UI: expected messages array");}
 		this.#processor.processMessages(messages);
 		this.#syncSurfaces();
 		if (this.pendingAction?.phase === "sent") {
@@ -12466,9 +12462,9 @@ const OpenClawA2UIHost = class extends i$7 {
 		this.surfaces = Array.from(this.#processor.getSurfaces().entries());
 	}
 	render() {
-		if (this.surfaces.length === 0) return b`<div class="empty">
+		if (this.surfaces.length === 0) {return b`<div class="empty">
         <div class="empty-title">Canvas (A2UI)</div>
-      </div>`;
+      </div>`;}
 		const statusText = this.pendingAction?.phase === "sent" ? `Working: ${this.pendingAction.name}` : this.pendingAction?.phase === "sending" ? `Sending: ${this.pendingAction.name}` : this.pendingAction?.phase === "error" ? `Failed: ${this.pendingAction.name}` : "";
 		return b` ${this.pendingAction && this.pendingAction.phase !== "error" ? b`<div class="status">
             <div class="spinner"></div>
