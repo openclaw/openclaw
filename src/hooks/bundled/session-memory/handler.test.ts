@@ -924,4 +924,21 @@ describe("session-memory hook", () => {
     const assistantLines = (memoryContent?.match(/^assistant:/gm) ?? []).length;
     expect(assistantLines).toBe(2);
   });
+
+  it("keeps repeated assistant reply after an intervening visible user message (#92563)", async () => {
+    // Same assistant text across different turns should NOT be deduped.
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Question A" },
+      { role: "assistant", content: "OK" },
+      { role: "user", content: "Question B" },
+      { role: "assistant", content: "OK" },
+    ]);
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).toContain("user: Question A");
+    expect(memoryContent).toContain("assistant: OK");
+    expect(memoryContent).toContain("user: Question B");
+    const okCount = (memoryContent?.match(/assistant: OK/g) ?? []).length;
+    expect(okCount).toBe(2);
+  });
 });

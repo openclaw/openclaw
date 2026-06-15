@@ -47,17 +47,18 @@ export async function getRecentSessionContent(
               continue;
             }
             const text = extractTextMessageContent(msg.content);
+            // Only dedupe consecutive assistant rows so a reply from a different
+            // turn that happens to repeat the same text is still included.
             if (text && !text.startsWith("/")) {
-              // Dedupe consecutive assistant messages with identical text.
-              // Thinking-enabled models produce raw (thinking + text) and
-              // cleaned (text-only) copies in the same turn; delivery mirrors
-              // can also repeat the visible text of the preceding assistant.
-              if (role === "assistant" && text === lastAssistantText) {
-                continue;
-              }
-              allMessages.push(`${role}: ${text}`);
               if (role === "assistant") {
+                if (text === lastAssistantText) {
+                  continue;
+                }
+                allMessages.push(`assistant: ${text}`);
                 lastAssistantText = text;
+              } else {
+                allMessages.push(`${role}: ${text}`);
+                lastAssistantText = undefined;
               }
             }
           }
