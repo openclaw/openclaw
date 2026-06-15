@@ -413,6 +413,14 @@ describe("markdownToTelegramHtml", () => {
     ).toBe("Task <id> (https://example.com/task?id=1&kind=bug)");
   });
 
+  it("preserves table cell boundaries in Telegram HTML fallback text", () => {
+    expect(
+      telegramHtmlToPlainTextFallback(
+        "<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
+      ),
+    ).toBe("Name | Age\nAlice | 30");
+  });
+
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
   });

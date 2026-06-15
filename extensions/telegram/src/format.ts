@@ -485,8 +485,12 @@ function encodePlainTextForTelegramHtmlStrip(text: string): string {
 }
 
 export function telegramHtmlToPlainTextFallback(html: string): string {
+  const withPlainTables = html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml) => {
+    const rows = parseTelegramRichHtmlTableRows(tableHtml);
+    return rows.map((row) => row.join(" | ")).join("\n");
+  });
   TELEGRAM_HTML_ANCHOR_PATTERN.lastIndex = 0;
-  const withPlainLinks = html.replace(
+  const withPlainLinks = withPlainTables.replace(
     TELEGRAM_HTML_ANCHOR_PATTERN,
     (
       _match: string,
