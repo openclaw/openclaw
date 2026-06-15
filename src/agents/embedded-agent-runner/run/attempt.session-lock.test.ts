@@ -739,6 +739,177 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("allows session control entries while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "model_change",
+          id: "model-change",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          provider: "openai",
+          modelId: "gpt-5.1",
+        }),
+        JSON.stringify({
+          type: "thinking_level_change",
+          id: "thinking-change",
+          parentId: "model-change",
+          timestamp: new Date().toISOString(),
+          thinkingLevel: "high",
+        }),
+        JSON.stringify({
+          type: "custom",
+          customType: "model-snapshot",
+          id: "model-snapshot",
+          parentId: "thinking-change",
+          timestamp: new Date().toISOString(),
+          data: { provider: "openai", modelId: "gpt-5.1" },
+        }),
+        JSON.stringify({
+          type: "label",
+          id: "label-change",
+          parentId: "model-snapshot",
+          timestamp: new Date().toISOString(),
+          targetId: "model-change",
+          label: "runtime setting",
+        }),
+        JSON.stringify({
+          type: "session_info",
+          id: "session-info",
+          parentId: "label-change",
+          timestamp: new Date().toISOString(),
+          name: "session title",
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    expect(controller.hasSessionTakeover()).toBe(false);
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+  });
+
+  it.each([
+    ["model_change without provider", { type: "model_change", modelId: "gpt-5.1" }],
+    ["thinking_level_change without thinkingLevel", { type: "thinking_level_change" }],
+    ["custom without customType", { type: "custom", data: { provider: "openai" } }],
+    ["custom with empty customType", { type: "custom", customType: "" }],
+    ["label without targetId", { type: "label", label: "runtime setting" }],
+    ["label with non-string label", { type: "label", targetId: "model-change", label: 42 }],
+    ["session_info with non-string name", { type: "session_info", name: 42 }],
+  ])(
+    "rejects malformed session control entries while the prompt lock is released: %s",
+    async (_, entry) => {
+      const sessionFile = await createTempSessionFile();
+      const release = vi.fn(async () => {});
+      const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock: acquireSessionWriteLockLocal,
+        lockOptions: { ...lockOptions, sessionFile },
+      });
+
+      await controller.releaseForPrompt();
+      await fs.appendFile(
+        sessionFile,
+        `${JSON.stringify({
+          id: "malformed-control-entry",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          ...entry,
+        })}\n`,
+        "utf8",
+      );
+
+      await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+        EmbeddedAttemptSessionTakeoverError,
+      );
+      expect(controller.hasSessionTakeover()).toBe(true);
+
+      const cleanupLock = await controller.acquireForCleanup();
+      await cleanupLock.release();
+    },
+  );
+
+  it.each([
+    [
+      "message",
+      {
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "concurrent user input" }] },
+      },
+    ],
+    [
+      "custom_message",
+      {
+        type: "custom_message",
+        customType: "extension-context",
+        content: "prompt-affecting extension content",
+        display: false,
+      },
+    ],
+    [
+      "compaction",
+      {
+        type: "compaction",
+        summary: "Compacted context that would affect the next prompt.",
+        firstKeptEntryId: "root",
+        tokensBefore: 42,
+      },
+    ],
+    [
+      "branch_summary",
+      {
+        type: "branch_summary",
+        fromId: "root",
+        summary: "Branch summary that would affect the next prompt.",
+      },
+    ],
+    ["leaf", { type: "leaf", targetId: null }],
+  ])(
+    "rejects prompt-affecting session entries while the prompt lock is released: %s",
+    async (_, entry) => {
+      const sessionFile = await createTempSessionFile();
+      const release = vi.fn(async () => {});
+      const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock: acquireSessionWriteLockLocal,
+        lockOptions: { ...lockOptions, sessionFile },
+      });
+
+      await controller.releaseForPrompt();
+      await fs.appendFile(
+        sessionFile,
+        `${JSON.stringify({
+          id: "prompt-affecting-entry",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          ...entry,
+        })}\n`,
+        "utf8",
+      );
+
+      await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+        EmbeddedAttemptSessionTakeoverError,
+      );
+      expect(controller.hasSessionTakeover()).toBe(true);
+
+      const cleanupLock = await controller.acquireForCleanup();
+      await cleanupLock.release();
+    },
+  );
+
   it("allows delivery mirror appends while the prompt lock is released", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});

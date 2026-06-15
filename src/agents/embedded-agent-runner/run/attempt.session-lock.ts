@@ -141,6 +141,53 @@ function isTranscriptOnlyOpenClawAssistantLine(line: string): boolean {
   }
 }
 
+function hasSessionControlEntryBase(record: Record<string, unknown>): boolean {
+  return (
+    typeof record.id === "string" &&
+    record.id.trim().length > 0 &&
+    (record.parentId === null || typeof record.parentId === "string") &&
+    typeof record.timestamp === "string" &&
+    record.timestamp.trim().length > 0
+  );
+}
+
+function isPromptReleasedSessionControlLine(line: string): boolean {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!isJsonRecord(parsed) || !hasSessionControlEntryBase(parsed)) {
+      return false;
+    }
+    // These records are out-of-band session metadata/settings. They do not add
+    // user/assistant/tool content to the prompt transcript, so accepting their
+    // append while the provider lock is released keeps an in-flight reply alive
+    // without masking real conversational takeovers.
+    switch (parsed.type) {
+      case "model_change":
+        return typeof parsed.provider === "string" && typeof parsed.modelId === "string";
+      case "thinking_level_change":
+        return typeof parsed.thinkingLevel === "string";
+      case "custom":
+        return typeof parsed.customType === "string" && parsed.customType.trim().length > 0;
+      case "label":
+        return (
+          typeof parsed.targetId === "string" &&
+          parsed.targetId.trim().length > 0 &&
+          (parsed.label === undefined || typeof parsed.label === "string")
+        );
+      case "session_info":
+        return parsed.name === undefined || typeof parsed.name === "string";
+      default:
+        return false;
+    }
+  } catch {
+    return false;
+  }
+}
+
+function isBenignPromptReleasedSessionLine(line: string): boolean {
+  return isTranscriptOnlyOpenClawAssistantLine(line) || isPromptReleasedSessionControlLine(line);
+}
+
 function normalizeTranscriptEntryId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
@@ -302,7 +349,7 @@ async function sessionFenceAdvanceIsBenign(params: {
     return false;
   }
   const lines = normalizeStringEntries(text.split("\n"));
-  return lines.length > 0 && lines.every(isTranscriptOnlyOpenClawAssistantLine);
+  return lines.length > 0 && lines.every(isBenignPromptReleasedSessionLine);
 }
 
 async function sessionFenceCtimeDriftIsBenign(params: {
@@ -374,7 +421,7 @@ async function sessionFenceRewriteIsBenign(params: {
     expectedParentId = lineMatch.nextPreviousId ?? expectedParentId;
   }
   const appendedLines = currentLines.slice(previousLines.length);
-  return appendedLines.every(isTranscriptOnlyOpenClawAssistantLine);
+  return appendedLines.every(isBenignPromptReleasedSessionLine);
 }
 
 type OwnedSessionFileWrite = {
