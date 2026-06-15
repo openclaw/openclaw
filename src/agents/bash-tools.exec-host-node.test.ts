@@ -19,6 +19,8 @@ type MockAllowAlwaysPersistenceInput = Parameters<
 type MockAllowAlwaysPersistenceDecision =
   import("../infra/exec-approvals.js").AllowAlwaysPersistenceDecision;
 type MockExecApprovalDecision = import("../infra/exec-approvals.js").ExecApprovalDecision;
+type MockExecApprovalUnavailableDecision =
+  import("../infra/exec-approvals.js").ExecApprovalUnavailableDecision;
 type MockAllowlistSegment = {
   raw?: string;
   resolution: null;
@@ -151,6 +153,17 @@ const resolveExecApprovalAllowedDecisionsMock = vi.hoisted(() =>
         : ["allow-once", "allow-always", "deny"],
   ),
 );
+const resolveExecApprovalUnavailableDecisionsMock = vi.hoisted(() =>
+  vi.fn(
+    (params?: {
+      ask?: string | null;
+      allowAlwaysPersistence?: { kind: string } | null;
+    }): readonly MockExecApprovalUnavailableDecision[] =>
+      params?.ask === "always" || params?.allowAlwaysPersistence?.kind === "one-shot"
+        ? ["allow-always"]
+        : [],
+  ),
+);
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
     approvals: { allowlist: [] as ExecAllowlistEntry[], file: { version: 1, agents: {} } },
@@ -209,6 +222,7 @@ vi.mock("../infra/exec-approvals.js", () => ({
   resolveAllowAlwaysPersistenceDecision: resolveAllowAlwaysPersistenceDecisionMock,
   resolveAllowAlwaysPatternCoverage: resolveAllowAlwaysPatternCoverageMock,
   resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
+  resolveExecApprovalUnavailableDecisions: resolveExecApprovalUnavailableDecisionsMock,
   resolveExecApprovalsFromFile: resolveExecApprovalsFromFileMock,
   maxAsk: (a: ExecAsk, b: ExecAsk): ExecAsk => {
     const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
@@ -520,6 +534,7 @@ describe("executeNodeHostCommand", () => {
       patterns: [{ pattern: "/trusted/bin/tool" }],
     });
     resolveExecApprovalAllowedDecisionsMock.mockClear();
+    resolveExecApprovalUnavailableDecisionsMock.mockClear();
     resolveExecHostApprovalContextMock.mockReset();
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -1775,7 +1790,7 @@ describe("executeNodeHostCommand", () => {
         patterns: [{ pattern: "/trusted/bin/tool" }],
       },
     });
-    expect(requireRegisteredApprovalRequest().allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],
@@ -1824,7 +1839,7 @@ describe("executeNodeHostCommand", () => {
         patterns: [{ pattern: "/trusted/bin/tool" }],
       },
     });
-    expect(requireRegisteredApprovalRequest().allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
   });
 
   it("offers allow-always for prepared node commands with complete node coverage", async () => {
@@ -1896,11 +1911,7 @@ describe("executeNodeHostCommand", () => {
         patterns: [{ pattern: "/node/bin/git" }],
       },
     });
-    expect(requireRegisteredApprovalRequest().allowedDecisions).toEqual([
-      "allow-once",
-      "allow-always",
-      "deny",
-    ]);
+    expect(requireRegisteredApprovalRequest().unavailableDecisions).toBeUndefined();
   });
 
   it("does not use fallback-full when node auto-review cannot parse the command", async () => {
@@ -2235,7 +2246,7 @@ describe("executeNodeHostCommand", () => {
       ask: "on-miss",
       allowAlwaysPersistence: { kind: "one-shot", reasons: ["unplanned"] },
     });
-    expect(requireRegisteredApprovalRequest().allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],

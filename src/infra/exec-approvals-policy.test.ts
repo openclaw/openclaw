@@ -25,6 +25,8 @@ let normalizeExecMode: typeof import("./exec-approvals.js").normalizeExecMode;
 let normalizeExecTarget: typeof import("./exec-approvals.js").normalizeExecTarget;
 let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSecurity;
 let requiresExecApproval: typeof import("./exec-approvals.js").requiresExecApproval;
+let normalizeExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").normalizeExecApprovalUnavailableDecisions;
+let resolveExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").resolveExecApprovalUnavailableDecisions;
 let resolveExecApprovalRequestAllowedDecisions: typeof import("./exec-approvals.js").resolveExecApprovalRequestAllowedDecisions;
 let resolveExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExecModeFromPolicy;
 let resolveExecModePolicy: typeof import("./exec-approvals.js").resolveExecModePolicy;
@@ -50,6 +52,9 @@ async function loadActualExecApprovalModules(): Promise<void> {
   normalizeExecTarget = execApprovals.normalizeExecTarget;
   normalizeExecSecurity = execApprovals.normalizeExecSecurity;
   requiresExecApproval = execApprovals.requiresExecApproval;
+  normalizeExecApprovalUnavailableDecisions =
+    execApprovals.normalizeExecApprovalUnavailableDecisions;
+  resolveExecApprovalUnavailableDecisions = execApprovals.resolveExecApprovalUnavailableDecisions;
   resolveExecApprovalRequestAllowedDecisions =
     execApprovals.resolveExecApprovalRequestAllowedDecisions;
   resolveExecModeFromPolicy = execApprovals.resolveExecModeFromPolicy;
@@ -217,25 +222,39 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
-  it("treats request allowed decisions as a narrowing cap", () => {
+  it("treats unavailable request decisions as optional approvals only", () => {
+    expect(
+      normalizeExecApprovalUnavailableDecisions(["allow-once", "deny", "allow-always", "bad"]),
+    ).toEqual(["allow-always"]);
     expect(
       resolveExecApprovalRequestAllowedDecisions({
-        ask: "always",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        ask: "on-miss",
+        unavailableDecisions: ["allow-always"],
       }),
     ).toEqual(["allow-once", "deny"]);
     expect(
       resolveExecApprovalRequestAllowedDecisions({
         ask: "on-miss",
-        allowedDecisions: ["deny"],
+        unavailableDecisions: ["allow-once", "deny", "allow-always", "bad"],
       }),
-    ).toEqual(["deny"]);
+    ).toEqual(["allow-once", "deny"]);
     expect(
       resolveExecApprovalRequestAllowedDecisions({
         ask: "always",
-        allowedDecisions: ["allow-always"],
+        unavailableDecisions: ["allow-always"],
       }),
     ).toEqual(["allow-once", "deny"]);
+  });
+
+  it("derives unavailable optional decisions from effective approval policy", () => {
+    expect(resolveExecApprovalUnavailableDecisions({ ask: "on-miss" })).toEqual([]);
+    expect(resolveExecApprovalUnavailableDecisions({ ask: "always" })).toEqual(["allow-always"]);
+    expect(
+      resolveExecApprovalUnavailableDecisions({
+        ask: "on-miss",
+        allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+      }),
+    ).toEqual(["allow-always"]);
   });
 
   it.each([

@@ -21,6 +21,7 @@ import {
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  normalizeExecApprovalUnavailableDecisions,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
@@ -168,7 +169,7 @@ export function createExecApprovalHandlers(
         security?: string;
         ask?: string;
         warningText?: string | null;
-        allowedDecisions?: string[];
+        unavailableDecisions?: string[];
         commandSpans?: {
           startIndex: number;
           endIndex: number;
@@ -299,6 +300,9 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      const unavailableDecisions = normalizeExecApprovalUnavailableDecisions(
+        p.unavailableDecisions,
+      );
       const request = {
         command: sanitizedCommandText,
         commandPreview:
@@ -317,9 +321,10 @@ export function createExecApprovalHandlers(
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
         commandAnalysis,
         commandSpans,
+        unavailableDecisions: unavailableDecisions.length > 0 ? unavailableDecisions : undefined,
         allowedDecisions: resolveExecApprovalRequestAllowedDecisions({
           ask: p.ask ?? null,
-          allowedDecisions: p.allowedDecisions,
+          unavailableDecisions,
         }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,

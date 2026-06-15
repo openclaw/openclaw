@@ -2585,13 +2585,22 @@ describe("exec approval handlers", () => {
       expect(validateExecApprovalRequestParams(params)).toBe(true);
     });
 
-    it("accepts narrowed allowed decisions", () => {
+    it("accepts unavailable optional decisions", () => {
       expect(
         validateExecApprovalRequestParams({
           ...baseParams,
-          allowedDecisions: ["allow-once", "deny"],
+          unavailableDecisions: ["allow-always"],
         }),
       ).toBe(true);
+    });
+
+    it.each(["allow-once", "deny"])("rejects baseline unavailable decision %s", (decision) => {
+      expect(
+        validateExecApprovalRequestParams({
+          ...baseParams,
+          unavailableDecisions: [decision],
+        }),
+      ).toBe(false);
     });
   });
 
@@ -3022,7 +3031,7 @@ describe("exec approval handlers", () => {
     expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("rejects allow-always when the request allowed decisions exclude it", async () => {
+  it("rejects allow-always when the request marks it unavailable", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
     const requestPromise = requestExecApproval({
@@ -3031,7 +3040,7 @@ describe("exec approval handlers", () => {
       context,
       params: {
         twoPhase: true,
-        allowedDecisions: ["allow-once", "deny"],
+        unavailableDecisions: ["allow-always"],
       },
     });
     const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
@@ -3065,7 +3074,7 @@ describe("exec approval handlers", () => {
     expect(allowOnceRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("keeps deny available when request allowed decisions omit it", async () => {
+  it("keeps baseline decisions available when allow-always is unavailable", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
     const requestPromise = requestExecApproval({
@@ -3074,7 +3083,7 @@ describe("exec approval handlers", () => {
       context,
       params: {
         twoPhase: true,
-        allowedDecisions: ["allow-once"],
+        unavailableDecisions: ["allow-always"],
       },
     });
     const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);

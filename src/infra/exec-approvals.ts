@@ -220,6 +220,7 @@ export type ExecApprovalRequestPayload = {
   warningText?: string | null;
   commandAnalysis?: CommandExplanationSummary | null;
   commandSpans?: ExecApprovalCommandSpan[];
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
@@ -1778,6 +1779,42 @@ export const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
+export const OPTIONAL_EXEC_APPROVAL_DECISIONS = [
+  "allow-always",
+] as const satisfies readonly ExecApprovalDecision[];
+export type ExecApprovalUnavailableDecision = (typeof OPTIONAL_EXEC_APPROVAL_DECISIONS)[number];
+
+const OPTIONAL_EXEC_APPROVAL_DECISION_SET: ReadonlySet<string> = new Set(
+  OPTIONAL_EXEC_APPROVAL_DECISIONS,
+);
+
+function isOptionalExecApprovalDecision(
+  decision: string,
+): decision is ExecApprovalUnavailableDecision {
+  return OPTIONAL_EXEC_APPROVAL_DECISION_SET.has(decision);
+}
+
+function collectExecApprovalUnavailableDecisionSet(
+  decisions?: readonly string[] | readonly ExecApprovalUnavailableDecision[] | null,
+): ReadonlySet<ExecApprovalUnavailableDecision> {
+  const unavailable = new Set<ExecApprovalUnavailableDecision>();
+  if (!Array.isArray(decisions)) {
+    return unavailable;
+  }
+  for (const decision of decisions) {
+    if (isOptionalExecApprovalDecision(decision)) {
+      unavailable.add(decision);
+    }
+  }
+  return unavailable;
+}
+
+export function normalizeExecApprovalUnavailableDecisions(
+  decisions?: readonly string[] | readonly ExecApprovalUnavailableDecision[] | null,
+): readonly ExecApprovalUnavailableDecision[] {
+  const unavailable = collectExecApprovalUnavailableDecisionSet(decisions);
+  return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => unavailable.has(decision));
+}
 
 export function resolveExecApprovalAllowedDecisions(params?: {
   ask?: string | null;
@@ -1790,29 +1827,28 @@ export function resolveExecApprovalAllowedDecisions(params?: {
   return DEFAULT_EXEC_APPROVAL_DECISIONS;
 }
 
+export function resolveExecApprovalUnavailableDecisions(params?: {
+  ask?: string | null;
+  allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;
+}): readonly ExecApprovalUnavailableDecision[] {
+  const allowed = new Set(resolveExecApprovalAllowedDecisions(params));
+  return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => !allowed.has(decision));
+}
+
 export function resolveExecApprovalRequestAllowedDecisions(params?: {
   ask?: string | null;
-  allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[] | readonly string[] | null;
 }): readonly ExecApprovalDecision[] {
   const policyDecisions = resolveExecApprovalAllowedDecisions({ ask: params?.ask });
-  const explicit = Array.isArray(params?.allowedDecisions)
-    ? params.allowedDecisions.filter(
-        (decision): decision is ExecApprovalDecision =>
-          decision === "allow-once" || decision === "allow-always" || decision === "deny",
-      )
-    : [];
-  if (explicit.length === 0) {
+  const unavailableDecisions = collectExecApprovalUnavailableDecisionSet(
+    params?.unavailableDecisions,
+  );
+  if (unavailableDecisions.size === 0) {
     return policyDecisions;
   }
-  const explicitDecisions = new Set(explicit);
-  const narrowed = policyDecisions.filter((decision) => explicitDecisions.has(decision));
-  if (narrowed.length === 0) {
-    return policyDecisions;
-  }
-  if (!narrowed.includes("deny") && policyDecisions.includes("deny")) {
-    return [...narrowed, "deny"];
-  }
-  return narrowed;
+  return policyDecisions.filter(
+    (decision) => !isOptionalExecApprovalDecision(decision) || !unavailableDecisions.has(decision),
+  );
 }
 
 export function isExecApprovalDecisionAllowed(params: {

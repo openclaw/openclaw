@@ -24,6 +24,7 @@ import {
   recordAllowlistMatchesUse,
   resolveApprovalAuditTrustPath,
   resolveAllowAlwaysPersistenceDecision,
+  resolveExecApprovalUnavailableDecisions,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
@@ -585,6 +586,14 @@ export async function processGatewayAllowlist(
     ask: hostAsk,
     allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
   });
+  const approvalUnavailableDecisions = resolveExecApprovalUnavailableDecisions({
+    ask: hostAsk,
+    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
+  });
+  const unavailableDecisionRequestParams =
+    approvalUnavailableDecisions.length > 0
+      ? { unavailableDecisions: approvalUnavailableDecisions }
+      : {};
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
@@ -673,7 +682,7 @@ export async function processGatewayAllowlist(
         host: "gateway",
         security: hostSecurity,
         ask: hostAsk,
-        allowedDecisions: approvalAllowedDecisions,
+        ...unavailableDecisionRequestParams,
         commandHighlighting: params.commandHighlighting,
         warningText: params.warnings.join("\n").trim() || undefined,
         ...buildExecApprovalRequesterContext({
