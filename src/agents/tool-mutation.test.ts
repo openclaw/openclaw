@@ -119,6 +119,14 @@ describe("tool mutation helpers", () => {
       buildToolMutationState("subagents", { action: "steer", target: "worker-1" }).mutatingAction,
     ).toBe(true);
     expect(buildToolMutationState("subagents", { action: "list" }).mutatingAction).toBe(false);
+    expect(buildToolMutationState("sessions_delegate", { task: "summarize" }).mutatingAction).toBe(
+      true,
+    );
+    expect(
+      buildToolMutationState("sessions_delegate_batch", {
+        tasks: [{ task: "summarize" }],
+      }).mutatingAction,
+    ).toBe(true);
     expect(buildToolMutationState("get_goal", { sessionKey: "agent:main" }).mutatingAction).toBe(
       false,
     );

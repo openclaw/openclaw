@@ -39,6 +39,7 @@ import {
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import { registerOutputCaptureGate } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
@@ -154,6 +155,7 @@ export type RegisterSubagentRunParams = {
   workspaceDir?: string;
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
+  requiresOutputCaptureGate?: boolean;
   spawnMode?: "run" | "session";
   attachmentsDir?: string;
   attachmentsRootDir?: string;
@@ -645,6 +647,7 @@ export function createSubagentRunManager(params: {
       taskName: registerParams.taskName,
       cleanup: registerParams.cleanup,
       expectsCompletionMessage: registerParams.expectsCompletionMessage,
+      requiresOutputCaptureGate: registerParams.requiresOutputCaptureGate === true,
       spawnMode,
       label: registerParams.label,
       model: registerParams.model,
@@ -673,6 +676,11 @@ export function createSubagentRunManager(params: {
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
     params.runs.set(runId, entry);
+    // Delegate runs read child output directly, so register their gate before
+    // any completion listener can delete the child transcript.
+    if (registerParams.requiresOutputCaptureGate === true) {
+      registerOutputCaptureGate(registerParams.runId);
+    }
     try {
       params.persistOrThrow();
     } catch (error) {

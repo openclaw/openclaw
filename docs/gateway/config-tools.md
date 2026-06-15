@@ -29,21 +29,21 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 
 ### Tool groups
 
-| Group              | Tools                                                                                                                   |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                         |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                  |
-| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status` |
-| `group:memory`     | `memory_search`, `memory_get`                                                                                           |
-| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                   |
-| `group:ui`         | `browser`, `canvas`                                                                                                     |
-| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                  |
-| `group:messaging`  | `message`                                                                                                               |
-| `group:nodes`      | `nodes`                                                                                                                 |
-| `group:agents`     | `agents_list`, `update_plan`                                                                                            |
-| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                    |
-| `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
-| `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                            |
+| Group              | Tools                                                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                                         |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                                  |
+| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_delegate`, `sessions_delegate_batch`, `sessions_yield`, `subagents`, `session_status` |
+| `group:memory`     | `memory_search`, `memory_get`                                                                                                                                           |
+| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                   |
+| `group:ui`         | `browser`, `canvas`                                                                                                                                                     |
+| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                  |
+| `group:messaging`  | `message`                                                                                                                                                               |
+| `group:nodes`      | `nodes`                                                                                                                                                                 |
+| `group:agents`     | `agents_list`, `update_plan`                                                                                                                                            |
+| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                    |
+| `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                                                                          |
+| `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                            |
 
 ### MCP and plugin tools inside sandbox tool policy
 
@@ -398,6 +398,10 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
 ### `tools.sessions_spawn`
 
 Controls inline attachment support for `sessions_spawn`.
+
+`sessions_delegate` and `sessions_delegate_batch` create child sessions too.
+For compatibility, `deny: ["sessions_spawn"]` also blocks both delegate tool
+ids.
 
 ```json5
 {

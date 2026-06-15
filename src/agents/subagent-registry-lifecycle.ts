@@ -57,6 +57,7 @@ import {
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import { waitForOutputCaptureGate } from "./subagent-registry-memory.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
@@ -986,6 +987,11 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (entry.expectsCompletionMessage === false) {
       void (async () => {
+        if (entry.requiresOutputCaptureGate === true) {
+          // Wait for sessions_delegate to finish reading child output before
+          // deleting the child transcript or removing the run entry.
+          await waitForOutputCaptureGate(runId, 30_000);
+        }
         if (entry.cleanup === "delete") {
           await deleteSubagentSessionForCleanup({
             callGateway: params.callGateway,

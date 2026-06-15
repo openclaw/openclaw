@@ -8,6 +8,10 @@ export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session his
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Message session or configured agent.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP session.";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
+export const SESSIONS_DELEGATE_TOOL_DISPLAY_SUMMARY =
+  "Delegate task to subagent; wait for result.";
+export const SESSIONS_DELEGATE_BATCH_TOOL_DISPLAY_SUMMARY =
+  "Fan out subagent tasks; collect results.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
 
@@ -72,6 +76,22 @@ export function describeSessionsSpawnTool(options?: {
     ...baseDescription.slice(0, 3),
     '`runtime="acp"` for ACP harness ids: codex, claude, gemini, opencode, or agent ACP runtime config.',
     ...baseDescription.slice(3),
+  ].join(" ");
+}
+
+/** Describes the sessions_delegate tool for model-facing instructions. */
+export function describeSessionsDelegateTool(): string {
+  return [
+    "Spawn an isolated sub-agent session, block until it completes, and return its output as a tool result.",
+    "Unlike sessions_spawn, this tool does NOT use auto-announce. The child's final reply is returned directly.",
+    "Use this for synchronous delegation where you need the result before continuing.",
+  ].join(" ");
+}
+
+export function describeSessionsDelegateBatchTool(): string {
+  return [
+    "Spawn multiple isolated sub-agent sessions in parallel, wait for all to complete, and return collected results.",
+    "Each task runs in its own session. Use failureMode='partial' (default) to get completed results even if some tasks fail.",
   ].join(" ");
 }
 

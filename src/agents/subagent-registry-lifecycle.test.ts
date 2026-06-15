@@ -83,6 +83,14 @@ vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => false),
 }));
 
+const registryMemoryMocks = vi.hoisted(() => ({
+  waitForOutputCaptureGate: vi.fn(async () => true),
+}));
+
+vi.mock("./subagent-registry-memory.js", () => ({
+  waitForOutputCaptureGate: registryMemoryMocks.waitForOutputCaptureGate,
+}));
+
 vi.mock("./subagent-registry-cleanup.js", () => ({
   resolveCleanupCompletionReason: () => SUBAGENT_ENDED_REASON_COMPLETE,
   resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "retry-limit" }),
@@ -659,6 +667,7 @@ describe("subagent registry lifecycle hardening", () => {
     );
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
+    expect(registryMemoryMocks.waitForOutputCaptureGate).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(runs.has(entry.runId)).toBe(false));
     expect(entry.delivery?.announcedAt).toBeUndefined();
   });
@@ -1315,6 +1324,96 @@ describe("subagent registry lifecycle hardening", () => {
       browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
     ).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("awaits output capture gate before deleting delegate child session", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+      requiresOutputCaptureGate: true,
+      cleanup: "delete",
+    });
+
+    // Track call order to verify gate is awaited before deletion.
+    const callOrder: string[] = [];
+    registryMemoryMocks.waitForOutputCaptureGate.mockImplementation(async () => {
+      callOrder.push("waitForOutputCaptureGate");
+      return true;
+    });
+    gatewayMocks.callGateway.mockImplementation(async () => {
+      callOrder.push("sessions.delete");
+      return {};
+    });
+
+    const controller = createLifecycleController({ entry, persist });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(persist).toHaveBeenCalled();
+    });
+
+    expect(registryMemoryMocks.waitForOutputCaptureGate).toHaveBeenCalledWith(entry.runId, 30_000);
+    expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: entry.childSessionKey,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+    // Gate must be awaited before session deletion.
+    expect(callOrder.indexOf("waitForOutputCaptureGate")).toBeLessThan(
+      callOrder.indexOf("sessions.delete"),
+    );
+  });
+
+  it("does not wait for output capture on non-delegate completion-disabled cleanup", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      spawnMode: "session",
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      persist,
+      runSubagentAnnounceFlow: vi.fn(async () => true),
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() =>
+      expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+        method: "sessions.delete",
+        params: {
+          key: entry.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: true,
+        },
+        timeoutMs: 10_000,
+      }),
+    );
+    expect(registryMemoryMocks.waitForOutputCaptureGate).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(runs.has(entry.runId)).toBe(false));
   });
 
   it("dedupes browser cleanup when two callers complete the same run in parallel", async () => {

@@ -18,6 +18,8 @@ const MUTATING_TOOL_NAMES = new Set([
   "process",
   "message",
   "sessions_spawn",
+  "sessions_delegate",
+  "sessions_delegate_batch",
   "sessions_send",
   "cron",
   "gateway",
@@ -355,6 +357,9 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "write":
     case "edit":
     case "apply_patch":
+    case "sessions_delegate":
+    case "sessions_delegate_batch":
+    case "sessions_spawn":
     case "sessions_send":
     case "create_goal":
     case "update_goal":
@@ -490,7 +495,7 @@ export function buildToolMutationState(
   const actionFingerprint = buildToolActionFingerprint(toolName, args, meta);
   const fileTarget = extractFileTarget(toolName, args);
   return {
-    mutatingAction: actionFingerprint != null,
+    mutatingAction: isMutatingToolCall(toolName, args),
     actionFingerprint,
     ...(fileTarget !== undefined ? { fileTarget } : {}),
   };
