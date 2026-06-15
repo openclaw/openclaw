@@ -1775,6 +1775,24 @@ export async function readLightStagedKeys(params: {
   return keys;
 }
 
+/**
+ * Read the phase signal entries for a workspace so callers can inspect
+ * per-entry `lastLightAt` / `lastRemAt` timestamps for deduplication.
+ */
+export async function readPhaseSignalEntries(params: {
+  workspaceDir: string;
+  nowMs?: number;
+}): Promise<Record<string, ShortTermPhaseSignalEntry>> {
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return {};
+  }
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  const store = await readPhaseSignalStore(workspaceDir, nowIso);
+  return store.entries;
+}
+
 export async function rankShortTermPromotionCandidates(
   options: RankShortTermPromotionOptions,
 ): Promise<PromotionCandidate[]> {
