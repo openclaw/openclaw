@@ -1,5 +1,5 @@
 // Qa Lab plugin module implements cli behavior.
-import { Option, type Command } from "commander";
+import type { Command } from "commander";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { collectString } from "./cli-options.js";
 import type {
@@ -387,7 +387,8 @@ export function registerQaLabCli(program: Command) {
     .description("Run private QA automation flows and launch the QA debugger");
   registerMantisCli(qa);
 
-  qa.command("run")
+  const qaRun = qa
+    .command("run")
     .description("Run the bundled QA self-check and write a Markdown report")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output <path>", "Report output path")
@@ -400,11 +401,13 @@ export function registerQaLabCli(program: Command) {
       "Set profile qa-evidence.json mode: full or slim",
       parseQaEvidenceModeOption,
     )
-    .addOption(
-      new Option("--exclude-test-execution-evidence", "Deprecated alias for --evidence-mode slim")
-        .default(false)
-        .hideHelp(),
-    )
+    .option(
+      "--exclude-test-execution-evidence",
+      "Deprecated alias for --evidence-mode slim",
+      false,
+    );
+  qaRun.options.at(-1)?.hideHelp();
+  qaRun
     .option("--transport <id>", "QA transport id", "qa-channel")
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
@@ -417,32 +420,32 @@ export function registerQaLabCli(program: Command) {
       "Write artifacts without setting a failing exit code when scenarios fail",
       false,
     )
-    .option("--fast", "Enable provider fast mode where supported", false)
-    .action(async (opts: QaRunCliOptions, command: Command) => {
-      validateQaRunMode(opts, command);
-      if (opts.qaProfile?.trim()) {
-        await runQaProfile({
-          repoRoot: opts.repoRoot,
-          outputDir: opts.outputDir,
-          profile: opts.qaProfile,
-          surface: opts.surface,
-          category: opts.category,
-          evidenceMode: resolveQaEvidenceModeOptions(opts),
-          transportId: opts.transport,
-          providerMode: opts.providerMode,
-          primaryModel: opts.model,
-          alternateModel: opts.altModel,
-          concurrency: opts.concurrency,
-          allowFailures: opts.allowFailures,
-          fastMode: opts.fast,
-        });
-        return;
-      }
-      await runQaSelfCheck({
+    .option("--fast", "Enable provider fast mode where supported", false);
+  qaRun.action(async (opts: QaRunCliOptions, command: Command) => {
+    validateQaRunMode(opts, command);
+    if (opts.qaProfile?.trim()) {
+      await runQaProfile({
         repoRoot: opts.repoRoot,
-        output: opts.output,
+        outputDir: opts.outputDir,
+        profile: opts.qaProfile,
+        surface: opts.surface,
+        category: opts.category,
+        evidenceMode: resolveQaEvidenceModeOptions(opts),
+        transportId: opts.transport,
+        providerMode: opts.providerMode,
+        primaryModel: opts.model,
+        alternateModel: opts.altModel,
+        concurrency: opts.concurrency,
+        allowFailures: opts.allowFailures,
+        fastMode: opts.fast,
       });
+      return;
+    }
+    await runQaSelfCheck({
+      repoRoot: opts.repoRoot,
+      output: opts.output,
     });
+  });
 
   qa.command("suite")
     .description("Run repo-backed QA scenarios against the QA gateway lane")
