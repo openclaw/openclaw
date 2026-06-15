@@ -3961,7 +3961,10 @@ function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>
       record.reasoning = reasoningDetails;
     }
     delete record.reasoning_details;
-  } else if (reasoningDetails !== undefined && !Array.isArray(reasoningDetails)) {
+  } else if (Array.isArray(reasoningDetails)) {
+    // Preserve array reasoning_details (e.g., MiniMax M3 via OpenRouter)
+    // These are valid replay fields that should be kept.
+  } else if (reasoningDetails !== undefined) {
     delete record.reasoning_details;
   }
 

@@ -397,7 +397,10 @@ export const streamOpenAICompletions: StreamFunction<
             appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
           }
 
-          if (shouldEmitReasoning && foundReasoningField) {
+          // Always preserve reasoning when present, even without explicit reasoningEffort.
+          // This handles providers like MiniMax M3 via OpenRouter that return reasoning
+          // in reasoning/reasoning_details fields regardless of reasoningEffort setting.
+          if (foundReasoningField) {
             const delta = deltaFields[foundReasoningField];
             if (typeof delta === "string" && delta.length > 0) {
               const thinkingSignature =
@@ -446,6 +449,16 @@ export const streamOpenAICompletions: StreamFunction<
                 if (matchingToolCall) {
                   matchingToolCall.thoughtSignature = JSON.stringify(detail);
                 }
+              }
+            }
+            // Also preserve reasoning_details for plain-text assistant messages
+            // This handles providers like MiniMax M3 via OpenRouter that return
+            // reasoning_details in the delta for non-tool-call responses.
+            if (!output.content.some((b) => b.type === "toolCall")) {
+              // Store reasoning_details in the first text block's thinkingSignature
+              const textBlock = output.content.find((b) => b.type === "text");
+              if (textBlock && !textBlock.thinkingSignature) {
+                textBlock.thinkingSignature = JSON.stringify(reasoningDetails);
               }
             }
           }
