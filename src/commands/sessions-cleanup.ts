@@ -141,6 +141,67 @@ function renderStoreDryRunPlan(params: {
     ].join(" ");
     params.runtime.log(line.trimEnd());
   }
+
+  // Per-label summary breakdown.
+  const labelCounts = new Map<string, { kept: number; pruned: number }>();
+  for (const row of params.actionRows) {
+    const groupLabel = resolveSessionGroupLabel(row);
+    const bucket = labelCounts.get(groupLabel) ?? { kept: 0, pruned: 0 };
+    if (row.action === "keep") {
+      bucket.kept += 1;
+    } else {
+      bucket.pruned += 1;
+    }
+    labelCounts.set(groupLabel, bucket);
+  }
+  if (labelCounts.size > 0) {
+    params.runtime.log("");
+    params.runtime.log(rich ? theme.heading("Summary by Label:") : "Summary by Label:");
+    const sorted = [...labelCounts.entries()].toSorted(
+      (a, b) => (b[1].kept + b[1].pruned) - (a[1].kept + a[1].pruned),
+    );
+    for (const [label, counts] of sorted) {
+      const line = `  ${label.padEnd(28)} -> ${counts.kept} kept, ${counts.pruned} pruned`;
+      params.runtime.log(rich ? theme.muted(line) : line);
+    }
+    const totalKept = sorted.reduce((s, [, c]) => s + c.kept, 0);
+    const totalPruned = sorted.reduce((s, [, c]) => s + c.pruned, 0);
+    params.runtime.log(
+      rich
+        ? theme.heading(`Total: ${totalKept} kept, ${totalPruned} pruned`)
+        : `Total: ${totalKept} kept, ${totalPruned} pruned`,
+    );
+  }
+}
+
+/**
+ * Resolve a human-readable group label for a session row.
+ * Prefers explicit label/displayName, then derives from session key patterns.
+ */
+function resolveSessionGroupLabel(row: SessionCleanupActionRow): string {
+  const explicit = row.label?.trim() || row.displayName?.trim();
+  if (explicit && explicit !== row.key) {
+    return explicit.length > 26 ? explicit.slice(0, 26) + "..." : explicit;
+  }
+  // Derive from key patterns: agent:<agent>:<channel>:<type>:<id>
+  const directMatch = row.key.match(/^agent:[^:]+:([^:]+):direct:/);
+  if (directMatch) {
+    return `Direct (${directMatch[1]})`;
+  }
+  const groupMatch = row.key.match(/^agent:[^:]+:([^:]+):group:/);
+  if (groupMatch) {
+    return `Group (${groupMatch[1]})`;
+  }
+  if (row.key.includes(":subagent:")) {
+    return "Subagent";
+  }
+  if (row.key.includes(":cron:") || row.key.startsWith("cron:")) {
+    return "Cron";
+  }
+  if (row.key === "main" || row.key === "agent:main:main") {
+    return "Main";
+  }
+  return "Other";
 }
 
 function renderAppliedSummaries(params: {
