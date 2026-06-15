@@ -10,7 +10,14 @@ const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
-const ensureConfigReadyMock = vi.fn(async () => {});
+type EnsureConfigReadyOptions = {
+  beforeStateMigrations?: () => Promise<boolean>;
+  commandPath?: string[];
+  requireConfig?: boolean;
+};
+const ensureConfigReadyMock = vi.fn<(_opts: EnsureConfigReadyOptions) => Promise<void>>(
+  async () => {},
+);
 const ensurePluginRegistryLoadedMock = vi.fn();
 const routeLogsToStderrMock = vi.fn();
 const prepareGatewayRunBootstrapMock = vi.fn(async () => true);

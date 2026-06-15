@@ -405,7 +405,7 @@ describe("shell env fallback", () => {
       exec: (() =>
         Buffer.from(
           "OPENAI_API_KEY=openai-shell\0ANTHROPIC_API_KEY=anthropic-shell\0",
-        )) as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+        )) as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
     });
 
     clearShellEnvAppliedKeys(["OPENAI_API_KEY"]);

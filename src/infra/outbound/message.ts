@@ -100,6 +100,7 @@ export type MessageSendResult = {
   mediaUrl: string | null;
   mediaUrls?: string[];
   result?: OutboundDeliveryResult | { messageId: string };
+  deliveryStatus?: "suppressed";
   dryRun?: boolean;
 };
 
@@ -413,6 +414,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       result: results.at(-1),
+      ...(send.status === "suppressed" ? { deliveryStatus: "suppressed" as const } : {}),
     };
   }
 

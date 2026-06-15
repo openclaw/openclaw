@@ -56,6 +56,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   OCM_VERSION: v0.2.15
+  OCM_LINUX_X64_SHA256: b849b8de5d77e97e0df9319703254ae95e29d7f26a7552ea79bf173ff110ea0a
   KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.5
 
@@ -187,11 +188,20 @@ jobs:
           set -euo pipefail
           KOVA_SRC="${RUNNER_TEMP}/kova-src"
           echo "KOVA_SRC=$KOVA_SRC" >> "$GITHUB_ENV"
-          mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")"
-          curl -fsSL https://raw.githubusercontent.com/shakkernerd/ocm/main/install.sh \
-            | bash -s -- --version "$OCM_VERSION" --prefix "$HOME/.local" --force
-          git clone --filter=blob:none "https://github.com/${KOVA_REPOSITORY}.git" "$KOVA_SRC"
-          git -C "$KOVA_SRC" checkout "$KOVA_REF"
+          mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")" "${RUNNER_TEMP}/ocm-install"
+
+          ocm_archive="${RUNNER_TEMP}/ocm-${OCM_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused \
+            -o "$ocm_archive" \
+            "https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -
+          tar -xzf "$ocm_archive" -C "${RUNNER_TEMP}/ocm-install"
+          install -m 0755 "${RUNNER_TEMP}/ocm-install/ocm" "$HOME/.local/bin/ocm"
+
+          git init -b main "$KOVA_SRC"
+          git -C "$KOVA_SRC" remote add origin "https://github.com/${KOVA_REPOSITORY}.git"
+          git -C "$KOVA_SRC" fetch --filter=blob:none --depth 1 origin "$KOVA_REF"
+          git -C "$KOVA_SRC" checkout --detach FETCH_HEAD
           cat > "$HOME/.local/bin/kova" <<EOF
           #!/usr/bin/env bash
           export KOVA_HOME="${KOVA_HOME}"

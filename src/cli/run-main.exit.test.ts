@@ -77,8 +77,18 @@ const runCrestodianMock = vi.hoisted(() =>
   vi.fn<(options?: unknown) => Promise<void>>(async () => {}),
 );
 const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
-const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
-const ensureCliExecutionBootstrapMock = vi.hoisted(() => vi.fn(async () => {}));
+type GatewayRunCommandHooks = {
+  beforeRun?: (opts: { reset?: boolean }) => Promise<void>;
+};
+type CliExecutionBootstrapOptions = {
+  beforeStateMigrations?: () => Promise<boolean>;
+};
+const addGatewayRunCommandMock = vi.hoisted(() =>
+  vi.fn<(command: unknown, hooks?: GatewayRunCommandHooks) => unknown>((command) => command),
+);
+const ensureCliExecutionBootstrapMock = vi.hoisted(() =>
+  vi.fn<(_opts: CliExecutionBootstrapOptions) => Promise<void>>(async () => {}),
+);
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const enableConsoleCaptureMock = vi.hoisted(() => vi.fn());
 const progressDoneMock = vi.hoisted(() => vi.fn());

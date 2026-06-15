@@ -354,6 +354,10 @@ export function resolveMcpHttpBodyTimeoutMs(): number {
   return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
 }
 
+export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefined {
+  return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
+}
+
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,

@@ -31,7 +31,13 @@ const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
 const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const pinConfigDir = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const pinRuntimePaths = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
-const loadGlobalRuntimeDotEnvFiles = vi.fn((_opts?: unknown) => undefined);
+type RuntimeDotEnvLoadResult = {
+  gatewayEnvAppliedKeys: string[];
+  stateEnvAppliedKeys: string[];
+};
+const loadGlobalRuntimeDotEnvFiles = vi.fn<
+  (_opts?: unknown) => RuntimeDotEnvLoadResult | undefined
+>(() => undefined);
 const beforeRun = vi.fn(async () => {
   callOrder.push("bootstrap");
 });

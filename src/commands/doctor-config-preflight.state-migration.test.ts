@@ -52,7 +52,9 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it("runs the startup guard immediately before the first state mutation", async () => {
-    const beforeStateMigrations = vi.fn(async () => true);
+    const beforeStateMigrations = vi.fn<(_snapshot?: unknown) => Promise<boolean>>(
+      async () => true,
+    );
 
     await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
