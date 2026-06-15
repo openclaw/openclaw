@@ -135,7 +135,10 @@ describe("markdownToTelegramHtml", () => {
     expect(
       markdownToTelegramRichHtml('![A "quote"](https://cdn.example/img.png?token=a&expires=b)'),
     ).toBe(
-      '<figure><img src="https://cdn.example/img.png?token=a&amp;expires=b" alt="A \'quote\'"/></figure>',
+      '<figure><img src="https://cdn.example/img.png?token=a&amp;expires=b" alt="A &quot;quote&quot;"/></figure>',
+    );
+    expect(markdownToTelegramRichHtml("![A > B](https://example.com/a.png)")).toBe(
+      '<figure><img src="https://example.com/a.png" alt="A &gt; B"/></figure>',
     );
     expect(markdownToTelegramRichHtml("See ![Diagram](https://example.com/a.jpg).")).toBe(
       'See <a href="https://example.com/a.jpg">Diagram</a>.',
