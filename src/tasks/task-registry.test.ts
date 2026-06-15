@@ -2093,8 +2093,7 @@ describe("task-registry", () => {
   });
 
   it("uses the child session agent for cross-agent background task attribution", async () => {
-    await withTaskRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest({ persist: false });
 
       const created = createTaskRecord({
