@@ -8,6 +8,7 @@ import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { decodeWindowsOutputBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -76,6 +77,10 @@ export interface ReadToolOptions {
   autoResizeImages?: boolean;
   /** Custom operations for file reading. Default: local filesystem */
   operations?: ReadOperations;
+  /** Override platform for encoding fallback (test-only seam). */
+  platform?: NodeJS.Platform;
+  /** Override Windows encoding for simulated codepage decoding (test-only seam). */
+  windowsEncoding?: string | null;
 }
 
 type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
@@ -248,6 +253,27 @@ function formatReadResult(
   return text;
 }
 
+/** Decodes a text buffer using the shared UTF-8 → Windows codepage → UTF-8 fallback chain. */
+function decodeReadBuffer(
+  buffer: Buffer,
+  platform?: NodeJS.Platform,
+  windowsEncoding?: string | null,
+): string {
+  const output = decodeWindowsOutputBuffer({ buffer, platform, windowsEncoding });
+  // decodeWindowsOutputBuffer treats non-Win32 platforms as UTF-8-only.  For
+  // cross-platform tolerance, also accept invalid UTF-8 by falling back to
+  // replacement characters so a GBK file on Linux is readable rather than
+  // silently returning garbled UTF-8 output.
+  if ((platform ?? process.platform) !== "win32") {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+    } catch {
+      return buffer.toString("utf-8");
+    }
+  }
+  return output;
+}
+
 export function createReadToolDefinition(
   cwd: string,
   options?: ReadToolOptions,
@@ -339,7 +365,11 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent = buffer.toString("utf-8");
+              const textContent = decodeReadBuffer(
+                buffer,
+                options?.platform,
+                options?.windowsEncoding,
+              );
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
