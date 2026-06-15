@@ -297,6 +297,7 @@ describe("google gemini cli backend auth bridge", () => {
         "GEMINI_CLI_CUSTOM_HEADERS",
         "GEMINI_API_KEY_AUTH_MECHANISM",
         "GEMINI_API_KEY",
+        "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
       ]);
     } finally {
       restoreEnv("GOOGLE_GENAI_USE_GCA", originalUseGca);

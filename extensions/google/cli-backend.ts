@@ -37,6 +37,7 @@ const GEMINI_CLI_API_KEY_AUTH_ENV = [
   "GEMINI_API_KEY_AUTH_MECHANISM",
 ];
 const GEMINI_CLI_PROFILE_AUTH_ENV = [...GEMINI_CLI_API_KEY_AUTH_ENV, "GEMINI_API_KEY"];
+const GEMINI_CLI_PROFILE_SETTINGS_ENV = ["GEMINI_CLI_SYSTEM_SETTINGS_PATH"];
 
 type PreparedGeminiCliExecution = {
   env: Record<string, string>;
@@ -270,7 +271,7 @@ async function prepareGeminiCliOAuthHome(
       GEMINI_FORCE_FILE_STORAGE: "true",
       ...buildGeminiCliProjectEnv(oauth.projectId),
     },
-    clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV],
+    clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV, ...GEMINI_CLI_PROFILE_SETTINGS_ENV],
   };
 }
 
@@ -296,7 +297,7 @@ async function prepareGeminiCliApiKeyHome(
       GEMINI_FORCE_FILE_STORAGE: "true",
       GEMINI_API_KEY: apiKey.key,
     },
-    clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV],
+    clearEnv: [...GEMINI_CLI_PROFILE_AUTH_ENV, ...GEMINI_CLI_PROFILE_SETTINGS_ENV],
   };
 }
 
