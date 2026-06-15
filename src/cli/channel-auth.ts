@@ -146,6 +146,32 @@ function resolveAccountContext(
   return { accountId };
 }
 
+function shouldRestartGatewayForMissingRuntimeChannel(error: unknown, channelId: string): boolean {
+  const message = formatErrorMessage(error).toLowerCase();
+  const channel = channelId.toLowerCase();
+  return (
+    message.includes("invalid channels.start channel") ||
+    message.includes(`unknown channel: ${channel}`) ||
+    message.includes(`unknown channel ${channel}`)
+  );
+}
+
+async function requestGatewayRestartForMissingRuntimeChannel(params: {
+  cfg: OpenClawConfig;
+  channelId: string;
+}) {
+  await callGateway({
+    config: params.cfg,
+    method: "gateway.restart.request",
+    params: {
+      reason: `channel ${params.channelId} auth saved for a channel missing from the running gateway`,
+    },
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    deviceIdentity: null,
+  });
+}
+
 async function reconcileGatewayRuntimeAfterLocalLogin(params: {
   cfg: OpenClawConfig;
   plugin: ChannelPlugin;
@@ -176,8 +202,25 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
       deviceIdentity: null,
     });
   } catch (error) {
+    const message = formatErrorMessage(error);
+    if (shouldRestartGatewayForMissingRuntimeChannel(error, params.channelId)) {
+      try {
+        await requestGatewayRestartForMissingRuntimeChannel({
+          cfg: params.cfg,
+          channelId: params.channelId,
+        });
+        params.runtime.log(
+          `Local login saved auth for ${params.channelId}/${params.accountId}, and requested a gateway restart because the running gateway did not know the channel: ${message}`,
+        );
+      } catch (restartError) {
+        params.runtime.log(
+          `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${message}; gateway restart request failed: ${formatErrorMessage(restartError)}`,
+        );
+      }
+      return;
+    }
     params.runtime.log(
-      `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${formatErrorMessage(error)}`,
+      `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${message}`,
     );
   }
 }

@@ -245,6 +245,36 @@ describe("channel-auth", () => {
     );
   });
 
+  it("requests a gateway restart when local login saves auth for a channel missing from the running gateway", async () => {
+    const weixinPlugin = {
+      ...plugin,
+      id: "openclaw-weixin",
+    };
+    const cfg = { channels: { "openclaw-weixin": {} } };
+    mocks.normalizeChannelId.mockReturnValue("openclaw-weixin");
+    mocks.getChannelPlugin.mockReturnValue(weixinPlugin);
+    mocks.listChannelPlugins.mockReturnValue([weixinPlugin]);
+    mocks.loadConfig.mockReturnValue(cfg);
+    mocks.callGateway
+      .mockRejectedValueOnce(new Error("invalid channels.start channel"))
+      .mockResolvedValueOnce({ ok: true, status: "scheduled" });
+
+    await expect(
+      runChannelLogin({ channel: "weixin", account: "acct-1" }, runtime),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(2, {
+      config: cfg,
+      method: "gateway.restart.request",
+      params: {
+        reason: "channel openclaw-weixin auth saved for a channel missing from the running gateway",
+      },
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+  });
+
   it("auto-picks the single configured channel that supports login when opts are empty", async () => {
     await runChannelLogin({}, runtime);
 
