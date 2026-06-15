@@ -346,6 +346,25 @@ jobs:
                 comment.body?.includes(marker),
             );
 
+            if (!existing && mode === "success") {
+              core.info("No existing Periphery comment and scan passed; skipping comment.");
+              return;
+            }
+
+            const currentPull = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            if (
+              currentPull.data.state !== "open" ||
+              currentPull.data.base?.repo?.full_name !== repository ||
+              currentPull.data.head?.sha !== run.head_sha
+            ) {
+              core.info(`Skipping stale run ${run.id}; PR #${pr.number} changed before comment update.`);
+              return;
+            }
+
             if (existing) {
               await github.rest.issues.updateComment({
                 owner,
@@ -353,11 +372,6 @@ jobs:
                 comment_id: existing.id,
                 body,
               });
-              return;
-            }
-
-            if (mode === "success") {
-              core.info("No existing Periphery comment and scan passed; skipping comment.");
               return;
             }
 

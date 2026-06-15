@@ -68,6 +68,7 @@ async function runCommenter(
   options: {
     existingComments?: ExistingComment[];
     liveHeadSha?: string;
+    liveHeadShaAfter?: string;
     runHeadSha?: string;
     runAttempt?: number;
   } = {},
@@ -85,6 +86,7 @@ async function runCommenter(
   };
   let downloadCount = 0;
   let artifactListCount = 0;
+  let pullGetCount = 0;
   const createdBodies: string[] = [];
   const updatedBodies: string[] = [];
   const github = {
@@ -107,10 +109,16 @@ async function runCommenter(
       },
       pulls: {
         async get() {
+          pullGetCount += 1;
           return {
             data: {
               base: { repo: { full_name: "openclaw/openclaw" } },
-              head: { sha: options.liveHeadSha ?? "head-sha" },
+              head: {
+                sha:
+                  pullGetCount > 1
+                    ? (options.liveHeadShaAfter ?? options.liveHeadSha ?? "head-sha")
+                    : (options.liveHeadSha ?? "head-sha"),
+              },
               number: 123,
               state: "open",
             },
@@ -165,6 +173,7 @@ async function runCommenter(
     core,
     createdBodies,
     downloadCount,
+    pullGetCount,
     updatedBodies,
   };
 }
@@ -403,6 +412,36 @@ describe("iOS Periphery comment workflow", () => {
 
     expect(result.downloadCount).toBe(0);
     expect(result.core.warnings).toEqual([`No ${ARTIFACT_NAME} artifact found.`]);
+  });
+
+  it("revalidates the PR head before creating a comment", async () => {
+    const archive = makeZip({
+      "periphery.json": JSON.stringify([
+        {
+          kind: "function",
+          location: "Sources/Test.swift:12",
+          name: "unused",
+        },
+      ]),
+      "periphery.status": "1\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: ARTIFACT_NAME,
+        size_in_bytes: archive.length,
+      },
+      archive,
+      {
+        liveHeadShaAfter: "new-head",
+      },
+    );
+
+    expect(result.downloadCount).toBe(1);
+    expect(result.pullGetCount).toBe(2);
+    expect(result.createdBodies).toEqual([]);
+    expect(result.updatedBodies).toEqual([]);
   });
 
   it("escapes finding text before creating a PR comment", async () => {
