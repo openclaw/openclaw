@@ -1,6 +1,7 @@
 // Progress draft compositor tests cover streamed draft composition for channel progress updates.
 import { describe, expect, it, vi } from "vitest";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
+import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
 
 describe("createChannelProgressDraftCompositor", () => {
   it("keeps the progress label visible when tool lines are hidden", async () => {
@@ -70,6 +71,24 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress(" files");
 
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n• _Reading files_", undefined);
+  });
+
+  it("resets reasoning deltas without clearing tool progress", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushReasoningProgress("Checking files");
+    progress.resetReasoningProgress();
+    await progress.pushReasoningProgress("Now testing");
+
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n• _Now testing_", undefined);
   });
 
   it("preserves tagged reasoning content without leaking tags", async () => {
@@ -156,5 +175,34 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress("Thinking\n\n_Reading files_");
 
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n• _Reading files_", undefined);
+  });
+
+  it("logs a timer-fired start failure via the gate's default boundary logger", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const error = new Error("send failed");
+      const update = vi.fn().mockRejectedValue(error);
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.pushToolProgress("🛠️ Exec");
+      expect(warn).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
+
+      expect(update).toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        "[progress-draft] channel progress draft failed to start: Error: send failed",
+      );
+    } finally {
+      vi.useRealTimers();
+      warn.mockRestore();
+    }
   });
 });

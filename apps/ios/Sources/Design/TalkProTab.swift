@@ -8,7 +8,17 @@ struct TalkProTab: View {
         TalkDefaults.speakerphoneEnabledByDefault
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
     @State private var showPermissionPrompt = false
+    @State private var showTalkIssueDetails = false
+    let headerLeadingAction: OpenClawSidebarHeaderAction?
     var openSettings: () -> Void
+
+    init(
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        openSettings: @escaping () -> Void)
+    {
+        self.headerLeadingAction = headerLeadingAction
+        self.openSettings = openSettings
+    }
 
     private var state: TalkProState {
         TalkProState(
@@ -30,6 +40,15 @@ struct TalkProTab: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         self.header
+                        if let fallbackIssue = self.fallbackIssue {
+                            TalkRuntimeIssueBanner(
+                                issue: fallbackIssue,
+                                onOpenSettings: self.openSettings,
+                                onShowDetails: {
+                                    self.showTalkIssueDetails = true
+                                })
+                                .padding(.horizontal, OpenClawProMetric.pagePadding)
+                        }
                         self.voiceHeroCard
                         self.conversationCard
                         self.voiceModeCard
@@ -62,11 +81,22 @@ struct TalkProTab: View {
             .presentationDetents([.medium, .large])
             .openClawSheetChrome()
         }
+        .sheet(isPresented: self.$showTalkIssueDetails) {
+            if let fallbackIssue = self.fallbackIssue {
+                TalkRuntimeIssueDetailsSheet(
+                    issue: fallbackIssue,
+                    onOpenSettings: self.openSettings)
+                    .openClawSheetChrome()
+            }
+        }
         .onAppear { self.alignPersistedTalkState() }
     }
 
     private var header: some View {
         HStack(alignment: .center, spacing: 11) {
+            if let headerLeadingAction {
+                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+            }
             OpenClawProMark(size: 31, shadowRadius: 9)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Talk")
@@ -173,9 +203,21 @@ struct TalkProTab: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 11)
                     .padding(.bottom, 3)
-                self.infoRow(icon: "waveform", title: "Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                self.infoRow(
+                    icon: "waveform",
+                    title: "Configured",
+                    value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                Divider().padding(.leading, 54)
+                self.infoRow(
+                    icon: "waveform",
+                    title: "Active now",
+                    value: self.activeModeText)
                 Divider().padding(.leading, 54)
                 self.infoRow(icon: "antenna.radiowaves.left.and.right", title: "Transport", value: self.transportText)
+                if let issueText = self.talkIssueText {
+                    Divider().padding(.leading, 54)
+                    self.infoRow(icon: "exclamationmark.triangle.fill", title: "Last issue", value: issueText)
+                }
                 Divider().padding(.leading, 54)
                 self.infoRow(icon: "key.fill", title: "Permission", value: self.permissionText)
                 Divider().padding(.leading, 54)
@@ -287,6 +329,11 @@ struct TalkProTab: View {
             GatewayStatusBuilder.build(appModel: self.appModel) == .connected
     }
 
+    private var fallbackIssue: TalkRuntimeIssue? {
+        guard self.gatewayConnected else { return nil }
+        return self.appModel.talkMode.gatewayTalkCurrentFallbackIssue
+    }
+
     private var headerSubtitle: String {
         let mode = self.appModel.talkMode.gatewayTalkVoiceModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let agent = self.appModel.chatAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -315,6 +362,21 @@ struct TalkProTab: View {
         if provider.isEmpty || provider == "Not loaded" { return transport.isEmpty ? "Not loaded" : transport }
         if transport.isEmpty || transport == "Not loaded" { return provider }
         return "\(provider) • \(transport)"
+    }
+
+    private var activeModeText: String {
+        let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty { return "Not active" }
+        if subtitle.isEmpty { return title }
+        return "\(title) • \(subtitle)"
+    }
+
+    private var talkIssueText: String? {
+        let text = (self.appModel.talkMode.gatewayTalkLastIssueText ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     private var permissionText: String {

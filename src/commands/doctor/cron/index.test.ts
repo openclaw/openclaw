@@ -426,6 +426,23 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
   });
 
+  it("archives legacy cron stores when an older migrated archive already exists", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+    await fs.writeFile(`${storePath}.migrated`, "old archive", "utf-8");
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(`${storePath}.migrated`, "utf-8")).resolves.toBe("old archive");
+    await expect(fs.stat(`${storePath}.migrated.2`)).resolves.toBeTruthy();
+    expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+  });
+
   it("imports legacy-only jobs when SQLite already has cron rows", async () => {
     const storePath = await makeTempStorePath();
     await writeCurrentCronStore(storePath, [
@@ -559,6 +576,27 @@ describe("maybeRepairLegacyCronStore", () => {
     await expect(fs.stat(`${runLogPath}.migrated`)).resolves.toBeTruthy();
     expectNoteContaining("legacy JSON cron run logs will be imported into SQLite", "Cron");
     expectNoteContaining("Cron run logs migrated to SQLite", "Doctor changes");
+  });
+
+  it("does not claim legacy store detected when only non-legacy issues exist (#92683)", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "notify-job",
+        name: "Notify job",
+        notify: true,
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expectNoNoteContaining("Legacy cron job storage detected", "Cron");
+    expectNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining("1 job still uses legacy", "Cron");
   });
 
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {

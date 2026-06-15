@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { resolveAuthProfileOrder } from "./order.js";
 import { coercePersistedAuthProfileStore, mergeAuthProfileStores } from "./persisted.js";
 
 describe("persisted auth profile boundary", () => {
@@ -219,6 +220,45 @@ describe("persisted auth profile boundary", () => {
     expect(merged.lastGood?.anthropic).toBe(profileId);
   });
 
+  it("tracks persisted profile provenance with override precedence", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        runtimePersistedProfileIds: ["openai:base", "openai:overridden"],
+        profiles: {
+          "openai:base": {
+            type: "api_key",
+            provider: "openai",
+            key: "base-key",
+          },
+          "openai:overridden": {
+            type: "api_key",
+            provider: "openai",
+            key: "old-key",
+          },
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        runtimePersistedProfileIds: ["openai:added"],
+        profiles: {
+          "openai:overridden": {
+            type: "api_key",
+            provider: "openai",
+            key: "scoped-key",
+          },
+          "openai:added": {
+            type: "api_key",
+            provider: "openai",
+            key: "added-key",
+          },
+        },
+      },
+    );
+
+    expect(merged.runtimePersistedProfileIds).toEqual(["openai:added", "openai:base"]);
+  });
+
   it("preserves config-only order fallbacks during agent-store merges", () => {
     const merged = mergeAuthProfileStores(
       {
@@ -247,6 +287,91 @@ describe("persisted auth profile boundary", () => {
     );
 
     expect(merged.order?.openai).toEqual(["openai:new-login", "openai:aws-sdk"]);
+  });
+
+  it("prefers agent-local provider profiles before inherited main profiles", () => {
+    const expires = Date.now() + 60_000;
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "minimax-portal:cli": {
+            type: "oauth",
+            provider: "minimax-portal",
+            access: "main-minimax-access",
+            refresh: "main-minimax-refresh",
+            expires,
+          },
+        },
+        order: {
+          "minimax-portal": ["minimax-portal:cli"],
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "minimax-portal:default": {
+            type: "oauth",
+            provider: "minimax-portal",
+            access: "agent-minimax-access",
+            refresh: "agent-minimax-refresh",
+            expires,
+          },
+        },
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(Object.keys(merged.profiles)).toEqual(["minimax-portal:default", "minimax-portal:cli"]);
+    expect(merged.order?.["minimax-portal"]).toEqual([
+      "minimax-portal:default",
+      "minimax-portal:cli",
+    ]);
+    expect(resolveAuthProfileOrder({ store: merged, provider: "minimax-portal" })).toEqual([
+      "minimax-portal:default",
+      "minimax-portal:cli",
+    ]);
+  });
+
+  it("collapses normalized provider order keys without expanding explicit override order", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:main": {
+            type: "api_key",
+            provider: "OpenAI",
+            key: "main-key",
+          },
+        },
+        order: {
+          OpenAI: ["openai:main"],
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:agent": {
+            type: "api_key",
+            provider: "openai",
+            key: "agent-key",
+          },
+          "openai:other-agent": {
+            type: "api_key",
+            provider: "openai",
+            key: "other-agent-key",
+          },
+        },
+        order: {
+          openai: ["openai:agent"],
+        },
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(merged.order).toEqual({
+      openai: ["openai:agent"],
+    });
   });
 
   it("preserves inherited base runtime external profiles during agent-store merges", () => {

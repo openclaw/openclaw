@@ -29,6 +29,7 @@ function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const chatAbortControllers = new Map();
+  const chatAbortedRuns = new Map();
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map();
 
@@ -36,6 +37,7 @@ function createMockContext() {
     broadcast,
     nodeSendToSession,
     chatAbortControllers,
+    chatAbortedRuns,
     agentRunSeq,
     dedupe,
     getRuntimeConfig: () => ({

@@ -200,6 +200,9 @@ export function createChannelProgressDraftCompositor(params: {
     reset() {
       clearProgressState(false);
     },
+    resetReasoningProgress() {
+      reasoningRawText = "";
+    },
     suppress() {
       clearProgressState(true);
     },

@@ -65,6 +65,7 @@ export type CliBackendLiveEnvSnapshot = {
 };
 
 export const CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV = "OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP";
+export const CLI_BACKEND_LIVE_ADVISORY_ENV = "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY";
 
 export type CliBackendLiveProviderSkipDecision = {
   action: "fail" | "skip";
@@ -213,7 +214,10 @@ export function shouldRunCliModelSwitchProbe(providerId: string, modelRef: strin
 export function shouldAllowCliBackendLiveProviderSkip(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return isTruthyEnvValue(env[CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]);
+  return (
+    isTruthyEnvValue(env[CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]) &&
+    isTruthyEnvValue(env[CLI_BACKEND_LIVE_ADVISORY_ENV])
+  );
 }
 
 export function resolveCliBackendLiveProviderSkipDecision(params: {
@@ -228,8 +232,31 @@ export function resolveCliBackendLiveProviderSkipDecision(params: {
   }
   return {
     action: "fail",
-    message: `${message} Set ${CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV}=1 only for advisory live probes.`,
+    message:
+      `${message} Set ${CLI_BACKEND_LIVE_ADVISORY_ENV}=1 and ` +
+      `${CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV}=1 only for advisory live probes.`,
   };
+}
+
+export function isCliBackendLiveTimeoutPayload(payload: unknown): boolean {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { status?: unknown }).status === "timeout"
+  );
+}
+
+export function shouldRetryCliBackendLiveTimeout(params: {
+  attempt: number;
+  maxAttempts: number;
+  payload: unknown;
+  providerId: string;
+}): boolean {
+  return (
+    params.providerId === "codex-cli" &&
+    params.attempt < params.maxAttempts &&
+    isCliBackendLiveTimeoutPayload(params.payload)
+  );
 }
 
 export function matchesCliBackendReply(text: string, expected: string): boolean {

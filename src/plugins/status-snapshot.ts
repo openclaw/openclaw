@@ -117,7 +117,7 @@ function buildPluginRecordFromInstalledIndex(
     httpRoutes: 0,
     hookCount: 0,
     configSchema: false,
-    contracts: {},
+    contracts: manifest?.contracts,
     dependencyStatus: buildSnapshotPluginDependencyStatus({
       rootDir: plugin.rootDir,
       dependencies: manifest?.packageDependencies,

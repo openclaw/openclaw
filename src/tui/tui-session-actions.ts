@@ -423,6 +423,7 @@ export function createSessionActions(context: SessionActionContext) {
         verboseLevel?: string;
         traceLevel?: string;
         inFlightRun?: { runId?: unknown; text?: unknown };
+        runtimePluginsPrewarm?: { status?: string; error?: string };
       };
       const sessionInfo = record.sessionInfo;
       if (sessionInfo?.key && sessionInfo.key !== state.currentSessionKey) {
@@ -536,6 +537,11 @@ export function createSessionActions(context: SessionActionContext) {
         setActivityStatus("streaming");
       }
       state.historyLoaded = true;
+      if (record.runtimePluginsPrewarm?.status === "failed") {
+        chatLog.addSystem(
+          `runtime prewarm failed: ${record.runtimePluginsPrewarm.error ?? "unknown"}`,
+        );
+      }
       void rememberSessionKey?.(state.currentSessionKey);
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);

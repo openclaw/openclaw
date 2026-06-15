@@ -127,7 +127,10 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true, cwd: "/tmp/task-repo" });
+    const run = makeRun({
+      enforceFinalTag: true,
+      cwd: "/tmp/task-repo",
+    });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -183,6 +186,22 @@ describe("agent-runner-utils", () => {
     expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
   });
 
+  it("uses session chat type over stale queued metadata for embedded execution params", () => {
+    const run = makeRun({ chatType: "direct" });
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: { Provider: "discord", ChatType: "Channel" },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.embeddedContext.chatType).toBe("channel");
+    expect("chatType" in resolved.runBaseParams).toBe(false);
+  });
+
   it("passes through recovered auto fallback provenance for embedded run params", () => {
     hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({
@@ -228,6 +247,7 @@ describe("agent-runner-utils", () => {
     const run = makeRun({
       authProfileId: "profile-openai",
       authProfileIdSource: "auto",
+      chatType: "direct",
     });
 
     const resolved = buildEmbeddedRunContexts({
@@ -235,6 +255,7 @@ describe("agent-runner-utils", () => {
       sessionCtx: {
         Provider: "OpenAI",
         To: "channel-1",
+        ChatType: "Channel",
         SenderId: "sender-1",
         MemberRoleIds: ["admin", " ", "operator"],
       },
@@ -250,6 +271,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.sessionKey).toBe(run.sessionKey);
     expect(resolved.embeddedContext.agentId).toBe(run.agentId);
     expect(resolved.embeddedContext.messageProvider).toBe("openai");
+    expect(resolved.embeddedContext.chatType).toBe("channel");
     expect(resolved.embeddedContext.messageTo).toBe("channel-1");
     expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
     expect(resolved.embeddedContext.currentInboundAudio).toBe(false);
@@ -262,7 +284,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("prefers OriginatingChannel over Provider for messageProvider", () => {
-    const run = makeRun();
+    const run = makeRun({ agentAccountId: "work", chatType: "group" });
 
     const resolved = buildEmbeddedRunContexts({
       run,
@@ -276,7 +298,52 @@ describe("agent-runner-utils", () => {
     });
 
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
+    expect(resolved.embeddedContext.agentAccountId).toBe("work");
+    expect(resolved.embeddedContext.chatType).toBe("group");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
+  });
+
+  it("hydrates the queued route before resolving channel threading policy", () => {
+    hoisted.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: ({
+          accountId,
+          context,
+        }: {
+          accountId?: string | null;
+          context: { ChatType?: string; NativeChannelId?: string; To?: string };
+        }) => ({
+          currentChannelId: context.NativeChannelId ?? context.To,
+          currentMessagingTarget: context.To,
+          replyToMode: accountId === "work" && context.ChatType === "direct" ? "off" : "all",
+        }),
+      },
+    });
+    const run = makeRun({ agentAccountId: "work", chatType: "direct" });
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "cron-event",
+        NativeChannelId: "D1",
+      },
+      replyRoute: {
+        originatingChannel: "slack",
+        originatingTo: "user:U1",
+        originatingAccountId: "work",
+        originatingChatType: "direct",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+    });
+
+    expect(resolved.embeddedContext.messageProvider).toBe("slack");
+    expect(resolved.embeddedContext.messageTo).toBe("user:U1");
+    expect(resolved.embeddedContext.currentChannelId).toBe("D1");
+    expect(resolved.embeddedContext.currentMessagingTarget).toBe("user:U1");
+    expect(resolved.embeddedContext.agentAccountId).toBe("work");
+    expect(resolved.embeddedContext.chatType).toBe("direct");
+    expect(resolved.embeddedContext.replyToMode).toBe("off");
   });
 
   it("carries inbound audio context into embedded message tools", () => {

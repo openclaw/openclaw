@@ -1,8 +1,9 @@
 // Npm Telegram Live tests cover npm telegram live script behavior.
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -11,6 +12,19 @@ const PREPARE_PACKAGE_PATH = path.resolve(
   TEST_DIR,
   "../../scripts/e2e/lib/npm-telegram-live/prepare-package.mjs",
 );
+const tempRoots: string[] = [];
+
+function mkTempRoot() {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-npm-telegram-live-"));
+  tempRoots.push(root);
+  return root;
+}
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
 
 describe("package Telegram live Docker E2E", () => {
   it("supports npm-specific Convex credential aliases", () => {
@@ -65,9 +79,14 @@ describe("package Telegram live Docker E2E", () => {
     expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
     expect(installRun).not.toContain("run_logged docker run --rm");
     expect(script).toContain("run_logged docker_e2e_run_with_harness");
+    expect(script).toContain('docker_e2e_print_log "$run_log"');
+    expect(script).not.toContain('cat "$run_log"');
     expect(script).toContain('"${docker_env[@]}"');
-    expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
+    expect(script).toContain(
+      'if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then',
+    );
     expect(script).toContain('credential_role="ci"');
+    expect(script).toContain('credential_role="maintainer"');
   });
 
   it("bounds installed-package hot path OpenClaw commands", () => {
@@ -89,6 +108,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --fix");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --non-interactive");
+    expect(runtimeRun).toContain('openclaw_e2e_print_log "$file"');
+    expect(runtimeRun).not.toContain("sed -n '1,220p'");
     expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
   });
 
@@ -97,6 +118,9 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ");
     expect(script).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(script).toContain('-e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"');
+    expect(script).toContain('-e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"');
+    expect(script).toContain("OPENCLAW_QA_PACKAGE_SOURCE_SHA");
     expect(script).toContain(
       'package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")',
     );
@@ -119,6 +143,15 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).not.toContain(
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
     );
+  });
+
+  it("forwards repeated RTT controls to the package Telegram live lane", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES");
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_RTT_CHECKS");
   });
 
   it("keeps private QA harness imports local while using the installed package dist", () => {
@@ -172,5 +205,72 @@ describe("package Telegram live Docker E2E", () => {
         OPENCLAW_QA_CREDENTIAL_ROLE: "maintainer",
       }),
     ).toBe("ci");
+  });
+
+  it("defaults package Telegram RTT for the normal package live lane", () => {
+    expect(testing.resolveRttOptions({})).toEqual({
+      rttCount: 20,
+      rttTimeoutMs: undefined,
+      maxRttFailures: 20,
+      rttCheckIds: [],
+    });
+  });
+
+  it("does not force default RTT onto focused non-RTT scenario runs", () => {
+    expect(testing.resolveRttOptions({}, ["telegram-canary"])).toEqual({});
+  });
+
+  it("maps repeated RTT env onto package Telegram live options", () => {
+    expect(
+      testing.resolveRttOptions({
+        OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: "7",
+        OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS: "45000",
+        OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES: "2",
+        OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "telegram-mentioned-message-reply",
+      }),
+    ).toEqual({
+      rttCount: 7,
+      rttTimeoutMs: 45_000,
+      maxRttFailures: 2,
+      rttCheckIds: ["telegram-mentioned-message-reply"],
+    });
+  });
+
+  it("rejects invalid repeated RTT env", () => {
+    expect(() =>
+      testing.resolveRttOptions({
+        OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: "7samples",
+      }),
+    ).toThrow("invalid OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: 7samples");
+  });
+
+  it("gates package Telegram status on the summary artifact", async () => {
+    const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-05-01T00:00:00.000Z",
+        entries: [{ result: { status: "fail" } }],
+      }),
+      "utf8",
+    );
+
+    await expect(
+      testing.shouldFailPackageTelegramRun(
+        { summaryPath },
+        { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: "" },
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it("does not read package Telegram summaries when failures are allowed", async () => {
+    await expect(
+      testing.shouldFailPackageTelegramRun(
+        { summaryPath: path.join(mkTempRoot(), "missing-summary.json") },
+        { OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES: "1" },
+      ),
+    ).resolves.toBe(false);
   });
 });
