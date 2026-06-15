@@ -322,6 +322,7 @@ export async function prepareCliRunContext(
       agentDir,
     });
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
+    const resolvedAuthCredential = resolvedAuth?.credential;
     authStore = loadAuthProfileStoreForRuntime(agentDir, {
       readOnly: true,
       externalCli: externalCliDiscoveryForProviderAuth({
@@ -329,7 +330,7 @@ export async function prepareCliRunContext(
         profileId: resolvedAuthProfileId,
       }),
     });
-    authCredential = authStore.profiles[resolvedAuthProfileId];
+    authCredential = resolvedAuthCredential ?? authStore.profiles[resolvedAuthProfileId];
     if (resolvedAuth && authCredential) {
       effectiveAuthProfileId = resolvedAuthProfileId;
       // Apply resolved strings only to static credentials with secret refs.
