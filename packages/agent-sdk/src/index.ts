@@ -189,4 +189,16 @@ export const DEFAULT_DENY_PRIVATE_RANGES = [
 
 // ── Hash utilities ──────────────────────────────────────────────────
 
-export { hashFile, hashString } from "./hash.js";
+// ── Policy enforcement ──────────────────────────────────────────────
+
+export { resolveSecret, isToolAllowed } from "./policy/secrets.js";
+export type {
+  SecretResolution,
+  SecretSource,
+  SecretEnvSource,
+  SecretGatewaySource,
+  SecretFileSource,
+} from "./policy/secrets.js";
+
+export { checkNetworkEgress, isPrivateIp, checkDnsRebinding } from "./policy/network.js";
+export type { EgressCheckResult } from "./policy/network.js";
