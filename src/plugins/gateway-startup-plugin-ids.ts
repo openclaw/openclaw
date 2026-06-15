@@ -1949,6 +1949,30 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       }
       continue;
     }
+    // Non-bundled channel plugins that are explicitly enabled via plugins.entries
+    // must start even when no channel-level config key exists. The install flow
+    // sets plugins.entries.<id>.enabled=true as the sole activation signal when
+    // there is no matching channels.* config entry, so falling through to
+    // shouldConsiderForGatewayStartup (which rejects any plugin with channels)
+    // would silently drop them. (#93219)
+    if (
+      listManifestChannelIds(manifestLookup, plugin.pluginId).length > 0 &&
+      plugin.origin !== "bundled"
+    ) {
+      if (
+        canStartConfiguredChannelPlugin({
+          plugin,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          manifestLookup,
+          platform: params.platform,
+        })
+      ) {
+        pluginIds.push(plugin.pluginId);
+      }
+      continue;
+    }
     if (
       canStartRequiredAgentHarnessPlugin({
         plugin,

@@ -430,6 +430,16 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         providers: [],
         cliBackends: [],
       },
+      {
+        id: "npm-installed-channel-plugin",
+        channels: ["npm-installed-channel"],
+        // No channelEnvVars — install flow sets plugins.entries.<id>.enabled=true
+        // with no matching channels.* config entry. (#93219)
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
     ].map(withManifestLoadPaths) as PluginManifestRecord[],
     diagnostics: [],
   };
@@ -2651,6 +2661,49 @@ describe("resolveGatewayStartupPluginIds", () => {
         },
       } as OpenClawConfig,
       expected: ["demo-channel", "browser", "openai", "memory-core"],
+    });
+  });
+
+  it("includes explicitly enabled npm-installed channel plugins with no channels.* config entry (#93219)", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          entries: {
+            "npm-installed-channel-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core", "npm-installed-channel-plugin"],
+    });
+  });
+
+  it("blocks npm-installed channel plugins when explicitly disabled (#93219)", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          entries: {
+            "npm-installed-channel-plugin": { enabled: false },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core"],
+    });
+  });
+
+  it("blocks npm-installed channel plugins when in the deny list (#93219)", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          deny: ["npm-installed-channel-plugin"],
+          entries: {
+            "npm-installed-channel-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core"],
     });
   });
 });
