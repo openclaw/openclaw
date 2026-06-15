@@ -7,7 +7,7 @@ read_when:
   - You are debugging Kimi thinking-off behavior on Fireworks
 ---
 
-[Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. OpenClaw includes a bundled Fireworks provider plugin that ships with two pre-cataloged Kimi models and accepts any Fireworks model or router id at runtime.
+[Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. OpenClaw includes a bundled Fireworks provider plugin that ships with pre-cataloged Kimi, DeepSeek, MiniMax, GLM, and GPT-OSS models and accepts any Fireworks model or router id at runtime.
 
 | Property        | Value                                                  |
 | --------------- | ------------------------------------------------------ |
@@ -51,7 +51,7 @@ export FIREWORKS_API_KEY=fw-...
     openclaw models list --provider fireworks
     ```
 
-    The list should include `Kimi K2.6` and `Kimi K2.5 Turbo (Fire Pass)`. If `FIREWORKS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
+    The list should include `Kimi K2.6`, `Kimi K2.5 Turbo (Fire Pass)`, `DeepSeek V4 Pro`, `MiniMax M3`, `GLM-5.1`, and `GPT-OSS 120B`. If `FIREWORKS_API_KEY` is unresolved, `openclaw models status --json` reports the missing credential under `auth.unusableProfiles`.
 
   </Step>
 </Steps>
@@ -71,10 +71,14 @@ openclaw onboard --non-interactive \
 
 ## Built-in catalog
 
-| Model ref                                              | Name                        | Input        | Context | Max output | Thinking             |
-| ------------------------------------------------------ | --------------------------- | ------------ | ------- | ---------- | -------------------- |
-| `fireworks/accounts/fireworks/models/kimi-k2p6`        | Kimi K2.6                   | text + image | 262,144 | 262,144    | Forced off           |
-| `fireworks/accounts/fireworks/routers/kimi-k2p5-turbo` | Kimi K2.5 Turbo (Fire Pass) | text + image | 256,000 | 256,000    | Forced off (default) |
+| Model ref                                              | Name                        | Input        | Context   | Max output | Thinking                      |
+| ------------------------------------------------------ | --------------------------- | ------------ | --------- | ---------- | ----------------------------- |
+| `fireworks/accounts/fireworks/models/kimi-k2p6`        | Kimi K2.6                   | text + image | 262,144   | 262,144    | Forced off                    |
+| `fireworks/accounts/fireworks/routers/kimi-k2p5-turbo` | Kimi K2.5 Turbo (Fire Pass) | text + image | 256,000   | 256,000    | Forced off (default)          |
+| `fireworks/accounts/fireworks/models/deepseek-v4-pro`  | DeepSeek V4 Pro             | text         | 1,048,576 | 1,048,576  | off/low/medium/high/xhigh/max |
+| `fireworks/accounts/fireworks/models/minimax-m3`       | MiniMax M3                  | text + image | 524,288   | 64,000     | off/low/medium/high           |
+| `fireworks/accounts/fireworks/models/glm-5p1`          | GLM-5.1                     | text         | 202,752   | 202,752    | off/low/medium/high           |
+| `fireworks/accounts/fireworks/models/gpt-oss-120b`     | GPT-OSS 120B                | text         | 131,072   | 131,072    | low/medium/high               |
 
 <Note>
   OpenClaw pins all Fireworks Kimi models to `thinking: off` because Fireworks rejects Kimi thinking parameters in production. Routing the same model through [Moonshot](/providers/moonshot) directly preserves Kimi reasoning output. See [thinking modes](/tools/thinking) for switching between providers.
@@ -82,7 +86,7 @@ openclaw onboard --non-interactive \
 
 ## Custom Fireworks model ids
 
-OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution clones the Fire Pass template (text + image input, OpenAI-compatible API, default cost zero) and disables thinking automatically when the id matches the Kimi pattern. GLM dynamic ids are marked text-only unless you configure a custom model entry with image input.
+OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id shown by Fireworks and prefix it with `fireworks/`. Dynamic resolution clones the Fire Pass template (text + image input, OpenAI-compatible API, default cost zero) and disables thinking automatically when the id matches the Kimi pattern. GLM dynamic ids are marked text-only unless you configure a custom model entry with image input. The cataloged reasoning models above (DeepSeek V4 Pro, MiniMax M3, GLM-5.1, GPT-OSS 120B) carry their per-model `reasoning_effort` contract in the manifest, and their `/think` menus are derived from each model's `supportedReasoningEfforts`; configure those exact ids to get those menus.
 
 ```json5
 {
@@ -108,7 +112,7 @@ OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id s
   </Accordion>
 
   <Accordion title="Why thinking is forced off for Kimi">
-    Fireworks K2.6 returns a 400 if the request carries `reasoning_*` parameters even though Kimi supports thinking through Moonshot's own API. The bundled policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
+    Fireworks K2.6 returns a 400 if the request carries `reasoning_*` parameters even though Kimi supports thinking through Moonshot's own API. The Kimi catalog rows are marked `reasoning: false` in the manifest, so OpenClaw advertises only the `off` thinking level for them, and the bundled stream wrapper (`extensions/fireworks/stream.ts`) strips any thinking parameters from the request — manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
 
     To use Kimi reasoning end-to-end, configure the [Moonshot provider](/providers/moonshot) and route the same model through it.
 
