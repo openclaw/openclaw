@@ -1,3 +1,4 @@
+// Covers tool availability evaluation and disabled-tool reasons.
 import { describe, expect, it } from "vitest";
 import { evaluateToolAvailability } from "./availability.js";
 import type { ToolDescriptor } from "./types.js";
@@ -16,7 +17,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 describe("evaluateToolAvailability", () => {
   it("treats descriptors without signals as available", () => {
-    expect(evaluateToolAvailability({ descriptor: baseDescriptor })).toEqual([]);
+    expect(evaluateToolAvailability({ descriptor: baseDescriptor })).toStrictEqual([]);
   });
 
   it("evaluates auth, env, config, plugin, and context signals from data only", () => {
@@ -44,7 +45,7 @@ describe("evaluateToolAvailability", () => {
           values: { channel: "telegram" },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("returns deterministic diagnostics for missing signals", () => {
@@ -141,7 +142,7 @@ describe("evaluateToolAvailability", () => {
             value.id === "OPENAI_API_KEY",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not infer env-template strings as configured credentials", () => {
@@ -192,7 +193,7 @@ describe("evaluateToolAvailability", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("supports anyOf availability expressions", () => {
@@ -221,7 +222,7 @@ describe("evaluateToolAvailability", () => {
           enabledPluginIds: new Set(),
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       evaluateToolAvailability({
@@ -233,5 +234,25 @@ describe("evaluateToolAvailability", () => {
         },
       }).map((entry) => entry.reason),
     ).toEqual(["auth-missing", "env-missing", "config-missing", "plugin-disabled"]);
+  });
+
+  it("surfaces an unsupported-signal sibling even when another anyOf branch is available", () => {
+    const descriptor: ToolDescriptor = {
+      ...baseDescriptor,
+      availability: {
+        anyOf: [
+          { kind: "auth", providerId: "openai" },
+          // Empty allOf is a malformed descriptor; its unsupported-signal must not be masked.
+          { allOf: [] },
+        ],
+      },
+    };
+
+    expect(
+      evaluateToolAvailability({
+        descriptor,
+        context: { authProviderIds: new Set(["openai"]) },
+      }).map((entry) => entry.reason),
+    ).toEqual(["unsupported-signal"]);
   });
 });

@@ -1,4 +1,5 @@
-import type { MiscMessageGenerationOptions } from "@whiskeysockets/baileys";
+// Whatsapp plugin module implements quoted message behavior.
+import type { MiscMessageGenerationOptions } from "baileys";
 import { jidToE164 } from "./text-runtime.js";
 
 // ── Inbound message metadata cache ──────────────────────────────────────

@@ -1,3 +1,4 @@
+// Zalo tests cover monitor.lifecycle plugin behavior.
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
@@ -41,7 +42,9 @@ const TEST_CONFIG = {} as OpenClawConfig;
 async function settleLifecycleWork(): Promise<void> {
   for (let i = 0; i < 6; i += 1) {
     await Promise.resolve();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 
@@ -91,9 +94,7 @@ describe("monitorZaloProvider lifecycle", () => {
     await monitoredRun;
 
     expect(settled).toBe(true);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Zalo provider stopped mode=polling"),
-    );
+    expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
   });
 
   it("deletes an existing webhook before polling", async () => {
@@ -110,7 +111,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Zalo polling mode ready (webhook disabled)"),
+      "[default] Zalo polling mode ready (webhook disabled)",
     );
 
     abort.abort();
@@ -129,7 +130,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("webhook inspection unavailable; continuing without webhook cleanup"),
+      "[default] Zalo polling mode webhook inspection unavailable; continuing without webhook cleanup",
     );
     expect(runtime.error).not.toHaveBeenCalled();
 
@@ -191,8 +192,6 @@ describe("monitorZaloProvider lifecycle", () => {
 
     expect(settled).toBe(true);
     expect(registry.httpRoutes).toHaveLength(0);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Zalo provider stopped mode=webhook"),
-    );
+    expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=webhook");
   });
 });

@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+// Control UI tests cover chat responsive behavior.
+import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 
 const VIEWPORTS = [
   [320, 568],
@@ -17,32 +18,68 @@ const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe :
 
 let browser: Browser;
 
+type ControlRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text?: string;
+  display?: string;
+};
+
+function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height">) {
+  for (const key of ["x", "y", "width", "height"] as const) {
+    expect(Number.isFinite(rect[key])).toBe(true);
+  }
+}
+
+async function getBoundingBox(page: Page, selector: string) {
+  const box = await page.locator(selector).boundingBox();
+  if (box === null) {
+    throw new Error(`Expected bounding box for ${selector}`);
+  }
+  expectFiniteRect(box);
+  return box;
+}
+
+function expectControlRect(rect: ControlRect | null, label: string): ControlRect {
+  if (rect === null) {
+    throw new Error(`Expected ${label} control rect`);
+  }
+  expectFiniteRect(rect);
+  return rect;
+}
+
 function readUiCss(): string {
-  const roots = [process.cwd(), resolve(process.cwd(), "ui")];
   const files = [
-    "src/styles/base.css",
-    "src/styles/layout.css",
-    "src/styles/layout.mobile.css",
-    "src/styles/components.css",
-    "src/styles/chat/layout.css",
-    "src/styles/chat/text.css",
-    "src/styles/chat/grouped.css",
-    "src/styles/chat/tool-cards.css",
-    "src/styles/chat/sidebar.css",
+    "ui/src/styles/base.css",
+    "ui/src/styles/layout.css",
+    "ui/src/styles/layout.mobile.css",
+    "ui/src/styles/components.css",
+    "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/text.css",
+    "ui/src/styles/chat/grouped.css",
+    "ui/src/styles/chat/tool-cards.css",
+    "ui/src/styles/chat/sidebar.css",
   ];
-  return files
-    .map((file) => {
-      const path = roots
-        .map((root) => resolve(root, file))
-        .find((candidate) => existsSync(candidate));
-      expect(path, `Missing CSS fixture ${file}`).toBeTruthy();
-      return readFileSync(path!, "utf8");
-    })
-    .join("\n");
+  return files.map((file) => readStyleSheet(file)).join("\n");
 }
 
 function iconSvg() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>`;
+}
+
+function chatBubbleActionsHtml() {
+  return `
+    <div class="chat-bubble-actions">
+      <button class="btn btn--xs chat-expand-btn" type="button" aria-label="Open in canvas">
+        <span class="chat-expand-btn__icon" aria-hidden="true">${iconSvg()}</span>
+      </button>
+      <button class="btn btn--xs chat-copy-btn" type="button" aria-label="Copy as markdown">
+        <span class="chat-copy-btn__icon" aria-hidden="true">${iconSvg()}</span>
+      </button>
+    </div>
+  `;
 }
 
 function chatControlsHtml(opts: { agent?: boolean } = {}) {
@@ -63,12 +100,9 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
             <label class="field chat-controls__session chat-controls__session-picker">
               <select data-chat-session-select="true" aria-label="Chat session"><option>Daily planning</option></select>
             </label>
-            <label class="field chat-controls__session chat-controls__model">
-              <select data-chat-model-select="true" aria-label="Chat model"><option>Default (gpt-5)</option></select>
-            </label>
-            <label class="field chat-controls__session chat-controls__thinking-select">
-              <select class="chat-controls__thinking-select-full" data-chat-thinking-select="true" aria-label="Chat thinking level"><option>Default (high)</option></select>
-            </label>
+            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="" data-chat-thinking-value="" aria-label="Chat model">gpt-5 · High</summary>
+            </details>
           </div>
           <div class="chat-controls__thinking">
             <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
@@ -77,6 +111,35 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
             <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
           </div>
         </div>
+      </div>
+    </div>
+  `;
+}
+
+function composerControlsHtml() {
+  return `
+    <div class="agent-chat__composer-controls">
+      <div class="chat-composer-model-control">
+        <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+          <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
+            <span class="chat-controls__inline-select-label">Default model · Off</span>
+            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined">
+            <div class="chat-controls__combined-model-list">
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option chat-controls__inline-select-option--selected">Default model</button>
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">gpt-5.5</button>
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">claude-sonnet-4-6</button>
+            </div>
+          </div>
+        </details>
+      </div>
+      <div class="chat-settings-popover-wrapper">
+        <button class="chat-settings-chip" type="button" aria-label="Chat settings">
+          <span class="chat-settings-chip__icon">${iconSvg()}</span>
+          <span class="chat-settings-chip__text">Chat settings</span>
+          <span class="chat-settings-chip__chevron">${iconSvg()}</span>
+        </button>
       </div>
     </div>
   `;
@@ -94,12 +157,9 @@ function chatHeaderControlsHtml(hidden = false) {
             <label class="field chat-controls__session chat-controls__session-picker">
               <select data-chat-session-select="true" aria-label="Chat session"><option>main</option></select>
             </label>
-            <label class="field chat-controls__session chat-controls__model">
-              <select data-chat-model-select="true" aria-label="Chat model"><option>gpt-5.5</option></select>
-            </label>
-            <label class="field chat-controls__session chat-controls__thinking-select">
-              <select class="chat-controls__thinking-select-full" data-chat-thinking-select="true" aria-label="Chat thinking level"><option>Default (high)</option></select>
-            </label>
+            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="gpt-5.5" data-chat-thinking-value="" aria-label="Chat model">gpt-5.5 · High</summary>
+            </details>
           </div>
         </div>
         <div class="page-meta">
@@ -108,7 +168,6 @@ function chatHeaderControlsHtml(hidden = false) {
             <span class="chat-controls__separator">|</span>
             <button class="btn btn--sm btn--icon active" aria-label="Toggle assistant thinking">${iconSvg()}</button>
             <button class="btn btn--sm btn--icon active" aria-label="Toggle tool calls">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon" aria-label="Toggle focus mode">${iconSvg()}</button>
             <button class="btn btn--sm btn--icon active" aria-label="Show cron sessions">${iconSvg()}</button>
           </div>
         </div>
@@ -145,6 +204,7 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
                     <div class="chat-avatar assistant">A</div>
                     <div class="chat-group-messages">
                       <div class="chat-bubble has-copy">
+                        ${chatBubbleActionsHtml()}
                         <div class="chat-text">
                           <p>The chat shell should stay compact and readable.</p>
                           <pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre>
@@ -176,11 +236,11 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
               <div class="agent-chat__toolbar-left">
                 <button class="agent-chat__input-btn">${iconSvg()}</button>
                 <button class="agent-chat__input-btn">${iconSvg()}</button>
+                <button class="agent-chat__input-btn">${iconSvg()}</button>
                 <span class="agent-chat__token-count">8</span>
               </div>
+              ${composerControlsHtml()}
               <div class="agent-chat__toolbar-right">
-                <button class="btn btn--ghost">${iconSvg()}</button>
-                <button class="btn btn--ghost">${iconSvg()}</button>
                 <button class="chat-send-btn">${iconSvg()}</button>
               </div>
             </div>
@@ -201,6 +261,53 @@ async function openFixture(
     `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
   );
   return page;
+}
+
+async function getRect(page: Page, selector: string) {
+  const rect = await page.locator(selector).evaluate((node) => {
+    const bounds = (node as HTMLElement).getBoundingClientRect();
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+    };
+  });
+  expectFiniteRect({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+  return rect;
+}
+
+async function getTextContentRect(page: Page, selector: string) {
+  const rect = await page.locator(selector).evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const bounds = range.getBoundingClientRect();
+    range.detach();
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+    };
+  });
+  expectFiniteRect({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+  return rect;
+}
+
+function rectsOverlap(
+  first: Pick<ControlRect, "x" | "y" | "width" | "height">,
+  second: Pick<ControlRect, "x" | "y" | "width" | "height">,
+) {
+  return (
+    first.x < second.x + second.width &&
+    first.x + first.width > second.x &&
+    first.y < second.y + second.height &&
+    first.y + first.height > second.y
+  );
 }
 
 async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
@@ -248,7 +355,6 @@ describeBrowserLayout("chat responsive browser layout", () => {
           session: rectFor('[data-chat-session-select="true"]'),
           agent: rectFor('[data-chat-agent-filter="true"]'),
           model: rectFor('[data-chat-model-select="true"]'),
-          thinking: rectFor('[data-chat-thinking-select="true"]'),
           action: rectFor(".page-meta .btn--icon"),
         };
       });
@@ -256,14 +362,15 @@ describeBrowserLayout("chat responsive browser layout", () => {
         controls.session?.y,
         controls.agent?.y,
         controls.model?.y,
-        controls.thinking?.y,
         controls.action?.y,
       ].filter((value): value is number => typeof value === "number");
-      expect(rowY.length).toBe(5);
+      expect(rowY.length).toBe(4);
       expect(Math.max(...rowY) - Math.min(...rowY)).toBeLessThanOrEqual(4);
-      expect(controls.agent!.x).toBeLessThan(controls.session!.x);
-      expect(controls.session!.width / controls.agent!.width).toBeGreaterThan(1.25);
-      expect(controls.session!.width / controls.agent!.width).toBeLessThan(1.55);
+      const agent = expectControlRect(controls.agent, "agent");
+      const session = expectControlRect(controls.session, "session");
+      expect(agent.x).toBeLessThan(session.x);
+      expect(session.width / agent.width).toBeGreaterThan(1.25);
+      expect(session.width / agent.width).toBeLessThan(1.55);
     } finally {
       await page.close();
     }
@@ -294,9 +401,78 @@ describeBrowserLayout("chat responsive browser layout", () => {
     const page = await openFixture(width, height);
     try {
       await expectNoHorizontalOverflow(page);
-      const code = await page.locator(".chat-text pre").boundingBox();
-      expect(code).not.toBeNull();
-      expect(code!.x + code!.width).toBeLessThanOrEqual(width + 1);
+      const code = await getBoundingBox(page, ".chat-text pre");
+      expect(code.x + code.width).toBeLessThanOrEqual(width + 1);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it.each([
+    [320, 568],
+    [1366, 900],
+  ] as const)(
+    "keeps short assistant text clear of bubble actions at %sx%s",
+    async (width, height) => {
+      const page = await browser.newPage({ viewport: { width, height } });
+      try {
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+            <div class="chat-thread" role="log">
+              <div class="chat-thread-inner">
+                <div class="chat-group assistant">
+                  <div class="chat-avatar assistant">A</div>
+                  <div class="chat-group-messages">
+                    <div class="chat-bubble has-copy">
+                      ${chatBubbleActionsHtml()}
+                      <div class="chat-text"><p>Done.</p></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </body></html>`,
+        );
+        await page.locator(".chat-bubble").hover();
+
+        const text = await getTextContentRect(page, ".chat-text p");
+        const actions = await getRect(page, ".chat-bubble-actions");
+        expect(text.right).toBeLessThanOrEqual(actions.left - 1);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  it.each([
+    [320, 568],
+    [1366, 900],
+  ] as const)("wraps long inline code without clipping at %sx%s", async (width, height) => {
+    const page = await browser.newPage({ viewport: { width, height } });
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread" role="log">
+            <div class="chat-thread-inner">
+              <div class="chat-group assistant">
+                <div class="chat-avatar assistant">A</div>
+                <div class="chat-group-messages">
+                  <div class="chat-bubble">
+                    <div class="chat-text">
+                      <p><code>openclaw_message_send_channel_webchat_target_example_com_thread_very_long_identifier_without_spaces_1234567890abcdefghijklmnopqrstuvwxyz</code></p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      await expectNoHorizontalOverflow(page);
+      const bubble = await getRect(page, ".chat-bubble");
+      const inlineCode = await getRect(page, ".chat-text p code");
+      expect(inlineCode.right).toBeLessThanOrEqual(bubble.right + 1);
     } finally {
       await page.close();
     }
@@ -311,14 +487,13 @@ describeBrowserLayout("chat responsive browser layout", () => {
           (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
           themeMode,
         );
-        const dropdown = await page.locator(".chat-controls-dropdown.open").boundingBox();
-        expect(dropdown).not.toBeNull();
-        expect(dropdown!.x).toBeGreaterThanOrEqual(8);
-        expect(dropdown!.x + dropdown!.width).toBeLessThanOrEqual(312);
+        const dropdown = await getBoundingBox(page, ".chat-controls-dropdown.open");
+        expect(dropdown.x).toBeGreaterThanOrEqual(8);
+        expect(dropdown.x + dropdown.width).toBeLessThanOrEqual(312);
         await expectNoHorizontalOverflow(page);
         const mobileControls = await page.evaluate(() => {
           const rectFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLSelectElement | null;
+            const node = document.querySelector(selector) as HTMLElement | null;
             if (!node) {
               return null;
             }
@@ -328,26 +503,27 @@ describeBrowserLayout("chat responsive browser layout", () => {
               y: rect.y,
               width: rect.width,
               height: rect.height,
-              text: node.options[node.selectedIndex]?.textContent?.trim() ?? "",
+              text: node.textContent?.trim() ?? "",
               display: getComputedStyle(node).display,
             };
           };
           return {
             agent: rectFor('[data-chat-agent-filter="true"]'),
             session: rectFor('[data-chat-session-select="true"]'),
-            thinkingFull: rectFor('[data-chat-thinking-select="true"]'),
+            model: rectFor('[data-chat-model-select="true"]'),
             compactCount: document.querySelectorAll('[data-chat-thinking-select-compact="true"]')
               .length,
           };
         });
-        expect(mobileControls.agent).not.toBeNull();
-        expect(mobileControls.session).not.toBeNull();
-        expect(mobileControls.session!.y).toBe(mobileControls.agent!.y);
-        expect(mobileControls.agent!.x).toBeLessThan(mobileControls.session!.x);
-        expect(mobileControls.session!.width / mobileControls.agent!.width).toBeGreaterThan(1.25);
-        expect(mobileControls.session!.width / mobileControls.agent!.width).toBeLessThan(1.55);
-        expect(mobileControls.thinkingFull?.display).not.toBe("none");
-        expect(mobileControls.thinkingFull?.text).toBe("Default (high)");
+        const agent = expectControlRect(mobileControls.agent, "agent");
+        const session = expectControlRect(mobileControls.session, "session");
+        const model = expectControlRect(mobileControls.model, "model");
+        expect(session.y).toBe(agent.y);
+        expect(agent.x).toBeLessThan(session.x);
+        expect(session.width / agent.width).toBeGreaterThan(1.25);
+        expect(session.width / agent.width).toBeLessThan(1.55);
+        expect(model.display).not.toBe("none");
+        expect(model.text).toBe("gpt-5 · High");
         expect(mobileControls.compactCount).toBe(0);
 
         const sizes = await page
@@ -390,20 +566,73 @@ describeBrowserLayout("chat responsive browser layout", () => {
     }
   });
 
+  it.each([
+    [320, 568],
+    [393, 852],
+    [568, 320],
+  ] as const)(
+    "keeps current composer model, settings, and send controls from overlapping at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height);
+      try {
+        await expectNoHorizontalOverflow(page);
+        const controls = await page.evaluate(() => {
+          const rectFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              display: getComputedStyle(node).display,
+            };
+          };
+          return {
+            input: rectFor(".agent-chat__input"),
+            left: rectFor(".agent-chat__toolbar-left"),
+            model: rectFor(".chat-composer-model-control"),
+            settings: rectFor(".chat-settings-chip"),
+            settingsLabel: rectFor(".chat-settings-chip__text"),
+            send: rectFor(".chat-send-btn"),
+          };
+        });
+
+        const input = expectControlRect(controls.input, "composer");
+        const left = expectControlRect(controls.left, "composer left controls");
+        const model = expectControlRect(controls.model, "composer model control");
+        const settings = expectControlRect(controls.settings, "composer settings control");
+        const send = expectControlRect(controls.send, "composer send control");
+        const settingsLabel = expectControlRect(controls.settingsLabel, "settings label");
+
+        for (const control of [left, model, settings, send]) {
+          expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
+          expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
+        }
+        expect(rectsOverlap(model, settings)).toBe(false);
+        expect(rectsOverlap(model, send)).toBe(false);
+        expect(rectsOverlap(settings, send)).toBe(false);
+        expect(settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(settingsLabel.display).toBe("none");
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
   it("uses the compact mobile grid when the agent filter is not rendered", async () => {
     const page = await openFixture(320, 568, { singleAgent: true });
     try {
       await expectNoHorizontalOverflow(page);
       expect(await page.locator('[data-chat-agent-filter="true"]').count()).toBe(0);
-      const session = await page.locator('[data-chat-session-select="true"]').boundingBox();
-      const model = await page.locator('[data-chat-model-select="true"]').boundingBox();
-      const thinking = await page.locator('[data-chat-thinking-select="true"]').boundingBox();
-      expect(session).not.toBeNull();
-      expect(model).not.toBeNull();
-      expect(thinking).not.toBeNull();
-      expect(thinking!.x).toBeGreaterThan(session!.x);
-      expect(model!.y).toBeGreaterThan(session!.y);
-      expect(model!.width).toBeGreaterThan(session!.width);
+      const session = await getBoundingBox(page, '[data-chat-session-select="true"]');
+      const model = await getBoundingBox(page, '[data-chat-model-select="true"]');
+      expect(model.y).toBeGreaterThan(session.y);
+      expect(model.width).toBe(session.width);
     } finally {
       await page.close();
     }

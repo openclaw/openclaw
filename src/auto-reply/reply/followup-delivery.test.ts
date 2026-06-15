@@ -1,5 +1,7 @@
+// Tests follow-up reply delivery and route preservation.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -15,7 +17,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         cfg: baseConfig,
         payloads: [{ text: "HEARTBEAT_OK" }],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps media payloads when stripping heartbeat ack text", () => {
@@ -27,6 +29,46 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "", mediaUrl: "/tmp/image.png" }]);
   });
 
+  it("preserves transcript ownership when stripping heartbeat text", () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "HEARTBEAT_OK still working" },
+      { assistantTranscriptOwned: true },
+    );
+
+    const [resolved] = resolveFollowupDeliveryPayloads({
+      cfg: baseConfig,
+      payloads: [payload],
+    });
+
+    expect(getReplyPayloadMetadata(resolved ?? {})).toEqual({
+      assistantTranscriptOwned: true,
+      replyDelivery: {
+        replyToMode: "all",
+      },
+    });
+  });
+
+  it("uses the captured reply policy instead of reloading changed config", () => {
+    const [resolved] = resolveFollowupDeliveryPayloads({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "all",
+          },
+        },
+      } as OpenClawConfig,
+      payloads: [{ text: "queued reply" }],
+      originatingChannel: "slack",
+      originatingChatType: "channel",
+      originatingReplyToMode: "off",
+    });
+
+    expect(getReplyPayloadMetadata(resolved ?? {})?.replyDelivery).toEqual({
+      chatType: "channel",
+      replyToMode: "off",
+    });
+  });
+
   it("drops text payloads already sent via messaging tool", () => {
     expect(
       resolveFollowupDeliveryPayloads({
@@ -34,7 +76,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         payloads: [{ text: "hello world!" }],
         sentTexts: ["hello world!"],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("drops media payloads already sent via messaging tool", () => {
@@ -94,6 +136,72 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "discord-only text" }]);
   });
 
+  it("does not dedupe same-channel text sent to a different routed thread", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "thread reply" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "222.000",
+        sentTexts: ["thread reply"],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "111.000",
+            text: "thread reply",
+          },
+        ],
+      }),
+    ).toEqual([{ text: "thread reply" }]);
+  });
+
+  it("dedupes same-channel text sent to the same routed thread", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "thread reply" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "111.000",
+        sentTexts: ["thread reply"],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "111.000",
+            text: "thread reply",
+          },
+        ],
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("dedupes a Slack DM tool send recorded through its routable target", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "thread reply" }],
+        messageProvider: "slack",
+        originatingTo: "user:U123",
+        originatingThreadId: "171.222",
+        sentTexts: ["thread reply"],
+        sentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "user:U123",
+            threadId: "171.222",
+            text: "thread reply",
+          },
+        ],
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("falls back to global text dedupe for legacy multi-target messaging telemetry", () => {
     expect(
       resolveFollowupDeliveryPayloads({
@@ -107,7 +215,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
           { tool: "discord", provider: "discord", to: "channel:C2" },
         ],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("dedupes final media only against message-tool media sent to the same route", () => {
@@ -174,7 +282,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         sentTexts: ["hello world!"],
         sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1", text: "hello world!" }],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("delivers distinct replies when originating channel resolves the provider", () => {

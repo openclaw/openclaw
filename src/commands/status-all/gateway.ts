@@ -1,7 +1,11 @@
-import fs from "node:fs/promises";
-import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+// Gateway log-tail helpers for status diagnostics.
+// Summaries compact repeated auth/runtime failures while preserving enough context for operators.
 
+import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+
+/** Reads the last non-empty lines from a gateway log file, returning an empty list on read failure. */
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const raw = await fs.readFile(filePath, "utf8").catch(() => "");
   if (!raw.trim()) {
@@ -28,6 +32,7 @@ function shorten(message: string, maxLen: number): string {
 }
 
 function normalizeGwsLine(line: string): string {
+  // Remove per-request ids so repeated gateway websocket errors group into one summary.
   return line
     .replace(/\s+runId=[^\s]+/g, "")
     .replace(/\s+conn=[^\s]+/g, "")
@@ -58,6 +63,7 @@ function consumeJsonBlock(
   return { json: parts.join("\n"), endIndex: i };
 }
 
+/** Summarizes gateway log tail lines, grouping repeated failures and trimming long output. */
 export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number }): string[] {
   const maxLines = Math.max(6, opts?.maxLines ?? 26);
 
@@ -99,7 +105,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       continue;
     }
 
-    // "[openai-codex] Token refresh failed: 401 { ...json... }"
+    // "[openai] Token refresh failed: 401 { ...json... }"
     const tokenRefresh = line.match(/^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/);
     if (tokenRefresh) {
       const tag = tokenRefresh[1] ?? "unknown";
@@ -119,6 +125,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
         const code = normalizeOptionalString(parsed?.error?.code) ?? null;
         const msg = normalizeOptionalString(parsed?.error?.message) ?? null;
         const refreshReason = classifyOAuthRefreshFailureReason(msg ?? "");
+        // OAuth providers often return verbose JSON; classify re-auth failures into one readable hint.
         const msgShort = msg ? (refreshReason ? "re-auth required" : shorten(msg, 52)) : null;
         const base = `[${tag}] token refresh ${status}${code ? ` ${code}` : ""}${msgShort ? ` · ${msgShort}` : ""}`;
         addGroup(`token:${tag}:${status}:${code ?? ""}:${msgShort ?? ""}`, base);
@@ -126,7 +133,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       }
     }
 
-    // "Embedded agent failed before reply: OAuth token refresh failed for openai-codex: ..."
+    // "Embedded agent failed before reply: OAuth token refresh failed for openai: ..."
     const embedded = line.match(
       /^Embedded agent failed before reply:\s+OAuth token refresh failed for ([^:]+):/,
     );

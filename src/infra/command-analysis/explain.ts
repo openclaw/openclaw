@@ -1,9 +1,12 @@
-import { explainShellCommand } from "../command-explainer/extract.js";
+// Command-analysis display helpers turn parsed command policy data into small
+// warning summaries for approval surfaces without loading the rich parser path.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { CommandExplanation, CommandRisk } from "../command-explainer/types.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
 import { analyzeCommandForPolicy } from "./policy.js";
 import { detectCommandCarrierArgv, detectInlineEvalInSegments } from "./risks.js";
 
+/** Compact command explanation summary shown in approval UI. */
 export type CommandExplanationSummary = {
   commandCount: number;
   nestedCommandCount: number;
@@ -11,6 +14,7 @@ export type CommandExplanationSummary = {
   warningLines: string[];
 };
 
+// Risk labels keep warnings readable without exposing full command payloads.
 function riskLabel(risk: CommandRisk): string {
   switch (risk.kind) {
     case "inline-eval":
@@ -30,10 +34,11 @@ function riskLabel(risk: CommandRisk): string {
   }
 }
 
+/** Summarizes parsed shell-command explanation data for display. */
 export function summarizeCommandExplanation(
   explanation: CommandExplanation,
 ): CommandExplanationSummary {
-  const riskKinds = [...new Set(explanation.risks.map((risk) => risk.kind))];
+  const riskKinds = uniqueStrings(explanation.risks.map((risk) => risk.kind));
   const warningLines = explanation.risks.map((risk) => {
     const label = riskLabel(risk);
     return label === risk.kind ? `Contains ${risk.kind}` : `Contains ${risk.kind}: ${label}`;
@@ -42,12 +47,8 @@ export function summarizeCommandExplanation(
     commandCount: explanation.topLevelCommands.length,
     nestedCommandCount: explanation.nestedCommands.length,
     riskKinds,
-    warningLines: [...new Set(warningLines)],
+    warningLines: uniqueStrings(warningLines),
   };
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)];
 }
 
 export function summarizeCommandSegmentsForDisplay(
@@ -122,6 +123,7 @@ export async function explainCommandForDisplay(
   command: string,
 ): Promise<{ explanation: CommandExplanation; summary: CommandExplanationSummary } | null> {
   try {
+    const { explainShellCommand } = await import("../command-explainer/extract.js");
     const explanation = await explainShellCommand(command);
     return { explanation, summary: summarizeCommandExplanation(explanation) };
   } catch {

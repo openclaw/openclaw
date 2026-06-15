@@ -1,5 +1,7 @@
+// Loads runtime sidecar path baselines for bundled plugin checks.
 import fs from "node:fs";
 import path from "node:path";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
 const NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
@@ -13,10 +15,8 @@ function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Se
   if (!fs.existsSync(packageJsonPath)) {
     return new Set();
   }
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-    files?: unknown;
-  };
-  if (!Array.isArray(packageJson.files)) {
+  const packageJson = tryReadJsonSync<{ files?: unknown }>(packageJsonPath);
+  if (!Array.isArray(packageJson?.files)) {
     return new Set();
   }
   const excluded = new Set<string>();
@@ -36,6 +36,7 @@ function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Se
   return excluded;
 }
 
+/** Collects bundled runtime sidecar paths that should ship with the root package. */
 export function collectBundledRuntimeSidecarPaths(params?: {
   rootDir?: string;
 }): readonly string[] {
@@ -57,6 +58,7 @@ export function collectBundledRuntimeSidecarPaths(params?: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Writes or checks the bundled runtime sidecar path baseline JSON file. */
 export async function writeBundledRuntimeSidecarPathBaseline(params: {
   repoRoot: string;
   check: boolean;

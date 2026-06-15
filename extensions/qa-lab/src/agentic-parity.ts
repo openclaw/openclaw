@@ -1,3 +1,6 @@
+// Qa Lab plugin module implements agentic parity behavior.
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 const QA_AGENTIC_PARITY_PACK = "agentic";
 
 const QA_AGENTIC_PARITY_SCENARIOS = [
@@ -76,7 +79,7 @@ export function resolveQaParityPackScenarioIds(params: {
   scenarioIds?: string[];
 }): string[] {
   const normalizedPack = params.parityPack?.trim().toLowerCase();
-  const explicitScenarioIds = [...new Set(params.scenarioIds ?? [])];
+  const explicitScenarioIds = uniqueStrings(params.scenarioIds ?? []);
   if (!normalizedPack) {
     return explicitScenarioIds;
   }
@@ -86,5 +89,5 @@ export function resolveQaParityPackScenarioIds(params: {
     );
   }
 
-  return [...new Set([...explicitScenarioIds, ...QA_AGENTIC_PARITY_SCENARIO_IDS])];
+  return uniqueStrings([...explicitScenarioIds, ...QA_AGENTIC_PARITY_SCENARIO_IDS]);
 }

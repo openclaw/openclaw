@@ -1,3 +1,5 @@
+// Zalouser plugin module implements send behavior.
+import { createZalouserSendReceipt } from "./send-receipt.js";
 import { parseZalouserTextStyles } from "./text-styles.js";
 import type { ZaloEventMessage, ZaloSendOptions, ZaloSendResult } from "./types.js";
 import {
@@ -59,7 +61,13 @@ export async function sendMessageZalouser(
     lastResult = result;
   }
 
-  return lastResult ?? { ok: false, error: "No message content provided" };
+  return (
+    lastResult ?? {
+      ok: false,
+      error: "No message content provided",
+      receipt: createZalouserSendReceipt({ threadId, kind: "text" }),
+    }
+  );
 }
 
 export async function sendImageZalouser(
@@ -110,6 +118,7 @@ export async function sendReactionZalouser(params: {
   return {
     ok: result.ok,
     error: result.error,
+    receipt: createZalouserSendReceipt({ threadId: params.threadId, kind: "unknown" }),
   };
 }
 

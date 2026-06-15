@@ -1,3 +1,4 @@
+// Verifies model reference validation in config surfaces.
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -10,7 +11,7 @@ function createModelSuppressionRegistry(): PluginManifestRegistry {
         id: "openai",
         origin: "bundled",
         channels: [],
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
         contracts: {},
         cliBackends: [],
         skills: [],
@@ -21,7 +22,7 @@ function createModelSuppressionRegistry(): PluginManifestRegistry {
         modelCatalog: {
           suppressions: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               model: "gpt-5.3-codex-spark",
               reason:
                 "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
@@ -40,7 +41,7 @@ describe("config model reference validation", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.3-codex-spark",
+              primary: "openai/gpt-5.3-codex-spark",
             },
           },
         },
@@ -56,20 +57,44 @@ describe("config model reference validation", () => {
     if (res.ok) {
       return;
     }
-    expect(res.issues).toContainEqual({
-      path: "agents.defaults.model.primary",
-      message:
-        "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-    });
+    expect(res.issues).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        message:
+          "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      },
+    ]);
   });
 
-  it("accepts supported openai-codex provider/model pairs", () => {
+  it("accepts supported openai provider/model pairs", () => {
     const res = validateConfigObjectWithPlugins(
       {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.4-mini",
+              primary: "openai/gpt-5.4-mini",
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts available openai fallback model pairs", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.4-mini",
+              fallbacks: ["openai/gpt-5.2-codex", "openai/gpt-5.3-codex"],
             },
           },
         },

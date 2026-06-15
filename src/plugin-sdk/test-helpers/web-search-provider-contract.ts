@@ -1,9 +1,12 @@
+/**
+ * Contract suite for bundled web search provider registration and runtime behavior.
+ */
 import { describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,
-  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
   resolveWebSearchProviderContractEntriesForPluginId,
-} from "../testing.js";
+} from "../../plugins/contracts/registry.js";
+import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../plugins/web-provider-public-artifacts.explicit.js";
 import { installWebSearchProviderContractSuite } from "./provider-contract-suites.js";
 
 type WebSearchContractEntry = ReturnType<
@@ -33,18 +36,24 @@ export function describeWebSearchProviderContracts(pluginId: string) {
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
       ?.webSearchProviderIds ?? [];
 
+  let providerEntries: WebSearchContractEntry[] | undefined;
   const resolveProviders = (): WebSearchContractEntry[] => {
+    if (providerEntries) {
+      return providerEntries;
+    }
     const publicArtifactProviders = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
       onlyPluginIds: [pluginId],
     });
     if (publicArtifactProviders) {
-      return publicArtifactProviders.map((provider) => ({
+      providerEntries = publicArtifactProviders.map((provider) => ({
         pluginId: provider.pluginId,
         provider,
         credentialValue: resolveWebSearchCredentialValue(provider),
       }));
+      return providerEntries;
     }
-    return resolveWebSearchProviderContractEntriesForPluginId(pluginId);
+    providerEntries = resolveWebSearchProviderContractEntriesForPluginId(pluginId);
+    return providerEntries;
   };
 
   describe(`${pluginId} web search provider contract registry load`, () => {
@@ -57,7 +66,9 @@ export function describeWebSearchProviderContracts(pluginId: string) {
     describe(`${pluginId}:${providerId} web search contract`, () => {
       installWebSearchProviderContractSuite({
         provider: () => {
-          const entry = resolveProviders().find((entry) => entry.provider.id === providerId);
+          const entry = resolveProviders().find(
+            (entryValue) => entryValue.provider.id === providerId,
+          );
           if (!entry) {
             throw new Error(
               `web search provider contract entry missing for ${pluginId}:${providerId}`,
@@ -66,7 +77,9 @@ export function describeWebSearchProviderContracts(pluginId: string) {
           return entry.provider;
         },
         credentialValue: () => {
-          const entry = resolveProviders().find((entry) => entry.provider.id === providerId);
+          const entry = resolveProviders().find(
+            (entryLocal) => entryLocal.provider.id === providerId,
+          );
           if (!entry) {
             throw new Error(
               `web search provider contract entry missing for ${pluginId}:${providerId}`,

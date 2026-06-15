@@ -163,12 +163,7 @@ function mergeAdjacentStrings(inlines: StoryInline[]): StoryInline[] {
 /**
  * Create an image block
  */
-export function createImageBlock(
-  src: string,
-  alt: string = "",
-  height: number = 0,
-  width: number = 0,
-): StoryVerse {
+export function createImageBlock(src: string, alt = "", height = 0, width = 0): StoryVerse {
   return {
     block: {
       image: { src, height, width, alt },
@@ -196,7 +191,7 @@ function processInlinesForImages(inlines: StoryInline[]): {
 
   for (const inline of inlines) {
     if (typeof inline === "object" && "__image" in inline) {
-      const img = (inline as unknown as { __image: { src: string; alt: string } }).__image;
+      const img = (inline as unknown as { __image: { src: string; alt: string } })["__image"];
       imageBlocks.push(createImageBlock(img.src, img.alt));
     } else {
       cleanInlines.push(inline);

@@ -1,4 +1,12 @@
+// Pairing CLI for listing and approving channel DM pairing requests.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
 import {
@@ -14,26 +22,23 @@ import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 
 /** Parse channel, allowing extension channels not in core registry. */
 function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel {
   const value = normalizeLowercaseStringOrEmpty(normalizeStringifiedOptionalString(raw) ?? "");
   if (!value) {
-    throw new Error("Channel required");
+    throw new Error(
+      `Missing channel. Use ${formatCliCommand("openclaw pairing list --channel <channel>")}.`,
+    );
   }
 
   const normalized = normalizeChannelId(value);
   if (normalized) {
     if (!channels.includes(normalized)) {
-      throw new Error(`Channel ${normalized} does not support pairing`);
+      throw new Error(
+        `Channel "${normalized}" does not support pairing. Supported pairing channels: ${channels.join(", ") || "none"}.`,
+      );
     }
     return normalized;
   }
@@ -42,18 +47,21 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) {
     return value as PairingChannel;
   }
-  throw new Error(`Invalid channel: ${value}`);
+  throw new Error(
+    `Invalid channel "${value}". Use lowercase letters, numbers, "_" or "-", for example "telegram".`,
+  );
 }
 
-async function notifyApproved(channel: PairingChannel, id: string) {
+async function notifyApproved(channel: PairingChannel, id: string, accountId?: string) {
   const cfg = getRuntimeConfig();
-  await notifyPairingApproved({ channelId: channel, id, cfg });
+  await notifyPairingApproved({ channelId: channel, id, cfg, ...(accountId ? { accountId } : {}) });
 }
 
 async function maybeBootstrapCommandOwnerFromPairing(params: {
   channel: PairingChannel;
   id: string;
 }): Promise<{ ownerEntry: string | null; bootstrapped: boolean }> {
+  // First approved pairing can seed ownerAllowFrom so command access is not left open-ended.
   const ownerEntry = formatCommandOwnerFromChannelSender(params);
   if (!ownerEntry) {
     return { ownerEntry: null, bootstrapped: false };
@@ -185,7 +193,9 @@ export function registerPairingCli(program: Command) {
             code: String(resolvedCode),
           });
       if (!approved) {
-        throw new Error(`No pending pairing request found for code: ${String(resolvedCode)}`);
+        throw new Error(
+          `No pending pairing request found for code "${String(resolvedCode)}". Run ${formatCliCommand(`openclaw pairing list --channel ${channel}`)} to list pending requests.`,
+        );
       }
 
       defaultRuntime.log(
@@ -204,7 +214,9 @@ export function registerPairingCli(program: Command) {
       if (!opts.notify) {
         return;
       }
-      await notifyApproved(channel, approved.id).catch((err) => {
+      const approvedAccountId =
+        accountId || normalizeStringifiedOptionalString(approved.entry?.meta?.accountId);
+      await notifyApproved(channel, approved.id, approvedAccountId).catch((err: unknown) => {
         defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
       });
     });

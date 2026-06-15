@@ -1,3 +1,5 @@
+// Provider fallback tests verify web_fetch normalizes third-party fetch output
+// before exposing it to agents or cache entries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -14,8 +16,8 @@ const runtimeState = vi.hoisted(() => ({
 vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
 }));
-vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: () => runtimeState.activeSecretsRuntimeSnapshot,
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeConfigSnapshot: () => runtimeState.activeSecretsRuntimeSnapshot,
 }));
 vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
   getActiveRuntimeWebToolsMetadata: () => runtimeState.activeRuntimeWebToolsMetadata,
@@ -38,6 +40,8 @@ describe("web_fetch provider fallback normalization", () => {
   });
 
   it("re-wraps and truncates provider fallback payloads before caching or returning", async () => {
+    // Provider implementations may return raw text; core still owns the
+    // untrusted-content wrapper and maxChars enforcement.
     global.fetch = withFetchPreconnect(
       vi.fn(async () => {
         throw new Error("network failed");
@@ -95,12 +99,10 @@ describe("web_fetch provider fallback normalization", () => {
     expect(details.title).toContain("Provider Title");
     expect(details.warning).toContain("Provider Warning");
     expect(details.truncated).toBe(true);
-    expect(details.externalContent).toMatchObject({
-      untrusted: true,
-      source: "web_fetch",
-      wrapped: true,
-      provider: "firecrawl",
-    });
+    expect(details.externalContent?.untrusted).toBe(true);
+    expect(details.externalContent?.source).toBe("web_fetch");
+    expect(details.externalContent?.wrapped).toBe(true);
+    expect(details.externalContent?.provider).toBe("firecrawl");
   });
 
   it("keeps requested url and only accepts safe provider finalUrl values", async () => {
@@ -140,6 +142,8 @@ describe("web_fetch provider fallback normalization", () => {
   });
 
   it("late-binds provider fallback config and runtime metadata from the active runtime snapshot", async () => {
+    // Long-lived tool instances should observe the active runtime snapshot, not
+    // stale construction-time provider metadata.
     global.fetch = withFetchPreconnect(
       vi.fn(async () => {
         throw new Error("network failed");
@@ -209,20 +213,20 @@ describe("web_fetch provider fallback normalization", () => {
 
     expect(details.wrappedLength).toBeGreaterThan(200);
     expect(details.wrappedLength).toBeLessThanOrEqual(640);
-    expect(details.externalContent).toMatchObject({
-      provider: "firecrawl",
-    });
-    expect(resolveWebFetchDefinitionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: runtimeConfig,
-        runtimeWebFetch: expect.objectContaining({
-          selectedProvider: "firecrawl",
-        }),
-      }),
-    );
+    expect(details.externalContent?.provider).toBe("firecrawl");
+    const definitionInput = resolveWebFetchDefinitionMock.mock.calls.at(0)?.[0] as
+      | {
+          config?: OpenClawConfig;
+          runtimeWebFetch?: { selectedProvider?: string };
+        }
+      | undefined;
+    expect(definitionInput?.config).toBe(runtimeConfig);
+    expect(definitionInput?.runtimeWebFetch?.selectedProvider).toBe("firecrawl");
   });
 
   it("scopes provider fallback cache entries by the late-bound provider", async () => {
+    // The same URL can be fetched by different providers with different auth
+    // and extraction semantics, so provider id is part of the cache identity.
     global.fetch = withFetchPreconnect(
       vi.fn(async () => {
         throw new Error("network failed");

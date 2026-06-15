@@ -1,3 +1,4 @@
+// Openai plugin module implements thinking policy behavior.
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 
 const OPENAI_THINKING_BASE_LEVELS = [
@@ -15,7 +16,6 @@ const OPENAI_XHIGH_MODEL_IDS = [
   "gpt-5.4-pro",
   "gpt-5.4-mini",
   "gpt-5.4-nano",
-  "gpt-5.2",
 ] as const;
 
 const OPENAI_CODEX_XHIGH_MODEL_IDS = [
@@ -23,9 +23,12 @@ const OPENAI_CODEX_XHIGH_MODEL_IDS = [
   "gpt-5.5-pro",
   "gpt-5.4",
   "gpt-5.4-pro",
-  "gpt-5.3-codex",
-  "gpt-5.2-codex",
-  "gpt-5.1-codex",
+  "gpt-5.3-codex-spark",
+] as const;
+
+const OPENAI_UNIFIED_XHIGH_MODEL_IDS = [
+  ...OPENAI_XHIGH_MODEL_IDS,
+  ...OPENAI_CODEX_XHIGH_MODEL_IDS,
 ] as const;
 
 function normalizeModelId(value: string): string {
@@ -60,4 +63,8 @@ export function resolveOpenAIThinkingProfile(modelId: string): ProviderThinkingP
 
 export function resolveOpenAICodexThinkingProfile(modelId: string): ProviderThinkingProfile {
   return buildOpenAIThinkingProfile({ modelId, xhighModelIds: OPENAI_CODEX_XHIGH_MODEL_IDS });
+}
+
+export function resolveUnifiedOpenAIThinkingProfile(modelId: string): ProviderThinkingProfile {
+  return buildOpenAIThinkingProfile({ modelId, xhighModelIds: OPENAI_UNIFIED_XHIGH_MODEL_IDS });
 }

@@ -1,3 +1,4 @@
+// Internal task registry facade used by runtime modules without exposing public SDK surface.
 export {
   cancelTaskById,
   createTaskRecord,
@@ -8,6 +9,7 @@ export {
   finalizeTaskRunByRunId,
   getTaskById,
   hasActiveTaskForChildSessionKey,
+  listFreshTasksForOwnerKey,
   listTaskRecords,
   listTasksForFlowId,
   listTasksForOwnerKey,
@@ -28,3 +30,4 @@ export {
   setTaskRunDeliveryStatusByRunId,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
+export type { TaskRecord } from "./task-registry.types.js";

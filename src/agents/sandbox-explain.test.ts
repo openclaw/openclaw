@@ -1,3 +1,4 @@
+// Verifies sandbox tool-policy resolution and blocked-tool explanation text.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
@@ -10,10 +11,8 @@ const { toolPolicyAuditInfo } = vi.hoisted(() => ({
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
-    debug: vi.fn(),
-    error: vi.fn(),
+    // Audit logging is asserted without touching the real subsystem logger.
     info: toolPolicyAuditInfo,
-    warn: vi.fn(),
   }),
 }));
 
@@ -125,7 +124,6 @@ describe("sandbox explain helpers", () => {
       toolName: "browser",
       audit: true,
     });
-    expect(msg).toBeTruthy();
     expect(msg).toContain('Tool "browser" blocked by sandbox tool policy');
     expect(msg).toContain("mode=non-main");
     expect(msg).toContain("tools.sandbox.tools.deny");

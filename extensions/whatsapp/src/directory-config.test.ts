@@ -1,3 +1,4 @@
+// Whatsapp tests cover directory config plugin behavior.
 import { createDirectoryTestRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it } from "vitest";
 import {
@@ -35,12 +36,10 @@ describe("whatsapp directory", () => {
         limit: undefined,
         runtime: runtimeEnv,
       } as never),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "user", id: "+15551230001" },
-        { kind: "user", id: "+15551230002" },
-      ]),
-    );
+    ).resolves.toEqual([
+      { kind: "user", id: "+15551230001" },
+      { kind: "user", id: "+15551230002" },
+    ]);
 
     await expect(
       listWhatsAppDirectoryGroupsFromConfig({
@@ -50,11 +49,9 @@ describe("whatsapp directory", () => {
         limit: undefined,
         runtime: runtimeEnv,
       } as never),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "group", id: "120363111111111111@g.us" },
-        { kind: "group", id: "120363222222222222@g.us" },
-      ]),
-    );
+    ).resolves.toEqual([
+      { kind: "group", id: "120363111111111111@g.us" },
+      { kind: "group", id: "120363222222222222@g.us" },
+    ]);
   });
 });

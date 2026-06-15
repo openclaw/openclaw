@@ -1,3 +1,4 @@
+// Covers plugin loader CLI metadata without activating plugin runtimes.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,6 +27,58 @@ afterAll(() => {
 });
 
 describe("plugin loader CLI metadata", () => {
+  it.each([
+    {
+      id: "wrong-cli-channel-entry",
+      kind: "bundled-channel-entry",
+      error: "bundled channel entry requires setup-runtime loader",
+    },
+    {
+      id: "wrong-cli-channel-setup-entry",
+      kind: "bundled-channel-setup-entry",
+      error: "bundled channel setup entry requires setup-runtime loader",
+    },
+  ])(
+    "reports $kind loaded through CLI metadata legacy plugin path",
+    async ({ id, kind, error }) => {
+      useNoBundledPlugins();
+      const plugin = writePlugin({
+        id,
+        filename: `${id}.cjs`,
+        body: `module.exports = { id: ${JSON.stringify(id)}, kind: ${JSON.stringify(kind)} };`,
+      });
+      const errors: string[] = [];
+
+      const registry = await loadOpenClawPluginCliRegistry({
+        cache: false,
+        logger: {
+          info: () => {},
+          warn: () => {},
+          error: (msg: string) => errors.push(msg),
+          debug: () => {},
+        },
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: [id],
+          },
+        },
+      });
+
+      const loaded = registry.plugins.find((entry) => entry.id === id);
+      expect(loaded?.status).toBe("error");
+      expect(loaded?.error).toBe(error);
+      expect(
+        registry.diagnostics.some(
+          (diag) => diag.level === "error" && diag.pluginId === id && diag.message === error,
+        ),
+      ).toBe(true);
+      expect(errors).toEqual([
+        `[plugins] ${id} ${error}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+      ]);
+    },
+  );
+
   it("suppresses trust warning logs during CLI metadata loads", async () => {
     useNoBundledPlugins();
     const stateDir = makeTempDir();
@@ -67,7 +120,7 @@ describe("plugin loader CLI metadata", () => {
       },
     });
 
-    expect(warnings).toEqual([]);
+    expect(warnings).toStrictEqual([]);
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("rogue");
   });
 
@@ -658,6 +711,111 @@ module.exports = {
     expect(fs.existsSync(runtimeMarker)).toBe(true);
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
       "discovery-cli-metadata-channel",
+    );
+  });
+
+  it("can force channel runtime entries for CLI registration when setup entries exist", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const modeMarker = path.join(pluginDir, "registration-mode.txt");
+    const setupMarker = path.join(pluginDir, "setup-loaded.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/force-runtime-cli-channel",
+          openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-entry.cjs" },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "force-runtime-cli-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["force-runtime-cli-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `${inlineChannelPluginEntryFactorySource()}
+module.exports = {
+  ...defineChannelPluginEntry({
+    id: "force-runtime-cli-channel",
+    name: "Force Runtime CLI Channel",
+    description: "force runtime cli channel",
+    plugin: {
+      id: "force-runtime-cli-channel",
+      meta: {
+        id: "force-runtime-cli-channel",
+        label: "Force Runtime CLI Channel",
+        selectionLabel: "Force Runtime CLI Channel",
+        docsPath: "/channels/force-runtime-cli-channel",
+        blurb: "force runtime cli channel",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+    registerCliMetadata(api) {
+      require("node:fs").writeFileSync(
+        ${JSON.stringify(modeMarker)},
+        String(api.registrationMode),
+        "utf-8",
+      );
+      api.registerCli(() => {}, {
+        descriptors: [
+          {
+            name: "force-runtime-cli-channel",
+            description: "Forced runtime channel CLI metadata",
+            hasSubcommands: true,
+          },
+        ],
+      });
+    },
+  }),
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      forceFullRuntimeForChannelPlugins: true,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["force-runtime-cli-channel"],
+          entries: {
+            "force-runtime-cli-channel": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("discovery");
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "force-runtime-cli-channel",
     );
   });
 

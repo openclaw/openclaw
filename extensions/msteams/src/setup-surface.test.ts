@@ -1,3 +1,4 @@
+// Msteams tests cover setup surface plugin behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
@@ -69,7 +70,7 @@ describe("msteams setup surface", () => {
     });
   });
 
-  it("reports configured status from resolved credentials", async () => {
+  it("reports configured status from resolved credentials", () => {
     resolveMSTeamsCredentials.mockReturnValue({
       appId: "app",
     });

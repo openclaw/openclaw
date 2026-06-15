@@ -1,9 +1,11 @@
+// Read-only command default tests cover command defaulting for read-only channel plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: loadPluginMetadataSnapshot,
 }));
 
 import { resolveReadOnlyChannelCommandDefaults } from "./read-only-command-defaults.js";
@@ -59,10 +61,50 @@ describe("resolveReadOnlyChannelCommandDefaults", () => {
       nativeSkillsAutoEnabled: false,
     });
     expect(loadPluginMetadataSnapshot).toHaveBeenCalledWith({
+      allowWorkspaceScopedCurrent: true,
       config: {},
       env,
       stateDir: "/state",
       workspaceDir: "/workspace",
+    });
+  });
+
+  it("resolves command defaults for manifest channel aliases", () => {
+    loadPluginMetadataSnapshot.mockReturnValue({
+      index: {
+        plugins: [
+          {
+            pluginId: "vendor-demo-plugin",
+            origin: "global",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "vendor-demo-plugin",
+          origin: "global",
+          channels: ["demo"],
+          channelConfigs: {
+            demo: {
+              commands: {
+                nativeCommandsAutoEnabled: true,
+                nativeSkillsAutoEnabled: false,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(
+      resolveReadOnlyChannelCommandDefaults("demo", {
+        config: {},
+      }),
+    ).toEqual({
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: false,
     });
   });
 });

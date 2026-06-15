@@ -1,3 +1,4 @@
+// Msteams tests cover file consent helpers plugin behavior.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
 import {
@@ -269,14 +270,16 @@ describe("msteams pending uploads", () => {
     });
 
     expect(getPendingUploadCount()).toBe(1);
-    expect(getPendingUpload(id)).toEqual(
-      expect.objectContaining({
-        id,
-        filename: "hello.txt",
-        contentType: "text/plain",
-        conversationId: "conv-1",
-      }),
-    );
+    const pendingUpload = getPendingUpload(id);
+    expect(pendingUpload).toEqual({
+      id,
+      buffer: Buffer.from("hello"),
+      filename: "hello.txt",
+      contentType: "text/plain",
+      conversationId: "conv-1",
+      createdAt: pendingUpload?.createdAt,
+    });
+    expect(typeof pendingUpload?.createdAt).toBe("number");
   });
 
   it("removes uploads explicitly and ignores empty ids", () => {

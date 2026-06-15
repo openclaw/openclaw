@@ -6,6 +6,7 @@
  */
 
 import { beforeAll, describe, it, expect } from "vitest";
+import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 
 let InputImageContentPartSchema: typeof import("./open-responses.schema.js").InputImageContentPartSchema;
@@ -28,7 +29,7 @@ describe("OpenResponses Feature Parity", () => {
   });
 
   describe("Schema Validation", () => {
-    it("should validate input_image with url source", async () => {
+    it("should validate input_image with url source", () => {
       const validImage = {
         type: "input_image" as const,
         source: {
@@ -41,7 +42,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should validate input_image with base64 source", async () => {
+    it("should validate input_image with base64 source", () => {
       const validImage = {
         type: "input_image" as const,
         source: {
@@ -55,7 +56,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should validate input_image with HEIC base64 source", async () => {
+    it("should validate input_image with HEIC base64 source", () => {
       const validImage = {
         type: "input_image" as const,
         source: {
@@ -69,7 +70,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should reject input_image with invalid mime type", async () => {
+    it("should reject input_image with invalid mime type", () => {
       const invalidImage = {
         type: "input_image" as const,
         source: {
@@ -83,7 +84,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(false);
     });
 
-    it("should validate input_file with url source", async () => {
+    it("should validate input_file with url source", () => {
       const validFile = {
         type: "input_file" as const,
         source: {
@@ -96,7 +97,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should validate input_file with base64 source", async () => {
+    it("should validate input_file with base64 source", () => {
       const validFile = {
         type: "input_file" as const,
         source: {
@@ -111,7 +112,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should validate tool definition in flat Responses API format", async () => {
+    it("should validate tool definition in flat Responses API format", () => {
       const validTool = {
         type: "function" as const,
         name: "get_weather",
@@ -129,7 +130,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should reject wrapped Chat Completions format (function: {...} wrapper)", async () => {
+    it("should reject wrapped Chat Completions format (function: {...} wrapper)", () => {
       const wrappedTool = {
         type: "function" as const,
         function: {
@@ -142,7 +143,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(false);
     });
 
-    it("should reject tool definition without name", async () => {
+    it("should reject tool definition without name", () => {
       const invalidTool = {
         type: "function" as const,
         name: "", // Empty name
@@ -155,7 +156,7 @@ describe("OpenResponses Feature Parity", () => {
   });
 
   describe("CreateResponseBody Schema", () => {
-    it("should validate request with input_image", async () => {
+    it("should validate request with input_image", () => {
       const validRequest = {
         model: "claude-sonnet-4-20250514",
         input: [
@@ -183,7 +184,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should validate request with client tools", async () => {
+    it("should validate request with client tools", () => {
       const validRequest = {
         model: "claude-sonnet-4-20250514",
         input: [
@@ -213,7 +214,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should validate assistant message phase metadata", async () => {
+    it("should validate assistant message phase metadata", () => {
       const validRequest = {
         model: "gpt-5.4",
         input: [
@@ -235,7 +236,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should reject phase metadata on non-assistant messages", async () => {
+    it("should reject phase metadata on non-assistant messages", () => {
       const invalidRequest = {
         model: "gpt-5.4",
         input: [
@@ -252,7 +253,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(false);
     });
 
-    it("should validate request with function_call_output for turn-based tools", async () => {
+    it("should validate request with function_call_output for turn-based tools", () => {
       const validRequest = {
         model: "claude-sonnet-4-20250514",
         input: [
@@ -268,7 +269,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should validate complete turn-based tool flow", async () => {
+    it("should validate complete turn-based tool flow", () => {
       const turn1Request = {
         model: "claude-sonnet-4-20250514",
         input: [
@@ -308,7 +309,7 @@ describe("OpenResponses Feature Parity", () => {
   });
 
   describe("Response Resource Schema", () => {
-    it("should validate assistant output item phase metadata", async () => {
+    it("should validate assistant output item phase metadata", () => {
       const assistantOutput = {
         type: "message" as const,
         id: "msg_123",
@@ -322,7 +323,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should validate response with function_call output", async () => {
+    it("should validate response with function_call output", () => {
       const functionCallOutput = {
         type: "function_call" as const,
         id: "msg_123",
@@ -337,7 +338,7 @@ describe("OpenResponses Feature Parity", () => {
   });
 
   describe("buildAgentPrompt", () => {
-    it("should convert function_call_output to tool entry", async () => {
+    it("should convert function_call_output to tool entry", () => {
       const result = buildAgentPrompt([
         {
           type: "function_call_output" as const,
@@ -350,7 +351,7 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.message).toBe('{"temperature": "72°F"}');
     });
 
-    it("should handle mixed message and function_call_output items", async () => {
+    it("should handle mixed message and function_call_output items", () => {
       const result = buildAgentPrompt([
         {
           type: "message" as const,
@@ -373,6 +374,67 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.message).toContain("weather");
       expect(result.message).toContain("72°F");
       expect(result.message).toContain("Thanks");
+    });
+
+    it("substitutes a placeholder for an image-only active user turn", () => {
+      const result = buildAgentPrompt([
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [
+            {
+              type: "input_image" as const,
+              source: { type: "url" as const, url: "https://example.com/cat.png" },
+            },
+          ],
+        },
+      ]);
+
+      expect(result.message).toBe(IMAGE_ONLY_USER_MESSAGE);
+    });
+
+    it("substitutes a placeholder for a file-only active user turn", () => {
+      const result = buildAgentPrompt([
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [
+            {
+              type: "input_file" as const,
+              source: { type: "url" as const, url: "https://example.com/report.pdf" },
+            },
+          ],
+        },
+      ]);
+
+      expect(result.message).not.toBe("");
+      expect(result.message.toLowerCase()).toContain("file");
+    });
+
+    it("keeps the user text when a file-only turn also carries text", () => {
+      const result = buildAgentPrompt([
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [
+            { type: "input_text" as const, text: "summarize this" },
+            {
+              type: "input_file" as const,
+              source: { type: "url" as const, url: "https://example.com/report.pdf" },
+            },
+          ],
+        },
+      ]);
+
+      expect(result.message).toBe("summarize this");
+    });
+
+    it("keeps an empty message when the active turn has neither text, image, nor file", () => {
+      const result = buildAgentPrompt([
+        { type: "message" as const, role: "user" as const, content: [] },
+      ]);
+
+      expect(result.message).toBe("");
     });
   });
 

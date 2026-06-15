@@ -1,13 +1,16 @@
+// Browser Origin validator for gateway HTTP and websocket requests.
+import net from "node:net";
+import { isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { isLoopbackHost, normalizeHostHeader } from "./net.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
 
 type OriginCheckResult =
   | {
       ok: true;
-      matchedBy: "allowlist" | "host-header-fallback" | "local-loopback";
+      matchedBy: "allowlist" | "host-header-fallback" | "private-same-origin" | "local-loopback";
     }
   | { ok: false; reason: string };
 
@@ -30,6 +33,7 @@ function parseOrigin(
   }
 }
 
+/** Validate a browser Origin against explicit allowlist, same-host, and local dev rules. */
 export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;
@@ -59,6 +63,13 @@ export function checkBrowserOrigin(params: {
   ) {
     return { ok: true, matchedBy: "host-header-fallback" };
   }
+  if (
+    requestHost &&
+    parsedOrigin.host === requestHost &&
+    isTrustedSameOriginHost(requestHost, params.isLocalClient)
+  ) {
+    return { ok: true, matchedBy: "private-same-origin" };
+  }
 
   // Dev fallback only for genuinely local socket clients, not Host-header claims.
   if (params.isLocalClient && isLoopbackHost(parsedOrigin.hostname)) {
@@ -66,4 +77,18 @@ export function checkBrowserOrigin(params: {
   }
 
   return { ok: false, reason: "origin not allowed" };
+}
+
+function isTrustedSameOriginHost(hostHeader: string, isLocalClient?: boolean): boolean {
+  const hostname = resolveHostName(hostHeader);
+  if (!hostname) {
+    return false;
+  }
+  if (isLoopbackHost(hostname)) {
+    return isLocalClient !== false;
+  }
+  if (net.isIP(hostname) !== 0) {
+    return isPrivateOrLoopbackIpAddress(hostname);
+  }
+  return hostname.endsWith(".local") || hostname.endsWith(".ts.net");
 }

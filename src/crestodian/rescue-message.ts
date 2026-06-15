@@ -1,9 +1,15 @@
+// Crestodian rescue messages expose approved setup-helper commands over message channels.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryReadJson, writeJson } from "../infra/json-files.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   executeCrestodianOperation,
@@ -15,6 +21,13 @@ import {
 } from "./operations.js";
 import { resolveCrestodianRescuePolicy } from "./rescue-policy.js";
 
+/**
+ * Message-channel rescue command handling for Crestodian.
+ *
+ * Rescue mode accepts `/crestodian` commands from approved message contexts,
+ * stores pending persistent operations for explicit confirmation, and captures
+ * command output without exposing local TUI or plugin-install flows remotely.
+ */
 type RescuePendingOperation = {
   id: string;
   createdAt: string;
@@ -23,6 +36,7 @@ type RescuePendingOperation = {
   auditDetails: Record<string, unknown>;
 };
 
+/** Input required to process one possible `/crestodian` rescue message. */
 export type CrestodianRescueMessageInput = {
   cfg: OpenClawConfig;
   command: CommandContext;
@@ -53,6 +67,7 @@ function createCaptureRuntime(): { runtime: RuntimeEnv; read: () => string } {
   };
 }
 
+/** Extract the command body after `/crestodian`, or null when the message is not for rescue. */
 export function extractCrestodianRescueMessage(commandBody: string): string | null {
   const normalized = commandBody.trim();
   const lower = normalized.toLowerCase();
@@ -67,6 +82,7 @@ function resolvePendingDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function resolvePendingPath(input: CrestodianRescueMessageInput): string {
+  // Pending approval is scoped by sender/channel identity so unrelated chats cannot approve it.
   const key = JSON.stringify({
     channel: input.command.channelId ?? input.command.channel,
     from: input.command.from,
@@ -81,8 +97,14 @@ async function readPending(
   now = new Date(),
 ): Promise<RescuePendingOperation | null> {
   try {
-    const parsed = JSON.parse(await fs.readFile(pendingPath, "utf8")) as RescuePendingOperation;
-    if (Date.parse(parsed.expiresAt) <= now.getTime()) {
+    const parsed = await tryReadJson<RescuePendingOperation>(pendingPath);
+    if (!parsed) {
+      return null;
+    }
+    const expiresAtMs = asDateTimestampMs(Date.parse(parsed.expiresAt));
+    const nowMs = asDateTimestampMs(now.getTime());
+    if (expiresAtMs === undefined || nowMs === undefined || expiresAtMs <= nowMs) {
+      // Expired rescue approvals are deleted before returning so stale writes cannot linger.
       await fs.rm(pendingPath, { force: true });
       return null;
     }
@@ -93,13 +115,10 @@ async function readPending(
 }
 
 async function writePending(pendingPath: string, pending: RescuePendingOperation): Promise<void> {
-  await fs.mkdir(path.dirname(pendingPath), { recursive: true });
-  await fs.writeFile(pendingPath, `${JSON.stringify(pending, null, 2)}\n`, {
-    encoding: "utf8",
+  await writeJson(pendingPath, pending, {
+    dirMode: 0o700,
     mode: 0o600,
-  });
-  await fs.chmod(pendingPath, 0o600).catch(() => {
-    // Best-effort on platforms/filesystems without POSIX modes.
+    trailingNewline: true,
   });
 }
 
@@ -136,6 +155,7 @@ function formatUnsupportedRemoteOperation(operation: CrestodianOperation): strin
   return null;
 }
 
+/** Process one rescue message and return a reply, or null when not a rescue command. */
 export async function runCrestodianRescueMessage(
   input: CrestodianRescueMessageInput,
 ): Promise<string | null> {
@@ -180,12 +200,20 @@ export async function runCrestodianRescueMessage(
     return unsupported;
   }
   if (isPersistentCrestodianOperation(operation)) {
+    // Persistent remote operations are two-step: store the parsed operation, then require approval.
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + policy.pendingTtlMinutes * 60_000);
+    const nowMs = asDateTimestampMs(now.getTime());
+    const expiresAtMs =
+      nowMs === undefined
+        ? undefined
+        : resolveExpiresAtMsFromDurationMs(policy.pendingTtlMinutes * 60_000, { nowMs });
+    if (expiresAtMs === undefined) {
+      return "Crestodian rescue could not create a pending approval because the expiry clock is invalid.";
+    }
     await writePending(pendingPath, {
       id: randomUUID(),
       createdAt: now.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: new Date(expiresAtMs).toISOString(),
       operation,
       auditDetails: buildAuditDetails(input),
     });

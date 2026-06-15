@@ -1,3 +1,5 @@
+// Implements guided and non-interactive `openclaw channels add` account setup.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
@@ -6,14 +8,20 @@ import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import {
+  formatUnknownChannelMessage,
+  formatUnsupportedChannelActionMessage,
+} from "../../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { WizardCancelledError } from "../../wizard/prompts.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
@@ -60,8 +68,8 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
           }),
       )
     : await import("../../channels/plugins/catalog.js").then(
-        ({ listChannelPluginCatalogEntries }) =>
-          listChannelPluginCatalogEntries({ excludeWorkspace: true }),
+        ({ listRawChannelPluginCatalogEntries }) =>
+          listRawChannelPluginCatalogEntries({ excludeWorkspace: true }),
       );
   return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
@@ -73,14 +81,15 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
   });
 }
 
-function parseOptionalInt(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return value;
+function parseOptionalInt(value: unknown, flag: string): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
   }
-  if (typeof value === "string" && value.trim()) {
-    return Number.parseInt(value, 10);
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a non-negative integer.`);
   }
-  return undefined;
+  return parsed;
 }
 
 function parseOptionalDelimitedInput(value: unknown): string[] | undefined {
@@ -110,15 +119,32 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
     input.secretFile ??= readOptionalString(input.tokenFile);
   }
 
-  input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit);
+  input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit, "--initial-sync-limit");
   input.groupChannels = parseOptionalDelimitedInput(opts.groupChannels);
   input.dmAllowlist = parseOptionalDelimitedInput(opts.dmAllowlist);
   return input as ChannelSetupInput;
 }
 
+/** Add or configure a channel account, using the wizard when no concrete flags are supplied. */
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
+  params?: { hasFlags?: boolean },
+) {
+  try {
+    return await channelsAddCommandImpl(opts, runtime, params);
+  } catch (err) {
+    if (err instanceof WizardCancelledError) {
+      runtime.exit(1);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function channelsAddCommandImpl(
+  opts: ChannelsAddOptions,
+  runtime: RuntimeEnv,
   params?: { hasFlags?: boolean },
 ) {
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
@@ -142,13 +168,15 @@ export async function channelsAddCommand(
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
     const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
     await prompter.intro("Channel setup");
-    let nextConfig = await onboardChannels.setupChannels(cfg, runtime, prompter, {
+    let nextConfigLocal = await onboardChannels.setupChannels(cfg, runtime, prompter, {
       allowDisable: false,
       allowSignalInstall: true,
       onPostWriteHook: (hook) => {
         postWriteHooks.collect(hook);
       },
       promptAccountIds: true,
+      deferStatusUntilSelection: true,
+      skipStatusNote: true,
       onSelection: (value) => {
         selection = value;
       },
@@ -160,30 +188,30 @@ export async function channelsAddCommand(
       },
     });
     if (selection.length === 0) {
-      await prompter.outro("No channels selected.");
+      await prompter.outro("No channel changes made.");
       return;
     }
 
     const wantsNames = await prompter.confirm({
-      message: "Add display names for these accounts? (optional)",
+      message: "Name these channel accounts now? (optional)",
       initialValue: false,
     });
     if (wantsNames) {
       for (const channel of selection) {
         const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
         const plugin = resolvedPlugins.get(channel) ?? getLoadedChannelPlugin(channel);
-        const account = plugin?.config.resolveAccount(nextConfig, accountId) as
+        const account = plugin?.config.resolveAccount(nextConfigLocal, accountId) as
           | { name?: string }
           | undefined;
-        const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
+        const snapshot = plugin?.config.describeAccount?.(account, nextConfigLocal);
         const existingName = snapshot?.name ?? account?.name;
         const name = await prompter.text({
-          message: `${channel} account name (${accountId})`,
+          message: `${channel} display name for account "${accountId}"`,
           initialValue: existingName,
         });
         if (name?.trim()) {
-          nextConfig = applyAccountName({
-            cfg: nextConfig,
+          nextConfigLocal = applyAccountName({
+            cfg: nextConfigLocal,
             channel,
             accountId,
             name,
@@ -208,28 +236,28 @@ export async function channelsAddCommand(
       );
     if (bindTargets.length > 0) {
       const bindNow = await prompter.confirm({
-        message: "Bind configured channel accounts to agents now?",
+        message: "Route these channel accounts to agents now?",
         initialValue: true,
       });
       if (bindNow) {
-        const agentSummaries = buildAgentSummaries(nextConfig);
-        const defaultAgentId = resolveDefaultAgentId(nextConfig);
+        const agentSummaries = buildAgentSummaries(nextConfigLocal);
+        const defaultAgentId = resolveDefaultAgentId(nextConfigLocal);
         for (const target of bindTargets) {
           const targetAgentId = await prompter.select({
-            message: `Route ${target.channel} account "${target.accountId}" to agent`,
+            message: `Send ${target.channel}/${target.accountId} messages to agent`,
             options: agentSummaries.map((agent) => ({
               value: agent.id,
               label: agent.isDefault ? `${agent.id} (default)` : agent.id,
             })),
             initialValue: defaultAgentId,
           });
-          const bindingResult = applyAgentBindings(nextConfig, [
+          const bindingResult = applyAgentBindings(nextConfigLocal, [
             {
               agentId: targetAgentId,
               match: { channel: target.channel, accountId: target.accountId },
             },
           ]);
-          nextConfig = bindingResult.config;
+          nextConfigLocal = bindingResult.config;
           if (bindingResult.added.length > 0 || bindingResult.updated.length > 0) {
             await prompter.note(
               [
@@ -256,7 +284,7 @@ export async function channelsAddCommand(
     }
 
     const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig,
+      nextConfig: nextConfigLocal,
       ...(baseHash !== undefined ? { baseHash } : {}),
     });
     const writtenConfig = committed.config;
@@ -279,7 +307,7 @@ export async function channelsAddCommand(
 
   const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
-  let catalogEntry = channel ? undefined : await resolveCatalogChannelEntry(rawChannel, nextConfig);
+  let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.
@@ -309,10 +337,14 @@ export async function channelsAddCommand(
     );
   };
 
-  if (!channel && catalogEntry) {
+  if (catalogEntry) {
     const workspaceDir = resolveWorkspaceDir();
     const { isCatalogChannelInstalled } = await import("../channel-setup/discovery.js");
+    const registeredPlugin = channel ? getLoadedChannelPlugin(channel) : undefined;
+    const bundledSetupPlugin = channel ? getBundledChannelSetupPlugin(channel) : undefined;
     if (
+      !registeredPlugin &&
+      !bundledSetupPlugin &&
       !isCatalogChannelInstalled({
         cfg: nextConfig,
         entry: catalogEntry,
@@ -339,13 +371,13 @@ export async function channelsAddCommand(
         ...(result.pluginId ? { pluginId: result.pluginId } : {}),
       };
     }
-    channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
+    channel ??= normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }
 
   if (!channel) {
     const hint = catalogEntry
-      ? `Plugin ${catalogEntry.meta.label} could not be loaded after install.`
-      : `Unknown channel: ${rawChannel}`;
+      ? `Plugin ${catalogEntry.meta.label} could not be loaded after install. Run openclaw doctor --fix, then retry openclaw channels add.`
+      : formatUnknownChannelMessage({ channel: rawChannel });
     runtime.error(hint);
     runtime.exit(1);
     return;
@@ -353,7 +385,12 @@ export async function channelsAddCommand(
 
   const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
   if (!plugin?.setup?.applyAccountConfig) {
-    runtime.error(`Channel ${channel} does not support add.`);
+    runtime.error(
+      `${formatUnsupportedChannelActionMessage({
+        channel,
+        action: "non-interactive add",
+      })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`,
+    );
     runtime.exit(1);
     return;
   }

@@ -1,3 +1,4 @@
+// Google Meet type declarations define plugin contracts.
 import type { GoogleMeetMode, GoogleMeetModeInput, GoogleMeetTransport } from "../config.js";
 
 type GoogleMeetSessionState = "active" | "ended";
@@ -61,6 +62,15 @@ export type GoogleMeetChromeHealth = {
     direction: "client" | "server";
     type: string;
     detail?: string;
+  }>;
+  recentTalkEvents?: Array<{
+    id: string;
+    type: string;
+    sessionId: string;
+    turnId?: string;
+    seq: number;
+    timestamp: string;
+    final?: boolean;
   }>;
   manualActionRequired?: boolean;
   manualActionReason?: GoogleMeetManualActionReason;

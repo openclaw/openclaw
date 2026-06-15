@@ -9,11 +9,6 @@ enum GatewaySettingsStore {
     private static let instanceIdDefaultsKey = "node.instanceId"
     private static let preferredGatewayStableIDDefaultsKey = "gateway.preferredStableID"
     private static let lastDiscoveredGatewayStableIDDefaultsKey = "gateway.lastDiscoveredStableID"
-    private static let manualEnabledDefaultsKey = "gateway.manual.enabled"
-    private static let manualHostDefaultsKey = "gateway.manual.host"
-    private static let manualPortDefaultsKey = "gateway.manual.port"
-    private static let manualTlsDefaultsKey = "gateway.manual.tls"
-    private static let discoveryDebugLogsDefaultsKey = "gateway.discovery.debugLogs"
     private static let lastGatewayKindDefaultsKey = "gateway.last.kind"
     private static let lastGatewayHostDefaultsKey = "gateway.last.host"
     private static let lastGatewayPortDefaultsKey = "gateway.last.port"
@@ -32,6 +27,17 @@ enum GatewaySettingsStore {
         self.ensureStableInstanceID()
         self.ensurePreferredGatewayStableID()
         self.ensureLastDiscoveredGatewayStableID()
+    }
+
+    static func currentInstanceID(defaults: UserDefaults = .standard) -> String {
+        self.bootstrapPersistence()
+        if let value = defaults.string(forKey: self.instanceIdDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        {
+            return value
+        }
+        return self.loadStableInstanceID() ?? ""
     }
 
     static func loadStableInstanceID() -> String? {
@@ -110,8 +116,15 @@ enum GatewaySettingsStore {
     }
 
     static func saveGatewayToken(_ token: String, instanceId: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            _ = KeychainStore.delete(
+                service: self.gatewayService,
+                account: self.gatewayTokenAccount(instanceId: instanceId))
+            return
+        }
         _ = KeychainStore.saveString(
-            token,
+            trimmed,
             service: self.gatewayService,
             account: self.gatewayTokenAccount(instanceId: instanceId))
     }
@@ -125,8 +138,13 @@ enum GatewaySettingsStore {
     }
 
     static func saveGatewayBootstrapToken(_ token: String, instanceId: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            self.clearGatewayBootstrapToken(instanceId: instanceId)
+            return
+        }
         _ = KeychainStore.saveString(
-            token,
+            trimmed,
             service: self.gatewayService,
             account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
     }
@@ -145,8 +163,15 @@ enum GatewaySettingsStore {
     }
 
     static func saveGatewayPassword(_ password: String, instanceId: String) {
+        let trimmed = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            _ = KeychainStore.delete(
+                service: self.gatewayService,
+                account: self.gatewayPasswordAccount(instanceId: instanceId))
+            return
+        }
         _ = KeychainStore.saveString(
-            password,
+            trimmed,
             service: self.gatewayService,
             account: self.gatewayPasswordAccount(instanceId: instanceId))
     }
@@ -154,24 +179,6 @@ enum GatewaySettingsStore {
     enum LastGatewayConnection: Equatable {
         case manual(host: String, port: Int, useTLS: Bool, stableID: String)
         case discovered(stableID: String, useTLS: Bool)
-
-        var stableID: String {
-            switch self {
-            case let .manual(_, _, _, stableID):
-                stableID
-            case let .discovered(stableID, _):
-                stableID
-            }
-        }
-
-        var useTLS: Bool {
-            switch self {
-            case let .manual(_, _, useTLS, _):
-                useTLS
-            case let .discovered(_, useTLS):
-                useTLS
-            }
-        }
     }
 
     private enum LastGatewayKind: String, Codable {
@@ -197,17 +204,6 @@ enum GatewaySettingsStore {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if value?.isEmpty == false { return value }
         return nil
-    }
-
-    static func saveTalkProviderApiKey(_ apiKey: String?, provider: String) {
-        guard let providerId = self.normalizedTalkProviderID(provider) else { return }
-        let account = self.talkProviderApiKeyAccount(providerId: providerId)
-        let trimmed = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmed.isEmpty {
-            _ = KeychainStore.delete(service: self.talkService, account: account)
-            return
-        }
-        _ = KeychainStore.saveString(trimmed, service: self.talkService, account: account)
     }
 
     static func saveLastGatewayConnectionManual(host: String, port: Int, useTLS: Bool, stableID: String) {
@@ -548,13 +544,6 @@ enum GatewayDiagnostics {
             if let data = entry.data(using: .utf8) {
                 self.appendToLog(url: url, data: data)
             }
-        }
-    }
-
-    static func reset() {
-        guard let url = fileURL else { return }
-        self.queue.async {
-            try? FileManager.default.removeItem(at: url)
         }
     }
 }

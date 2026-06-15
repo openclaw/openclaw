@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+/**
+ * Gateway runtime service lifecycle tests.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -30,6 +33,7 @@ vi.mock("../infra/env.js", () => ({
 
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: hoisted.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: hoisted.deliverOutboundPayloads,
 }));
 
 vi.mock("../infra/outbound/delivery-queue.js", () => ({
@@ -75,6 +79,10 @@ describe("server-runtime-services", () => {
     hoisted.deliverOutboundPayloads.mockClear();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("skips model pricing bootstrap import when pricing is disabled", async () => {
     activateGatewayScheduledServices({
       minimalTestGateway: false,
@@ -105,7 +113,6 @@ describe("server-runtime-services", () => {
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
-    await vi.dynamicImportSettled();
     expect(hoisted.loadModelPricingCacheModule).not.toHaveBeenCalled();
     expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
@@ -120,17 +127,7 @@ describe("server-runtime-services", () => {
       index: { plugins: [] },
       manifestRegistry: { plugins: [], diagnostics: [] },
     };
-    const cron = { start: vi.fn(async () => undefined) };
-    const log = createLog();
-
-    const services = activateGatewayScheduledServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cron,
-      logCron: { error: vi.fn() },
-      log,
+    const { cron, services } = activateScheduledServicesForTest({
       pluginLookUpTable: pluginLookUpTable as never,
     });
 
@@ -146,16 +143,7 @@ describe("server-runtime-services", () => {
   });
 
   it("does not start model pricing refresh after scheduled services stop before import settles", async () => {
-    const cron = { start: vi.fn(async () => undefined) };
-    const services = activateGatewayScheduledServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cron,
-      logCron: { error: vi.fn() },
-      log: createLog(),
-    });
+    const { services } = activateScheduledServicesForTest();
 
     services.stopModelPricingRefresh();
     await vi.dynamicImportSettled();
@@ -166,36 +154,31 @@ describe("server-runtime-services", () => {
 
   it("activates heartbeat, cron, and delivery recovery after sidecars are ready", async () => {
     vi.useFakeTimers();
-    const cron = { start: vi.fn(async () => undefined) };
     const log = createLog();
-
-    const services = activateGatewayScheduledServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cron,
-      logCron: { error: vi.fn() },
-      log,
-    });
+    const { cron, services } = activateScheduledServicesForTest({ log });
 
     expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
     expect(cron.start).toHaveBeenCalledTimes(1);
     expect(services.heartbeatRunner).toBe(hoisted.heartbeatRunner);
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
-    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: hoisted.deliverOutboundPayloads,
-        cfg: {},
-      }),
-    );
-    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deps: {},
-        maxEnqueuedAt: 123,
-      }),
-    );
+    expect(log.child).toHaveBeenNthCalledWith(1, "delivery-recovery");
+    expect(log.child).toHaveBeenNthCalledWith(2, "session-delivery-recovery");
+    const deliveryLog = log.child.mock.results[0]?.value;
+    const sessionDeliveryLog = log.child.mock.results[1]?.value;
+    if (!deliveryLog || !sessionDeliveryLog) {
+      throw new Error("Expected delivery recovery log children");
+    }
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith({
+      deliver: hoisted.deliverOutboundPayloads,
+      cfg: {},
+      log: deliveryLog,
+    });
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith({
+      deps: {},
+      maxEnqueuedAt: 123,
+      log: sessionDeliveryLog,
+    });
   });
 
   it("can defer cron startup while activating other scheduled services", async () => {
@@ -268,7 +251,9 @@ describe("server-runtime-services", () => {
   it("clears delayed maintenance handles when close starts during maintenance startup", async () => {
     vi.useFakeTimers();
     let closing = false;
-    let resolveMaintenance!: (maintenance: ReturnType<typeof createMaintenanceHandles>) => void;
+    let resolveMaintenance:
+      | ((maintenance: ReturnType<typeof createMaintenanceHandles>) => void)
+      | undefined;
     const startMaintenance = vi.fn(
       () =>
         new Promise<ReturnType<typeof createMaintenanceHandles>>((resolve) => {
@@ -278,6 +263,7 @@ describe("server-runtime-services", () => {
     const applyMaintenance = vi.fn();
     const cron = { start: vi.fn(async () => undefined) };
     const recordPostReadyMemory = vi.fn();
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
 
     scheduleGatewayPostReadyMaintenance(
       createPostReadyMaintenanceScheduleParams({
@@ -294,14 +280,21 @@ describe("server-runtime-services", () => {
     expect(startMaintenance).toHaveBeenCalledTimes(1);
 
     closing = true;
-    resolveMaintenance(createMaintenanceHandles());
+    if (!resolveMaintenance) {
+      throw new Error("Expected gateway maintenance resolver to be initialized");
+    }
+    const maintenance = createMaintenanceHandles();
+    resolveMaintenance(maintenance);
     await Promise.resolve();
     await Promise.resolve();
 
     expect(applyMaintenance).not.toHaveBeenCalled();
     expect(cron.start).not.toHaveBeenCalled();
     expect(recordPostReadyMemory).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.tickInterval);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.healthInterval);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.dedupeCleanup);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.mediaCleanup);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {
@@ -337,6 +330,28 @@ function createLog() {
     warn: vi.fn(),
     error: vi.fn(),
   };
+}
+
+function createTestCron() {
+  return { start: vi.fn(async () => undefined) };
+}
+
+function activateScheduledServicesForTest(
+  overrides: Partial<Parameters<typeof activateGatewayScheduledServices>[0]> = {},
+) {
+  const cron = overrides.cron ?? createTestCron();
+  const log = overrides.log ?? createLog();
+  const services = activateGatewayScheduledServices({
+    minimalTestGateway: false,
+    cfgAtStart: {} as never,
+    deps: {} as never,
+    sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+    logCron: { error: vi.fn() },
+    ...overrides,
+    cron,
+    log,
+  });
+  return { cron, log, services };
 }
 
 function createPostReadyMaintenanceScheduleParams(

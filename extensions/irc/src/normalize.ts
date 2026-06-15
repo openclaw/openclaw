@@ -1,7 +1,9 @@
+// Irc helper module supports normalize behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasIrcControlChars } from "./control-chars.js";
 import type { IrcInboundMessage } from "./types.js";
 
@@ -93,7 +95,7 @@ export function resolveIrcAllowlistMatch(params: {
   message: IrcInboundMessage;
   allowNameMatching?: boolean;
 }): { allowed: boolean; source?: string } {
-  const allowFrom = new Set(params.allowFrom.map(normalizeLowercaseStringOrEmpty).filter(Boolean));
+  const allowFrom = new Set(normalizeStringEntriesLower(params.allowFrom));
   if (allowFrom.has("*")) {
     return { allowed: true, source: "wildcard" };
   }

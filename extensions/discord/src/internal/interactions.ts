@@ -1,3 +1,4 @@
+// Discord plugin module implements interactions behavior.
 import {
   ComponentType,
   InteractionResponseType,
@@ -286,7 +287,7 @@ export class BaseComponentInteraction extends BaseInteraction {
   async update(payload: MessagePayload): Promise<unknown> {
     return await this.callback(InteractionResponseType.UpdateMessage, serializePayload(payload));
   }
-  async acknowledge(): Promise<unknown> {
+  override async acknowledge(): Promise<unknown> {
     return await this.callback(InteractionResponseType.DeferredMessageUpdate);
   }
   async showModal(modal: Modal): Promise<unknown> {
@@ -323,7 +324,7 @@ export class ModalInteraction extends BaseInteraction {
       client,
     );
   }
-  async acknowledge(): Promise<unknown> {
+  override async acknowledge(): Promise<unknown> {
     return await this.callback(InteractionResponseType.DeferredMessageUpdate);
   }
 }

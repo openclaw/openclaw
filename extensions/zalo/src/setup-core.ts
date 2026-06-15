@@ -1,3 +1,4 @@
+// Zalo plugin module implements setup core behavior.
 import {
   addWildcardAllowFrom,
   createDelegatedSetupWizardProxy,
@@ -5,11 +6,14 @@ import {
   createSetupInputPresenceValidator,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 import { promptZaloAllowFrom } from "./setup-allow-from.js";
+
+const t = createSetupTranslator();
 
 const channel = "zalo" as const;
 
@@ -57,7 +61,7 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         },
   getCurrent: (cfg, accountId) =>
     resolveZaloAccount({
-      cfg: cfg,
+      cfg,
       accountId: accountId ?? resolveDefaultZaloAccountId(cfg),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
@@ -66,7 +70,7 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
         : resolveDefaultZaloAccountId(cfg);
     const resolved = resolveZaloAccount({
-      cfg: cfg,
+      cfg,
       accountId: resolvedAccountId,
     });
     if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
@@ -125,10 +129,10 @@ export function createZaloSetupWizardProxy(
     channel,
     loadWizard,
     status: {
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs token",
-      configuredHint: "recommended · configured",
-      unconfiguredHint: "recommended · newcomer-friendly",
+      configuredLabel: t("wizard.channels.statusConfigured"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsToken"),
+      configuredHint: t("wizard.channels.statusRecommendedConfigured"),
+      unconfiguredHint: t("wizard.channels.statusRecommendedNewcomerFriendly"),
       configuredScore: 1,
       unconfiguredScore: 10,
     },

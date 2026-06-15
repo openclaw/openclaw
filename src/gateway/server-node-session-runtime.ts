@@ -1,12 +1,16 @@
-import { NodeRegistry } from "./node-registry.js";
+// Gateway node session runtime factory.
+// Creates node registry, subscription, and voice-wake fanout state.
+import { NodeRegistry, type SerializedEventPayload } from "./node-registry.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import { safeParseJson } from "./server-json.js";
-import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
+import { hasConnectedTalkNode } from "./server-talk-nodes.js";
 
+// Node session runtime owns connected node registry state, session event
+// subscriptions, and voice-wake fanout helpers for the gateway process.
+/** Creates node registry/subscription runtime state for a gateway server. */
 export function createGatewayNodeSessionRuntime(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
 }) {
@@ -15,10 +19,15 @@ export function createGatewayNodeSessionRuntime(params: {
   const nodeSubscriptions = createNodeSubscriptionManager();
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();
   const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-  const nodeSendEvent = (opts: { nodeId: string; event: string; payloadJSON?: string | null }) => {
-    const payload = safeParseJson(opts.payloadJSON ?? null);
-    nodeRegistry.sendEvent(opts.nodeId, opts.event, payload);
+  const nodeSendEvent = (opts: {
+    nodeId: string;
+    event: string;
+    payloadJSON?: SerializedEventPayload | null;
+  }) => {
+    nodeRegistry.sendEventRaw(opts.nodeId, opts.event, opts.payloadJSON ?? null);
   };
+  // Session fanout goes through the subscription manager so node reconnects and
+  // explicit unsubscribes keep both node->session indexes in sync.
   const nodeSendToSession = (sessionKey: string, event: string, payload: unknown) =>
     nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent);
   const nodeSendToAllSubscribed = (event: string, payload: unknown) =>
@@ -26,7 +35,7 @@ export function createGatewayNodeSessionRuntime(params: {
   const broadcastVoiceWakeChanged = (triggers: string[]) => {
     params.broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
-  const hasMobileNodeConnected = () => hasConnectedMobileNode(nodeRegistry);
+  const hasTalkNodeConnected = () => hasConnectedTalkNode(nodeRegistry);
 
   return {
     nodeRegistry,
@@ -39,6 +48,6 @@ export function createGatewayNodeSessionRuntime(params: {
     nodeUnsubscribe: nodeSubscriptions.unsubscribe,
     nodeUnsubscribeAll: nodeSubscriptions.unsubscribeAll,
     broadcastVoiceWakeChanged,
-    hasMobileNodeConnected,
+    hasTalkNodeConnected,
   };
 }

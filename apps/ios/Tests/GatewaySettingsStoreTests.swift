@@ -9,11 +9,9 @@ private struct KeychainEntry: Hashable {
 
 private let gatewayService = "ai.openclaw.gateway"
 private let nodeService = "ai.openclaw.node"
-private let talkService = "ai.openclaw.talk"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
 private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
 private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
-private let talkAcmeProviderEntry = KeychainEntry(service: talkService, account: "provider.apiKey.acme")
 private let bootstrapDefaultsKeys = [
     "node.instanceId",
     "gateway.preferredStableID",
@@ -186,18 +184,5 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(defaults.object(forKey: "gateway.last.stableID") == nil)
             #expect(defaults.object(forKey: "gateway.last.host") == nil)
         }
-    }
-
-    @Test func talkProviderApiKey_genericRoundTrip() {
-        let keychainSnapshot = snapshotKeychain([talkAcmeProviderEntry])
-        defer { restoreKeychain(keychainSnapshot) }
-
-        _ = KeychainStore.delete(service: talkService, account: talkAcmeProviderEntry.account)
-
-        GatewaySettingsStore.saveTalkProviderApiKey("acme-key", provider: "acme")
-        #expect(GatewaySettingsStore.loadTalkProviderApiKey(provider: "acme") == "acme-key")
-
-        GatewaySettingsStore.saveTalkProviderApiKey(nil, provider: "acme")
-        #expect(GatewaySettingsStore.loadTalkProviderApiKey(provider: "acme") == nil)
     }
 }

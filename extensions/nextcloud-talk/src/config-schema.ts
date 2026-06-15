@@ -1,3 +1,4 @@
+// Nextcloud Talk helper module supports config schema behavior.
 import {
   DmPolicySchema,
   GroupPolicySchema,
@@ -7,7 +8,7 @@ import {
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
 const NextcloudTalkRoomSchema = z

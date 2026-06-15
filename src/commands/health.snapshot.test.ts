@@ -1,3 +1,4 @@
+// Health snapshot tests cover channel, session, runtime, and gateway health snapshot construction.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,10 +6,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { HealthSummary } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
 let testStore: Record<string, { updatedAt?: number }> = {};
+let listHealthSessionEntriesCalls: Array<{ agentId?: string; storePath?: string }> = [];
 let healthPluginsForTest: HealthTestPlugin[] = [];
 
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
@@ -42,6 +45,12 @@ type DiscordHealthAccount = {
   configured: boolean;
 };
 
+type IMessageHealthAccount = {
+  accountId: string;
+  enabled: boolean;
+  configured: boolean;
+};
+
 async function loadFreshHealthModulesForTest() {
   vi.doMock("../config/config.js", () => ({
     getRuntimeConfig: () => testConfig,
@@ -61,6 +70,12 @@ async function loadFreshHealthModulesForTest() {
   }));
   vi.doMock("../config/sessions/store.js", () => ({
     loadSessionStore: () => testStore,
+  }));
+  vi.doMock("../config/sessions/session-accessor.js", () => ({
+    listSessionEntries: (scope?: { agentId?: string; storePath?: string }) => {
+      listHealthSessionEntriesCalls.push(scope ?? {});
+      return Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    },
   }));
   vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: vi.fn(async () => true),
@@ -95,7 +110,12 @@ function getTelegramChannelConfig(cfg: Record<string, unknown>) {
 function listTelegramAccountIdsForTest(cfg: Record<string, unknown>): string[] {
   const telegram = getTelegramChannelConfig(cfg);
   const accounts = telegram.accounts as Record<string, unknown> | undefined;
-  const ids = Object.keys(accounts ?? {}).filter(Boolean);
+  const ids: string[] = [];
+  for (const accountId of Object.keys(accounts ?? {})) {
+    if (accountId) {
+      ids.push(accountId);
+    }
+  }
   return ids.length > 0 ? ids : ["default"];
 }
 
@@ -300,6 +320,8 @@ function createTelegramHealthPlugin(): HealthTestPlugin {
       listAccountIds: (cfg) => listTelegramAccountIdsForTest(cfg as Record<string, unknown>),
       resolveAccount: (cfg, accountId) =>
         resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
+      inspectAccount: (cfg, accountId) =>
+        resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
       isConfigured: (account) => Boolean((account as TelegramHealthAccount).token.trim()),
     },
     status: {
@@ -398,6 +420,43 @@ function createDiscordHealthPlugin(): HealthTestPlugin {
   };
 }
 
+function createIMessageHealthPlugin(): HealthTestPlugin {
+  return {
+    ...createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: (_cfg, accountId) => ({
+        accountId: accountId?.trim() || "default",
+        enabled: true,
+        configured: true,
+      }),
+      inspectAccount: (_cfg, accountId) => ({
+        accountId: accountId?.trim() || "default",
+        enabled: true,
+        configured: true,
+      }),
+      isEnabled: (account) => (account as IMessageHealthAccount).enabled,
+      isConfigured: (account) => (account as IMessageHealthAccount).configured,
+    },
+    status: {
+      buildChannelSummary: ({ snapshot }) => ({
+        accountId: snapshot.accountId,
+        configured: Boolean(snapshot.configured),
+        ...(snapshot.probe && typeof snapshot.probe === "object" ? { probe: snapshot.probe } : {}),
+      }),
+      probeAccount: async () => ({
+        ok: false,
+        error:
+          "imsg cannot access /Users/alice/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway. privateApi=/tmp/openclaw/private.sock",
+        privateApi: {
+          rpcCommand: "imsg rpc --json",
+          diagnostics: "sensitive transport details",
+        },
+      }),
+    },
+  };
+}
+
 describe("getHealthSnapshot", () => {
   beforeAll(async () => {
     ({
@@ -411,6 +470,7 @@ describe("getHealthSnapshot", () => {
   beforeEach(() => {
     buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
     probeTelegramAccountForTestOverride = undefined;
+    listHealthSessionEntriesCalls = [];
     healthPluginsForTest = [createTelegramHealthPlugin()];
     setActivePluginRegistry(
       createTestRegistry([
@@ -422,6 +482,23 @@ describe("getHealthSnapshot", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it("clamps oversized probe timeouts", async () => {
+    testConfig = {
+      session: { store: "/tmp/x" },
+      channels: { telegram: { botToken: "123:test" } },
+    };
+    testStore = {};
+    const timeouts: number[] = [];
+    probeTelegramAccountForTestOverride = async (_account, timeoutMs) => {
+      timeouts.push(timeoutMs);
+      return { ok: true };
+    };
+
+    await getHealthSnapshot({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+    expect(timeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 
   it("includes active plugin load errors in the health snapshot", async () => {
@@ -507,8 +584,8 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
-    expect(calls.some((c) => c.includes("/getMe"))).toBe(true);
-    expect(calls.some((c) => c.includes("/getWebhookInfo"))).toBe(true);
+    expect(calls.join("\n")).toContain("/getMe");
+    expect(calls.join("\n")).toContain("/getWebhookInfo");
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
@@ -520,7 +597,7 @@ describe("getHealthSnapshot", () => {
       );
       expect(tokenFileProbe.telegram.configured).toBe(true);
       expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
-      expect(tokenFileProbe.calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);
+      expect(tokenFileProbe.calls.join("\n")).toContain("bott-file/getMe");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -616,13 +693,11 @@ describe("getHealthSnapshot", () => {
     expect(discord.connected).toBe(true);
     expect(discord.tokenSource).toBe("config");
     expect(discord.tokenStatus).toBe("available");
-    expect(discord.accounts?.default).toMatchObject({
-      configured: true,
-      running: true,
-      connected: true,
-      tokenSource: "config",
-      tokenStatus: "available",
-    });
+    expect(discord.accounts?.default?.configured).toBe(true);
+    expect(discord.accounts?.default?.running).toBe(true);
+    expect(discord.accounts?.default?.connected).toBe(true);
+    expect(discord.accounts?.default?.tokenSource).toBe("config");
+    expect(discord.accounts?.default?.tokenStatus).toBe("available");
   });
 
   it("preserves plugin-derived configured state for unavailable SecretRef credentials", async () => {
@@ -671,11 +746,9 @@ describe("getHealthSnapshot", () => {
     expect(discord.configured).toBe(true);
     expect(discord.tokenSource).toBe("config");
     expect(discord.tokenStatus).toBe("configured_unavailable");
-    expect(discord.accounts?.default).toMatchObject({
-      configured: true,
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-    });
+    expect(discord.accounts?.default?.configured).toBe(true);
+    expect(discord.accounts?.default?.tokenSource).toBe("config");
+    expect(discord.accounts?.default?.tokenStatus).toBe("configured_unavailable");
   });
 
   it("omits secret runtime fields and raw probe payloads from non-sensitive health snapshots", async () => {
@@ -739,6 +812,75 @@ describe("getHealthSnapshot", () => {
     expect(telegram.accounts?.default?.connected).toBe(true);
     expect(telegram.accounts?.default?.probe).toBeUndefined();
     expect(telegram.accounts?.default?.channelAccessToken).toBeUndefined();
+  });
+
+  it("keeps redacted failed probes in non-sensitive health snapshots", async () => {
+    healthPluginsForTest = [createIMessageHealthPlugin()];
+    testConfig = { channels: { imessage: { enabled: true } } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      includeSensitive: false,
+    });
+    const imessage = snap.channels.imessage as {
+      configured?: boolean;
+      probe?: {
+        ok?: boolean;
+        error?: string;
+        privateApi?: unknown;
+      };
+      accounts?: Record<
+        string,
+        {
+          probe?: {
+            ok?: boolean;
+            error?: string;
+            privateApi?: unknown;
+          };
+        }
+      >;
+    };
+
+    expect(imessage.configured).toBe(true);
+    expect(imessage.probe).toEqual({
+      ok: false,
+      error:
+        "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    });
+    expect(imessage.probe?.privateApi).toBeUndefined();
+    expect(imessage.accounts?.default?.probe).toEqual({
+      ok: false,
+      error:
+        "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    });
+    expect(imessage.accounts?.default?.probe?.privateApi).toBeUndefined();
+  });
+
+  it("omits generic failed probe errors from non-sensitive health snapshots", async () => {
+    testConfig = { channels: { telegram: { botToken: "bad-token" } } };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down with private diagnostic");
+      }),
+    );
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      includeSensitive: false,
+    });
+    const telegram = snap.channels.telegram as {
+      configured?: boolean;
+      probe?: unknown;
+      accounts?: Record<string, { probe?: unknown }>;
+    };
+
+    expect(telegram.configured).toBe(true);
+    expect(telegram.probe).toBeUndefined();
+    expect(telegram.accounts?.default?.probe).toBeUndefined();
   });
 
   it("returns structured telegram probe errors", async () => {
@@ -815,7 +957,23 @@ describe("getHealthSnapshot", () => {
 
     expect(main?.heartbeat.everyMs).toBeNull();
     expect(main?.heartbeat.every).toBe("disabled");
-    expect(ops?.heartbeat.everyMs).toBeTruthy();
+    expect(ops?.heartbeat.everyMs).toBe(60 * 60 * 1000);
     expect(ops?.heartbeat.every).toBe("1h");
+  });
+
+  it("passes agent scope when summarizing configured agent sessions", async () => {
+    testConfig = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+    };
+    testStore = {};
+
+    await getHealthSnapshot({ timeoutMs: 10, probe: false });
+
+    expect(listHealthSessionEntriesCalls).toEqual([
+      { agentId: "main", storePath: "/tmp/sessions.json" },
+      { agentId: "ops", storePath: "/tmp/sessions.json" },
+    ]);
   });
 });

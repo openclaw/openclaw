@@ -1,4 +1,5 @@
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
+// Telegram tests cover network config plugin behavior.
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({

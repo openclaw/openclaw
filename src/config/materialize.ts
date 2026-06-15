@@ -1,8 +1,10 @@
+// Materializes normalized config into runtime-ready settings.
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
   applyAgentDefaults,
+  applyCronDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
@@ -15,6 +17,7 @@ import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./type
 
 type ConfigMaterializationMode = "load" | "missing" | "snapshot";
 
+/** Defaults profile selected for config load, missing-file, or snapshot materialization. */
 type MaterializationProfile = {
   includeCompactionDefaults: boolean;
   includeContextPruningDefaults: boolean;
@@ -54,7 +57,10 @@ export function asRuntimeConfig(config: OpenClawConfig): RuntimeConfig {
 export function materializeRuntimeConfig(
   config: OpenClawConfig,
   mode: ConfigMaterializationMode,
-  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
+  options: {
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+    loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
+  } = {},
 ): RuntimeConfig {
   const profile = MATERIALIZATION_PROFILES[mode];
   let next = applyMessageDefaults(config);
@@ -63,13 +69,17 @@ export function materializeRuntimeConfig(
   }
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
+  next = applyCronDefaults(next);
   if (profile.includeContextPruningDefaults) {
     next = applyContextPruningDefaults(next, { manifestRegistry: options.manifestRegistry });
   }
   if (profile.includeCompactionDefaults) {
     next = applyCompactionDefaults(next);
   }
-  next = applyModelDefaults(next, { manifestRegistry: options.manifestRegistry });
+  next = applyModelDefaults(next, {
+    manifestRegistry: options.manifestRegistry,
+    loadManifestRegistry: options.loadManifestRegistry,
+  });
   next = applyTalkConfigNormalization(next);
   if (profile.normalizePaths) {
     normalizeConfigPaths(next);

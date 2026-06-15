@@ -1,3 +1,4 @@
+// Verifies sandbox config merge precedence across global, agent, and shared scopes.
 import { describe, expect, it } from "vitest";
 import {
   resolveSandboxBrowserConfig,
@@ -60,6 +61,7 @@ describe("sandbox config merges", () => {
   });
 
   it("resolves docker binds and shared-scope override behavior", () => {
+    // Shared scope intentionally ignores agent-specific Docker overrides.
     for (const scenario of [
       {
         name: "merges sandbox docker binds (global + agent combined)",
@@ -169,13 +171,11 @@ describe("sandbox config merges", () => {
         strictHostKeyChecking: false,
       },
     });
-    expect(ssh).toMatchObject({
-      target: "agent@example.com:2222",
-      command: "ssh",
-      identityFile: "~/.ssh/global",
-      certificateFile: "~/.ssh/agent-cert.pub",
-      strictHostKeyChecking: false,
-    });
+    expect(ssh.target).toBe("agent@example.com:2222");
+    expect(ssh.command).toBe("ssh");
+    expect(ssh.identityFile).toBe("~/.ssh/global");
+    expect(ssh.certificateFile).toBe("~/.ssh/agent-cert.pub");
+    expect(ssh.strictHostKeyChecking).toBe(false);
 
     const sshShared = resolveSandboxSshConfig({
       scope: "shared",

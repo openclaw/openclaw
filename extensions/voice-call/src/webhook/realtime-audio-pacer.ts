@@ -1,9 +1,11 @@
+// Realtime telephony audio pacing and speech-start detection for mulaw streams.
+
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
 const TELEPHONY_CHUNK_MS = 20;
-const DEFAULT_SPEECH_RMS_THRESHOLD = 0.02;
-const DEFAULT_REQUIRED_LOUD_CHUNKS = 2;
-const DEFAULT_REQUIRED_QUIET_CHUNKS = 10;
+const DEFAULT_SPEECH_RMS_THRESHOLD = 0.035;
+const DEFAULT_REQUIRED_LOUD_CHUNKS = 4;
+const DEFAULT_REQUIRED_QUIET_CHUNKS = 12;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
 const PCM16_MAX_AMPLITUDE = 32768;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
@@ -12,7 +14,8 @@ for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
   MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
 }
 
-type RealtimeTwilioAudioQueueItem =
+/** Queue item sent over the realtime provider media stream. */
+type RealtimeAudioQueueItem =
   | {
       chunk: Buffer;
       durationMs: number;
@@ -23,10 +26,19 @@ type RealtimeTwilioAudioQueueItem =
       type: "mark";
     };
 
-export type RealtimeTwilioAudioPacerSendJson = (message: unknown) => boolean;
+/** WebSocket send callback for realtime audio frames. */
+export type RealtimeAudioSend = (message: string) => boolean;
 
-export class RealtimeTwilioAudioPacer {
-  private queue: RealtimeTwilioAudioQueueItem[] = [];
+/** Provider-specific serializer for media, clear, and mark frames. */
+export interface RealtimeAudioSerializer {
+  media(payloadBase64: string): string;
+  clear(): string;
+  mark(name: string): string;
+}
+
+/** Paces outgoing mulaw audio frames at telephony cadence. */
+export class RealtimeAudioPacer {
+  private queue: RealtimeAudioQueueItem[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
@@ -35,11 +47,12 @@ export class RealtimeTwilioAudioPacer {
     private readonly params: {
       maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
-      sendJson: RealtimeTwilioAudioPacerSendJson;
-      streamSid: string;
+      send: RealtimeAudioSend;
+      serializer: RealtimeAudioSerializer;
     },
   ) {}
 
+  /** Queue mulaw audio and split it into 20ms-ish telephony chunks. */
   sendAudio(muLaw: Buffer): void {
     if (this.closed || muLaw.length === 0) {
       return;
@@ -61,6 +74,7 @@ export class RealtimeTwilioAudioPacer {
     this.ensurePump();
   }
 
+  /** Queue a provider mark frame after prior audio frames. */
   sendMark(name: string): void {
     if (this.closed || !name) {
       return;
@@ -69,16 +83,20 @@ export class RealtimeTwilioAudioPacer {
     this.ensurePump();
   }
 
-  clearAudio(): void {
+  /** Clear queued audio and notify the provider stream. */
+  clearAudio(): number {
     if (this.closed) {
-      return;
+      return 0;
     }
+    const clearedAudioBytes = this.queuedAudioBytes;
     this.clearTimer();
     this.queue = [];
     this.queuedAudioBytes = 0;
-    this.params.sendJson({ event: "clear", streamSid: this.params.streamSid });
+    this.params.send(this.params.serializer.clear());
+    return clearedAudioBytes;
   }
 
+  /** Stop sending and discard queued frames. */
   close(): void {
     this.closed = true;
     this.clearTimer();
@@ -86,6 +104,7 @@ export class RealtimeTwilioAudioPacer {
     this.queuedAudioBytes = 0;
   }
 
+  /** Clear the scheduled pump timer. */
   private clearTimer(): void {
     if (!this.timer) {
       return;
@@ -94,17 +113,20 @@ export class RealtimeTwilioAudioPacer {
     this.timer = null;
   }
 
+  /** Start the pump when queued work exists and no timer is active. */
   private ensurePump(): void {
     if (!this.timer) {
       this.pump();
     }
   }
 
+  /** Close the pacer and notify the caller about queued-audio backpressure. */
   private failBackpressure(): void {
     this.close();
     this.params.onBackpressure?.();
   }
 
+  /** Send one queued item and schedule the next send based on audio duration. */
   private pump(): void {
     this.timer = null;
     if (this.closed) {
@@ -116,21 +138,13 @@ export class RealtimeTwilioAudioPacer {
     }
 
     let delayMs = 0;
-    let sent = true;
+    let sent;
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-      sent = this.params.sendJson({
-        event: "media",
-        streamSid: this.params.streamSid,
-        media: { payload: item.chunk.toString("base64") },
-      });
+      sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
       delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
     } else {
-      sent = this.params.sendJson({
-        event: "mark",
-        streamSid: this.params.streamSid,
-        mark: { name: item.name },
-      });
+      sent = this.params.send(this.params.serializer.mark(item.name));
     }
 
     if (!sent) {
@@ -144,18 +158,20 @@ export class RealtimeTwilioAudioPacer {
   }
 }
 
+/** Calculate normalized RMS from mulaw bytes. */
 export function calculateMulawRms(muLaw: Buffer): number {
   if (muLaw.length === 0) {
     return 0;
   }
   let sum = 0;
-  for (let i = 0; i < muLaw.length; i += 1) {
-    const normalized = (MULAW_LINEAR_SAMPLES[muLaw[i] ?? 0] ?? 0) / PCM16_MAX_AMPLITUDE;
+  for (const sample of muLaw) {
+    const normalized = (MULAW_LINEAR_SAMPLES[sample] ?? 0) / PCM16_MAX_AMPLITUDE;
     sum += normalized * normalized;
   }
   return Math.sqrt(sum / muLaw.length);
 }
 
+/** Detect likely speech start from consecutive loud mulaw chunks. */
 export class RealtimeMulawSpeechStartDetector {
   private loudChunks = 0;
   private quietChunks = DEFAULT_REQUIRED_QUIET_CHUNKS;
@@ -169,6 +185,7 @@ export class RealtimeMulawSpeechStartDetector {
     } = {},
   ) {}
 
+  /** Accept one mulaw chunk and return true only on transition into speaking. */
   accept(muLaw: Buffer): boolean {
     const rms = calculateMulawRms(muLaw);
     const threshold = this.params.rmsThreshold ?? DEFAULT_SPEECH_RMS_THRESHOLD;
@@ -193,6 +210,7 @@ export class RealtimeMulawSpeechStartDetector {
   }
 }
 
+/** Decode one G.711 mulaw byte to a linear PCM sample. */
 function decodeMulawSample(value: number): number {
   const muLaw = ~value & 0xff;
   const sign = muLaw & 0x80;

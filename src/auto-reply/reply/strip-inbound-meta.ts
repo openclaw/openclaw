@@ -1,16 +1,20 @@
 /**
  * Strips OpenClaw-injected inbound metadata blocks from a user-role message
- * text before it is displayed in any UI surface (TUI, webchat, macOS app).
+ * text before it is displayed in any UI surface (TUI, webchat, macOS app) or
+ * replayed as historical context to the model.
  *
  * Background: `buildInboundUserContextPrefix` in `inbound-meta.ts` prepends
  * structured metadata blocks (Conversation info, Sender info, reply context,
  * etc.) directly to the stored user message content so the LLM can access
- * them. These blocks are AI-facing only and must never surface in user-visible
- * chat history.
+ * them. These blocks are current-turn AI-facing context only and must never
+ * surface in user-visible chat history or accumulate in historical prompt
+ * replay.
  *
  * Also strips the timestamp prefix injected by `injectTimestamp` so UI surfaces
  * do not show AI-facing envelope metadata as user text.
  */
+
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
 
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 
@@ -35,10 +39,20 @@ const [CONVERSATION_INFO_SENTINEL, SENDER_INFO_SENTINEL] = INBOUND_META_SENTINEL
 
 // Pre-compiled fast-path regex — avoids line-by-line parse when no blocks present.
 const SENTINEL_FAST_RE = new RegExp(
-  [...INBOUND_META_SENTINELS, UNTRUSTED_CONTEXT_HEADER]
+  [...INBOUND_META_SENTINELS, ...MESSAGE_TOOL_DELIVERY_HINTS, UNTRUSTED_CONTEXT_HEADER]
     .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("|"),
 );
+
+/** Fast check for whether text contains any inbound metadata sentinel. */
+export function hasInboundMetadataSentinel(text: string): boolean {
+  return Boolean(text && SENTINEL_FAST_RE.test(text));
+}
+
+function isMessageToolDeliveryHintLine(line: string): boolean {
+  const trimmed = line.trim();
+  return MESSAGE_TOOL_DELIVERY_HINTS.some((hint) => hint === trimmed);
+}
 
 function isInboundMetaSentinelLine(line: string): boolean {
   const trimmed = line.trim();
@@ -180,6 +194,7 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
  * Returns the original string reference unchanged when no metadata is present
  * (fast path — zero allocation).
  */
+/** Strips all injected inbound metadata blocks from user-visible text. */
 export function stripInboundMetadata(text: string): string {
   if (!text) {
     return text;
@@ -203,6 +218,10 @@ export function stripInboundMetadata(text: string): string {
     // When this structured header appears, drop it and everything that follows.
     if (!inMetaBlock && shouldStripTrailingUntrustedContext(strippedLeadingPrefixLines, i)) {
       break;
+    }
+
+    if (!inMetaBlock && isMessageToolDeliveryHintLine(line)) {
+      continue;
     }
 
     // Detect start of a metadata block.
@@ -247,6 +266,7 @@ export function stripInboundMetadata(text: string): string {
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "");
 }
 
+/** Strips only leading inbound metadata blocks while preserving later user text. */
 export function stripLeadingInboundMetadata(text: string): string {
   if (!text || !SENTINEL_FAST_RE.test(text)) {
     return text;
@@ -262,8 +282,21 @@ export function stripLeadingInboundMetadata(text: string): string {
     return "";
   }
 
+  const strippedDeliveryHint = isMessageToolDeliveryHintLine(lines[index]);
+  while (index < lines.length && isMessageToolDeliveryHintLine(lines[index])) {
+    index++;
+    while (index < lines.length && lines[index] === "") {
+      index++;
+    }
+  }
+  if (index >= lines.length) {
+    return "";
+  }
+
   if (!isInboundMetaSentinelLine(lines[index])) {
-    const strippedNoLeading = stripTrailingUntrustedContextSuffix(lines);
+    const strippedNoLeading = stripTrailingUntrustedContextSuffix(
+      strippedDeliveryHint ? lines.slice(index) : lines,
+    );
     return strippedNoLeading.join("\n");
   }
 
@@ -295,6 +328,7 @@ export function stripLeadingInboundMetadata(text: string): string {
   return strippedRemainder.join("\n");
 }
 
+/** Extracts the sender label from injected inbound metadata when present. */
 export function extractInboundSenderLabel(text: string): string | null {
   if (!text || !SENTINEL_FAST_RE.test(text)) {
     return null;

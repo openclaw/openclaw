@@ -1124,7 +1124,7 @@ Optional overrides:
     introMessage: "Say exactly: I'm here.",
     providers: {
       google: {
-        voice: "Kore",
+        speakerVoice: "Kore",
       },
     },
   },
@@ -1141,7 +1141,7 @@ ElevenLabs for both agent-mode listening and speaking:
       providers: {
         elevenlabs: {
           modelId: "eleven_v3",
-          voiceId: "pMsXgVXv3BLzUgSXRplE",
+          speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
         },
       },
     },
@@ -1169,11 +1169,11 @@ ElevenLabs for both agent-mode listening and speaking:
 ```
 
 The persistent Meet voice comes from
-`messages.tts.providers.elevenlabs.voiceId`. Agent replies can also use
-per-reply `[[tts:voiceId=... model=eleven_v3]]` directives when TTS model
+`messages.tts.providers.elevenlabs.speakerVoiceId`. Agent replies can also use
+per-reply `[[tts:speakerVoiceId=... model=eleven_v3]]` directives when TTS model
 overrides are enabled, but config is the deterministic default for meetings.
 On join, the logs should show `transcriptionProvider=elevenlabs` and each
-spoken reply should log `provider=elevenlabs model=eleven_v3 voice=<voiceId>`.
+spoken reply should log `provider=elevenlabs model=eleven_v3 speakerVoiceId=<voiceId>`.
 
 Twilio-only config:
 
@@ -1259,7 +1259,7 @@ a session ended.
 }
 ```
 
-## Agent And Bidi Modes
+## Agent and bidi modes
 
 Chrome `agent` mode is optimized for "my agent is in the meeting" behavior. The
 realtime transcription provider hears the meeting audio, final participant
@@ -1668,16 +1668,16 @@ participant:
 - Run `openclaw voicecall tail` and check that Twilio webhooks are arriving at
   the Gateway.
 - Run `openclaw logs --follow` and look for the Twilio Meet sequence: Google
-  Meet delegates the join, Voice Call starts the phone leg, Google Meet waits
-  `voiceCall.dtmfDelayMs`, sends DTMF with `voicecall.dtmf`, waits
-  `voiceCall.postDtmfSpeechDelayMs`, then requests intro speech with
-  `voicecall.speak`.
+  Meet delegates the join, Voice Call stores and serves pre-connect DTMF TwiML,
+  Voice Call serves realtime TwiML for the Twilio call, then Google Meet requests
+  intro speech with `voicecall.speak`.
 - Re-run `openclaw googlemeet setup --transport twilio`; a green setup check is
   required but does not prove the meeting PIN sequence is correct.
 - Confirm the dial-in number belongs to the same Meet invitation and region as
   the PIN.
-- Increase `voiceCall.dtmfDelayMs` if Meet answers slowly or the call transcript
-  still shows the prompt asking for a PIN after DTMF was sent.
+- Increase `voiceCall.dtmfDelayMs` from the 12-second default if Meet answers
+  slowly or the call transcript still shows the prompt asking for a PIN after
+  pre-connect DTMF was sent.
 - If the participant joins but you do not hear the greeting, check
   `openclaw logs --follow` for the post-DTMF `voicecall.speak` request and
   either media-stream TTS playback or the Twilio `<Say>` fallback. If the call

@@ -1,3 +1,4 @@
+// Opencode tests cover provider policy api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
@@ -8,8 +9,17 @@ describe("opencode provider policy public artifact", () => {
         provider: "opencode",
         modelId: "claude-opus-4-7",
       }),
-    ).toMatchObject({
-      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
       defaultLevel: "off",
     });
   });
@@ -20,10 +30,16 @@ describe("opencode provider policy public artifact", () => {
       modelId: "claude-opus-4-6",
     });
 
-    expect(profile).toMatchObject({
-      levels: expect.arrayContaining([{ id: "adaptive" }]),
+    expect(profile).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "adaptive" },
+      ],
       defaultLevel: "adaptive",
     });
-    expect(profile.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(false);
   });
 });

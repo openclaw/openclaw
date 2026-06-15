@@ -11,6 +11,11 @@ private func setupCode(from payload: String) -> String {
 }
 
 @Suite struct DeepLinksSecurityTests {
+    @Test func dashboardDeepLinkParses() {
+        let url = URL(string: "openclaw://dashboard")!
+        #expect(DeepLinkParser.parse(url) == .dashboard)
+    }
+
     @Test func gatewayDeepLinkRejectsInsecureNonLoopbackWs() {
         let url = URL(
             string: "openclaw://gateway?host=attacker.example&port=18789&tls=0&token=abc")!
@@ -59,6 +64,40 @@ private func setupCode(from payload: String) -> String {
                 password: nil))
     }
 
+    @Test func setupCodeAllowsPrivateLanWs() {
+        let payload = #"{"url":"ws://192.168.1.20:18789","bootstrapToken":"tok"}"#
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+                host: "192.168.1.20",
+                port: 18789,
+                tls: false,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
+    @Test func setupCodeAllowsMDNSWs() {
+        let payload = #"{"url":"ws://openclaw.local:18789","bootstrapToken":"tok"}"#
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+                host: "openclaw.local",
+                port: 18789,
+                tls: false,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
+    @Test func setupCodeRejectsTailnetPlaintextWs() {
+        let payload = #"{"url":"ws://gateway.tailnet.ts.net:18789","bootstrapToken":"tok"}"#
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func setupCodeRejectsCgnatPlaintextWs() {
+        let payload = #"{"url":"ws://100.64.0.9:18789","bootstrapToken":"tok"}"#
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
     @Test func setupCodeParsesHostPayload() {
         let payload = #"{"host":"gateway.tailnet.ts.net","port":443,"tls":true,"bootstrapToken":"tok"}"#
         #expect(
@@ -86,6 +125,18 @@ private func setupCode(from payload: String) -> String {
     @Test func setupCodeRejectsInsecureHostPayload() {
         let payload = #"{"host":"gateway.tailnet.ts.net","port":18789,"tls":false,"bootstrapToken":"tok"}"#
         #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func setupCodeAllowsPrivateLanHostPayload() {
+        let payload = #"{"host":"openclaw.local","port":18789,"tls":false,"bootstrapToken":"tok"}"#
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+                host: "openclaw.local",
+                port: 18789,
+                tls: false,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
     }
 
     @Test func setupInputParsesFullCopiedSetupMessage() {

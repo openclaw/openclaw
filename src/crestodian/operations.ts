@@ -1,3 +1,4 @@
+// Crestodian operations parse, approve, execute, and audit setup-helper commands.
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
@@ -8,11 +9,24 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { appendCrestodianAuditEntry, resolveCrestodianAuditPath } from "./audit.js";
 import type { CrestodianOverview } from "./overview.js";
 
+/**
+ * Crestodian command parser and operation executor.
+ *
+ * Persistent operations require explicit approval, write audit records, and
+ * lazy-load heavy CLI modules only when the selected operation needs them.
+ */
 type ConfigModule = typeof import("../config/config.js");
 type ConfigFileSnapshot = Awaited<ReturnType<ConfigModule["readConfigFileSnapshot"]>>;
 type CrestodianOverviewLoader = () => Promise<CrestodianOverview>;
 type CrestodianOverviewFormatter = (overview: CrestodianOverview) => string;
 
+const loadConfigModule = async () => await import("../config/config.js");
+const loadOverviewModule = async () => await import("./overview.js");
+const loadModelsSharedModule = async () => await import("../commands/models/shared.js");
+const loadConfigCliModule = async () => await import("../cli/config-cli.js");
+const loadDoctorModule = async () => await import("../commands/doctor.js");
+
+/** Parsed Crestodian operation before approval/execution. */
 export type CrestodianOperation =
   | { kind: "none"; message: string }
   | { kind: "overview" }
@@ -45,6 +59,7 @@ export type CrestodianOperation =
   | { kind: "open-tui"; agentId?: string; workspace?: string }
   | { kind: "set-default-model"; model: string };
 
+/** Result returned by the operation executor. */
 export type CrestodianOperationResult = {
   applied: boolean;
   exitsInteractive?: boolean;
@@ -52,6 +67,7 @@ export type CrestodianOperationResult = {
   nextInput?: string;
 };
 
+/** Injectable command dependencies used by tests and alternate runners. */
 export type CrestodianCommandDeps = {
   formatOverview?: CrestodianOverviewFormatter;
   loadOverview?: CrestodianOverviewLoader;
@@ -110,10 +126,11 @@ const PLUGIN_UNINSTALL_RE =
   /^(?:(?:plugins?)\s+(?:uninstall|remove)|(?:uninstall|remove)\s+plugins?)\s+(?<pluginId>[A-Za-z0-9_.@/-]+)$/i;
 
 const OPENAI_API_DEFAULT_MODEL_REF = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
-const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-4-7";
-const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-4-7";
-const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
+const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-4-8";
+const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-4-8";
+const CODEX_APP_SERVER_DEFAULT_MODEL_REF = "openai/gpt-5.5";
 
+/** Parse one user command into Crestodian's closed operation union. */
 export function parseCrestodianOperation(input: string): CrestodianOperation {
   const trimmed = input.trim();
   const lower = trimmed.toLowerCase();
@@ -131,6 +148,7 @@ export function parseCrestodianOperation(input: string): CrestodianOperation {
   }
   const configSetRefMatch = trimmed.match(CONFIG_SET_REF_RE);
   if (configSetRefMatch?.groups?.path && configSetRefMatch.groups.id?.trim()) {
+    // SecretRef commands store references only; raw secret values are never embedded here.
     const source = configSetRefMatch.groups.source?.toLowerCase() ?? "env";
     return {
       kind: "config-set-ref",
@@ -210,6 +228,7 @@ export function parseCrestodianOperation(input: string): CrestodianOperation {
     return { kind: "status" };
   }
   if (lower.includes("agent")) {
+    // Creation is checked before "talk to agent" because setup phrasing can contain both words.
     const createMatch = trimmed.match(CREATE_AGENT_RE);
     if (createMatch?.groups?.agent) {
       const workspace = trimShellishToken(trimmed.match(WORKSPACE_RE)?.groups?.workspace);
@@ -289,11 +308,13 @@ function validateCrestodianPluginInstallSpec(spec: string): string | null {
     return "Crestodian plugin install accepts one npm or ClawHub package spec.";
   }
   if (/^(?:\.{1,2}\/|\/|~\/|file:|git(?:\+ssh|\+https)?:|https?:)/i.test(trimmed)) {
+    // Crestodian does not install local paths or URLs; those can execute arbitrary package code.
     return "Crestodian plugin install accepts npm or ClawHub package specs only.";
   }
   return null;
 }
 
+/** Return whether an operation can change local state or process lifecycle. */
 export function isPersistentCrestodianOperation(operation: CrestodianOperation): boolean {
   return (
     operation.kind === "set-default-model" ||
@@ -310,6 +331,7 @@ export function isPersistentCrestodianOperation(operation: CrestodianOperation):
   );
 }
 
+/** Format a user-facing description for an operation requiring approval. */
 export function describeCrestodianPersistentOperation(operation: CrestodianOperation): string {
   switch (operation.kind) {
     case "set-default-model":
@@ -339,6 +361,7 @@ export function describeCrestodianPersistentOperation(operation: CrestodianOpera
   }
 }
 
+/** Format the standard approval plan text for a persistent operation. */
 export function formatCrestodianPersistentPlan(operation: CrestodianOperation): string {
   return `Plan: ${describeCrestodianPersistentOperation(operation)}. Say yes to apply.`;
 }
@@ -369,6 +392,7 @@ function chooseSetupModel(
   model?: string;
   source: string;
 } {
+  // Setup picks an existing/default local credential path before falling back to no model change.
   if (requestedModel?.trim()) {
     return { model: requestedModel.trim(), source: "requested" };
   }
@@ -385,7 +409,7 @@ function chooseSetupModel(
     return { model: CLAUDE_CLI_DEFAULT_MODEL_REF, source: "Claude Code CLI" };
   }
   if (overview.tools.codex.found) {
-    return { model: CODEX_CLI_DEFAULT_MODEL_REF, source: "Codex CLI" };
+    return { model: CODEX_APP_SERVER_DEFAULT_MODEL_REF, source: "Codex app-server" };
   }
   return { source: "none" };
 }
@@ -420,7 +444,7 @@ async function runGatewayLifecycle(operation: "start" | "stop" | "restart"): Pro
 }
 
 async function readConfigFileSnapshotLazy(): Promise<ConfigFileSnapshot> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const { readConfigFileSnapshot } = await loadConfigModule();
   return await readConfigFileSnapshot();
 }
 
@@ -430,7 +454,7 @@ async function loadOverviewForOperation(
   if (deps?.loadOverview) {
     return await deps.loadOverview();
   }
-  const { loadCrestodianOverview } = await import("./overview.js");
+  const { loadCrestodianOverview } = await loadOverviewModule();
   return await loadCrestodianOverview();
 }
 
@@ -441,7 +465,7 @@ async function formatOverviewForOperation(
   if (deps?.formatOverview) {
     return deps.formatOverview(overview);
   }
-  const { formatCrestodianOverview } = await import("./overview.js");
+  const { formatCrestodianOverview } = await loadOverviewModule();
   return formatCrestodianOverview(overview);
 }
 
@@ -449,7 +473,7 @@ async function loadConfigFileMutationHelpers(): Promise<{
   mutateConfigFile: ConfigModule["mutateConfigFile"];
   readConfigFileSnapshot: ConfigModule["readConfigFileSnapshot"];
 }> {
-  const { mutateConfigFile, readConfigFileSnapshot } = await import("../config/config.js");
+  const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigModule();
   return { mutateConfigFile, readConfigFileSnapshot };
 }
 
@@ -508,6 +532,7 @@ async function resolveTuiAgentId(params: {
   return match?.id ?? requested;
 }
 
+/** Execute a parsed Crestodian operation after applying approval gates and audit logging. */
 export async function executeCrestodianOperation(
   operation: CrestodianOperation,
   runtime: RuntimeEnv,
@@ -613,11 +638,12 @@ export async function executeCrestodianOperation(
     const before = await readConfigFileSnapshot();
     const workspace = resolveUserPath(operation.workspace ?? process.cwd());
     const applyDefaultModelPrimaryUpdate = setupModel.model
-      ? (await import("../commands/models/shared.js")).applyDefaultModelPrimaryUpdate
+      ? (await loadModelsSharedModule()).applyDefaultModelPrimaryUpdate
       : undefined;
     const result = await mutateConfigFile({
       base: "source",
       mutate: (cfg) => {
+        // Mutate via the config helper so file locking, formatting, and validation stay centralized.
         let next = cfg;
         if (setupModel.model && applyDefaultModelPrimaryUpdate) {
           next = applyDefaultModelPrimaryUpdate({
@@ -674,12 +700,12 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "config.set");
-    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { readConfigFileSnapshot } = await loadConfigModule();
     const before = await readConfigFileSnapshot();
     const runConfigSet =
       opts.deps?.runConfigSet ??
       (async (setOpts: { path?: string; value?: string; cliOptions: ConfigSetOptions }) => {
-        const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
+        const { runConfigSet: importedRunConfigSet } = await loadConfigCliModule();
         await importedRunConfigSet({
           ...setOpts,
           runtime: createNoExitRuntime(runtime),
@@ -712,12 +738,12 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "config.setRef");
-    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { readConfigFileSnapshot } = await loadConfigModule();
     const before = await readConfigFileSnapshot();
     const runConfigSet =
       opts.deps?.runConfigSet ??
       (async (setOpts: { path?: string; value?: string; cliOptions: ConfigSetOptions }) => {
-        const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
+        const { runConfigSet: importedRunConfigSet } = await loadConfigCliModule();
         await importedRunConfigSet({
           ...setOpts,
           runtime: createNoExitRuntime(runtime),
@@ -823,7 +849,7 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "agents.create");
-    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { readConfigFileSnapshot } = await loadConfigModule();
     const before = await readConfigFileSnapshot();
     const workspace = resolveUserPath(operation.workspace ?? process.cwd());
     const runAgentsAdd =
@@ -858,7 +884,7 @@ export async function executeCrestodianOperation(
   }
   if (operation.kind === "doctor") {
     logQueued(runtime, "doctor");
-    const runDoctor = opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
+    const runDoctor = opts.deps?.runDoctor ?? (await loadDoctorModule()).doctorCommand;
     await runDoctor(runtime, { nonInteractive: true });
     runtime.log("[crestodian] done: doctor");
     return { applied: false };
@@ -870,9 +896,9 @@ export async function executeCrestodianOperation(
       return { applied: false, message };
     }
     logQueued(runtime, "doctor.fix");
-    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const { readConfigFileSnapshot } = await loadConfigModule();
     const before = await readConfigFileSnapshot();
-    const runDoctor = opts.deps?.runDoctor ?? (await import("../commands/doctor.js")).doctorCommand;
+    const runDoctor = opts.deps?.runDoctor ?? (await loadDoctorModule()).doctorCommand;
     await runDoctor(runtime, { nonInteractive: true, repair: true, yes: true });
     const after = await readConfigFileSnapshot();
     await appendCrestodianAuditEntry({
@@ -989,7 +1015,7 @@ export async function executeCrestodianOperation(
     logQueued(runtime, "config.setDefaultModel");
     const { mutateConfigFile, readConfigFileSnapshot } = await loadConfigFileMutationHelpers();
     const before = await readConfigFileSnapshot();
-    const { applyDefaultModelPrimaryUpdate } = await import("../commands/models/shared.js");
+    const { applyDefaultModelPrimaryUpdate } = await loadModelsSharedModule();
     const result = await mutateConfigFile({
       base: "source",
       mutate: (cfg) => {

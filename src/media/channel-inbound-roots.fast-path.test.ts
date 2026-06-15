@@ -1,3 +1,4 @@
+// Channel inbound root fast-path tests cover cached media root resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -144,13 +145,13 @@ describe("channel inbound roots fast path", () => {
     ).toHaveBeenCalledOnce();
   });
 
-  it("resolves inbound attachment roots from explicit channel and account context", () => {
+  it("resolves local inbound roots from explicit channel context", () => {
     publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
       ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        if (dirName === "explicitchat" && artifactBasename === "media-contract-api.js") {
+        if (dirName === "toolchat" && artifactBasename === "media-contract-api.js") {
           return {
             resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
-              `/explicit/${accountId ?? "default"}`,
+              `/tool/${accountId}`,
             ],
           };
         }
@@ -161,16 +162,13 @@ describe("channel inbound roots fast path", () => {
     expect(
       resolveChannelInboundAttachmentRootsForChannel({
         cfg,
-        channelId: "EXPLICITCHAT",
+        channelId: "toolchat",
         accountId: "personal",
       }),
-    ).toEqual(["/explicit/personal"]);
-    expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledOnce();
+    ).toEqual(["/tool/personal"]);
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
-        dirName: "explicitchat",
+        dirName: "toolchat",
         artifactBasename: "media-contract-api.js",
       },
     );

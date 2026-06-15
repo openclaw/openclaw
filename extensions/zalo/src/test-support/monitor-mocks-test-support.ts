@@ -1,3 +1,4 @@
+// Zalo plugin module implements monitor mocks test support behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createEmptyPluginRegistry,
@@ -110,7 +111,7 @@ export async function resetLifecycleTestState() {
   vi.clearAllMocks();
   (await importCachedWebhookModule()).clearZaloWebhookSecurityStateForTest();
   for (const module of loadedMonitorModules) {
-    module.__testing.clearHostedMediaRouteRefsForTest();
+    module.testing.clearHostedMediaRouteRefsForTest();
   }
   setActivePluginRegistry(createEmptyPluginRegistry());
 }

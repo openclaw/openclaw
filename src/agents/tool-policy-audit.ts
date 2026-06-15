@@ -153,12 +153,24 @@ function matchedPolicyRules(params: {
   return [...rules].toSorted();
 }
 
+/**
+ * Verbosity for tool-policy audit emission. Upstream-compatible knob: it selects
+ * the log level the audit line is emitted at and does NOT change which tools are
+ * filtered (the security-relevant behavior stays identical to the Rockie rewrite).
+ */
+export type ToolPolicyAuditLogLevel = "info" | "debug";
+
 export function auditToolPolicyFilter(params: {
   stepLabel: string;
   policy: ToolPolicyLike;
   before: readonly { name: string }[];
   after: readonly { name: string }[];
+  logLevel?: ToolPolicyAuditLogLevel;
 }): void {
+  const emit: typeof toolPolicyAuditLogger.info = (message, fields) =>
+    params.logLevel === "debug"
+      ? toolPolicyAuditLogger.debug(message, fields)
+      : toolPolicyAuditLogger.info(message, fields);
   const removedByRule = removedToolNamesByRule({
     policy: params.policy,
     before: params.before,
@@ -176,7 +188,7 @@ export function auditToolPolicyFilter(params: {
       tools: removed.slice(0, MAX_AUDIT_TOOL_NAMES),
     });
     const matchedRuleSuffix = matchedRules.length > 0 ? `; matched ${matchedRules.join(", ")}` : "";
-    toolPolicyAuditLogger.info(
+    emit(
       `tool policy removed ${removed.length} tool(s) via ${rule}: ${toolNames.join(", ")}${matchedRuleSuffix}`,
       {
         rule,

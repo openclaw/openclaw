@@ -1,3 +1,5 @@
+// Resolves Docker upgrade-survivor baseline specs from requested tokens and
+// live release history JSON captured by release workflows.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mjs";
@@ -101,6 +103,9 @@ function readStableReleases(file, publishedVersions) {
     .toSorted((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
 }
 
+/**
+ * Expands the release-history token into recent stable plus pinned historical baselines.
+ */
 export function resolveReleaseHistory(args) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
@@ -128,6 +133,25 @@ export function resolveReleaseHistory(args) {
   return dedupeSpecs(versions);
 }
 
+/**
+ * Resolves the last N stable release versions from release metadata.
+ */
+export function resolveLastStable(args, count) {
+  const releasesJson = args.get("releases-json");
+  if (!releasesJson) {
+    throw new Error("--releases-json is required when requested baselines include last-stable-*");
+  }
+  if (!Number.isInteger(count) || count < 1) {
+    throw new Error(`invalid last-stable baseline count: ${count}`);
+  }
+  const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
+  const releases = readStableReleases(releasesJson, publishedVersions);
+  return dedupeSpecs(releases.slice(0, count).map((release) => release.version));
+}
+
+/**
+ * Resolves all stable release versions at or after the requested minimum.
+ */
 export function resolveAllSince(args, minimumVersion) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
@@ -142,6 +166,9 @@ export function resolveAllSince(args, minimumVersion) {
   );
 }
 
+/**
+ * Expands requested baseline tokens into normalized package/version specs.
+ */
 export function resolveBaselines(args) {
   const requested = args.get("requested") ?? "";
   const fallback = args.get("fallback") ?? "openclaw@latest";
@@ -149,11 +176,13 @@ export function resolveBaselines(args) {
   if (requestedTokens.length === 0) {
     return dedupeSpecs([fallback]);
   }
-  const exactTokens = [];
   const resolved = [];
   for (const token of requestedTokens) {
     if (token === "release-history") {
       resolved.push(...resolveReleaseHistory(args));
+    } else if (token.startsWith("last-stable-")) {
+      const count = Number.parseInt(token.slice("last-stable-".length), 10);
+      resolved.push(...resolveLastStable(args, count));
     } else if (token.startsWith("all-since-")) {
       const minimumVersion = token.slice("all-since-".length);
       if (!parseStableVersion(minimumVersion)) {
@@ -161,10 +190,10 @@ export function resolveBaselines(args) {
       }
       resolved.push(...resolveAllSince(args, minimumVersion));
     } else {
-      exactTokens.push(token);
+      resolved.push(token);
     }
   }
-  return dedupeSpecs([...exactTokens, ...resolved]);
+  return dedupeSpecs(resolved);
 }
 
 const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv[1] : false;

@@ -2,7 +2,7 @@ import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
 import { buildOwnedChildEnv } from "../infra/owned-child-env.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   MEDIA_FFMPEG_MAX_BUFFER_BYTES,
   MEDIA_FFMPEG_TIMEOUT_MS,

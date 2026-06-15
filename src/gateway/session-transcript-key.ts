@@ -1,11 +1,11 @@
-import fs from "node:fs";
-import path from "node:path";
+// Session transcript key resolver.
+// Maps transcript file paths back to Gateway session keys for live broadcasts.
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   loadCombinedSessionStoreForGateway,
   resolveGatewaySessionStoreTarget,
@@ -14,19 +14,6 @@ import {
 
 const TRANSCRIPT_SESSION_KEY_CACHE = new Map<string, string>();
 const TRANSCRIPT_SESSION_KEY_CACHE_MAX = 256;
-
-function resolveTranscriptPathForComparison(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  const resolved = path.resolve(trimmed);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
 
 function sessionKeyMatchesTranscriptPath(params: {
   cfg: OpenClawConfig;
@@ -53,10 +40,12 @@ function sessionKeyMatchesTranscriptPath(params: {
   ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
 }
 
+/** Clears the transcript path lookup cache for isolated tests. */
 export function clearSessionTranscriptKeyCacheForTests(): void {
   TRANSCRIPT_SESSION_KEY_CACHE.clear();
 }
 
+/** Resolve the most likely Gateway session key for a transcript file path. */
 export function resolveSessionKeyForTranscriptFile(sessionFile: string): string | undefined {
   const targetPath = resolveTranscriptPathForComparison(sessionFile);
   if (!targetPath) {
@@ -96,6 +85,8 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
   }
 
   if (matchingEntries.length > 0) {
+    // Multiple keys can point at copied/forked transcript paths. Prefer the
+    // freshest unambiguous session ID group; ties stay unresolved.
     const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
     for (const entry of matchingEntries) {
       const sessionId = entry[1].sessionId;

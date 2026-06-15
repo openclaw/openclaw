@@ -1,3 +1,4 @@
+// Restart helper tests cover update restart helper process selection and error handling.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -21,13 +22,20 @@ describe("restart-helper", () => {
 
   async function prepareAndReadScript(env: Record<string, string>, gatewayPort = 18789) {
     const scriptPath = await prepareRestartScript(env, gatewayPort);
-    expect(scriptPath).toBeTruthy();
-    const content = await fs.readFile(scriptPath!, "utf-8");
-    return { scriptPath: scriptPath!, content };
+    if (scriptPath == null) {
+      throw new Error("expected restart script path");
+    }
+    const content = await fs.readFile(scriptPath, "utf-8");
+    return { scriptPath, content };
   }
 
   async function cleanupScript(scriptPath: string) {
     await fs.unlink(scriptPath).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    });
+    await fs.rmdir(path.dirname(scriptPath)).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
@@ -51,6 +59,10 @@ exit 0
   ) {
     const launchctlPath = path.join(fakeBinDir, "launchctl");
     await fs.writeFile(launchctlPath, content, { mode: 0o755 });
+  }
+
+  async function writeFakeSleep(fakeBinDir: string) {
+    await fs.writeFile(path.join(fakeBinDir, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   }
 
   async function executeScript(scriptPath: string, env: Record<string, string>) {
@@ -129,7 +141,61 @@ exit 0
       expect(content).toContain("systemctl --user restart 'openclaw-gateway.service'");
       // Script should self-cleanup
       expect(content).toContain('rm -f "$0"');
+      expect(content).toContain('rmdir "$script_dir" 2>/dev/null || true');
       await cleanupScript(scriptPath);
+    });
+
+    it("creates restart scripts in a private temp directory with exclusive creation", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const timestamp = 1_727_201_234_567;
+      const oldCandidatePath = path.join(os.tmpdir(), `openclaw-restart-${timestamp}.sh`);
+      const victimDir = await makeTempDir("openclaw-restart-helper-victim-");
+      const victimPath = path.join(victimDir, "restart.sh");
+      await fs.rm(oldCandidatePath, { force: true });
+      await fs.writeFile(victimPath, "preexisting script\n", "utf-8");
+
+      let candidateIsSymlink = false;
+      try {
+        await fs.symlink(victimPath, oldCandidatePath);
+        candidateIsSymlink = true;
+      } catch {
+        await fs.writeFile(oldCandidatePath, "preexisting script\n", { flag: "wx" });
+      }
+
+      const dateSpy = vi.spyOn(Date, "now").mockReturnValue(timestamp);
+      const writeFileSpy = vi.spyOn(fs, "writeFile");
+
+      try {
+        const { scriptPath } = await prepareAndReadScript({
+          OPENCLAW_PROFILE: "default",
+        });
+        const scriptDir = path.dirname(scriptPath);
+        const relativeScriptDir = path.relative(os.tmpdir(), scriptDir);
+
+        expect(scriptPath).not.toBe(oldCandidatePath);
+        expect(scriptDir).not.toBe(os.tmpdir());
+        expect(relativeScriptDir).not.toBe("");
+        expect(relativeScriptDir.startsWith("..")).toBe(false);
+        expect(path.isAbsolute(relativeScriptDir)).toBe(false);
+        expect(path.basename(scriptDir)).toMatch(/^openclaw-restart-/);
+        expect(writeFileSpy).toHaveBeenLastCalledWith(
+          scriptPath,
+          expect.any(String),
+          expect.objectContaining({ flag: "wx", mode: 0o755 }),
+        );
+        await expect(fs.readFile(victimPath, "utf-8")).resolves.toBe("preexisting script\n");
+        if (!candidateIsSymlink) {
+          await expect(fs.readFile(oldCandidatePath, "utf-8")).resolves.toBe(
+            "preexisting script\n",
+          );
+        }
+        await cleanupScript(scriptPath);
+      } finally {
+        dateSpy.mockRestore();
+        writeFileSpy.mockRestore();
+        await fs.rm(oldCandidatePath, { force: true });
+        await fs.rm(victimDir, { recursive: true, force: true });
+      }
     });
 
     it("uses OPENCLAW_SYSTEMD_UNIT override for systemd scripts", async () => {
@@ -148,6 +214,7 @@ exit 0
       const fakeBinDir = path.join(tmpDir, "bin");
       const callsPath = path.join(tmpDir, "systemctl-calls.log");
       await fs.mkdir(fakeBinDir, { recursive: true });
+      await writeFakeSleep(fakeBinDir);
       await fs.writeFile(
         path.join(fakeBinDir, "systemctl"),
         `#!/bin/sh
@@ -196,6 +263,7 @@ exit 1
       expect(content).toContain("launchctl bootstrap 'gui/501'");
       expect(content).toContain("Bootstrap loads RunAtLoad agents");
       expect(content).toContain('rm -f "$0"');
+      expect(content).toContain('rmdir "$script_dir" 2>/dev/null || true');
       await cleanupScript(scriptPath);
     });
 
@@ -245,6 +313,7 @@ exit 1
       const fakeBinDir = path.join(tmpDir, "bin");
       const stateDir = path.join(tmpDir, "state");
       await fs.mkdir(fakeBinDir, { recursive: true });
+      await writeFakeSleep(fakeBinDir);
       await writeFakeLaunchctl(
         fakeBinDir,
         `#!/bin/sh
@@ -284,6 +353,7 @@ exit 0
       const stateFile = path.join(tmpDir, "state-file");
       const markerPath = path.join(tmpDir, "launchctl-ran");
       await fs.mkdir(fakeBinDir, { recursive: true });
+      await writeFakeSleep(fakeBinDir);
       await fs.writeFile(stateFile, "not a directory");
       await writeFakeLaunchctl(
         fakeBinDir,
@@ -315,6 +385,7 @@ exit 0
       const fakeBinDir = path.join(tmpDir, "bin");
       const stateDir = path.join(tmpDir, "state");
       await fs.mkdir(fakeBinDir, { recursive: true });
+      await writeFakeSleep(fakeBinDir);
       await writeFakeLaunchctl(fakeBinDir);
 
       const { scriptPath } = await prepareAndReadScript({
@@ -369,6 +440,7 @@ exit 0
       expect(content).toContain("openclaw restart launched startup fallback");
       expectWindowsRestartWaitOrdering(content);
       expect(content).toContain('del "%~f0" >nul 2>&1');
+      expect(content).toContain('rmdir "%OPENCLAW_RESTART_SCRIPT_DIR%" >nul 2>&1');
       await cleanupScript(scriptPath);
     });
 
@@ -522,7 +594,7 @@ exit 0
     it("spawns the script as a detached process on Linux", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       const scriptPath = "/tmp/fake-script.sh";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { on: vi.fn(), unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -532,13 +604,14 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
-      expect(mockChild.unref).toHaveBeenCalled();
+      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
+      expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("uses cmd.exe on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = "C:\\Temp\\fake-script.bat";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { on: vi.fn(), unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -548,13 +621,14 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
-      expect(mockChild.unref).toHaveBeenCalled();
+      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
+      expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { on: vi.fn(), unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -564,6 +638,34 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
+    });
+
+    it("does not throw when spawn fails synchronously", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      vi.mocked(spawn).mockImplementation(() => {
+        throw Object.assign(new Error("spawn /bin/sh ENOENT"), { code: "ENOENT" });
+      });
+
+      await expect(runRestartScript("/tmp/fake-script.sh")).resolves.toBeUndefined();
+    });
+
+    it("handles child process spawn errors after the detached handoff", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      let errorHandler: ((error: Error) => void) | undefined;
+      const mockChild = {
+        on: vi.fn((event: string, handler: (error: Error) => void) => {
+          if (event === "error") {
+            errorHandler = handler;
+          }
+          return mockChild;
+        }),
+        unref: vi.fn(),
+      };
+      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+
+      await runRestartScript("/tmp/fake-script.sh");
+      expect(errorHandler).toBeDefined();
+      expect(() => errorHandler?.(new Error("spawn /bin/sh ENOENT"))).not.toThrow();
     });
   });
 });

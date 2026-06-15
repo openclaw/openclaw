@@ -21,6 +21,7 @@ function usage() {
 function parseArgs(argv) {
   const options = {
     dir: "",
+    help: false,
     input: "",
     ref: "",
     repo: "",
@@ -28,7 +29,9 @@ function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--repo") {
+    if (arg === "--help" || arg === "-h") {
+      options.help = true;
+    } else if (arg === "--repo") {
       options.repo = argv[(index += 1)] ?? "";
     } else if (arg?.startsWith("--repo=")) {
       options.repo = arg.slice("--repo=".length);
@@ -49,6 +52,9 @@ function parseArgs(argv) {
     } else {
       throw new Error(`unknown argument: ${arg}\n${usage()}`);
     }
+  }
+  if (options.help) {
+    return options;
   }
   if (!options.input || !options.workflow) {
     throw new Error(usage());
@@ -155,8 +161,29 @@ function ghWorkflowCommand(lanes, ref, workflow, reuseInputs = {}) {
   return fields.join(" ");
 }
 
+function failureName(failure) {
+  return failure.name || failure.lane || "";
+}
+
+function failedEntryFromRecord(failure, file, ref, workflow, reuseInputs) {
+  const lane = failureName(failure);
+  const targetable = failure.targetable !== false;
+  return {
+    ghWorkflowCommand: targetable
+      ? failure.ghWorkflowCommand || ghWorkflowCommand([lane], ref, workflow, reuseInputs)
+      : "",
+    lane,
+    localRerunCommand: failure.rerunCommand,
+    logFile: failure.logFile,
+    reuseInputs,
+    source: file,
+    status: failure.status,
+    targetable,
+  };
+}
+
 function detectRepo() {
-  return JSON.parse(run("gh", ["repo", "view", "--json", "nameWithOwner"])).nameWithOwner;
+  return run("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
 }
 
 function findFiles(rootDir, basenames, out = []) {
@@ -177,31 +204,18 @@ function failedLaneEntriesFromJson(file, ref, workflow) {
   const source = path.basename(file);
   if (source === "failures.json" && Array.isArray(parsed.lanes)) {
     return parsed.lanes
-      .filter((lane) => lane.name)
-      .map((lane) => ({
-        ghWorkflowCommand:
-          lane.ghWorkflowCommand || ghWorkflowCommand([lane.name], ref, workflow, reuseInputs),
-        lane: lane.name,
-        localRerunCommand: lane.rerunCommand,
-        logFile: lane.logFile,
-        reuseInputs,
-        source: file,
-        status: lane.status,
-      }));
+      .filter((lane) => failureName(lane))
+      .map((lane) => failedEntryFromRecord(lane, file, ref, workflow, reuseInputs));
   }
 
   const lanes = Array.isArray(parsed.lanes) ? parsed.lanes : [];
-  return lanes
-    .filter((lane) => lane.status !== 0 && lane.name)
-    .map((lane) => ({
-      ghWorkflowCommand: ghWorkflowCommand([lane.name], ref, workflow, reuseInputs),
-      lane: lane.name,
-      localRerunCommand: lane.rerunCommand,
-      logFile: lane.logFile,
-      reuseInputs,
-      source: file,
-      status: lane.status,
-    }));
+  const failures =
+    Array.isArray(parsed.failures) && parsed.failures.length > 0
+      ? parsed.failures
+      : lanes.filter((lane) => lane.status !== 0);
+  return failures
+    .filter((lane) => failureName(lane))
+    .map((lane) => failedEntryFromRecord(lane, file, ref, workflow, reuseInputs));
 }
 
 function mergeByLane(entries) {
@@ -256,10 +270,10 @@ function runInfo(runId, repo) {
   );
 }
 
-function printEntries(entries, ref, workflow, run) {
-  if (run) {
-    console.log(`Run: ${run.url}`);
-    console.log(`Workflow: ${run.workflowName}`);
+function printEntries(entries, ref, workflow, runValue) {
+  if (runValue) {
+    console.log(`Run: ${runValue.url}`);
+    console.log(`Workflow: ${runValue.workflowName}`);
   }
   console.log(`Ref: ${ref}`);
   console.log(
@@ -269,23 +283,29 @@ function printEntries(entries, ref, workflow, run) {
     console.log("No failed Docker E2E lanes found.");
     return;
   }
-  console.log(`Failed lanes: ${entries.map((entry) => entry.lane).join(", ")}`);
-  console.log("");
-  console.log("Combined GitHub rerun:");
-  console.log(
-    ghWorkflowCommand(
-      entries.map((entry) => entry.lane),
-      ref,
-      workflow,
-      commonReuseInputs(entries),
-    ),
-  );
-  console.log("");
-  console.log("Per-lane GitHub reruns:");
-  for (const entry of entries) {
+  const workflowEntries = entries.filter((entry) => entry.targetable !== false);
+  console.log(`Failed Docker E2E entries: ${entries.map((entry) => entry.lane).join(", ")}`);
+  if (workflowEntries.length > 0) {
+    console.log("");
+    console.log("Combined GitHub rerun:");
     console.log(
-      `- ${entry.lane}: ${entry.ghWorkflowCommand || ghWorkflowCommand([entry.lane], ref, workflow)}`,
+      ghWorkflowCommand(
+        workflowEntries.map((entry) => entry.lane),
+        ref,
+        workflow,
+        commonReuseInputs(workflowEntries),
+      ),
     );
+    console.log("");
+    console.log("Per-lane GitHub reruns:");
+    for (const entry of workflowEntries) {
+      console.log(
+        `- ${entry.lane}: ${entry.ghWorkflowCommand || ghWorkflowCommand([entry.lane], ref, workflow)}`,
+      );
+    }
+  } else {
+    console.log("");
+    console.log("No targetable failed Docker E2E lanes found.");
   }
   console.log("");
   console.log("Local rerun starting points:");
@@ -296,27 +316,40 @@ function printEntries(entries, ref, workflow, run) {
   }
 }
 
-const options = parseArgs(process.argv.slice(2));
-const isLocalJson = fs.existsSync(options.input) && fs.statSync(options.input).isFile();
-if (isLocalJson) {
-  const ref = options.ref || process.env.GITHUB_SHA || "HEAD";
-  printEntries(
-    mergeByLane(failedLaneEntriesFromJson(options.input, ref, options.workflow)),
-    ref,
-    options.workflow,
-  );
-} else {
-  const repo = options.repo || detectRepo();
-  const run = runInfo(options.input, repo);
-  const ref = options.ref || run.headSha || run.headBranch;
-  const outputDir =
-    options.dir || path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${options.input}`);
-  const artifactNames = downloadDockerArtifacts(options.input, repo, outputDir);
-  const files = findFiles(outputDir, new Set(["failures.json", "summary.json"]));
-  const entries = mergeByLane(
-    files.flatMap((file) => failedLaneEntriesFromJson(file, ref, options.workflow)),
-  );
-  console.log(`Artifacts: ${artifactNames.join(", ")}`);
-  console.log(`Downloaded: ${outputDir}`);
-  printEntries(entries, ref, options.workflow, run);
+function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    console.log(usage());
+    return;
+  }
+  const isLocalJson = fs.existsSync(options.input) && fs.statSync(options.input).isFile();
+  if (isLocalJson) {
+    const ref = options.ref || process.env.GITHUB_SHA || "HEAD";
+    printEntries(
+      mergeByLane(failedLaneEntriesFromJson(options.input, ref, options.workflow)),
+      ref,
+      options.workflow,
+    );
+  } else {
+    const repo = options.repo || detectRepo();
+    const runLocal = runInfo(options.input, repo);
+    const ref = options.ref || runLocal.headSha || runLocal.headBranch;
+    const outputDir =
+      options.dir || path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${options.input}`);
+    const artifactNames = downloadDockerArtifacts(options.input, repo, outputDir);
+    const files = findFiles(outputDir, new Set(["failures.json", "summary.json"]));
+    const entries = mergeByLane(
+      files.flatMap((file) => failedLaneEntriesFromJson(file, ref, options.workflow)),
+    );
+    console.log(`Artifacts: ${artifactNames.join(", ")}`);
+    console.log(`Downloaded: ${outputDir}`);
+    printEntries(entries, ref, options.workflow, runLocal);
+  }
+}
+
+try {
+  main();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
 }

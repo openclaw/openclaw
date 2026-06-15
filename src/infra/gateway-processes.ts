@@ -1,5 +1,7 @@
+// Inspects local gateway processes for status and diagnostics.
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { findGatewayPidsOnPortSync as findUnixGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import {
@@ -7,6 +9,9 @@ import {
   readWindowsProcessArgsSync,
 } from "./windows-port-pids.js";
 
+// Gateway process helpers verify argv before signaling or reporting listener
+// PIDs so stale port owners cannot be mistaken for OpenClaw.
+/** Read command argv for a PID using the current platform's process APIs. */
 export function readGatewayProcessArgsSync(pid: number): string[] | null {
   if (process.platform === "linux") {
     try {
@@ -32,6 +37,7 @@ export function readGatewayProcessArgsSync(pid: number): string[] | null {
   return null;
 }
 
+/** Signal a PID only after its argv matches a gateway process. */
 export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "SIGUSR1"): void {
   const args = readGatewayProcessArgsSync(pid);
   if (!args || !isGatewayArgv(args, { allowGatewayBinary: true })) {
@@ -40,13 +46,14 @@ export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "S
   process.kill(pid, signal);
 }
 
+/** Find listener PIDs on `port` and keep only verified gateway processes. */
 export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[] {
   const rawPids =
     process.platform === "win32"
       ? readWindowsListeningPidsOnPortSync(port)
       : findUnixGatewayPidsOnPortSync(port);
 
-  return Array.from(new Set(rawPids))
+  return uniqueValues(rawPids)
     .filter((pid): pid is number => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
     .filter((pid) => {
       const args = readGatewayProcessArgsSync(pid);
@@ -54,6 +61,7 @@ export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[
     });
 }
 
+/** Format gateway PIDs for human-facing diagnostics. */
 export function formatGatewayPidList(pids: number[]): string {
   return pids.join(", ");
 }

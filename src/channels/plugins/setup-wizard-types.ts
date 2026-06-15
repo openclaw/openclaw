@@ -1,3 +1,8 @@
+/**
+ * Declarative channel setup wizard contract.
+ *
+ * Defines status, credentials, prompts, group access, and finalization types for setup flows.
+ */
 import type { DmPolicy } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -20,6 +25,7 @@ export type ChannelSetupPlugin = {
   setupWizard?: ChannelSetupWizard | ChannelSetupWizardAdapter;
 };
 
+/** Status block shown before users select channels during setup. */
 export type ChannelSetupWizardStatus = {
   configuredLabel: string;
   unconfiguredLabel: string;
@@ -48,6 +54,7 @@ export type ChannelSetupWizardStatus = {
   }) => number | undefined | Promise<number | undefined>;
 };
 
+/** Snapshot of one credential before prompting or reusing existing config. */
 export type ChannelSetupWizardCredentialState = {
   accountConfigured: boolean;
   hasConfiguredValue: boolean;
@@ -57,6 +64,7 @@ export type ChannelSetupWizardCredentialState = {
 
 export type ChannelSetupWizardCredentialValues = Partial<Record<string, string>>;
 
+/** Optional explanatory note shown when its owning step is reached. */
 export type ChannelSetupWizardNote = {
   title: string;
   lines: string[];
@@ -67,6 +75,7 @@ export type ChannelSetupWizardNote = {
   }) => boolean | Promise<boolean>;
 };
 
+/** Lets a wizard configure an account entirely from existing environment. */
 export type ChannelSetupWizardEnvShortcut = {
   prompt: string;
   preferredEnvVar?: string;
@@ -77,6 +86,7 @@ export type ChannelSetupWizardEnvShortcut = {
   }) => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
+/** Declarative secret/input step for a channel account credential. */
 export type ChannelSetupWizardCredential = {
   inputKey: keyof ChannelSetupInput;
   providerHint: string;
@@ -112,6 +122,7 @@ export type ChannelSetupWizardCredential = {
   }) => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
+/** Declarative non-secret text step that can depend on resolved credentials. */
 export type ChannelSetupWizardTextInput = {
   inputKey: keyof ChannelSetupInput;
   message: string;
@@ -164,6 +175,7 @@ export type ChannelSetupWizardAllowFromEntry = {
   id: string | null;
 };
 
+/** Channel-specific resolver for user-entered allowlist targets. */
 export type ChannelSetupWizardAllowFrom = {
   helpTitle?: string;
   helpLines?: string[];
@@ -186,6 +198,7 @@ export type ChannelSetupWizardAllowFrom = {
   }) => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
+/** Declarative group/DM access policy step used by interactive setup. */
 export type ChannelSetupWizardGroupAccess = {
   label: string;
   placeholder: string;
@@ -214,6 +227,7 @@ export type ChannelSetupWizardGroupAccess = {
   }) => OpenClawConfig;
 };
 
+/** Optional pre-step hook for deriving helper config or credential values. */
 export type ChannelSetupWizardPrepare = (params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -232,6 +246,7 @@ export type ChannelSetupWizardPrepare = (params: {
       credentialValues?: ChannelSetupWizardCredentialValues;
     } | void>;
 
+/** Optional post-step hook for final validation, writes, or post prompts. */
 export type ChannelSetupWizardFinalize = (params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -251,6 +266,7 @@ export type ChannelSetupWizardFinalize = (params: {
       credentialValues?: ChannelSetupWizardCredentialValues;
     } | void>;
 
+/** Full declarative setup wizard consumed by the generic setup adapter. */
 export type ChannelSetupWizard = {
   channel: string;
   status: ChannelSetupWizardStatus;
@@ -283,6 +299,7 @@ export type ChannelSetupWizard = {
   onAccountRecorded?: ChannelSetupWizardAdapter["onAccountRecorded"];
 };
 
+/** Runtime options for selecting and configuring one or more channels. */
 export type SetupChannelsOptions = {
   allowDisable?: boolean;
   allowSignalInstall?: boolean;
@@ -321,12 +338,14 @@ export type ChannelSetupStatus = {
   quickstartScore?: number;
 };
 
+/** Shared context for status checks before channel selection. */
 export type ChannelSetupStatusContext = {
   cfg: OpenClawConfig;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelId, string>>;
 };
 
+/** Shared context for applying setup changes for a selected channel. */
 export type ChannelSetupConfigureContext = {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -337,6 +356,7 @@ export type ChannelSetupConfigureContext = {
   forceAllowFrom: boolean;
 };
 
+/** Context passed after setup has written config to disk. */
 export type ChannelOnboardingPostWriteContext = {
   previousCfg: OpenClawConfig;
   cfg: OpenClawConfig;
@@ -344,6 +364,7 @@ export type ChannelOnboardingPostWriteContext = {
   runtime: RuntimeEnv;
 };
 
+/** Deferred hook for channel work that must run after config persistence. */
 export type ChannelOnboardingPostWriteHook = {
   channel: ChannelId;
   accountId: string;
@@ -362,6 +383,7 @@ export type ChannelSetupInteractiveContext = ChannelSetupConfigureContext & {
   label: string;
 };
 
+/** Optional direct-message policy contract exposed by setup adapters. */
 export type ChannelSetupDmPolicy = {
   label: string;
   channel: ChannelId;
@@ -380,6 +402,7 @@ export type ChannelSetupDmPolicy = {
   }) => Promise<OpenClawConfig>;
 };
 
+/** Imperative adapter consumed by onboarding and setup flows. */
 export type ChannelSetupWizardAdapter = {
   channel: ChannelId;
   getStatus: (ctx: ChannelSetupStatusContext) => Promise<ChannelSetupStatus>;

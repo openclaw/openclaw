@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Starts gateway watch in tmux while preserving useful dev environment state.
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -8,19 +9,32 @@ const TMUX_ATTACH_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const TMUX_ATTACH_FORCE_VALUES = new Set(["1", "true", "yes", "on"]);
 const DEFAULT_PROFILE_NAME = "main";
 const DEFAULT_BENCHMARK_PROFILE_DIR = ".artifacts/gateway-watch-profiles";
+const DEFAULT_BENCHMARK_PROFILE_MAX_FILES = "40";
 const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
+const RUN_NODE_CPU_PROF_MAX_FILES_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES";
+const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
+const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RAW_WATCH_SCRIPT = "scripts/watch-node.mjs";
 const TMUX_CWD_ENV_KEY = "OPENCLAW_GATEWAY_WATCH_CWD";
 const TMUX_CWD_OPTION_KEY = "@openclaw.gateway_watch.cwd";
 const TMUX_CHILD_ENV_KEYS = [
   "NODE_OPTIONS",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_DIAGNOSTICS",
+  "OPENCLAW_DIAGNOSTICS_EVENT_LOOP",
+  "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH",
   "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_GATEWAY_RESTART_TRACE",
+  "OPENCLAW_GATEWAY_STARTUP_TRACE",
   "OPENCLAW_HOME",
   "OPENCLAW_PROFILE",
   RUN_NODE_CPU_PROF_DIR_ENV,
+  RUN_NODE_CPU_PROF_MAX_FILES_ENV,
+  RUN_NODE_FILTER_SYNC_IO_STDERR_ENV,
+  RUN_NODE_OUTPUT_LOG_ENV,
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_STATE_DIR",
+  "OPENCLAW_TRACE_SYNC_IO",
 ];
 
 const sanitizeSessionPart = (value) => {
@@ -47,6 +61,11 @@ const readArgValue = (args, flag) => {
     }
   }
   return null;
+};
+
+const joinArtifactPath = (dir, basename) => {
+  const normalizedDir = String(dir || DEFAULT_BENCHMARK_PROFILE_DIR).replace(/[\\/]+$/g, "");
+  return `${normalizedDir || "."}/${basename}`;
 };
 
 const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {}) => {
@@ -96,6 +115,15 @@ const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {})
   if (benchmarkFlagSeen) {
     nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] =
       benchmarkDir || nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || DEFAULT_BENCHMARK_PROFILE_DIR;
+    nextEnv[RUN_NODE_CPU_PROF_MAX_FILES_ENV] ??= DEFAULT_BENCHMARK_PROFILE_MAX_FILES;
+    nextEnv.OPENCLAW_TRACE_SYNC_IO ??= "0";
+    if (nextEnv.OPENCLAW_TRACE_SYNC_IO === "1") {
+      nextEnv[RUN_NODE_OUTPUT_LOG_ENV] ??= joinArtifactPath(
+        nextEnv[RUN_NODE_CPU_PROF_DIR_ENV],
+        "gateway-watch-output.log",
+      );
+      nextEnv[RUN_NODE_FILTER_SYNC_IO_STDERR_ENV] ??= "1";
+    }
   }
   return {
     args: benchmarkNoForceSeen
@@ -103,10 +131,17 @@ const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {})
       : passthroughArgs,
     benchmarkNoForce: benchmarkNoForceSeen,
     benchmarkProfileDir: nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || null,
+    benchmarkTraceOutputLog:
+      nextEnv[RUN_NODE_FILTER_SYNC_IO_STDERR_ENV] === "1"
+        ? nextEnv[RUN_NODE_OUTPUT_LOG_ENV] || null
+        : null,
     env: nextEnv,
   };
 };
 
+/**
+ * Resolves the tmux session name for gateway watch arguments/environment.
+ */
 export const resolveGatewayWatchTmuxSessionName = ({ args = [], env = process.env } = {}) => {
   const profile =
     env.OPENCLAW_PROFILE ||
@@ -138,6 +173,9 @@ const resolveColorEnv = (env) => {
   return { assignments: [`FORCE_COLOR=${forceColor}`], options: [] };
 };
 
+/**
+ * Builds the shell command executed inside the tmux gateway watch session.
+ */
 export const buildGatewayWatchTmuxCommand = ({
   args = [],
   cwd = process.cwd(),
@@ -228,6 +266,9 @@ const setTmuxSessionMetadata = ({ cwd, sessionName, spawnSyncImpl, stderr }) => 
   }
 };
 
+/**
+ * Runs the gateway-watch tmux wrapper main flow.
+ */
 export const runGatewayWatchTmuxMain = (params = {}) => {
   const resolvedArgs = resolveGatewayWatchBenchmarkArgs({
     args: params.args ?? process.argv.slice(2),
@@ -247,6 +288,12 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
 
   if (resolvedArgs.benchmarkProfileDir) {
     log(deps.stderr, `gateway:watch benchmark CPU profiles: ${resolvedArgs.benchmarkProfileDir}`);
+  }
+  if (resolvedArgs.benchmarkTraceOutputLog) {
+    log(
+      deps.stderr,
+      `gateway:watch benchmark trace output: ${resolvedArgs.benchmarkTraceOutputLog}`,
+    );
   }
   if (resolvedArgs.benchmarkNoForce) {
     log(deps.stderr, "gateway:watch benchmark running without --force");

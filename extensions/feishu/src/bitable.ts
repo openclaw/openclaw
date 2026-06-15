@@ -1,9 +1,14 @@
+// Feishu plugin module implements bitable behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { createFeishuToolClient } from "./tool-account.js";
+import { createFeishuClient } from "./client.js";
+import { resolveAnyEnabledFeishuToolsConfig, resolveFeishuToolAccount } from "./tool-account.js";
+import { resolveToolsConfig } from "./tools-config.js";
 
 // ============ Helpers ============
 
@@ -206,6 +211,13 @@ async function listRecords(
     page_token: res.data?.page_token,
     total: res.data?.total,
   };
+}
+
+function readBitableListRecordsPageSize(params: Record<string, unknown>): number | undefined {
+  return readPositiveIntegerParam(params, "page_size", {
+    max: 500,
+    message: "page_size must be a positive integer between 1 and 500",
+  });
 }
 
 async function getRecord(client: Lark.Client, appToken: string, tableId: string, recordId: string) {
@@ -496,13 +508,10 @@ const ListRecordsSchema = Type.Object({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-  page_size: Type.Optional(
-    Type.Number({
-      description: "Number of records per page (1-500, default 100)",
-      minimum: 1,
-      maximum: 500,
-    }),
-  ),
+  page_size: optionalPositiveIntegerSchema({
+    description: "Number of records per page (1-500, default 100)",
+    maximum: 500,
+  }),
   page_token: Type.Optional(
     Type.String({ description: "Pagination token from previous response" }),
   ),
@@ -580,10 +589,20 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     return;
   }
 
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  if (!toolsCfg.bitable) {
+    return;
+  }
+
   type AccountAwareParams = { accountId?: string };
 
-  const getClient = (params: AccountAwareParams | undefined, defaultAccountId?: string) =>
-    createFeishuToolClient({ api, executeParams: params, defaultAccountId });
+  const getClient = (params: AccountAwareParams | undefined, defaultAccountId?: string) => {
+    const account = resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId });
+    if (!resolveToolsConfig(account.config.tools).bitable) {
+      throw new Error(`Feishu Bitable tools are disabled for account "${account.accountId}"`);
+    }
+    return createFeishuClient(account);
+  };
 
   const registerBitableTool = <
     // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Tool params bind each schema-specific executor to its registered tool.
@@ -655,7 +674,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         getClient(params, defaultAccountId),
         params.app_token,
         params.table_id,
-        params.page_size,
+        readBitableListRecordsPageSize(params as Record<string, unknown>),
         params.page_token,
       );
     },

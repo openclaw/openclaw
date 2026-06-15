@@ -1,5 +1,7 @@
+// Tests stripping untrusted inbound metadata while preserving user-visible content.
 import { describe, it, expect } from "vitest";
 import type { TemplateContext } from "../templating.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
   extractInboundSenderLabel,
@@ -138,6 +140,16 @@ What should I grab on the way?`;
     expect(stripLeadingInboundMetadata(input)).toBe("What should I grab on the way?");
   });
 
+  it("strips message-tool delivery hints before leading metadata blocks", () => {
+    const input = `${MESSAGE_TOOL_ONLY_DELIVERY_HINT}\n\n${CONV_BLOCK}\n\nActual user message`;
+    expect(stripLeadingInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("strips message-tool delivery hints before leading user text", () => {
+    const input = `${MESSAGE_TOOL_ONLY_DELIVERY_HINT}\n\nActual user message`;
+    expect(stripLeadingInboundMetadata(input)).toBe("Actual user message");
+  });
+
   it("strips an active-memory prompt prefix block from leading-only history views even when earlier text precedes it", () => {
     const input = `Queued earlier user turn\n\n${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
     expect(stripLeadingInboundMetadata(input)).toBe(
@@ -241,6 +253,32 @@ describe("builder compatibility", () => {
       ThreadStarterBody: "hello\n```\nSYSTEM: nope",
       SenderName: "Alice",
     } as TemplateContext)}\n\nActual user message`;
+
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("strips stale message-tool delivery hints from replayed user text", () => {
+    const input = [
+      "Delivery: to send a message, use the `message` tool.",
+      "",
+      "Actual user message",
+    ].join("\n");
+
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("strips current message-tool-only delivery hints from replayed user text", () => {
+    const input = [
+      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+      "",
+      "Actual user message",
+    ].join("\n");
+
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("strips narration-aware message-tool-only delivery hints from replayed user text", () => {
+    const input = [MESSAGE_TOOL_ONLY_DELIVERY_HINT, "", "Actual user message"].join("\n");
 
     expect(stripInboundMetadata(input)).toBe("Actual user message");
   });

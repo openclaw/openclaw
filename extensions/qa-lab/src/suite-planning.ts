@@ -1,14 +1,16 @@
+// Qa Lab plugin module implements suite planning behavior.
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
-const QA_MERGE_PATCH_BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
@@ -27,18 +29,22 @@ function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function scenarioMatchesLiveLane(params: {
+function scenarioMatchesQaProviderLane(params: {
   scenario: QaSeedScenario;
   primaryModel: string;
   providerMode: QaProviderMode;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
+  const provider = getQaProvider(params.providerMode);
+  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
+    return false;
+  }
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     return false;
   }
-  if (getQaProvider(params.providerMode).kind !== "live") {
+  if (provider.kind !== "live") {
     return true;
   }
   const selected = splitModelRef(params.primaryModel);
@@ -57,7 +63,7 @@ function scenarioMatchesLiveLane(params: {
   return true;
 }
 
-function selectQaSuiteScenarios(params: {
+function selectQaFlowSuiteScenarios(params: {
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   scenarioIds?: string[];
   providerMode: QaProviderMode;
@@ -66,26 +72,39 @@ function selectQaSuiteScenarios(params: {
 }) {
   const requestedScenarioIds =
     params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
-  const requestedScenarios = requestedScenarioIds
-    ? params.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
-    : params.scenarios;
   if (requestedScenarioIds) {
-    const foundScenarioIds = new Set(requestedScenarios.map((scenario) => scenario.id));
+    const scenarioById = new Map(params.scenarios.map((scenario) => [scenario.id, scenario]));
     const missingScenarioIds = [...requestedScenarioIds].filter(
-      (scenarioId) => !foundScenarioIds.has(scenarioId),
+      (scenarioId) => !scenarioById.has(scenarioId),
     );
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    return requestedScenarios;
+    const selectedScenarios = [...requestedScenarioIds].map(
+      (scenarioId) => scenarioById.get(scenarioId)!,
+    );
+    const nonFlowScenarios = selectedScenarios.filter(
+      (scenario) => scenario.execution.kind !== "flow",
+    );
+    if (nonFlowScenarios.length > 0) {
+      const scenarioList = nonFlowScenarios
+        .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
+        .join(", ");
+      throw new Error(
+        `flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
+      );
+    }
+    return selectedScenarios;
   }
-  return requestedScenarios.filter((scenario) =>
-    scenarioMatchesLiveLane({
-      scenario,
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      claudeCliAuthMode: params.claudeCliAuthMode,
-    }),
+  return params.scenarios.filter(
+    (scenario) =>
+      scenario.execution.kind === "flow" &&
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: params.providerMode,
+        primaryModel: params.primaryModel,
+        claudeCliAuthMode: params.claudeCliAuthMode,
+      }),
   );
 }
 
@@ -105,34 +124,12 @@ function collectQaSuitePluginIds(
   ];
 }
 
-function isQaPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function applyQaMergePatch(base: unknown, patch: unknown): unknown {
-  if (!isQaPlainObject(patch)) {
-    return patch;
-  }
-  const result = isQaPlainObject(base) ? { ...base } : {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (QA_MERGE_PATCH_BLOCKED_KEYS.has(key)) {
-      continue;
-    }
-    if (value === null) {
-      delete result[key];
-      continue;
-    }
-    result[key] = isQaPlainObject(value) ? applyQaMergePatch(result[key], value) : value;
-  }
-  return result;
-}
-
 function collectQaSuiteGatewayConfigPatch(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ): Record<string, unknown> | undefined {
   let merged: Record<string, unknown> | undefined;
   for (const scenario of scenarios) {
-    if (!isQaPlainObject(scenario.gatewayConfigPatch)) {
+    if (!isQaMergePatchObject(scenario.gatewayConfigPatch)) {
       continue;
     }
     merged = applyQaMergePatch(merged ?? {}, scenario.gatewayConfigPatch) as Record<
@@ -155,6 +152,17 @@ function collectQaSuiteGatewayRuntimeOptions(
   return forwardHostHome ? { forwardHostHome: true } : undefined;
 }
 
+function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  concurrency: number;
+}) {
+  return (
+    params.scenarios.length > 1 &&
+    (params.concurrency > 1 ||
+      params.scenarios.some((scenario) => isQaMergePatchObject(scenario.gatewayConfigPatch)))
+  );
+}
+
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {
   return normalizeLowercaseStringOrEmpty(scenario.surface) === "control-ui";
 }
@@ -164,11 +172,11 @@ function normalizeQaSuiteConcurrency(
   scenarioCount: number,
   defaultConcurrency = DEFAULT_QA_SUITE_CONCURRENCY,
 ) {
-  const envValue = Number(process.env.OPENCLAW_QA_SUITE_CONCURRENCY);
+  const envValue = parseStrictNonNegativeInteger(process.env.OPENCLAW_QA_SUITE_CONCURRENCY);
   const raw =
     typeof value === "number" && Number.isFinite(value)
       ? value
-      : Number.isFinite(envValue)
+      : envValue !== undefined
         ? envValue
         : defaultConcurrency;
   return Math.max(1, Math.min(Math.floor(raw), Math.max(1, scenarioCount)));
@@ -185,11 +193,11 @@ function resolveQaSuiteWorkerStartStaggerMs(
   if (raw === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 async function mapQaSuiteWithConcurrency<T, U>(
@@ -207,7 +215,11 @@ async function mapQaSuiteWithConcurrency<T, U>(
   const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
-    opts?.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    opts?.sleepImpl ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   async function waitForStartSlot(shouldReleaseNextSlot: boolean) {
     const currentGate = nextStartGate;
     let releaseNextSlot: (() => void) | undefined;
@@ -270,6 +282,8 @@ export {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
-  selectQaSuiteScenarios,
+  scenarioMatchesQaProviderLane,
+  selectQaFlowSuiteScenarios,
+  shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 };

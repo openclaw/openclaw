@@ -1,3 +1,4 @@
+// Qqbot tests cover inbound attachments plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { processAttachments, type AudioConvertPort } from "./inbound-attachments.js";
 
@@ -41,10 +42,15 @@ describe("engine/gateway/inbound-attachments", () => {
   it("returns an empty result when no attachments are present", async () => {
     await expect(
       processAttachments(undefined, { accountId: "qq", cfg: {}, audioConvert }),
-    ).resolves.toMatchObject({
+    ).resolves.toStrictEqual({
       attachmentInfo: "",
       imageUrls: [],
+      imageMediaTypes: [],
       voiceAttachmentPaths: [],
+      voiceAttachmentUrls: [],
+      voiceAsrReferTexts: [],
+      voiceTranscripts: [],
+      voiceTranscriptSources: [],
       attachmentLocalPaths: [],
     });
   });

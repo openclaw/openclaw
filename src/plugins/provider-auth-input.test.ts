@@ -1,3 +1,4 @@
+// Covers provider auth input collection and credential handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
@@ -6,6 +7,8 @@ import {
   maybeApplyApiKeyFromOption,
   normalizeTokenProviderInput,
 } from "./provider-auth-input.js";
+
+const acceptAnyApiKeyInput = () => undefined;
 
 const resolveEnvApiKey = vi.hoisted(() =>
   vi.fn((provider: string, env?: NodeJS.ProcessEnv) => {
@@ -123,7 +126,7 @@ async function ensureMinimaxApiKeyInternal(params: {
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
     normalize: (value) => value.trim(),
-    validate: () => undefined,
+    validate: acceptAnyApiKeyInput,
     prompter: params.prompter,
     secretInputMode: params.secretInputMode,
     setCredential: params.setCredential,
@@ -273,11 +276,12 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
 
     expect(result).toBe("prompted-key");
     expect(setCredential).toHaveBeenCalledWith("prompted-key", "plaintext");
-    expect(text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Enter key",
-      }),
-    );
+    expect(text).toHaveBeenCalledWith({
+      message: "Enter key",
+      placeholder: "API key",
+      validate: acceptAnyApiKeyInput,
+      sensitive: true,
+    });
   });
 
   it("uses explicit inline env ref when secret-input-mode=ref selects existing env key", async () => {
@@ -375,8 +379,24 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     expect(result).toBe("env-key");
     expectMinimaxEnvRefCredentialStored(setCredential);
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate provider reference"),
+      expect.stringContaining(
+        "Could not validate provider reference filemain:/providers/minimax/apiKey.",
+      ),
       "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json",
+      ),
+      "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Check your provider configuration and try again."),
+      "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      "Validated environment variable MINIMAX_API_KEY. OpenClaw will store a reference, not the key value.",
+      "Reference validated",
     );
   });
 

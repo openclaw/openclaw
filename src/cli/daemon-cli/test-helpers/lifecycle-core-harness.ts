@@ -1,3 +1,4 @@
+// Vitest harness for daemon lifecycle-core service and runtime dependencies.
 import { vi } from "vitest";
 import type { GatewayService } from "../../../daemon/service.js";
 import type { MockFn } from "../../../test-utils/vitest-mock-fn.js";
@@ -39,14 +40,14 @@ export function resetLifecycleRuntimeLogs() {
 }
 
 export function resetLifecycleServiceMocks() {
-  service.stage.mockClear();
-  service.install.mockClear();
-  service.uninstall.mockClear();
-  service.stop.mockClear();
-  service.isLoaded.mockClear();
-  service.readCommand.mockClear();
-  service.readRuntime.mockClear();
-  service.restart.mockClear();
+  service.stage.mockReset();
+  service.install.mockReset();
+  service.uninstall.mockReset();
+  service.stop.mockReset();
+  service.isLoaded.mockReset();
+  service.readCommand.mockReset();
+  service.readRuntime.mockReset();
+  service.restart.mockReset();
   service.isLoaded.mockResolvedValue(true);
   service.readCommand.mockResolvedValue({ programArguments: [], environment: {} });
   service.readRuntime.mockResolvedValue({ status: "running" });

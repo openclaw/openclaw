@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.vector dedupe plugin behavior.
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
@@ -29,13 +30,13 @@ describe("memory vector dedupe", () => {
       END;
     `);
 
-    expect(() =>
+    expect(
       replaceMemoryVectorRow({
-        db: db!,
+        db,
         id: "chunk-1",
         embedding: [2, 0, 0],
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     const row = db
       .prepare("SELECT COUNT(*) as c, length(embedding) as bytes FROM chunks_vec WHERE id = ?")

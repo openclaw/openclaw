@@ -1,3 +1,5 @@
+// Verifies message-action target requirements and alias detection, including
+// plugin aliases only when non-standard params are present.
 import { describe, expect, it, vi } from "vitest";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 
@@ -57,6 +59,12 @@ describe("actionHasTarget", () => {
     { action: "react", params: { chatGuid: "chat-guid" }, expected: true },
     { action: "react", params: { chatIdentifier: "chat-id" }, expected: true },
     { action: "react", params: { chatId: 42 }, expected: true },
+    {
+      action: "upload-file",
+      params: { chatIdentifier: "chat-id" },
+      ctx: { channel: "imessage" },
+      expected: true,
+    },
     { action: "read", params: { messageId: "msg_123" }, expected: false },
     {
       action: "pin",
