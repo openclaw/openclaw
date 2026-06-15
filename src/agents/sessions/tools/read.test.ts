@@ -177,4 +177,49 @@ describe("read tool", () => {
     expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
     expect(textContent(result)).toBe("/workspace/legacy.txt:c4e3bac3");
   });
+
+  it("reads GBK-encoded files with explicit encoding (regression #92664)", async () => {
+    // GBK encoded "中文测试内容"
+    const gbkBuffer = Buffer.from([
+      0xd6, 0xd0, 0xce, 0xc4, 0xb2, 0xe2, 0xca, 0xd4, 0xc4, 0xda, 0xc8, 0xdd,
+    ]);
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => gbkBuffer,
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "test.txt", encoding: "gbk" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("中文测试内容");
+  });
+
+  it("reads UTF-8 files by default", async () => {
+    const utf8Buffer = Buffer.from("Hello World", "utf-8");
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => utf8Buffer,
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "test.txt" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("Hello World");
+  });
 });
