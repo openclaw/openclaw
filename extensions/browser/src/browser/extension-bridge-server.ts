@@ -308,7 +308,7 @@ export function startExtensionBridgeServer(opts: {
         if (!opts.onAgentRequest) return failTurn("node agent routing unavailable");
         opts
           .onAgentRequest({ message, sessionKey })
-          .then(() => ws.send(JSON.stringify({ type: "res", id: m.id, ok: true })))
+          .then(() => ws.send(JSON.stringify({ type: "res", id: m.id, result: { ok: true } })))
           .catch((e: unknown) => failTurn(String((e as Error)?.message ?? e)));
         return;
       }

@@ -229,6 +229,10 @@ const childSessionToTab = new Map();
 /** @type {Map<number, {resolve:(v:any)=>void, reject:(e:Error)=>void}>} */
 const pending = new Map();
 
+// Outbound request ids for side-panel turns routed through the node. Kept in a
+// high range so they never collide with gateway/CDP request ids.
+let nextNodeTurnId = 1_000_000;
+
 // Per-tab operation locks prevent double-attach races.
 /** @type {Set<number>} */
 const tabOperationLocks = new Set();
@@ -1460,6 +1464,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     handleRequestContext(msg.tabId)
       .then(sendResponse)
       .catch((e) => sendResponse({ success: false, error: String(e) }));
+    return true;
+  }
+
+  // Side panel: route a turn through the node as a node-originated agent.request
+  // (over the relay/bridge socket), so the gateway gates the agent's tools by
+  // this hosting node (gateway.tools.byNode). The reply streams back over the
+  // side panel's own gateway connection on the same sessionKey. Resolves
+  // ok:false (e.g. relay not connected / no node) so the panel can fall back to
+  // a direct gateway turn.
+  if (msg.type === "nodeTurn") {
+    const id = nextNodeTurnId++;
+    requestFromRelay({
+      type: "req",
+      id,
+      method: "agent.request",
+      params: { message: msg.message, sessionKey: msg.sessionKey },
+    })
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     return true;
   }
 

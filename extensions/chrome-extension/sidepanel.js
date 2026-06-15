@@ -427,19 +427,37 @@ async function sendMessage() {
   msgInput.disabled = true;
 
   try {
-    const params = { message: text, idempotencyKey: generateId() };
-    if (sessionKey) {
-      params.key = sessionKey;
+    // Prefer routing the turn THROUGH the node (node-originated agent.request),
+    // so the gateway confines this turn's tools to the hosting node's policy
+    // (gateway.tools.byNode). The reply streams back over this panel's existing
+    // gateway subscription on the same sessionKey. If no node is hosting the
+    // bridge, fall back to a direct gateway turn.
+    let routedThroughNode = false;
+    try {
+      const nodeRes = await chrome.runtime.sendMessage({
+        type: "nodeTurn",
+        message: text,
+        sessionKey: sessionKey || undefined,
+      });
+      routedThroughNode = !!(nodeRes && nodeRes.ok);
+    } catch {
+      // background/relay unavailable — fall through to a direct gateway turn.
     }
-    const result = await sendReq("sessions.send", params);
-    if (result?.runId) currentRunId = result.runId;
-    if (result?.sessionKey && !sessionKey) {
-      sessionKey = result.sessionKey;
-      const opt = document.createElement("option");
-      opt.value = sessionKey;
-      opt.textContent = sessionKey.split(":").pop();
-      sessionPicker.appendChild(opt);
-      sessionPicker.value = sessionKey;
+    if (!routedThroughNode) {
+      const params = { message: text, idempotencyKey: generateId() };
+      if (sessionKey) {
+        params.key = sessionKey;
+      }
+      const result = await sendReq("sessions.send", params);
+      if (result?.runId) currentRunId = result.runId;
+      if (result?.sessionKey && !sessionKey) {
+        sessionKey = result.sessionKey;
+        const opt = document.createElement("option");
+        opt.value = sessionKey;
+        opt.textContent = sessionKey.split(":").pop();
+        sessionPicker.appendChild(opt);
+        sessionPicker.value = sessionKey;
+      }
     }
   } catch (err) {
     addMessage("system", "Send failed: " + err.message);
