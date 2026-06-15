@@ -953,6 +953,14 @@ const CANONICAL_PROVIDER_MODEL_LEAK_KEYS = [
   "authHeader",
   "request",
 ] as const;
+const MODEL_SCOPED_LEGACY_PROVIDER_DEFAULT_KEYS = [
+  "baseUrl",
+  "contextWindow",
+  "contextTokens",
+  "maxTokens",
+  "params",
+  "agentRuntime",
+] as const;
 
 function hasCanonicalOpenAIProvider(providers: Record<string, unknown>): boolean {
   return Object.keys(providers).some(
@@ -1008,11 +1016,19 @@ function collectModelMergeBlockers(params: {
   canonical: Record<string, unknown>;
   legacy: Record<string, unknown>;
   hasModelsToMerge: boolean;
+  hasRouteableLegacyModels: boolean;
 }): string[] {
   const blockers: string[] = [];
   for (const key of MODEL_UNSCOPED_PROVIDER_DEFAULT_KEYS) {
     if (hasOwnDefinedProperty(params.legacy, key)) {
       blockers.push(`models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.${key}`);
+    }
+  }
+  if (!params.hasModelsToMerge && params.hasRouteableLegacyModels) {
+    for (const key of MODEL_SCOPED_LEGACY_PROVIDER_DEFAULT_KEYS) {
+      if (hasOwnDefinedProperty(params.legacy, key)) {
+        blockers.push(`models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID}.${key}`);
+      }
     }
   }
   if (params.hasModelsToMerge) {
@@ -1068,6 +1084,19 @@ function getMergeableLegacyOpenAIModels(params: {
   });
 }
 
+function hasRouteableLegacyOpenAIModels(legacy: Record<string, unknown>): boolean {
+  const models: unknown[] = Array.isArray(legacy.models) ? (legacy.models as unknown[]) : [];
+  return models.some((m) => {
+    const mr = getRecord(m);
+    if (!mr) {
+      return false;
+    }
+    return (
+      (typeof mr.id === "string" && mr.id !== "") || (typeof mr.name === "string" && mr.name !== "")
+    );
+  });
+}
+
 function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boolean {
   const providers = getRecord(providersValue);
   if (!providers) {
@@ -1091,6 +1120,7 @@ function hasAutoFixableLegacyOpenAICodexProvider(providersValue: unknown): boole
           canonical: canonicalEntry.value,
           legacy: normalized.value,
         }).length > 0,
+      hasRouteableLegacyModels: hasRouteableLegacyOpenAIModels(normalized.value),
     });
     if (mergeBlockers.length === 0) {
       return true;
@@ -1125,6 +1155,7 @@ export function collectBlockedLegacyOpenAICodexProviderWarnings(raw: unknown): s
           canonical: canonicalEntry.value,
           legacy: normalized.value,
         }).length > 0,
+      hasRouteableLegacyModels: hasRouteableLegacyOpenAIModels(normalized.value),
     });
     if (mergeBlockers.length === 0) {
       continue;
@@ -1233,6 +1264,7 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         canonical,
         legacy: normalized.value,
         hasModelsToMerge: modelsToMerge.length > 0,
+        hasRouteableLegacyModels: hasRouteableLegacyOpenAIModels(normalized.value),
       });
       if (mergeBlockers.length > 0) {
         if (normalized.changed) {

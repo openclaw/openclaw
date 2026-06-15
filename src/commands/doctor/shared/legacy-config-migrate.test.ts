@@ -527,7 +527,6 @@ describe("legacy memory search config migrate", () => {
           },
           "openai-codex": {
             api: "openai-codex-responses",
-            baseUrl: "https://chatgpt.com/backend-api",
             models: [{ id: "gpt-5.5" }, { id: "gpt-5.4" }],
           },
         },
@@ -578,7 +577,7 @@ describe("legacy memory search config migrate", () => {
       models: [{ id: "gpt-5.5" }],
     });
     expect(res.changes).toContain(
-      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.auth, models.providers.openai-codex.request, models.providers.openai-codex.headers.",
+      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.auth, models.providers.openai-codex.request, models.providers.openai-codex.headers, models.providers.openai-codex.baseUrl.",
     );
   });
 
@@ -627,7 +626,6 @@ describe("legacy memory search config migrate", () => {
           },
           "openai-codex": {
             api: "openai-codex-responses",
-            baseUrl: "https://chatgpt.com/backend-api",
             models: [{ id: "gpt-5.5", api: "openai-codex-responses" }],
           },
         },
@@ -638,6 +636,73 @@ describe("legacy memory search config migrate", () => {
     expect(res.changes).toContain(
       "Removed models.providers.openai-codex because models.providers.openai already exists.",
     );
+  });
+
+  it("keeps legacy codex provider when an overlapping-only model would drop model-scoped routing/runtime defaults", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5.5" }],
+          },
+          "openai-codex": {
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            contextWindow: 200000,
+            contextTokens: 180000,
+            maxTokens: 8192,
+            params: { store: false },
+            agentRuntime: { id: "codex" },
+            models: [{ id: "gpt-5.5", api: "openai-codex-responses" }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 200000,
+      contextTokens: 180000,
+      maxTokens: 8192,
+      params: { store: false },
+      agentRuntime: { id: "codex" },
+      models: [{ id: "gpt-5.5", api: "openai-chatgpt-responses" }],
+    });
+    expect(res.config?.models?.providers?.openai).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://api.openai.com/v1",
+      models: [{ id: "gpt-5.5" }],
+    });
+    expect(res.changes).toContain(
+      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.baseUrl, models.providers.openai-codex.contextWindow, models.providers.openai-codex.contextTokens, models.providers.openai-codex.maxTokens, models.providers.openai-codex.params, models.providers.openai-codex.agentRuntime.",
+    );
+  });
+
+  it("previews a doctor warning for an overlapping-only codex provider with model-scoped defaults", () => {
+    const raw = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5.5" }],
+          },
+          "openai-codex": {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            agentRuntime: { id: "codex" },
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    expect(collectBlockedLegacyOpenAICodexProviderWarnings(raw)).toEqual([
+      "models.providers.openai-codex cannot be merged automatically into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.baseUrl, models.providers.openai-codex.agentRuntime. Move the affected model/provider defaults manually before removing models.providers.openai-codex.",
+    ]);
   });
 
   it("previews a doctor warning before removing a codex OAuth provider with no mergeable models", () => {
@@ -661,7 +726,7 @@ describe("legacy memory search config migrate", () => {
     };
 
     expect(collectBlockedLegacyOpenAICodexProviderWarnings(raw)).toEqual([
-      "models.providers.openai-codex cannot be merged automatically into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.auth, models.providers.openai-codex.headers. Move the affected model/provider defaults manually before removing models.providers.openai-codex.",
+      "models.providers.openai-codex cannot be merged automatically into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai-codex.auth, models.providers.openai-codex.headers, models.providers.openai-codex.baseUrl. Move the affected model/provider defaults manually before removing models.providers.openai-codex.",
     ]);
   });
 
