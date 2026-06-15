@@ -33,7 +33,7 @@ import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../security/dangerous-tools.js";
-import { getSessionHostingNodeId } from "./session-node-id-registry.js";
+import { resolveNodeScopedToolPolicy } from "./session-node-id-registry.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -117,12 +117,9 @@ export function resolveGatewayScopedTools(params: {
   // Per-node tool restriction (gateway.tools.byNode), keyed off the AUTHENTICATED
   // node hosting this turn (recorded at node-originated agent.request dispatch).
   // The nodeId comes from the node's authenticated connection, so a client cannot
-  // forge it; the policy can only narrow the toolset, never escalate.
-  const hostingNodeId = getSessionHostingNodeId(params.sessionKey);
-  const nodePolicy = hostingNodeId ? gatewayToolsCfg?.byNode?.[hostingNodeId] : undefined;
-  const nodeAllow = nodePolicy?.allow ? Array.from(nodePolicy.allow) : undefined;
-  const nodeDeny =
-    nodePolicy?.deny && nodePolicy.deny.length > 0 ? Array.from(nodePolicy.deny) : [];
+  // forge it; the policy can only narrow the toolset, never escalate. The same
+  // helper is applied in the embedded agent tool builder so both paths match.
+  const { nodeAllow, nodeDeny } = resolveNodeScopedToolPolicy(params.sessionKey, params.cfg);
   const defaultGatewayDeny =
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))

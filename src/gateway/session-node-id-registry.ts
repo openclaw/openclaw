@@ -16,6 +16,8 @@
  * Entries are bounded: each carries a timestamp, is honored only within a TTL
  * that comfortably outlasts a turn, and the map is capped (oldest evicted).
  */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+
 const ENTRY_TTL_MS = 15 * 60_000;
 const MAX_ENTRIES = 512;
 
@@ -62,6 +64,34 @@ export function getSessionHostingNodeId(sessionKey: string): string | undefined 
     return undefined;
   }
   return entry.nodeId;
+}
+
+/**
+ * Resolve the per-node tool restriction (`gateway.tools.byNode`) for the
+ * authenticated node hosting `sessionKey`, if any.
+ *
+ * Restriction-only: the returned `nodeAllow`/`nodeDeny` can narrow a toolset but
+ * never escalate it. Both tool-resolution paths call this so they enforce the
+ * node policy identically — the gateway scoped resolver
+ * (`resolveGatewayScopedTools`, for MCP/HTTP callers) AND the in-process agent
+ * tool builder (`createOpenClawCodingTools`, which a node-originated
+ * `agent.request` turn actually runs through). An absent `allow` means "no allow
+ * restriction"; an explicitly-present (even empty) `allow` is fail-closed.
+ */
+export function resolveNodeScopedToolPolicy(
+  sessionKey: string | undefined,
+  cfg: OpenClawConfig | undefined,
+): { nodeAllow?: string[]; nodeDeny: string[] } {
+  const key = sessionKey?.trim();
+  if (!key) {
+    return { nodeDeny: [] };
+  }
+  const hostingNodeId = getSessionHostingNodeId(key);
+  const nodePolicy = hostingNodeId ? cfg?.gateway?.tools?.byNode?.[hostingNodeId] : undefined;
+  const nodeAllow = nodePolicy?.allow ? Array.from(nodePolicy.allow) : undefined;
+  const nodeDeny =
+    nodePolicy?.deny && nodePolicy.deny.length > 0 ? Array.from(nodePolicy.deny) : [];
+  return { nodeAllow, nodeDeny };
 }
 
 /** Test-only: reset the registry. */

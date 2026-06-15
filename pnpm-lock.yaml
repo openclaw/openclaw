@@ -484,6 +484,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/chrome-extension: {}
+
   extensions/chutes:
     devDependencies:
       '@openclaw/plugin-sdk':
