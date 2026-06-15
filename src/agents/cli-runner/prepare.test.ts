@@ -412,6 +412,103 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("stages the resolved OAuth fallback profile for Gemini CLI preparation", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const legacyProfileId = "google-gemini-cli:default";
+    const resolvedProfileId = "google-gemini-cli:user@example.test";
+    const prepareExecution = vi.fn(async () => ({
+      env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
+    }));
+    const resolveApiKeyForProfile = vi.fn(async () => ({
+      apiKey: JSON.stringify({ token: "provider-formatted-access", projectId: "project-1" }),
+      profileId: resolvedProfileId,
+      profileType: "oauth" as const,
+      provider: "google-gemini-cli",
+      email: "user@example.test",
+    }));
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [legacyProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "stale-access-token",
+            refresh: "stale-refresh-token",
+            expires: 1_700_000_000_000,
+            email: "legacy@example.test",
+          },
+          [resolvedProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "resolved-access-token",
+            refresh: "resolved-refresh-token",
+            expires: 1_800_000_000_000,
+            projectId: "project-1",
+            email: "user@example.test",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: false,
+          authEpochMode: "profile-only",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        timeoutMs: 1_000,
+        runId: "run-test-gemini-oauth-fallback-profile",
+        authProfileId: legacyProfileId,
+        config: {},
+      });
+
+      expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileId: resolvedProfileId,
+          authCredential: expect.objectContaining({
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "resolved-access-token",
+            refresh: "resolved-refresh-token",
+            expires: 1_800_000_000_000,
+          }),
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not expose auth profile credentials to non-Gemini CLI prepare hooks", async () => {
     const { dir, sessionFile } = createSessionFile();
     const agentDir = path.join(dir, "agents", "main", "agent");

@@ -286,7 +286,7 @@ export async function prepareCliRunContext(
   });
   const agentDir = resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
-  const effectiveAuthProfileId =
+  let effectiveAuthProfileId =
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
   let authStore: AuthProfileStore | undefined;
   let authCredential: AuthProfileCredential | undefined;
@@ -321,15 +321,17 @@ export async function prepareCliRunContext(
       profileId: authProfileId,
       agentDir,
     });
+    const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
     authStore = loadAuthProfileStoreForRuntime(agentDir, {
       readOnly: true,
       externalCli: externalCliDiscoveryForProviderAuth({
         provider: params.provider,
-        profileId: authProfileId,
+        profileId: resolvedAuthProfileId,
       }),
     });
-    authCredential = authStore.profiles[authProfileId];
+    authCredential = authStore.profiles[resolvedAuthProfileId];
     if (resolvedAuth && authCredential) {
+      effectiveAuthProfileId = resolvedAuthProfileId;
       // Apply resolved strings only to static credentials with secret refs.
       // OAuth CLI bridges need raw refreshed fields from the reloaded store.
       if (authCredential.type === "api_key") {
