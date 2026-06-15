@@ -721,7 +721,11 @@ describe("runDaemonInstall", () => {
     } as never);
 
     const previous = process.env.OPENAI_API_KEY;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.OPENCLAW_CONFIG_PATH;
     try {
       await runDaemonInstall({ json: true, force: true });
 
@@ -736,6 +740,16 @@ describe("runDaemonInstall", () => {
       expect(env.PATH).not.toContain("/tmp/doctor-bin");
       expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     } finally {
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       if (previous === undefined) {
         delete process.env.OPENAI_API_KEY;
       } else {
