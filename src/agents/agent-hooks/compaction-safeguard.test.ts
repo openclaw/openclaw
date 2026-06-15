@@ -1350,6 +1350,62 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
   });
 
+  it("uses repaired no-drop prune output for summarization", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "assistant" as const,
+            content: [{ type: "toolCall", id: "call-timeout", name: "read", arguments: {} }],
+            timestamp: 1,
+          },
+          { role: "user" as const, content: "continue after timeout", timestamp: 2 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 300_000,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4000 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expectCompactionResult(result);
+    const summaryCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const summaryMessages = requireArray(summaryCall.messages);
+    expect(summaryMessages.map((message) => (message as { role?: unknown }).role)).toEqual([
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+    expect(summaryMessages[1]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-timeout",
+      isError: true,
+    });
+  });
+
   it("caps summarization reserve tokens to the model output limit", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("mock summary");

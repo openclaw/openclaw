@@ -1087,6 +1087,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const { newContentTokens, maxHistoryTokens, pruned } = prunePlan;
 
         if (newContentTokens > maxHistoryTokens && pruned) {
+          messagesToSummarize = pruned.messages;
+
           if (pruned.droppedChunks > 0) {
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
             log.warn(
@@ -1095,7 +1097,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
                 `(${pruned.droppedMessages} messages) to fit history budget.`,
             );
-            messagesToSummarize = pruned.messages;
 
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
