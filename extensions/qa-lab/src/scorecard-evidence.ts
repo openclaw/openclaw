@@ -7,10 +7,7 @@ import {
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import type {
-  QaScorecardCategoryMappingReport,
-  QaScorecardTaxonomyReport,
-} from "./scorecard-taxonomy.js";
+import type { QaScorecardCategoryCoverageReport } from "./scorecard-taxonomy.js";
 import { readQaScorecardFeatureCoverageByCategory } from "./scorecard-taxonomy.js";
 
 type QaProfileScorecardFilters = {
@@ -18,7 +15,7 @@ type QaProfileScorecardFilters = {
   category?: string;
 };
 
-type EvidenceCoverageRole = QaEvidenceSummaryEntry["mapping"]["coverage"][number]["role"];
+type EvidenceCoverageRole = QaEvidenceSummaryEntry["coverage"][number]["role"];
 
 function uniqueSortedStrings(values: Iterable<string | undefined>) {
   return [
@@ -41,9 +38,7 @@ function coverageIdsForRole(
 ) {
   return new Set(
     entries.flatMap((entry) =>
-      entry.mapping.coverage
-        .filter((coverage) => coverage.role === role)
-        .map((coverage) => coverage.id),
+      entry.coverage.filter((coverage) => coverage.role === role).map((coverage) => coverage.id),
     ),
   );
 }
@@ -59,7 +54,7 @@ function statusForCategory(params: { featureCount: number; fulfilledFeatureCount
 }
 
 function categoryFeatureCoverageIds(params: {
-  category: QaScorecardCategoryMappingReport;
+  category: QaScorecardCategoryCoverageReport;
   featureCoverageByCategoryId?: ReadonlyMap<string, readonly (readonly string[])[]>;
 }) {
   const features = params.featureCoverageByCategoryId?.get(params.category.id);
@@ -70,10 +65,8 @@ function categoryFeatureCoverageIds(params: {
 
 export function buildQaProfileScorecardEvidence(params: {
   evidence: QaEvidenceSummaryJson;
-  taxonomyReport: QaScorecardTaxonomyReport;
-  profile: string;
   filters: QaProfileScorecardFilters;
-  categories: readonly QaScorecardCategoryMappingReport[];
+  categories: readonly QaScorecardCategoryCoverageReport[];
   featureCoverageByCategoryId?: ReadonlyMap<string, readonly (readonly string[])[]>;
 }): QaEvidenceScorecardJson {
   const primaryCoverageIds = coverageIdsForRole(params.evidence.entries, "primary");
@@ -136,12 +129,6 @@ export function buildQaProfileScorecardEvidence(params: {
     (category) => category.status === "missing",
   ).length;
   return {
-    kind: "openclaw.qa.scorecard",
-    profile: params.profile,
-    taxonomy: {
-      path: params.taxonomyReport.taxonomyPath,
-      title: params.taxonomyReport.title,
-    },
     filters: {
       surface: nullableFilter(params.filters.surface),
       category: nullableFilter(params.filters.category),
@@ -168,23 +155,24 @@ export function buildQaProfileScorecardEvidence(params: {
 
 export async function attachQaProfileScorecardEvidenceToFile(params: {
   evidencePath: string;
-  taxonomyReport: QaScorecardTaxonomyReport;
   profile: string;
   filters: QaProfileScorecardFilters;
-  categories: readonly QaScorecardCategoryMappingReport[];
+  categories: readonly QaScorecardCategoryCoverageReport[];
 }) {
   const evidence = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(params.evidencePath, "utf8")),
   );
   const scorecard = buildQaProfileScorecardEvidence({
     evidence,
-    taxonomyReport: params.taxonomyReport,
-    profile: params.profile,
     filters: params.filters,
     categories: params.categories,
     featureCoverageByCategoryId: readQaScorecardFeatureCoverageByCategory(),
   });
-  const nextEvidence = attachQaEvidenceScorecard({ summary: evidence, scorecard });
+  const nextEvidence = attachQaEvidenceScorecard({
+    summary: evidence,
+    profile: params.profile,
+    scorecard,
+  });
   await fs.writeFile(params.evidencePath, `${JSON.stringify(nextEvidence, null, 2)}\n`, "utf8");
   return scorecard;
 }

@@ -371,17 +371,12 @@ describe("qa cli runtime", () => {
                     path: "qa/scenarios/channels/dm-chat-baseline.yaml",
                   },
                 },
-                mapping: {
-                  profile: "smoke-ci",
-                  coverage: [
-                    {
-                      id: "channels.dm",
-                      role: "primary",
-                      surfaceIds: ["dm"],
-                      categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
-                    },
-                  ],
-                },
+                coverage: [
+                  {
+                    id: "channels.dm",
+                    role: "primary",
+                  },
+                ],
                 execution: {
                   runner: "host",
                   environment: {
@@ -446,8 +441,8 @@ describe("qa cli runtime", () => {
       expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+        profile?: unknown;
         scorecard?: {
-          profile?: unknown;
           run?: { evidenceEntryCount?: unknown };
           features?: { fulfilled?: unknown };
           categoryReports?: Array<{
@@ -457,12 +452,15 @@ describe("qa cli runtime", () => {
           }>;
         };
       };
+      expect(evidence.profile).toBe("smoke-ci");
       expect(evidence.scorecard).toMatchObject({
-        profile: "smoke-ci",
         run: {
           evidenceEntryCount: 1,
         },
       });
+      expect(evidence.scorecard).not.toHaveProperty("kind");
+      expect(evidence.scorecard).not.toHaveProperty("taxonomy");
+      expect(evidence.scorecard).not.toHaveProperty("profile");
       expect(evidence.scorecard?.features?.fulfilled).toBe(1);
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
         id: "agent-runtime-and-provider-execution.agent-turn-execution",

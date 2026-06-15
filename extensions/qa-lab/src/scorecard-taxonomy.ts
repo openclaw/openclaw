@@ -109,11 +109,11 @@ export type QaScorecardEvidenceReport = {
   scenarioRefs: string[];
 };
 
-export type QaScorecardCategoryMappingReport = {
+export type QaScorecardCategoryCoverageReport = {
   id: string;
   taxonomySurfaceId: string;
   taxonomyCategoryName: string;
-  mappingStatus: "mapped" | "partial" | "missing";
+  coverageStatus: "covered" | "partial" | "missing";
   profiles: string[];
   coverageIds: string[];
   fulfilledCoverageIds: string[];
@@ -145,11 +145,11 @@ export type QaScorecardTaxonomyReport = {
   taxonomyFulfillmentPercent: number;
   evidenceRefCount: number;
   scenarioCoverageIdCount: number;
-  unmappedCoverageIdCount: number;
-  unmappedCoverageIds: string[];
+  unknownCoverageIdCount: number;
+  unknownCoverageIds: string[];
   validationIssueCount: number;
   validationIssues: QaScorecardValidationIssue[];
-  categories: QaScorecardCategoryMappingReport[];
+  categories: QaScorecardCategoryCoverageReport[];
 };
 
 type MaturityCategoryRef = {
@@ -414,7 +414,7 @@ export function buildQaScorecardTaxonomyReport(params: {
 }): QaScorecardTaxonomyReport {
   const maturityRefs = buildMaturityRefs(params.taxonomy);
   const issues: QaScorecardValidationIssue[] = [];
-  const categories: QaScorecardCategoryMappingReport[] = [];
+  const categories: QaScorecardCategoryCoverageReport[] = [];
   const primaryScenarioRefsByCoverageId = collectScenarioEvidenceByCoverageId({
     scenarios: params.scenarios,
     role: "primary",
@@ -578,11 +578,11 @@ export function buildQaScorecardTaxonomyReport(params: {
     const missingCoverageIds = required
       ? category.coverageIds.filter((coverageId) => !coverageIdsWithAnyEvidence.has(coverageId))
       : [];
-    const mappingStatus =
+    const coverageStatus =
       required &&
       category.features.length > 0 &&
       fulfilledFeatureCountForCategory === category.features.length
-        ? "mapped"
+        ? "covered"
         : evidenceReports.length > 0
           ? "partial"
           : "missing";
@@ -591,7 +591,7 @@ export function buildQaScorecardTaxonomyReport(params: {
       id: category.id,
       taxonomySurfaceId: category.surfaceId,
       taxonomyCategoryName: category.categoryName,
-      mappingStatus,
+      coverageStatus,
       profiles: profileIds,
       coverageIds: category.coverageIds,
       fulfilledCoverageIds: uniqueSorted(fulfilledCoverageIds),
@@ -608,9 +608,9 @@ export function buildQaScorecardTaxonomyReport(params: {
 
   const requiredCategories = categories.filter((category) => category.profiles.length > 0);
   const fulfilledCategoryCount = requiredCategories.filter(
-    (category) => category.mappingStatus === "mapped",
+    (category) => category.coverageStatus === "covered",
   ).length;
-  const unmappedCoverageIds = allScenarioCoverageIds.filter(
+  const unknownCoverageIds = allScenarioCoverageIds.filter(
     (coverageId) => !maturityRefs.coverageIds.has(coverageId),
   );
 
@@ -634,8 +634,8 @@ export function buildQaScorecardTaxonomyReport(params: {
     taxonomyFulfillmentPercent: percent(fulfilledFeatureCount, requiredFeatureCount),
     evidenceRefCount: categories.reduce((count, category) => count + category.evidence.length, 0),
     scenarioCoverageIdCount: allScenarioCoverageIds.length,
-    unmappedCoverageIdCount: unmappedCoverageIds.length,
-    unmappedCoverageIds,
+    unknownCoverageIdCount: unknownCoverageIds.length,
+    unknownCoverageIds,
     validationIssueCount: issues.length,
     validationIssues: issues,
     categories,

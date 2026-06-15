@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { toRepoRelativePath } from "./cli-paths.js";
 import { QaSuiteArtifactError } from "./errors.js";
 import {
@@ -159,16 +158,12 @@ function runQaScenarioCommand(
 }
 
 function buildScenarioEvidenceTarget(scenario: QaTestFileScenario) {
-  const surfaces =
-    scenario.surfaces && scenario.surfaces.length > 0 ? scenario.surfaces : [scenario.surface];
   return {
     id: scenario.id,
     title: scenario.title,
     sourcePath: scenario.execution.path,
     primaryCoverageIds: scenario.coverage?.primary ?? [],
     secondaryCoverageIds: scenario.coverage?.secondary ?? [],
-    surfaceIds: surfaces,
-    categoryIds: uniqueStrings([scenario.category].filter(Boolean) as string[]),
     docsRefs: scenario.docsRefs,
     codeRefs: scenario.codeRefs,
   };
@@ -276,6 +271,7 @@ function buildTestFileEvidence(params: {
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
+    profile: evidence.profile,
     entries: evidence.entries,
   });
 }
