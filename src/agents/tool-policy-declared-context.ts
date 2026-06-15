@@ -46,6 +46,7 @@ function denylistBlocksMcpServer(params: {
 }): boolean {
   return (
     denylistBlocksName("bundle-mcp", params.denylist) ||
+    matchesAnyGlobPattern("group:plugins", params.denylist) ||
     denylistContainsMcpServerEntry({
       safeServerName: params.safeServerName,
       rawDenylist: params.rawDenylist,
