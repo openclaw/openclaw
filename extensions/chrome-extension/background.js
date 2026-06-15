@@ -832,12 +832,26 @@ async function handleForwardCdpCommand(msg) {
   }
 
   if (method === "Target.createTarget") {
+    // SECURITY (My Browser pilot mode): the agent is confined to the tab the
+    // user explicitly attached. Never spawn a new tab — that would let the
+    // session reach the user's other tabs (logged-in sessions live in the same
+    // browser). Reuse the attached pilot tab and navigate it instead.
     const url = typeof params?.url === "string" ? params.url : "about:blank";
-    const tab = await chrome.tabs.create({ url, active: false });
-    if (!tab.id) throw new Error("Failed to create tab");
-    await new Promise((r) => setTimeout(r, 100));
-    const attached = await attachTab(tab.id);
-    return { targetId: attached.targetId };
+    let pilotTabId = null;
+    for (const [id, t] of tabs.entries()) {
+      if (t.state === "connected") {
+        pilotTabId = id;
+        break;
+      }
+    }
+    if (!pilotTabId) {
+      throw new Error("OpenClaw: no attached tab to pilot (open the side panel on a tab first)");
+    }
+    const pilot = tabs.get(pilotTabId);
+    if (url && url !== "about:blank") {
+      await chrome.debugger.sendCommand({ tabId: pilotTabId }, "Page.navigate", { url });
+    }
+    return { targetId: pilot.targetId };
   }
 
   if (method === "Target.closeTarget") {
