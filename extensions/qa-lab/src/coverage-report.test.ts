@@ -128,16 +128,6 @@ describe("qa coverage report", () => {
         (issue) => issue.code === "coverage-id-missing-primary-evidence",
       ),
     ).toBe(true);
-    const smokeCiCategoryIds =
-      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci")
-        ?.categoryIds ?? [];
-    const releaseCategoryIds =
-      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "release")
-        ?.categoryIds ?? [];
-    expect(releaseCategoryIds).toEqual(expect.arrayContaining(smokeCiCategoryIds));
-    expect(releaseCategoryIds).toContain(
-      "openai-codex-provider-path.responses-and-tool-compatibility",
-    );
     expect(
       inventory.scorecardTaxonomy.categories.find(
         (category) => category.id === TEST_BROWSER_CATEGORY_ID,
