@@ -55,6 +55,24 @@ function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
   return result as T;
 }
 
+function normalizePluginRuntimeOverrides(
+  overrides: DeepPartial<PluginRuntime>,
+): DeepPartial<PluginRuntime> {
+  const channelOverrides = overrides.channel;
+  if (!channelOverrides?.turn) {
+    return overrides;
+  }
+
+  const { inbound, turn, ...remainingChannelOverrides } = channelOverrides;
+  return {
+    ...overrides,
+    channel: {
+      ...remainingChannelOverrides,
+      inbound: inbound ? mergeDeep(turn, inbound) : turn,
+    },
+  };
+}
+
 function createTaskFlowSessionMock() {
   return {
     sessionKey: "agent:main:main",
@@ -818,7 +836,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   };
 
-  const runtime = mergeDeep(base, overrides);
+  const runtime = mergeDeep(base, normalizePluginRuntimeOverrides(overrides));
   runtime.channel.turn = runtime.channel.inbound;
   return runtime;
 }
