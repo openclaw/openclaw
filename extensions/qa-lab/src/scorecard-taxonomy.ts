@@ -19,7 +19,7 @@ function isRepoRootRelativeRef(value: string) {
 }
 
 const qaCoverageEvidenceRoleSchema = z.enum(["primary", "secondary"]);
-export const qaScorecardEvidenceModeSchema = z.enum(["full", "compact"]);
+export const qaScorecardEvidenceModeSchema = z.enum(["full", "slim"]);
 
 const qaScorecardProfileSchema = z.object({
   id: qaScorecardIdSchema,

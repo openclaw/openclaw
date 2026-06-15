@@ -3,6 +3,7 @@ import { z } from "zod";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 import {
+  qaScorecardEvidenceModeSchema,
   readQaScorecardProfileOptions,
   type QaScorecardEvidenceMode,
 } from "./scorecard-taxonomy.js";
@@ -190,7 +191,7 @@ export const qaEvidenceSummarySchema = z
     kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
     schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
     generatedAt: nonEmptyStringSchema,
-    isCompact: z.boolean(),
+    evidenceMode: qaScorecardEvidenceModeSchema,
     entries: z.array(qaEvidenceSummaryEntrySchema),
     profile: qaEvidenceProfileIdSchema.optional(),
     scorecard: qaEvidenceScorecardSchema.optional(),
@@ -504,18 +505,18 @@ function buildQaEvidenceSummary(params: {
 }): QaEvidenceSummaryJson {
   const profileOptions = readQaScorecardProfileOptions(params.profile);
   const evidenceMode = params.evidenceMode ?? profileOptions.evidenceMode;
-  const isCompact = evidenceMode === "compact";
-  const entries = isCompact
-    ? params.entries.map((entry) => {
-        const { execution: _execution, ...withoutExecution } = entry;
-        return withoutExecution;
-      })
-    : params.entries;
+  const entries =
+    evidenceMode === "slim"
+      ? params.entries.map((entry) => {
+          const { execution: _execution, ...withoutExecution } = entry;
+          return withoutExecution;
+        })
+      : params.entries;
   return qaEvidenceSummarySchema.parse({
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
-    isCompact,
+    evidenceMode,
     entries,
     profile: params.profile,
     scorecard: params.scorecard,

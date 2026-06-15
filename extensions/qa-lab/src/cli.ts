@@ -103,22 +103,25 @@ function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
 
 function parseQaEvidenceModeOption(value: string): QaProfileCommandOptions["evidenceMode"] {
   const evidenceMode = value.trim();
-  if (evidenceMode === "full" || evidenceMode === "compact") {
+  if (evidenceMode === "full" || evidenceMode === "slim") {
     return evidenceMode;
   }
-  throw invalidQaCliArgument("--evidence-mode must be one of full, compact.");
+  if (evidenceMode === "compact") {
+    return "slim";
+  }
+  throw invalidQaCliArgument("--evidence-mode must be one of full, slim.");
 }
 
 function resolveQaEvidenceModeOptions(opts: QaRunCliOptions) {
-  if (opts.excludeTestExecutionEvidence === true) {
-    if (opts.evidenceMode === "full") {
-      throw new Error(
-        "--exclude-test-execution-evidence cannot be combined with --evidence-mode full.",
-      );
-    }
-    return "compact";
+  if (opts.excludeTestExecutionEvidence !== true) {
+    return opts.evidenceMode;
   }
-  return opts.evidenceMode;
+  if (opts.evidenceMode === "full") {
+    throw invalidQaCliArgument(
+      "--exclude-test-execution-evidence conflicts with --evidence-mode full.",
+    );
+  }
+  return "slim";
 }
 
 function collectCliSuppliedQaRunFlags(
@@ -394,14 +397,11 @@ export function registerQaLabCli(program: Command) {
     .option("--category <id>", "Limit --qa-profile to a taxonomy category id")
     .option(
       "--evidence-mode <mode>",
-      "Set profile qa-evidence.json mode: full or compact",
+      "Set profile qa-evidence.json mode: full or slim",
       parseQaEvidenceModeOption,
     )
     .addOption(
-      new Option(
-        "--exclude-test-execution-evidence",
-        "Deprecated alias for --evidence-mode compact",
-      )
+      new Option("--exclude-test-execution-evidence", "Deprecated alias for --evidence-mode slim")
         .default(false)
         .hideHelp(),
     )

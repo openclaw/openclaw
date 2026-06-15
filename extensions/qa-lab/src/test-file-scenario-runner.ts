@@ -275,7 +275,7 @@ function buildTestFileEvidence(params: {
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
-    isCompact: evidence.isCompact,
+    evidenceMode: evidence.evidenceMode,
     profile: evidence.profile,
     entries: evidence.entries,
   });

@@ -175,9 +175,11 @@ function mergeQaEvidenceSummaries(params: {
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
-    isCompact:
+    evidenceMode:
       params.evidenceSummaries.length > 0 &&
-      params.evidenceSummaries.every((summary) => summary.isCompact),
+      params.evidenceSummaries.every((summary) => summary.evidenceMode === "slim")
+        ? "slim"
+        : "full",
     entries: params.evidenceSummaries.flatMap((summary) => summary.entries),
     profile: profiles.length === 1 ? profiles[0] : undefined,
   });
