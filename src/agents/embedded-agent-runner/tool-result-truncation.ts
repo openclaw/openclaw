@@ -53,6 +53,7 @@ const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
  */
 const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
+const AGGREGATE_REDUCTION_QUANTUM_RATIO = 0.2;
 
 type ToolResultTruncationOptions = {
   suffix?: string | ((truncatedChars: number) => string);
@@ -360,6 +361,7 @@ export function truncateOversizedToolResultsInMessages(
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    aggregateReductionQuantumRatio: AGGREGATE_REDUCTION_QUANTUM_RATIO,
   });
   if (plan.replacements.length === 0) {
     return { messages, truncatedCount: 0 };
@@ -412,6 +414,7 @@ function buildAggregateToolResultReplacements(params: {
   branch: ToolResultBranchEntry[];
   aggregateBudgetChars: number;
   minKeepChars?: number;
+  aggregateReductionQuantumRatio?: number;
 }): ToolResultReplacement[] {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const candidates = params.branch
@@ -451,7 +454,18 @@ function buildAggregateToolResultReplacements(params: {
     return [];
   }
 
-  let remainingReduction = totalChars - params.aggregateBudgetChars;
+  const aggregateOverflowChars = totalChars - params.aggregateBudgetChars;
+  // Live prompt projection and its matching pressure estimate use a coarse
+  // reduction quantum to avoid shaving exactly the current overflow on every
+  // appended tool result. Persisted recovery paths leave the ratio undefined so
+  // session/transcript rewrites still perform the minimum exact reduction.
+  const aggregateReductionQuantumChars =
+    params.aggregateReductionQuantumRatio !== undefined
+      ? Math.max(1, Math.ceil(params.aggregateBudgetChars * params.aggregateReductionQuantumRatio))
+      : 1;
+  let remainingReduction =
+    Math.ceil(aggregateOverflowChars / aggregateReductionQuantumChars) *
+    aggregateReductionQuantumChars;
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
 
   // Spend aggregate reduction on older entries first so fresh tool output stays intact.
@@ -569,6 +583,7 @@ function buildToolResultReplacementPlan(params: {
   maxChars: number;
   aggregateBudgetChars: number;
   minKeepChars?: number;
+  aggregateReductionQuantumRatio?: number;
 }): {
   replacements: ToolResultReplacement[];
   oversizedReplacementCount: number;
@@ -594,6 +609,7 @@ function buildToolResultReplacementPlan(params: {
     branch: oversizedTrimmedBranch,
     aggregateBudgetChars: params.aggregateBudgetChars,
     minKeepChars,
+    aggregateReductionQuantumRatio: params.aggregateReductionQuantumRatio,
   });
   const aggregateReducibleChars = calculateReplacementReduction(
     oversizedTrimmedBranch,
@@ -648,6 +664,7 @@ export function estimateToolResultReductionPotential(params: {
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    aggregateReductionQuantumRatio: AGGREGATE_REDUCTION_QUANTUM_RATIO,
   });
   const maxReducibleChars = plan.oversizedReducibleChars + plan.aggregateReducibleChars;
 

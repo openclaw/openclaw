@@ -344,6 +344,25 @@ describe("estimateToolResultReductionPotential", () => {
     );
   });
 
+  it("matches live prompt aggregate quantum in reduction estimates", () => {
+    const messages: AgentMessage[] = [
+      makeToolResult("x".repeat(5_000), "call_1"),
+      makeToolResult("y".repeat(5_000), "call_2"),
+      makeToolResult("z".repeat(5_000), "call_3"),
+    ];
+
+    const estimate = estimateToolResultReductionPotential({
+      messages,
+      contextWindowTokens: 128_000,
+      maxCharsOverride: 12_000,
+      aggregateMaxCharsOverride: 12_000,
+    });
+
+    expect(estimate.aggregateBudgetChars).toBe(12_000);
+    expect(estimate.totalToolResultChars).toBe(15_000);
+    expect(estimate.aggregateReducibleChars).toBeGreaterThan(3_000);
+  });
+
   it("lets tiny caps drive aggregate recovery estimates without the old floor", () => {
     const medium = "alpha beta gamma delta epsilon ".repeat(600);
     const messages: AgentMessage[] = [
@@ -429,6 +448,39 @@ describe("truncateOversizedToolResultsInMessages", () => {
     }
   });
 
+  it("reduces aggregate overflow in coarse chunks to avoid repeated cache-prefix churn", () => {
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage("calling tools"),
+      makeToolResult("x".repeat(5_000), "call_1"),
+      makeToolResult("y".repeat(5_000), "call_2"),
+      makeToolResult("z".repeat(5_000), "call_3"),
+    ];
+
+    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+      12_000,
+      12_000,
+    );
+
+    const totalChars = result.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+
+    // The aggregate budget is 12k and the total input is 15k. Instead of shaving
+    // exactly the 3k overflow and leaving the next appended tool result to rewrite
+    // old history again, live truncation reduces by one coarse quantum
+    // (12k * 0.2 = 2.4k, rounded overflow => 4.8k).
+    expect(truncatedCount).toBe(1);
+    expect(totalChars).toBeLessThanOrEqual(10_200);
+    expect(totalChars).toBeLessThan(12_000);
+    expect(getToolResultTextLength(result[3])).toBe(5_000);
+    expect(getToolResultTextLength(result[4])).toBe(5_000);
+  });
+
   it("bounds aggregate tool-result text in prompt history without rewriting callers", () => {
     // Live replay truncates cloned tool-result messages; the source array keeps
     // full content for UI and transcript persistence.
@@ -464,6 +516,38 @@ describe("truncateOversizedToolResultsInMessages", () => {
 });
 
 describe("truncateOversizedToolResultsInSession", () => {
+  it("uses exact aggregate shaving for persisted session recovery", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage(makeUserMessage("hello"));
+    sm.appendMessage(makeAssistantMessage("calling tools"));
+    sm.appendMessage(makeToolResult("x".repeat(5_000), "call_1"));
+    sm.appendMessage(makeToolResult("y".repeat(5_000), "call_2"));
+    sm.appendMessage(makeToolResult("z".repeat(5_000), "call_3"));
+    const sessionFile = sm.getSessionFile()!;
+
+    const result = await truncateOversizedToolResultsInSession({
+      sessionFile,
+      contextWindowTokens: 128_000,
+      maxCharsOverride: 12_000,
+      aggregateMaxCharsOverride: 12_000,
+    });
+
+    expect(result.truncated).toBe(true);
+    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const totalChars = afterBranch.reduce(
+      (sum, entry) =>
+        sum +
+        (entry.type === "message" && entry.message.role === "toolResult"
+          ? getToolResultTextLength(entry.message)
+          : 0),
+      0,
+    );
+
+    expect(totalChars).toBeLessThanOrEqual(12_000);
+    expect(totalChars).toBeGreaterThan(10_200);
+  });
+
   it("readably truncates aggregate medium tool results in a session file", async () => {
     // Persisted truncation rewrites JSONL directly and emits the transcript
     // update event instead of reopening through SessionManager internals.
