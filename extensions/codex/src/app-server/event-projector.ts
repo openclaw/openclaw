@@ -149,6 +149,10 @@ export class CodexAppServerEventProjector {
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
+  // Codex can mirror one commentary note through typed and raw item lanes with different ids.
+  private lastCommentaryProgress:
+    | { itemId: string; source: "typed" | "raw"; progressText: string }
+    | undefined;
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
   private readonly reasoningItemOrder = new Map<string, number>();
   private readonly planTextByItem = new Map<string, string>();
@@ -516,7 +520,7 @@ export class CodexAppServerEventProjector {
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
     if (this.isCommentaryAssistantItem(itemId)) {
-      this.emitCommentaryProgress({ itemId, text });
+      this.emitCommentaryProgress({ itemId, text, source: "typed" });
     } else if (this.shouldStreamAssistantPartial(itemId)) {
       await this.params.onPartialReply?.({ text, delta });
     }
@@ -652,7 +656,7 @@ export class CodexAppServerEventProjector {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
       if (item.text && this.isCommentaryAssistantItem(item.id)) {
-        this.emitCommentaryProgress({ itemId: item.id, text: item.text });
+        this.emitCommentaryProgress({ itemId: item.id, text: item.text, source: "typed" });
       }
     }
     this.recordNativeGeneratedMedia(item);
@@ -926,7 +930,7 @@ export class CodexAppServerEventProjector {
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
     if (phase === "commentary") {
-      this.emitCommentaryProgress({ itemId, text });
+      this.emitCommentaryProgress({ itemId, text, source: "raw" });
     }
   }
 
@@ -1057,7 +1061,11 @@ export class CodexAppServerEventProjector {
     return this.assistantPhaseByItem.get(itemId) === "final_answer";
   }
 
-  private emitCommentaryProgress(params: { itemId: string; text: string }): void {
+  private emitCommentaryProgress(params: {
+    itemId: string;
+    source: "typed" | "raw";
+    text: string;
+  }): void {
     const progressText = params.text.replace(/\s+/g, " ").trim();
     if (
       !progressText ||
@@ -1065,7 +1073,17 @@ export class CodexAppServerEventProjector {
     ) {
       return;
     }
+    if (
+      this.lastCommentaryProgress &&
+      this.lastCommentaryProgress.source !== params.source &&
+      this.lastCommentaryProgress.itemId !== params.itemId &&
+      this.lastCommentaryProgress.progressText === progressText
+    ) {
+      this.lastCommentaryProgressTextByItem.set(params.itemId, progressText);
+      return;
+    }
     this.lastCommentaryProgressTextByItem.set(params.itemId, progressText);
+    this.lastCommentaryProgress = { itemId: params.itemId, source: params.source, progressText };
     this.emitAgentEvent({
       stream: "item",
       data: {

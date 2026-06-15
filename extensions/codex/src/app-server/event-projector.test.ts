@@ -1150,6 +1150,102 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual(["final answer"]);
   });
 
+  it("dedupes commentary progress emitted by typed and raw response lanes", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "agentMessage",
+          id: "msg-commentary",
+          phase: "commentary",
+          text: "",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      agentMessageDelta("Checking the app-server stream", "msg-commentary"),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-commentary",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Checking the app-server stream" }],
+        },
+      }),
+    );
+
+    const progressEvents = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "preamble");
+
+    expect(progressEvents.map((event) => event.data)).toEqual([
+      {
+        itemId: "msg-commentary",
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText: "Checking the app-server stream",
+        source: "codex-app-server",
+      },
+    ]);
+  });
+
+  it("dedupes commentary progress when the raw response lane arrives first", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-commentary",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Checking the app-server stream" }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "agentMessage",
+          id: "msg-commentary",
+          phase: "commentary",
+          text: "",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      agentMessageDelta("Checking the app-server stream", "msg-commentary"),
+    );
+
+    const progressEvents = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "preamble");
+
+    expect(progressEvents.map((event) => event.data)).toEqual([
+      {
+        itemId: "raw-commentary",
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText: "Checking the app-server stream",
+        source: "codex-app-server",
+      },
+    ]);
+  });
+
   it("does not resolve commentary-phase assistant text as the final reply", async () => {
     const projector = await createProjector();
 
