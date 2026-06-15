@@ -2129,9 +2129,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt,
     });
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt,
+    });
 
     expect(attempt.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
     expect(retryInstruction).toBeNull();
+    expect(incompleteTurnText).toContain("tool actions may have already been executed");
   });
 
   it("does not retry post-tool turns with a visible final assistant answer", () => {
