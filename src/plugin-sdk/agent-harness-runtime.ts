@@ -145,6 +145,8 @@ export {
 } from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
+export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
+export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,

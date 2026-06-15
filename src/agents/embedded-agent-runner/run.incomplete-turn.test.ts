@@ -1,6 +1,7 @@
 // Coverage for incomplete-turn safety, retry instructions, and liveness states.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isCoreToolNameReplaySafe } from "../tool-replay-safety.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
@@ -2078,7 +2079,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
-  it.each(["search", "web_search", "memory_search", "x_search", "tool_describe"])(
+  it.each(["search", "web_search", "x_search", "memory_get", "tool_describe"])(
     "retries post-tool empty final turns after known read-only %s calls",
     (toolName) => {
       const finalAssistant = {
@@ -2105,6 +2106,31 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     },
   );
+
+  it("does not retry post-tool empty final turns after memory_search recall tracking", () => {
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "ollama",
+      model: "gemma4:31b",
+      content: [],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "ollama",
+      modelId: "gemma4:31b",
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking memory now."],
+        toolMetas: [{ toolName: "memory_search" }],
+        currentAttemptAssistant: finalAssistant,
+        lastAssistant: finalAssistant,
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
 
   it("retries post-tool reasoning-only final turns after earlier narration", () => {
     const finalAssistant = {
@@ -2135,6 +2161,53 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("uses lastAssistant for legacy harness results that omit currentAttemptAssistant", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking the scheduler now."],
+        toolMetas: [{ toolName: "search" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("does not reuse historical lastAssistant when the current assistant is explicitly absent", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking the scheduler now."],
+        toolMetas: [{ toolName: "search" }],
+        currentAttemptAssistant: undefined,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
   });
 
   it("does not retry post-tool empty final turns after unclassified tools", () => {
@@ -3737,7 +3810,10 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
     toolNames: string[],
     assistantText: string,
   ): Parameters<typeof resolvePlanningOnlyRetryInstruction>[0]["attempt"] {
-    const toolMetas = toolNames.map((toolName) => ({ toolName }));
+    const toolMetas = toolNames.map((toolName) => ({
+      toolName,
+      replaySafe: isCoreToolNameReplaySafe(toolName),
+    }));
     return {
       toolMetas,
       assistantTexts: [assistantText],

@@ -149,24 +149,6 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "glob",
   "ls",
 ]);
-// Blind attempt retries may repeat completed tools. Admit only names with an
-// unconditional read-only or idempotent contract; action-dependent and unknown tools fail closed.
-const REPLAY_SAFE_TOOL_NAMES = new Set([
-  ...SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES,
-  "web_search",
-  "web_fetch",
-  "x_search",
-  "memory_search",
-  "memory_get",
-  "sessions_list",
-  "sessions_history",
-  "agents_list",
-  "get_goal",
-  "update_plan",
-  "tool_search",
-  "tool_describe",
-  "image",
-]);
 const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
   "google",
   "google-vertex",
@@ -259,16 +241,14 @@ export type PlanningOnlyPlanDetails = {
 };
 
 /**
- * Marks whether retrying the attempt can safely replay the prompt. Mutating
- * tools, async work, committed delivery, spawned sessions, and cron writes all
- * count as side effects that make blind replay unsafe.
+ * Marks whether retrying the attempt can safely replay the prompt. Concrete
+ * tool-instance policy, async work, committed delivery, spawned sessions, and
+ * cron writes all contribute side-effect evidence.
  */
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadUnsafeTools = params.toolMetas.some(
-    (entry) => !REPLAY_SAFE_TOOL_NAMES.has(normalizeLowercaseStringOrEmpty(entry.toolName)),
-  );
+  const hadUnsafeTools = params.toolMetas.some((entry) => entry.replaySafe !== true);
   const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
     hadUnsafeTools ||
@@ -637,11 +617,14 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
 function hasEmptyPostToolFinalAssistantTurn(attempt: IncompleteTurnAttempt): boolean {
   // assistantTexts aggregates earlier narration. After tools, the latest typed
   // assistant message is the final-delivery contract and must carry the answer.
+  const currentAssistant = Object.hasOwn(attempt, "currentAttemptAssistant")
+    ? attempt.currentAttemptAssistant
+    : attempt.lastAssistant;
   return Boolean(
     attempt.toolMetas.length > 0 &&
     !hasAttemptTerminalState(attempt) &&
-    attempt.currentAttemptAssistant &&
-    extractAssistantVisibleText(attempt.currentAttemptAssistant).trim().length === 0,
+    currentAssistant &&
+    extractAssistantVisibleText(currentAssistant).trim().length === 0,
   );
 }
 

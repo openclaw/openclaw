@@ -12,7 +12,10 @@ import {
   filterToolResultMediaUrls,
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
+  getChannelAgentToolMeta,
+  getPluginToolMeta,
   type EmbeddedRunAttemptParams,
+  isAgentToolReplaySafe,
   isToolWrappedWithBeforeToolCallHook,
   isToolResultError,
   isMessagingTool,
@@ -178,6 +181,16 @@ export function createCodexDynamicToolBridge(params: {
     runtime: "codex",
     ...toolResultHookContext,
   });
+  const isReplaySafeTool = (tool: AnyAgentTool) =>
+    isAgentToolReplaySafe(tool, {
+      declaredReplaySafe: (candidate) => {
+        const pluginMeta = getPluginToolMeta(candidate as AnyAgentTool);
+        if (pluginMeta) {
+          return pluginMeta.replaySafe === true;
+        }
+        return getChannelAgentToolMeta(candidate as never) ? false : undefined;
+      },
+    });
   const legacyExtensionRunner =
     createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
   const directToolNames = new Set([
@@ -316,11 +329,13 @@ export function createCodexDynamicToolBridge(params: {
             isToolResultYield(rawResult) ||
             isToolResultYield(result),
         );
-        withDynamicToolAsyncStarted(
+        const asyncStarted =
+          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
+        withDynamicToolAsyncStarted(response, asyncStarted);
+        return withSideEffectEvidence(
           response,
-          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result),
+          asyncStarted || (terminalType !== "blocked" && !isReplaySafeTool(toolEntry.tool)),
         );
-        return withSideEffectEvidence(response, terminalType !== "blocked");
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         notifyAgentToolResult(
@@ -361,7 +376,7 @@ export function createCodexDynamicToolBridge(params: {
             },
             "error",
           ),
-          didStartExecution,
+          didStartExecution && !isReplaySafeTool(toolEntry.tool),
         );
       }
     },
