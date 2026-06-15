@@ -165,4 +165,57 @@ describe("resolveCurrentDirectiveLevels", () => {
 
     expect(result.currentReasoningLevel).toBe("off");
   });
+
+  it("prefers per-agent elevatedDefault over the global default (#73680)", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentEntry: {
+        elevatedDefault: "ask",
+      },
+      agentCfg: {
+        elevatedDefault: "off",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentElevatedLevel).toBe("ask");
+  });
+
+  it("keeps the session elevatedLevel ahead of agent elevated defaults (#73680)", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {
+        elevatedLevel: "full",
+      },
+      agentEntry: {
+        elevatedDefault: "ask",
+      },
+      agentCfg: {
+        elevatedDefault: "off",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentElevatedLevel).toBe("full");
+  });
+
+  it("prefers per-agent verboseDefault over the global default (#73680)", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentEntry: {
+        verboseDefault: "full",
+      },
+      agentCfg: {
+        verboseDefault: "off",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentVerboseLevel).toBe("full");
+  });
 });
