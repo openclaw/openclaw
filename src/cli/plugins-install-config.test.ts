@@ -30,6 +30,7 @@ vi.mock("../config/config.js", () => ({
       expectedConfigPath: "/tmp/config.json5",
       includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },
       includeFileTargetsForWrite: { "/tmp/plugins.json5": "/tmp/plugins.json5" },
+      includeRootsForWrite: ["/tmp/shared"],
     },
   }),
 }));
@@ -53,6 +54,7 @@ const installWriteOptions = {
   expectedConfigPath: "/tmp/config.json5",
   includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },
   includeFileTargetsForWrite: { "/tmp/plugins.json5": "/tmp/plugins.json5" },
+  includeRootsForWrite: ["/tmp/shared"],
 } satisfies ConfigWriteOptions;
 
 function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {

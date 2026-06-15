@@ -1339,6 +1339,27 @@ describe("config io write", () => {
     });
   });
 
+  it("returns include roots expanded with the ConfigIO homedir", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, "{}\n", "utf-8");
+      const io = createConfigIO({
+        configPath,
+        env: {
+          OPENCLAW_INCLUDE_ROOTS: "~/shared",
+          OPENCLAW_TEST_FAST: "1",
+        } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const result = await io.readConfigFileSnapshotForWrite();
+
+      expect(result.writeOptions.includeRootsForWrite).toEqual([path.join(home, "shared")]);
+    });
+  });
+
   it("rejects root-include partial writes instead of flattening the root config", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

@@ -391,6 +391,14 @@ async function rollbackJsonFileWriteIfUnchanged(params: {
 
 function createRootBoundBackupFs(target: RootBoundIncludeFile) {
   return {
+    chmod: async (filePath: string, mode: number) => {
+      const opened = await target.root.open(resolveRootBoundRelativePath(target, filePath));
+      try {
+        await opened.handle.chmod(mode);
+      } finally {
+        await opened[Symbol.asyncDispose]();
+      }
+    },
     copyFile: async (from: string, to: string) => {
       const content = await target.root.readBytes(resolveRootBoundRelativePath(target, from));
       await target.root.write(resolveRootBoundRelativePath(target, to), content, {
@@ -480,7 +488,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const nextConfigRecord = nextConfig as Record<string, unknown>;
 
   const writeEnv = params.io?.env ?? process.env;
-  const allowedRoots = resolveIncludeRoots(writeEnv);
+  const allowedRoots = params.writeOptions?.includeRootsForWrite ?? resolveIncludeRoots(writeEnv);
   const expectedIncludeTarget = params.writeOptions?.includeFileTargetsForWrite?.[includePath];
   if (!expectedIncludeTarget) {
     throw new ConfigMutationConflictError("included config target changed since last load", {

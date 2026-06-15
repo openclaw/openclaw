@@ -481,6 +481,8 @@ describe("config mutate helpers", () => {
       )}\n`,
       "utf-8",
     );
+    const previousBackupPath = `${pluginsPath}.bak`;
+    await fs.writeFile(previousBackupPath, "previous backup", { mode: 0o644 });
     const oldEntry = {
       enabled: true,
       config: { token: "plugin-token-runtime" },
@@ -595,6 +597,11 @@ describe("config mutate helpers", () => {
       '"$include": "./config/plugins.json5"',
     );
     await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toContain('"old"');
+    await expect(fs.readFile(`${pluginsPath}.bak.1`, "utf-8")).resolves.toBe("previous backup");
+    if (process.platform !== "win32") {
+      expect((await fs.stat(`${pluginsPath}.bak`)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(`${pluginsPath}.bak.1`)).mode & 0o777).toBe(0o600);
+    }
     const persistedPlugins = JSON.parse(await fs.readFile(pluginsPath, "utf-8")) as {
       entries?: Record<string, { config?: { token?: string } }>;
       installs?: Record<string, unknown>;
@@ -1003,11 +1010,12 @@ describe("config mutate helpers", () => {
     expect(persistedPlugins.entries?.["strict-plugin"]).toEqual({ enabled: true });
   });
 
-  it("writes a single-file top-level include under OPENCLAW_INCLUDE_ROOTS", async () => {
+  it("uses snapshot-resolved OPENCLAW_INCLUDE_ROOTS for direct include writes", async () => {
     const home = await suiteRootTracker.make("include-allowed-root");
-    const sharedRoot = await suiteRootTracker.make("include-allowed-root-shared");
+    const sharedRoot = path.join(home, "shared");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const pluginsPath = path.join(sharedRoot, "plugins.json5");
+    await fs.mkdir(sharedRoot, { recursive: true });
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,
@@ -1040,10 +1048,11 @@ describe("config mutate helpers", () => {
       writeOptions: {
         expectedConfigPath: snapshot.path,
         includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        includeRootsForWrite: [sharedRoot],
       },
       nextConfig,
       io: {
-        env: { OPENCLAW_INCLUDE_ROOTS: sharedRoot },
+        env: { OPENCLAW_INCLUDE_ROOTS: "~/shared" },
         readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
         writeConfigFile: ioMocks.writeConfigFile,
       },

@@ -86,6 +86,7 @@ function selectInstallMutationWriteOptions(
     envSnapshotForRestore: writeOptions.envSnapshotForRestore,
     includeFileHashesForWrite: writeOptions.includeFileHashesForWrite,
     includeFileTargetsForWrite: writeOptions.includeFileTargetsForWrite,
+    includeRootsForWrite: writeOptions.includeRootsForWrite,
   };
 }
 
