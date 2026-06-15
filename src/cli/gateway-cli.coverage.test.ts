@@ -594,10 +594,16 @@ describe("gateway-cli coverage", () => {
       password?: string;
       timeoutMs?: number;
       error?: unknown;
+      credentialsRequiredMessage?: string;
     };
     expect(diagArg.token).toBe("diag-token");
     expect(diagArg.password).toBe("diag-pass");
     expect(diagArg.error).toBeInstanceOf(GatewaySecretRefUnavailableError);
+    // Non-health callers must request the command-neutral diagnostic wording: it states the
+    // reachable-but-unauthenticated fact without claiming the method is a read-scope health RPC.
+    expect(diagArg.credentialsRequiredMessage).toBeDefined();
+    expect(diagArg.credentialsRequiredMessage).not.toMatch(/health/i);
+    expect(diagArg.credentialsRequiredMessage).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
     // Diagnostic handled the failure: no raw error leaked to stderr.
     expect(runtimeErrors.join("\n")).not.toContain("Gateway usage cost failed");
     expect(runtimeErrors.join("\n")).not.toContain("SecretRefUnavailable");
@@ -632,8 +638,16 @@ describe("gateway-cli coverage", () => {
     ]);
 
     expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
-    const diagArg = firstMockArg(emitReachableGatewayAuthDiagnostic) as { token?: string };
+    const diagArg = firstMockArg(emitReachableGatewayAuthDiagnostic) as {
+      token?: string;
+      credentialsRequiredMessage?: string;
+    };
     expect(diagArg.token).toBe("diag-token");
+    // Generic `gateway call <method>` is not a read-scope health RPC, so the helper must pass
+    // the command-neutral diagnostic message rather than the health-specific wording.
+    expect(diagArg.credentialsRequiredMessage).toBeDefined();
+    expect(diagArg.credentialsRequiredMessage).not.toMatch(/health/i);
+    expect(diagArg.credentialsRequiredMessage).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
     expect(runtimeErrors.join("\n")).not.toContain("Gateway call failed");
   });
 

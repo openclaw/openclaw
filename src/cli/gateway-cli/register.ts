@@ -170,10 +170,10 @@ async function callGatewayCliWithAuthDiagnostic<T = unknown>(
     const result = (await callGatewayCli(method, rpcOpts, params)) as T;
     return { handled: false, result };
   } catch (error) {
-    const [{ emitReachableGatewayAuthDiagnostic }, { readBestEffortConfig }] = await Promise.all([
-      loadGatewayHealthModule(),
-      loadConfigModule(),
-    ]);
+    const [
+      { emitReachableGatewayAuthDiagnostic, GATEWAY_REACHABLE_CREDENTIALS_REQUIRED_MESSAGE },
+      { readBestEffortConfig },
+    ] = await Promise.all([loadGatewayHealthModule(), loadConfigModule()]);
     const handled = await emitReachableGatewayAuthDiagnostic({
       error,
       config: await readBestEffortConfig(),
@@ -182,6 +182,10 @@ async function callGatewayCliWithAuthDiagnostic<T = unknown>(
       token: rpcOpts.token,
       password: rpcOpts.password,
       json: Boolean(rpcOpts.json),
+      // usage-cost / generic call are not read-scope health RPCs; the pre-dispatch credential
+      // failure is method-agnostic, so emit the command-neutral wording instead of the
+      // health-specific message.
+      credentialsRequiredMessage: GATEWAY_REACHABLE_CREDENTIALS_REQUIRED_MESSAGE,
     });
     if (handled) {
       return { handled: true };

@@ -46,8 +46,13 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   GATEWAY_HEALTH_REACHABLE_LINE,
+  GATEWAY_REACHABLE_CREDENTIALS_REQUIRED_MESSAGE,
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
+
+// Re-exported so the gateway CLI helper can request the command-neutral diagnostic wording
+// for non-health calls (usage-cost / generic call) via the already-loaded health module.
+export { GATEWAY_REACHABLE_CREDENTIALS_REQUIRED_MESSAGE };
 import { formatHealthChannelLines } from "./health-format.js";
 import type {
   AgentHealthSummary,
@@ -87,6 +92,12 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   token?: string;
   password?: string;
   json?: boolean;
+  /**
+   * Optional command-neutral diagnostic message. When omitted, the health-specific wording is
+   * used (preserving `gateway health` / doctor behaviour). Non-health callers pass a neutral
+   * message so the output does not claim the invoked method is a read-scope health RPC.
+   */
+  credentialsRequiredMessage?: string;
 }): Promise<boolean> {
   if (!isGatewayHealthAuthUnavailableError(params.error)) {
     return false;
@@ -109,7 +120,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   if (!gatewayProbeResultSawGateway(probe)) {
     return false;
   }
-  const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+  const diagnostic = buildCredentialsRequiredHealthDiagnostic(params.credentialsRequiredMessage);
   if (params.json) {
     writeRuntimeJson(params.runtime, diagnostic);
     params.runtime.exit(1);
