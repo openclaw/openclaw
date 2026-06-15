@@ -109,7 +109,32 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: () => [
+    {
+      id: "qwen",
+      capabilities: ["image", "video"],
+      defaultModels: { image: "qwen-vl-max-latest", video: "qwen-vl-max-latest" },
+      modelCapabilityOverrides: { nonImageModelFamilies: ["qwen3.7-max"] },
+    },
+  ],
+}));
+
 vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  hasManifestContractValue: ({
+    plugin,
+    contract,
+    value,
+  }: {
+    plugin: { contracts?: Record<string, readonly string[]> };
+    contract: string;
+    value: string;
+  }) => plugin.contracts?.[contract]?.includes(value) ?? false,
+  isManifestPluginAvailableForControlPlane: () => true,
+  loadManifestContractSnapshot: () => ({
+    index: { plugins: [] },
+    plugins: mediaMetadataPlugins,
+  }),
   loadManifestMetadataSnapshot: () => ({
     index: { plugins: [] },
     plugins: mediaMetadataPlugins,
@@ -215,6 +240,22 @@ describe("resolveDefaultMediaModel", () => {
         ]),
       }),
     ).toBeUndefined();
+  });
+
+  it("uses runtime provider metadata for manifest-backed configured image models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          qwen: {
+            models: [{ id: "qwen3.7-max", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveDefaultMediaModel({ providerId: "qwen", capability: "image", cfg })).toBe(
+      "qwen-vl-max-latest",
+    );
   });
 });
 

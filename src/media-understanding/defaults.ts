@@ -6,7 +6,9 @@ import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { configuredModelInputSupportsImage } from "./known-model-capabilities.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
+import { providerModelCapabilities } from "./model-capability-overrides.js";
 import {
+  buildMediaUnderstandingRegistry,
   normalizeMediaExecutionProviderId,
   normalizeMediaProviderId,
 } from "./provider-registry.js";
@@ -70,6 +72,21 @@ function providerHasDeclaredCapability(
   );
 }
 
+function resolveProviderWithRuntimeCapabilities(params: {
+  cfg?: OpenClawConfig;
+  providerId: string;
+  registry: ReadonlyMap<string, MediaUnderstandingProvider>;
+}): MediaUnderstandingProvider | undefined {
+  const normalizedProviderId = normalizeMediaProviderId(params.providerId);
+  const provider = params.registry.get(normalizedProviderId);
+  if (providerModelCapabilities(provider)?.modelCapabilityOverrides) {
+    return provider;
+  }
+  return (
+    buildMediaUnderstandingRegistry(undefined, params.cfg).get(normalizedProviderId) ?? provider
+  );
+}
+
 function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
   providerId: string;
@@ -92,7 +109,11 @@ function resolveConfiguredImageProviderModel(params: {
         configuredModelInputSupportsImage({
           modelId: id,
           input: model?.input,
-          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
+          provider: resolveProviderWithRuntimeCapabilities({
+            cfg: params.cfg,
+            providerId: providerKey,
+            registry: params.registry,
+          }),
         }),
       );
     });
@@ -123,7 +144,11 @@ function resolveConfiguredImageProviderIds(params: {
         configuredModelInputSupportsImage({
           modelId: id,
           input: model?.input,
-          provider: params.registry.get(normalizeMediaProviderId(providerKey)),
+          provider: resolveProviderWithRuntimeCapabilities({
+            cfg: params.cfg,
+            providerId: providerKey,
+            registry: params.registry,
+          }),
         }),
       );
     });

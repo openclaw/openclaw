@@ -12,6 +12,7 @@ import {
   providerModelCapabilities,
   type MediaUnderstandingProviderModelCapabilities,
 } from "../../media-understanding/model-capability-overrides.js";
+import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import { extractAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -186,6 +187,22 @@ export function imageModelConfigNeedsProviderRegistry(config: ImageModelConfig):
   });
 }
 
+function resolveProviderMetadata(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  providerRegistry?: ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>;
+}): MediaUnderstandingProviderModelCapabilities | undefined {
+  const injected = providerModelCapabilities(params.providerRegistry?.get(params.provider));
+  if (injected?.modelCapabilityOverrides) {
+    return injected;
+  }
+  return (
+    providerModelCapabilities(
+      buildMediaUnderstandingRegistry(undefined, params.cfg).get(params.provider),
+    ) ?? injected
+  );
+}
+
 function findConfiguredImageModelMatches(params: {
   cfg?: OpenClawConfig;
   providerRegistry?: ReadonlyMap<string, MediaUnderstandingProviderModelCapabilities>;
@@ -209,7 +226,11 @@ function findConfiguredImageModelMatches(params: {
         !configuredModelInputSupportsImage({
           modelId,
           input: entry?.input,
-          provider: providerModelCapabilities(params.providerRegistry?.get(provider)),
+          provider: resolveProviderMetadata({
+            cfg: params.cfg,
+            provider,
+            providerRegistry: params.providerRegistry,
+          }),
         })
       ) {
         continue;
@@ -302,7 +323,11 @@ export function resolveProviderVisionModelFromConfig(params: {
   ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
   const models = providerCfg?.models ?? [];
   const providerId = normalizeProviderId(params.provider);
-  const providerMetadata = providerModelCapabilities(params.providerRegistry?.get(providerId));
+  const providerMetadata = resolveProviderMetadata({
+    cfg: params.cfg,
+    provider: providerId,
+    providerRegistry: params.providerRegistry,
+  });
   const picked = models.find((m) => {
     const id = (m?.id ?? "").trim();
     return Boolean(
