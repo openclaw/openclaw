@@ -47,6 +47,7 @@ import type {
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { assertGatewaySessionStewardBoundary } from "../session-steward-boundary.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
@@ -980,17 +981,15 @@ export const usageHandlers: GatewayRequestHandlers = {
       return;
     }
     const specificKeyAgentId = specificKey ? parseAgentSessionKey(specificKey)?.agentId : undefined;
-    if (
-      requestedAgentId &&
-      specificKeyAgentId &&
-      normalizeAgentId(requestedAgentId) !== specificKeyAgentId
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      );
-      return;
+    if (specificKey) {
+      const boundaryCheck = assertGatewaySessionStewardBoundary({
+        sessionKey: specificKey,
+        requestedAgentId,
+      });
+      if (!boundaryCheck.ok) {
+        respond(false, undefined, boundaryCheck.error);
+        return;
+      }
     }
     const effectiveAgentId = requestedAllAgents
       ? undefined

@@ -15,6 +15,7 @@ import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { assertGatewaySessionStewardBoundary } from "./session-steward-boundary.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -196,6 +197,22 @@ export async function invokeGatewayTool(params: {
       ? (argsRaw as Record<string, unknown>)
       : {};
   const sessionKey = resolveSessionKey({ cfg: params.cfg, input: params.input });
+  const requestedAgentId = normalizeOptionalString(params.input.agentId);
+  const boundaryCheck = assertGatewaySessionStewardBoundary({
+    sessionKey,
+    requestedAgentId,
+  });
+  if (!boundaryCheck.ok) {
+    return {
+      ok: false,
+      status: 400,
+      toolName,
+      error: {
+        type: "invalid_request",
+        message: boundaryCheck.error.message,
+      },
+    };
+  }
   const resolveTools = (disablePluginTools: boolean) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
@@ -216,7 +233,6 @@ export async function invokeGatewayTool(params: {
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools } = resolveTools(false));
   }
-  const requestedAgentId = normalizeOptionalString(params.input.agentId);
   if (requestedAgentId && agentId && requestedAgentId !== agentId) {
     return {
       ok: false,
@@ -224,7 +240,7 @@ export async function invokeGatewayTool(params: {
       toolName,
       error: {
         type: "invalid_request",
-        message: `agent id "${requestedAgentId}" does not match session agent "${agentId}"`,
+        message: "session key agent does not match agentId",
       },
     };
   }

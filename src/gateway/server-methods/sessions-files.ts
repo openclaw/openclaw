@@ -15,6 +15,7 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { assertGatewaySessionStewardBoundary } from "../session-steward-boundary.js";
 import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -710,6 +711,14 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const boundaryCheck = assertGatewaySessionStewardBoundary({
+      sessionKey: params.sessionKey,
+      requestedAgentId: params.agentId,
+    });
+    if (!boundaryCheck.ok) {
+      respond(false, undefined, boundaryCheck.error);
+      return;
+    }
     const result = await buildListResult(params);
     respond(true, {
       sessionKey: params.sessionKey,
@@ -718,6 +727,14 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
   },
   "sessions.files.get": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsFilesGetParams, "sessions.files.get", respond)) {
+      return;
+    }
+    const boundaryCheck = assertGatewaySessionStewardBoundary({
+      sessionKey: params.sessionKey,
+      requestedAgentId: params.agentId,
+    });
+    if (!boundaryCheck.ok) {
+      respond(false, undefined, boundaryCheck.error);
       return;
     }
     const result = await findSessionFile(params);

@@ -153,6 +153,40 @@ describe("sessions.files RPC handlers", () => {
     ]);
   });
 
+  it("lists files for same-agent and global session boundaries", async () => {
+    const sameAgentPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      }),
+    );
+    expect(sameAgentPayload.sessionKey).toBe("agent:main:main");
+
+    const globalPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", {
+        sessionKey: "global",
+        agentId: "main",
+      }),
+    );
+    expect(globalPayload.sessionKey).toBe("global");
+  });
+
+  it("rejects cross-agent and malformed session boundaries without raw tails", async () => {
+    for (const sessionKey of ["agent:main:direct:user-1", "agent::main", "agent:main:"]) {
+      const params =
+        sessionKey === "agent:main:direct:user-1"
+          ? { sessionKey, agentId: "worker" }
+          : { sessionKey };
+      const calls = await invokeSessionFilesHandler("sessions.files.list", params);
+
+      const error = expectError(calls);
+      expect(error.code).toBe("INVALID_REQUEST");
+      expect(JSON.stringify(calls)).not.toContain("user-1");
+      expect(JSON.stringify(calls)).not.toContain("person-123");
+      expect(JSON.stringify(calls)).not.toContain("thread-123");
+    }
+  });
+
   it("collects touched files from existing transcript tool-call spellings", async () => {
     hoisted.visitSessionMessagesAsync.mockImplementation(
       async (_sessionId, _storePath, _sessionFile, visit) => {

@@ -283,7 +283,21 @@ describe("tools.effective handler", () => {
     } as never);
     const { respond, invoke } = createInvokeParams({ sessionKey: "missing-session" });
     await invoke();
-    expectInvalidResponse(respond, 'unknown session key "missing-session"');
+    expectInvalidResponse(respond, "unknown session key: UNSCOPED");
+  });
+
+  it("rejects cross-agent session boundaries before loading trusted context", async () => {
+    runtimeMocks.listAgentIds.mockReturnValueOnce(["main", "worker"]);
+    const { respond, invoke } = createInvokeParams({
+      sessionKey: "agent:main:direct:user-1",
+      agentId: "worker",
+    });
+
+    await invoke();
+
+    expectInvalidResponse(respond, "session key agent does not match agentId");
+    expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
+    expect(JSON.stringify(firstRespondCall(respond))).not.toContain("user-1");
   });
 
   it("returns the read-only effective runtime inventory without MCP startup", async () => {

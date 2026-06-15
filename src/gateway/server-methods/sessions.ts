@@ -87,6 +87,7 @@ import {
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
+import { assertGatewaySessionStewardBoundary } from "../session-steward-boundary.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -642,6 +643,10 @@ function resolveRequestedGlobalAgentId(
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
   const parsed = parseAgentSessionKey(key);
   const requestedAgentId = normalizeOptionalString(explicitAgentId);
+  const baseBoundary = assertGatewaySessionStewardBoundary({ sessionKey: key });
+  if (!baseBoundary.ok) {
+    return { ok: false, error: baseBoundary.error };
+  }
   if (requestedAgentId) {
     const agentId = normalizeAgentId(requestedAgentId);
     if (!listAgentIds(cfg).includes(agentId)) {
@@ -650,20 +655,27 @@ function resolveRequestedGlobalAgentId(
         error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
       };
     }
-    if (parsed?.agentId && normalizeAgentId(parsed.agentId) !== agentId) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
-      };
+    const requestedBoundary = assertGatewaySessionStewardBoundary({
+      sessionKey: key,
+      requestedAgentId: agentId,
+    });
+    if (!requestedBoundary.ok) {
+      return { ok: false, error: requestedBoundary.error };
     }
     if (canonicalKey !== "global") {
       const keyAgentId = parsed?.agentId
         ? normalizeAgentId(parsed.agentId)
         : normalizeAgentId(resolveSessionStoreAgentId(cfg, canonicalKey));
       if (keyAgentId !== agentId) {
+        const canonicalBoundary = assertGatewaySessionStewardBoundary({
+          sessionKey: canonicalKey,
+          requestedAgentId: agentId,
+        });
         return {
           ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+          error: canonicalBoundary.ok
+            ? errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId")
+            : canonicalBoundary.error,
         };
       }
     }
@@ -1356,16 +1368,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       normalizeOptionalString(p.agentId) ?? resolveDefaultAgentId(cfg),
     );
     if (requestedKey) {
-      const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
-      if (requestedAgentId && requestedAgentId !== agentId && normalizeOptionalString(p.agentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `sessions.create key agent (${requestedAgentId}) does not match agentId (${agentId})`,
-          ),
-        );
+      const boundaryCheck = assertGatewaySessionStewardBoundary({
+        sessionKey: requestedKey,
+        requestedAgentId: normalizeOptionalString(p.agentId),
+      });
+      if (!boundaryCheck.ok) {
+        respond(false, undefined, boundaryCheck.error);
         return;
       }
     }
@@ -1374,6 +1382,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     let parentSessionEntry: SessionEntry | undefined;
     let parentSelectedAgentId: string | undefined;
     if (parentSessionKey) {
+      const parentBoundaryCheck = assertGatewaySessionStewardBoundary({
+        sessionKey: parentSessionKey,
+      });
+      if (!parentBoundaryCheck.ok) {
+        respond(false, undefined, parentBoundaryCheck.error);
+        return;
+      }
       const parentCanonicalKey = resolveSessionStoreKey({ cfg, sessionKey: parentSessionKey });
       if (parentCanonicalKey === "global") {
         const parentRequestedAgent = resolveRequestedGlobalAgentId(
@@ -1928,6 +1943,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const requestedRunId = readStringValue(p.runId);
     const requestedKey = normalizeOptionalString(p.key);
     const requestedParamAgentId = normalizeOptionalString(p.agentId);
+    if (requestedKey) {
+      const boundaryCheck = assertGatewaySessionStewardBoundary({
+        sessionKey: requestedKey,
+        requestedAgentId: requestedParamAgentId,
+      });
+      if (!boundaryCheck.ok) {
+        respond(false, undefined, boundaryCheck.error);
+        return;
+      }
+    }
     const scopedRequestedKey = resolveScopedAbortKey({
       cfg,
       key: requestedKey,

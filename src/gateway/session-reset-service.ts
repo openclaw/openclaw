@@ -59,6 +59,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
+import { assertGatewaySessionStewardBoundary } from "./session-steward-boundary.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
@@ -864,14 +865,14 @@ export async function performGatewaySessionReset(params: {
         error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${requestedAgentId}`),
       };
     }
-    if (
-      explicitAgentId &&
-      parsedKey?.agentId &&
-      normalizeAgentId(parsedKey.agentId) !== explicitAgentId
-    ) {
+    const boundaryCheck = assertGatewaySessionStewardBoundary({
+      sessionKey: params.key,
+      requestedAgentId: explicitAgentId,
+    });
+    if (!boundaryCheck.ok) {
       return {
         ok: false as const,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+        error: boundaryCheck.error,
       };
     }
     const target = resolveGatewaySessionStoreTarget({

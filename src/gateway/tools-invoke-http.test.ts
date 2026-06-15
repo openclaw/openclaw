@@ -1157,7 +1157,35 @@ describe("tools.invoke Gateway RPC", () => {
     expect(call?.[1]?.toolName).toBe("agents_list");
     const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
     expect(error?.code).toBe("validation_error");
-    expect(error?.message).toBe('agent id "other" does not match session agent "main"');
+    expect(error?.message).toBe("session key agent does not match agentId");
+  });
+
+  it("rejects cross-agent scoped invokes before tool resolution or hook execution", async () => {
+    cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, tools: { allow: ["tools_invoke_test"] } },
+          { id: "worker", tools: { allow: ["tools_invoke_test"] } },
+        ],
+      },
+    };
+
+    const call = await invokeToolsRpc({
+      name: "tools_invoke_test",
+      args: { mode: "ok" },
+      sessionKey: "agent:main:direct:user-1",
+      agentId: "worker",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(false);
+    expect(call?.[1]?.toolName).toBe("tools_invoke_test");
+    const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
+    expect(error?.code).toBe("validation_error");
+    expect(error?.message).toBe("session key agent does not match agentId");
+    expect(JSON.stringify(call)).not.toContain("user-1");
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(lastCreateOpenClawToolsContext).toBeUndefined();
   });
 
   it("rejects malformed params at the RPC boundary", async () => {
