@@ -214,7 +214,8 @@ describe("agent-assisted setup handoff", () => {
     expect(instructions).toContain("local Gateway is already securely configured and running");
     expect(instructions).toContain("do not ask the user to set it up before channels");
     expect(instructions).toContain("Do not run Gateway install, start, restart, or stop commands");
-    expect(instructions).toContain("openclaw onboard --install-daemon");
+    expect(instructions).not.toContain("temporary local Gateway");
+    expect(instructions).not.toContain("openclaw onboard --install-daemon");
     expect(instructions).toContain("model providers and authentication");
     expect(instructions).toContain("web search");
     expect(instructions).toContain("skills and plugins");
@@ -307,6 +308,7 @@ describe("agent-assisted setup handoff", () => {
     expect(hasExplicitFullWizardIntent({ mode: "local" })).toBe(true);
     expect(hasExplicitFullWizardIntent({ mode: "remote" })).toBe(true);
     expect(hasExplicitFullWizardIntent({ authChoice: "skip" })).toBe(true);
+    expect(hasExplicitFullWizardIntent({ reset: true })).toBe(true);
   });
 
   it("checks the effective default agent model and auth scope", async () => {

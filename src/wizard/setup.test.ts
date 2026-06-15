@@ -282,11 +282,18 @@ vi.mock("./setup.migration-import.js", () => ({
 vi.mock("./setup.assisted.js", () => ({
   finishAgentAssistedSetup,
   hasExplicitFullWizardIntent: vi.fn(
-    (opts: { authChoice?: string; gatewayPort?: number; installDaemon?: boolean; mode?: string }) =>
+    (opts: {
+      authChoice?: string;
+      gatewayPort?: number;
+      installDaemon?: boolean;
+      mode?: string;
+      reset?: boolean;
+    }) =>
       opts.authChoice === "skip" ||
       opts.gatewayPort !== undefined ||
       opts.installDaemon !== undefined ||
-      opts.mode !== undefined,
+      opts.mode !== undefined ||
+      opts.reset === true,
   ),
   hasRunnableLocalAgent,
 }));
