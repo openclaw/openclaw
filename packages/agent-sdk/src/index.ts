@@ -220,3 +220,8 @@ export {
   getQuarantineToolAllowlist,
 } from "./quarantine/mutation.js";
 export type { MutationCheckResult, MutatedFile, QuarantineRecord } from "./quarantine/mutation.js";
+
+// ── Live config integration ──────────────────────────────────────────
+
+export { applyConfigDiff, rollbackConfig, enableWithLiveConfig } from "./compiler/live.js";
+export type { LiveConfigResult } from "./compiler/live.js";
