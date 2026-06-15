@@ -4,7 +4,7 @@
  * Demonstrates that a managed TaskFlow with all terminal child tasks
  * is now reconciled to "lost" by task-flow maintenance.
  */
-import { createManagedTaskFlow, getTaskFlowById, listTaskFlowRecords, resetTaskFlowRegistryForTests, requestFlowCancel } from "../src/tasks/task-flow-registry.js";
+import { createManagedTaskFlow, getTaskFlowById, resetTaskFlowRegistryForTests } from "../src/tasks/task-flow-registry.js";
 import { createRunningTaskRun as createRunningTaskRunOrNull } from "../src/tasks/task-executor.js";
 import { previewTaskFlowRegistryMaintenance, runTaskFlowRegistryMaintenance } from "../src/tasks/task-flow-registry.maintenance.js";
 import { resetTaskRegistryDeliveryRuntimeForTests, resetTaskRegistryForTests } from "../src/tasks/task-registry.js";
