@@ -1,0 +1,51 @@
+{
+  "id": "infringement",
+  "name": "Infringement",
+  "description": "Query 图文/视频侵权检测 cases and create 研判 tasks against the leading-v2.0 (superworker) backend, with entity_auth(Legal) access control.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mysql": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Read-only MySQL connection for queries (may reuse the feed-search read account).",
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number" },
+          "user": { "type": "string" },
+          "password": { "type": "string" },
+          "database": { "type": "string" }
+        },
+        "required": ["host", "user", "password", "database"]
+      },
+      "writerDb": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Write-capable MySQL connection for creating cases/links (INSERT/UPDATE on infringement_*).",
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number" },
+          "user": { "type": "string" },
+          "password": { "type": "string" },
+          "database": { "type": "string" }
+        },
+        "required": ["host", "user", "password", "database"]
+      },
+      "rabbitmq": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "RabbitMQ broker for dispatching 研判 tasks to the Java TaskWorker queue.",
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number" },
+          "user": { "type": "string" },
+          "password": { "type": "string" },
+          "taskQueue": { "type": "string", "default": "TaskWorker" }
+        },
+        "required": ["host", "user", "password"]
+      }
+    },
+    "required": ["mysql", "writerDb", "rabbitmq"]
+  }
+}
