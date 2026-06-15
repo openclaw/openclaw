@@ -1,30 +1,38 @@
+// Covers gateway restart process and supervisor paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureFullEnv } from "../test-utils/env.js";
+import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+const execFileMock = vi.hoisted(() =>
+  Object.assign(vi.fn(), {
+    [Symbol.for("nodejs.util.promisify.custom")]: vi.fn(),
+    __promisify__: vi.fn(),
+  }),
+);
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-  };
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      execFile: execFileMock,
+      spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
+    } as Partial<typeof import("node:child_process")>,
+  );
 });
 
 vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
 }));
 
-vi.mock("../config/paths.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
-  return {
-    ...actual,
-    resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
-  };
-});
+vi.mock("../config/paths.js", () => ({
+  resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
+  resolveStateDir: (env: NodeJS.ProcessEnv = process.env) =>
+    env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
+}));
 
 const { testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
@@ -34,6 +42,7 @@ let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
 
 beforeEach(() => {
+  execFileMock.mockReset();
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();
@@ -193,69 +202,71 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 describe("triggerOpenClawRestart", () => {
   it("does not kickstart after bootstrap registers an unloaded LaunchAgent", () => {
     setPlatform("darwin");
-    delete process.env.VITEST;
-    delete process.env.NODE_ENV;
-    process.env.HOME = "/Users/test";
-    process.env.OPENCLAW_PROFILE = "default";
-    const uid = typeof process.getuid === "function" ? process.getuid() : 501;
-    spawnSyncMock.mockImplementation((command: string, args: string[]) => {
-      if (command === "/usr/sbin/lsof") {
-        return { error: undefined, status: 1, stdout: "" };
-      }
-      if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
-        return { error: undefined, status: 113, stderr: "service not loaded" };
-      }
-      if (command === "launchctl" && args[0] === "bootstrap") {
-        return { error: undefined, status: 0, stderr: "" };
-      }
-      return { error: undefined, status: 1, stdout: "" };
-    });
+    withEnv(
+      { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      () => {
+        const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+        spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+          if (command === "/usr/sbin/lsof") {
+            return { error: undefined, status: 1, stdout: "" };
+          }
+          if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
+            return { error: undefined, status: 113, stderr: "service not loaded" };
+          }
+          if (command === "launchctl" && args[0] === "bootstrap") {
+            return { error: undefined, status: 0, stderr: "" };
+          }
+          return { error: undefined, status: 1, stdout: "" };
+        });
 
-    const result = triggerOpenClawRestart();
+        const result = triggerOpenClawRestart();
 
-    expect(result).toEqual({
-      ok: true,
-      method: "launchctl",
-      tried: [
-        `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
-        `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
-      ],
-    });
+        expect(result).toEqual({
+          ok: true,
+          method: "launchctl",
+          tried: [
+            `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
+            `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
+          ],
+        });
+      },
+    );
   });
 
   it("continues when launchctl bootstrap reports the service is already loaded", () => {
     setPlatform("darwin");
-    delete process.env.VITEST;
-    delete process.env.NODE_ENV;
-    process.env.HOME = "/Users/test";
-    process.env.OPENCLAW_PROFILE = "default";
-    const uid = typeof process.getuid === "function" ? process.getuid() : 501;
-    spawnSyncMock.mockImplementation((command: string, args: string[]) => {
-      if (command === "/usr/sbin/lsof") {
-        return { error: undefined, status: 1, stdout: "" };
-      }
-      if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
-        return { error: undefined, status: 113, stderr: "service not loaded" };
-      }
-      if (command === "launchctl" && args[0] === "bootstrap") {
-        return { error: undefined, status: 37, stderr: "Operation already in progress" };
-      }
-      if (command === "launchctl" && args[0] === "kickstart") {
-        return { error: undefined, status: 0, stdout: "" };
-      }
-      return { error: undefined, status: 1, stdout: "" };
-    });
+    withEnv(
+      { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      () => {
+        const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+        spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+          if (command === "/usr/sbin/lsof") {
+            return { error: undefined, status: 1, stdout: "" };
+          }
+          if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
+            return { error: undefined, status: 113, stderr: "service not loaded" };
+          }
+          if (command === "launchctl" && args[0] === "bootstrap") {
+            return { error: undefined, status: 37, stderr: "Operation already in progress" };
+          }
+          if (command === "launchctl" && args[0] === "kickstart") {
+            return { error: undefined, status: 0, stdout: "" };
+          }
+          return { error: undefined, status: 1, stdout: "" };
+        });
 
-    const result = triggerOpenClawRestart();
+        const result = triggerOpenClawRestart();
 
-    expect(result).toEqual({
-      ok: true,
-      method: "launchctl",
-      tried: [
-        `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
-        `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
-        `launchctl kickstart gui/${uid}/ai.openclaw.gateway`,
-      ],
-    });
+        expect(result).toEqual({
+          ok: true,
+          method: "launchctl",
+          tried: [
+            `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
+            `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
+            `launchctl kickstart gui/${uid}/ai.openclaw.gateway`,
+          ],
+        });
+      },
+    );
   });
 });

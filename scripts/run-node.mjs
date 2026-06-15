@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Development runner that rebuilds OpenClaw, runs runtime postbuild steps, and
+// restarts the CLI when watched source or metadata changes.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -96,7 +98,7 @@ const findLatestMtime = (dirPath, shouldSkip, deps) => {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = deps.fs.readdirSync(current, { withFileTypes: true });
     } catch {
@@ -344,7 +346,7 @@ const listBuiltBundledPluginEntries = (deps) => {
 
 const listBuiltBundledPluginRuntimeOverlayDirs = (deps) => {
   const distExtensionsRoot = path.join(resolveRuntimePostBuildDistRoot(deps), "extensions");
-  let entries = [];
+  let entries;
   try {
     entries = deps.fs.readdirSync(distExtensionsRoot, { withFileTypes: true });
   } catch {
@@ -377,7 +379,7 @@ const listRuntimeOverlaySourcePaths = (sourceDir, deps) => {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = deps.fs.readdirSync(current, { withFileTypes: true });
     } catch {
@@ -452,7 +454,7 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
     return [];
   }
   const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-  let dirents = [];
+  let dirents;
   try {
     dirents = deps.fs.readdirSync(pluginSdkDir, { withFileTypes: true });
   } catch {
@@ -473,10 +475,23 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
 };
 
 const listRequiredStaticExtensionAssetOutputs = (deps) => {
+  if (deps.env.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS === "0") {
+    return [];
+  }
   const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  const runtimeRoot = resolveRuntimePostBuildRuntimeRoot(deps);
+  const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
+  const hasRuntimeOverlay = deps.fs.existsSync(runtimeExtensionsRoot);
   return discoverStaticExtensionAssets({ rootDir: deps.cwd, fs: deps.fs })
     .filter((asset) => deps.fs.existsSync(path.join(deps.cwd, asset.src)))
-    .map((asset) => path.join(distRoot, normalizePath(asset.dest).replace(/^dist\//u, "")))
+    .flatMap((asset) => {
+      const relativeOutput = normalizePath(asset.dest).replace(/^dist\//u, "");
+      const outputs = [path.join(distRoot, relativeOutput)];
+      if (hasRuntimeOverlay) {
+        outputs.push(path.join(runtimeRoot, relativeOutput));
+      }
+      return outputs;
+    })
     .toSorted((left, right) => left.localeCompare(right));
 };
 
@@ -485,6 +500,7 @@ const listRequiredCoreRuntimePostBuildOutputs = (deps) =>
     path.join(deps.cwd, normalizePath(relativePath)),
   );
 
+/** Lists runtime postbuild outputs that must exist before the dev CLI starts. */
 export const listRequiredRuntimePostBuildOutputs = (deps) => {
   const builtPluginEntries = listBuiltBundledPluginEntries(deps);
   return [
@@ -501,6 +517,7 @@ const hasMissingRequiredRuntimePostBuildOutput = (deps) =>
     (filePath) => statMtime(filePath, deps.fs) == null,
   );
 
+/** Decides whether source changes require a new dev build. */
 export const resolveBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
     return { shouldBuild: true, reason: "force_build" };
@@ -558,6 +575,7 @@ export const resolveBuildRequirement = (deps) => {
   return { shouldBuild: false, reason: "clean" };
 };
 
+/** Decides whether runtime postbuild artifacts need to be regenerated. */
 export const resolveRuntimePostBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_RUNTIME_POSTBUILD === "1") {
     return { shouldSync: true, reason: "force_runtime_postbuild" };
@@ -667,7 +685,10 @@ const parsePositiveIntegerEnv = (env, name, fallback) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const resolveRunNodeOutputLogPath = (deps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
@@ -838,7 +859,7 @@ const parsePositiveInteger = (value) => {
 };
 
 const listRunNodeCpuProfiles = (deps, absoluteProfileDir, commandName) => {
-  let entries = [];
+  let entries;
   try {
     entries = deps.fs.readdirSync(absoluteProfileDir, { withFileTypes: true });
   } catch {
@@ -910,8 +931,6 @@ const resolveRunNodeDiagnosticArgs = (deps) => {
 
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
-  let onSigInt;
-  let onSigTerm;
 
   const cleanupSignals = () => {
     if (onSigInt) {
@@ -934,10 +953,10 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
     }
   };
 
-  onSigInt = () => {
+  const onSigInt = () => {
     forwardSignal("SIGINT");
   };
-  onSigTerm = () => {
+  const onSigTerm = () => {
     forwardSignal("SIGTERM");
   };
 
@@ -1128,6 +1147,7 @@ const removeStaleBuildLock = (deps, lockDir, staleMs) => {
   }
 };
 
+/** Acquires the dev-build lock used to serialize local rebuilds. */
 export const acquireRunNodeBuildLock = async (deps) => {
   const lockRoot = path.join(deps.cwd, ".artifacts");
   const lockDir = path.join(lockRoot, "run-node-build.lock");
@@ -1147,7 +1167,8 @@ export const acquireRunNodeBuildLock = async (deps) => {
     DEFAULT_BUILD_LOCK_STALE_MS,
   );
   const startedAt = Date.now();
-  let loggedWait = false;
+  let waitLogBudget = 1;
+  const consumeWaitLog = () => waitLogBudget-- > 0;
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
@@ -1201,9 +1222,8 @@ export const acquireRunNodeBuildLock = async (deps) => {
       if (removeStaleBuildLock(deps, lockDir, staleMs)) {
         continue;
       }
-      if (!loggedWait) {
+      if (consumeWaitLog()) {
         logRunner("Waiting for TypeScript/runtime artifact lock.", deps);
-        loggedWait = true;
       }
       await sleep(pollMs);
     }
@@ -1371,6 +1391,9 @@ const runQaCoverageReportFromSource = async (deps) => {
   return res.exitCode ?? 1;
 };
 
+/**
+ * Runs the dev build/watch loop and keeps the child CLI in sync with changes.
+ */
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -1531,8 +1554,10 @@ export async function runNodeMain(params = {}) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runNodeMain()
     .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(err);
-      process.exit(1);
-    });
+    .catch(
+      /** @param {unknown} err */ (err) => {
+        console.error(err);
+        process.exit(1);
+      },
+    );
 }

@@ -1,12 +1,14 @@
-import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { channelRouteTargetsShareConversation } from "../../plugin-sdk/channel-route.js";
+// Session target resolution chooses the effective channel, destination,
+// account, and thread from explicit input, turn source, or session history.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalThreadValue,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { channelRouteTargetsShareConversation } from "../../plugin-sdk/channel-route.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
@@ -18,6 +20,9 @@ import type {
 } from "../../utils/message-channel-normalize.js";
 import { resolveTargetPrefixedChannel } from "./channel-target-prefix.js";
 
+/**
+ * Resolved delivery destination derived from session history, turn source, or explicit input.
+ */
 export type SessionDeliveryTarget = {
   channel?: DeliverableMessageChannel;
   to?: string;
@@ -56,6 +61,9 @@ function resolveParsedRouteTarget(params: {
   };
 }
 
+/**
+ * Resolves the effective outbound target for a session-scoped delivery request.
+ */
 export function resolveSessionDeliveryTarget(params: {
   entry?: SessionEntry;
   requestedChannel?: GatewayMessageChannel;
@@ -109,6 +117,8 @@ export function resolveSessionDeliveryTarget(params: {
         left: parsedTurnSourceTarget,
         right: parsedSessionTarget,
       }));
+  // Shared sessions can receive cross-channel updates mid-turn; only inherit session threads
+  // when the turn source still identifies the same conversation.
   const lastThreadId = hasTurnSourceThreadId
     ? parsedTurnSourceTarget?.threadId
     : hasTurnSourceChannel &&

@@ -1,9 +1,10 @@
+// Session store loading normalizes persisted records, migrations, maintenance, and caches.
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
@@ -119,6 +120,7 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
       return;
     }
     if (next === entry) {
+      // Copy-on-write keeps unchanged entries referentially stable for cache reuse.
       next = { ...entry };
     }
     if (value === undefined) {
@@ -182,6 +184,7 @@ function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
 
   let changed = false;
   const normalizedExtensions: Record<string, Record<string, PluginJsonValue>> = {};
+  // Plugin state is an external boundary; only JSON-safe keyed records are persisted back.
   for (const [rawPluginId, rawPluginState] of Object.entries(entry.pluginExtensions)) {
     const pluginId = normalizeRecordKey(rawPluginId);
     if (!pluginId || !isRecord(rawPluginState)) {
@@ -392,8 +395,8 @@ export function loadSessionStore(
   // Retry a few times on Windows because readers can briefly observe empty or
   // transiently invalid content while another process is swapping the file.
   let store: Record<string, SessionEntry> = {};
-  let fileStat = getFileStatSnapshot(storePath);
-  let mtimeMs = fileStat?.mtimeMs;
+  const fileStat = getFileStatSnapshot(storePath);
+  const mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
@@ -427,6 +430,7 @@ export function loadSessionStore(
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (hydratedPromptRefs || migrated || normalized) {
+    // Any in-memory repair invalidates the original serialized bytes for future write projection.
     serializedFromDisk = undefined;
   }
   if (opts.runMaintenance) {

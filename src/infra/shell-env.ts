@@ -1,8 +1,9 @@
+// Loads shell-derived environment variables for provider and command runtimes.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
@@ -221,7 +222,7 @@ type ShellEnvFallbackOptions = {
 };
 
 function hasExplicitEnvBinding(env: NodeJS.ProcessEnv, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(env, key);
+  return Object.hasOwn(env, key);
 }
 
 export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
@@ -326,4 +327,9 @@ export function resetShellPathCacheForTests(): void {
 
 export function getShellEnvAppliedKeys(): string[] {
   return [...lastAppliedKeys];
+}
+
+export function clearShellEnvAppliedKeys(keys: readonly string[]): void {
+  const removed = new Set(keys);
+  lastAppliedKeys = lastAppliedKeys.filter((key) => !removed.has(key));
 }

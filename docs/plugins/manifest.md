@@ -258,13 +258,14 @@ Each metadata entry supports:
 
 Each `configSignals` entry supports:
 
-| Field         | Required | Type       | What it means                                                                                                                                                                           |
-| ------------- | -------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rootPath`    | Yes      | `string`   | Dot path to the plugin-owned config object to inspect, for example `plugins.entries.example.config`.                                                                                    |
-| `overlayPath` | No       | `string`   | Dot path inside the root config whose object should overlay the root object before evaluating the signal. Use this for capability-specific config such as `image`, `video`, or `music`. |
-| `required`    | No       | `string[]` | Dot paths inside the effective config that must have configured values. Strings must be non-empty; objects and arrays must not be empty.                                                |
-| `requiredAny` | No       | `string[]` | Dot paths inside the effective config where at least one must have a configured value.                                                                                                  |
-| `mode`        | No       | `object`   | Optional string mode guard inside the effective config. Use this when config-only availability applies only to one mode.                                                                |
+| Field            | Required | Type       | What it means                                                                                                                                                                             |
+| ---------------- | -------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rootPath`       | Yes      | `string`   | Dot path to the plugin-owned config object to inspect, for example `plugins.entries.example.config`.                                                                                      |
+| `overlayPath`    | No       | `string`   | Dot path inside the root config whose object should overlay the root object before evaluating the signal. Use this for capability-specific config such as `image`, `video`, or `music`.   |
+| `overlayMapPath` | No       | `string`   | Dot path inside the root config whose object values should each overlay the root object. Use this for named account maps such as `accounts`, where any configured account should qualify. |
+| `required`       | No       | `string[]` | Dot paths inside the effective config that must have configured values. Strings must be non-empty; objects and arrays must not be empty.                                                  |
+| `requiredAny`    | No       | `string[]` | Dot paths inside the effective config where at least one must have a configured value.                                                                                                    |
+| `mode`           | No       | `object`   | Optional string mode guard inside the effective config. Use this when config-only availability applies only to one mode.                                                                  |
 
 Each `mode` guard supports:
 
@@ -630,6 +631,7 @@ read without importing the plugin runtime.
 {
   "contracts": {
     "agentToolResultMiddleware": ["openclaw", "codex"],
+    "trustedToolPolicies": ["workflow-budget"],
     "externalAuthProviders": ["acme-ai"],
     "embeddingProviders": ["openai-compatible"],
     "speechProviders": ["openai"],
@@ -650,32 +652,41 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                                                        |
-| -------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------- |
-| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                |
-| `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for.                                |
-| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                      |
-| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory. |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                        |
-| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                  |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                   |
-| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                     |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                      |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                      |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                             |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                            |
-| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                         |
-| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.  |
-| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                   |
+| Field                            | Type       | What it means                                                                                                                        |
+| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                                                |
+| `agentToolResultMiddleware`      | `string[]` | Runtime ids this plugin may register tool-result middleware for.                                                                     |
+| `trustedToolPolicies`            | `string[]` | Plugin-local trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
+| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                                                      |
+| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory.                                 |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                                                |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                                                |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                                                        |
+| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                                                  |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                                                   |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                                                     |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                                                      |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                                                      |
+| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
+| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
+| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
+| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
 `contracts.embeddedExtensionFactories` is retained for bundled Codex
 app-server-only extension factories. Bundled tool-result transforms should
 declare `contracts.agentToolResultMiddleware` and register with
-`api.registerAgentToolResultMiddleware(...)` instead. External plugins cannot
-register tool-result middleware because the seam can rewrite high-trust tool
-output before the model sees it.
+`api.registerAgentToolResultMiddleware(...)` instead. Installed plugins may use
+the same middleware seam only when explicitly enabled and only for runtimes they
+declare in `contracts.agentToolResultMiddleware`.
+
+Installed plugins that need the host-trusted pre-tool policy tier must declare
+each registered local id in `contracts.trustedToolPolicies` and be explicitly
+enabled. Bundled plugins keep the existing trusted-policy path, but installed
+plugins with undeclared policy ids are rejected before registration. Policy ids
+are scoped to the registering plugin, so two plugins may both declare and
+register `workflow-budget`; a single plugin may not register the same local id
+twice.
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`.
 Tool discovery uses this list to load only the plugin runtimes that can own the

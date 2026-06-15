@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements login qr behavior.
 import { randomUUID } from "node:crypto";
 import { logInfo } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -56,7 +57,9 @@ type LoginQrRaceResult =
   | { outcome: "failed"; message: string };
 
 function waitForNextTask(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
@@ -227,7 +230,7 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
       current.error = result.message;
       current.errorStatus = result.statusCode;
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       const current = activeLogins.get(accountId);
       if (current?.id !== login.id) {
         return;
@@ -244,7 +247,7 @@ async function waitForQrOrRecoveredLogin(params: {
 }): Promise<LoginQrRaceResult> {
   const qrResult = params.qrPromise.then(
     (qr) => ({ outcome: "qr", qr }) as const,
-    (err) =>
+    (err: unknown) =>
       ({
         outcome: "failed",
         message: `Failed to get QR: ${String(err)}`,
@@ -541,9 +544,9 @@ export async function waitForWebLogin(
         message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
       };
     }
-    const timeout = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), remaining),
-    );
+    const timeout = new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), remaining);
+    });
     const result = await Promise.race([
       login.waitPromise.then(() => "done" as const),
       login.qrUpdatePromise.then(() => "qr-update" as const),

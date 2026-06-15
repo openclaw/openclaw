@@ -1,8 +1,17 @@
+/**
+ * Parses output from CLI-backed model providers. It supports plain text, JSON,
+ * JSONL streaming, Claude stream-json dialects, usage metadata, and tool event
+ * reconstruction.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "./embedded-agent-messaging.types.js";
 
 type CliUsage = {
   input?: number;
@@ -12,14 +21,22 @@ type CliUsage = {
   total?: number;
 };
 
+/** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
   rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
   finalPromptText?: string;
+  didSendViaMessagingTool?: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: MessagingToolSend[];
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
 };
 
+/** Incremental assistant text emitted while parsing a streaming CLI response. */
 export type CliStreamingDelta = {
   text: string;
   delta: string;
@@ -27,12 +44,14 @@ export type CliStreamingDelta = {
   usage?: CliUsage;
 };
 
+/** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
   toolCallId: string;
   name: string;
   args: Record<string, unknown>;
 };
 
+/** Tool-call result event reconstructed from CLI stream output. */
 export type CliToolResultDelta = {
   toolCallId: string;
   name: string;
@@ -44,7 +63,8 @@ function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
-function usesClaudeStreamJsonDialect(params: {
+/** Returns whether JSONL output carries correlated Claude-style tool events. */
+export function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
 }): boolean {
@@ -58,7 +78,7 @@ function isClaudeStreamJsonResult(params: {
   providerId: string;
   parsed: Record<string, unknown>;
 }): boolean {
-  return usesClaudeStreamJsonDialect(params) && params.parsed.type === "result";
+  return supportsCliJsonlToolEvents(params) && params.parsed.type === "result";
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
@@ -82,6 +102,7 @@ function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
     // Fall back to scanning for top-level JSON objects embedded in mixed output.
   }
 
+  // Some CLIs prefix JSON with banners/logs; balanced scanning recovers structured records.
   for (const candidate of extractJsonObjectCandidates(trimmed)) {
     try {
       const parsed = JSON.parse(candidate);
@@ -238,6 +259,7 @@ function unwrapNestedCliResultText(raw: string): string {
       ) {
         return text;
       }
+      // Claude can wrap a result payload inside repeated JSON-string result envelopes.
       text = parsed.result;
     } catch {
       return text;
@@ -304,6 +326,8 @@ function shouldUnwrapNestedCliResultText(params: {
   return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
 }
 
+/** Parses JSON CLI output, including mixed stdout that contains embedded JSON objects. */
+/** Parses a single JSON payload emitted by a CLI backend. */
 export function parseCliJson(
   raw: string,
   backend: CliBackendConfig,
@@ -355,7 +379,7 @@ function parseClaudeCliJsonlResult(params: {
   sessionId?: string;
   usage?: CliUsage;
 }): CliOutput | null {
-  if (!usesClaudeStreamJsonDialect(params)) {
+  if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
   if (
@@ -382,7 +406,7 @@ function parseClaudeCliStreamingDelta(params: {
   sessionId?: string;
   usage?: CliUsage;
 }): CliStreamingDelta | null {
-  if (!usesClaudeStreamJsonDialect(params)) {
+  if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
   if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
@@ -436,6 +460,7 @@ function emitToolStartOnce(
   args: Record<string, unknown>,
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
+  // Streaming and final assistant records may both describe the same tool call.
   if (tracker.startedIds.has(toolCallId)) {
     return;
   }
@@ -451,6 +476,7 @@ function emitToolResultOnce(
   result: unknown,
   onToolResult?: (delta: CliToolResultDelta) => void,
 ): void {
+  // Tool results can arrive as assistant result blocks or echoed user tool_result blocks.
   if (tracker.resultDeliveredIds.has(toolCallId)) {
     return;
   }
@@ -495,7 +521,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
 }): void {
-  if (!usesClaudeStreamJsonDialect(params)) {
+  if (!supportsCliJsonlToolEvents(params)) {
     return;
   }
   const tracker = params.tracker;
@@ -606,24 +632,56 @@ function dispatchClaudeCliStreamingToolEvent(params: {
         params.onToolResult,
       );
     }
-    return;
   }
 }
 
+/** Creates a stateful parser for streaming JSONL CLI backend output. */
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  onCommentaryText?: (text: string) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
+  let pendingClaudeText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
   const texts: string[] = [];
   const toolTracker = createToolUseTracker();
+  // Classification is keyed on consumer presence so reclassified pre-tool text
+  // always has a destination; a separate enable flag let it be dropped (#92092).
+  const classifyClaudeCommentary =
+    Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
+
+  const flushPendingClaudeAssistantText = () => {
+    if (!pendingClaudeText) {
+      return;
+    }
+    const delta = pendingClaudeText;
+    pendingClaudeText = "";
+    assistantText = `${assistantText}${delta}`;
+    params.onAssistantDelta({
+      text: assistantText,
+      delta,
+      sessionId,
+      usage,
+    });
+  };
+
+  const flushPendingClaudeCommentaryText = () => {
+    if (!pendingClaudeText) {
+      return;
+    }
+    const text = pendingClaudeText.trim();
+    pendingClaudeText = "";
+    if (text) {
+      params.onCommentaryText?.(text);
+    }
+  };
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
@@ -639,6 +697,10 @@ export function createCliJsonlStreamingParser(params: {
       }) || !usage;
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
+    }
+
+    if (classifyClaudeCommentary && parsed.type === "result") {
+      flushPendingClaudeAssistantText();
     }
 
     const result = parseClaudeCliJsonlResult({
@@ -658,6 +720,19 @@ export function createCliJsonlStreamingParser(params: {
       const type = normalizeLowercaseStringOrEmpty(item.type);
       if (!type || type.includes("message")) {
         texts.push(item.text);
+      }
+    }
+
+    if (classifyClaudeCommentary && parsed.type === "stream_event" && isRecord(parsed.event)) {
+      const evt = parsed.event;
+      if (
+        evt.type === "content_block_start" &&
+        isRecord(evt.content_block) &&
+        isClaudeToolUseBlockType(evt.content_block.type)
+      ) {
+        flushPendingClaudeCommentaryText();
+      } else if (evt.type === "content_block_start" || evt.type === "message_stop") {
+        flushPendingClaudeAssistantText();
       }
     }
 
@@ -681,6 +756,10 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (!delta) {
+      return;
+    }
+    if (classifyClaudeCommentary) {
+      pendingClaudeText = `${pendingClaudeText}${delta.delta}`;
       return;
     }
     assistantText = delta.text;
@@ -725,6 +804,9 @@ export function createCliJsonlStreamingParser(params: {
     },
     finish() {
       flushLines(true);
+      if (classifyClaudeCommentary) {
+        flushPendingClaudeAssistantText();
+      }
     },
     getOutput() {
       if (output) {
@@ -736,6 +818,8 @@ export function createCliJsonlStreamingParser(params: {
   };
 }
 
+/** Parses complete JSONL CLI output into the final assistant result and metadata. */
+/** Parses complete JSONL output from a CLI backend into normalized text and metadata. */
 export function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
@@ -787,6 +871,8 @@ export function parseCliJsonl(
   return { text, sessionId, usage };
 }
 
+/** Parses CLI output according to the backend output mode with text fallback. */
+/** Parses CLI backend output using the configured JSON/JSONL/plain-text mode. */
 export function parseCliOutput(params: {
   raw: string;
   backend: CliBackendConfig;
@@ -814,6 +900,8 @@ export function parseCliOutput(params: {
   );
 }
 
+/** Extracts the most specific structured CLI error message from mixed or JSON output. */
+/** Extracts a human-readable error message from mixed CLI stderr/stdout text. */
 export function extractCliErrorMessage(raw: string): string | null {
   const parsedRecords = parseJsonRecordCandidates(raw);
   if (parsedRecords.length === 0) {

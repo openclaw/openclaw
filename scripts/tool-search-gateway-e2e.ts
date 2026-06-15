@@ -1,3 +1,4 @@
+// Tool Search Gateway E2E script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -5,12 +6,8 @@ import path from "node:path";
 import process from "node:process";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
-import { startQaMockOpenAiServer } from "../extensions/qa-lab/src/providers/mock-openai/server.js";
-import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shared/mock-auth.js";
-import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
-import { resetConfigRuntimeState } from "../src/config/config.js";
-import { startGatewayServer } from "../src/gateway/server.js";
 import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
+import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 
 type Lane = "normal" | "code";
@@ -33,6 +30,15 @@ type LaneResult = {
   gatewayOutputText: string;
   sessionLogToolMentions: Record<string, number>;
 };
+
+type LaneResultSummary = Pick<
+  LaneResult,
+  | "providerDeclaredToolCount"
+  | "providerPlannedTools"
+  | "providerRawBytes"
+  | "gatewayOutputText"
+  | "sessionLogToolMentions"
+>;
 
 const FAKE_PLUGIN_ID = "tool-search-e2e-fixture";
 export type ToolSearchGatewayFetchLimits = {
@@ -64,6 +70,46 @@ export function readToolSearchGatewayFetchLimits(
 }
 
 const DEFAULT_FETCH_LIMITS = readToolSearchGatewayFetchLimits();
+
+type ToolSearchGatewayEnvSnapshot = {
+  configPath: string | undefined;
+  stateDir: string | undefined;
+  testFast: string | undefined;
+};
+
+export function snapshotToolSearchGatewayEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): ToolSearchGatewayEnvSnapshot {
+  return {
+    configPath: env.OPENCLAW_CONFIG_PATH,
+    stateDir: env.OPENCLAW_STATE_DIR,
+    testFast: env.OPENCLAW_TEST_FAST,
+  };
+}
+
+function restoreEnvValue(
+  env: NodeJS.ProcessEnv,
+  key: keyof Pick<
+    NodeJS.ProcessEnv,
+    "OPENCLAW_CONFIG_PATH" | "OPENCLAW_STATE_DIR" | "OPENCLAW_TEST_FAST"
+  >,
+  value: string | undefined,
+): void {
+  if (value === undefined) {
+    delete env[key];
+  } else {
+    env[key] = value;
+  }
+}
+
+export function restoreToolSearchGatewayEnv(
+  snapshot: ToolSearchGatewayEnvSnapshot,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  restoreEnvValue(env, "OPENCLAW_CONFIG_PATH", snapshot.configPath);
+  restoreEnvValue(env, "OPENCLAW_STATE_DIR", snapshot.stateDir);
+  restoreEnvValue(env, "OPENCLAW_TEST_FAST", snapshot.testFast);
+}
 
 function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
@@ -112,43 +158,18 @@ function buildFakeTools(count = 36) {
   });
 }
 
-function countOccurrences(haystack: string, needle: string): number {
-  if (!needle) {
-    return 0;
-  }
-  let count = 0;
-  let offset = 0;
-  while (true) {
-    const next = haystack.indexOf(needle, offset);
-    if (next < 0) {
-      return count;
-    }
-    count += 1;
-    offset = next + needle.length;
-  }
-}
-
 async function readSessionLogMentions(params: {
   stateDir: string;
   targetTool: string;
 }): Promise<Record<string, number>> {
   const sessionsDir = path.join(params.stateDir, "agents", "qa", "sessions");
-  const mentions: Record<string, number> = {
-    tool_search_code: 0,
-    [params.targetTool]: 0,
-  };
-  let files: string[] = [];
-  try {
-    files = await fs.readdir(sessionsDir);
-  } catch {
-    return mentions;
-  }
-  for (const file of files.filter((candidate) => candidate.endsWith(".jsonl"))) {
-    const raw = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");
-    mentions.tool_search_code += countOccurrences(raw, "tool_search_code");
-    mentions[params.targetTool] += countOccurrences(raw, params.targetTool);
-  }
-  return mentions;
+  return await countSessionLogMentions({
+    sessionsDir,
+    needles: {
+      tool_search_code: "tool_search_code",
+      [params.targetTool]: params.targetTool,
+    },
+  });
 }
 
 export async function fetchJson(
@@ -281,6 +302,10 @@ async function writeConfig(params: {
   providerBaseUrl: string;
   fakePluginDir: string;
 }) {
+  const [{ buildQaGatewayConfig }, { stageQaMockAuthProfiles }] = await Promise.all([
+    import("../extensions/qa-lab/src/qa-gateway-config.js"),
+    import("../extensions/qa-lab/src/providers/shared/mock-auth.js"),
+  ]);
   let cfg = buildQaGatewayConfig({
     bind: "loopback",
     gatewayPort: params.gatewayPort,
@@ -496,7 +521,13 @@ async function runLane(params: {
   const configPath = path.join(stateDir, "openclaw.json");
   const workspaceDir = path.join(params.rootDir, params.lane, "workspace");
   const gatewayPort = await freePort();
+  const previousEnv = snapshotToolSearchGatewayEnv();
   await fs.mkdir(workspaceDir, { recursive: true });
+  const [{ resetConfigRuntimeState }, { startGatewayServer }] = await Promise.all([
+    import("../src/config/config.js"),
+    import("../src/gateway/server.js"),
+  ]);
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   await writeConfig({
     lane: params.lane,
     stateDir,
@@ -512,13 +543,13 @@ async function runLane(params: {
   process.env.OPENCLAW_TEST_FAST = "1";
   resetConfigRuntimeState();
 
-  const server = await startGatewayServer(gatewayPort, {
-    host: "127.0.0.1",
-    auth: { mode: "none" },
-    controlUiEnabled: false,
-    openResponsesEnabled: true,
-  });
   try {
+    server = await startGatewayServer(gatewayPort, {
+      host: "127.0.0.1",
+      auth: { mode: "none" },
+      controlUiEnabled: false,
+      openResponsesEnabled: true,
+    });
     const beforeRequests = (await fetchJson(
       `${params.providerBaseUrl}/debug/requests`,
     )) as unknown[];
@@ -576,12 +607,52 @@ async function runLane(params: {
       }),
     };
   } finally {
-    await server.close({ reason: `${params.lane} lane complete` });
-    resetConfigRuntimeState();
+    try {
+      await server?.close({ reason: `${params.lane} lane complete` });
+      resetConfigRuntimeState();
+    } finally {
+      restoreToolSearchGatewayEnv(previousEnv);
+    }
   }
 }
 
+export function assertToolSearchLaneResults(params: {
+  normal: LaneResultSummary;
+  code: LaneResultSummary;
+  targetTool: string;
+}) {
+  const { code, normal, targetTool } = params;
+  assert(
+    normal.providerPlannedTools.includes(targetTool) &&
+      normal.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
+      normal.gatewayOutputText.includes(targetTool) &&
+      normal.sessionLogToolMentions[targetTool] > 0,
+    `normal lane did not call ${targetTool}`,
+  );
+  assert(
+    code.providerPlannedTools.includes("tool_search_code") &&
+      code.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
+      code.gatewayOutputText.includes(targetTool) &&
+      code.sessionLogToolMentions[targetTool] > 0,
+    `code lane did not bridge-call ${targetTool}`,
+  );
+  assert(
+    normal.providerDeclaredToolCount > code.providerDeclaredToolCount,
+    `expected Tool Search to expose fewer tools to provider: normal=${normal.providerDeclaredToolCount} code=${code.providerDeclaredToolCount}`,
+  );
+  assert(
+    normal.providerRawBytes > code.providerRawBytes,
+    `expected Tool Search request to be smaller: normal=${normal.providerRawBytes} code=${code.providerRawBytes}`,
+  );
+  assert(
+    code.sessionLogToolMentions.tool_search_code > 0 && code.sessionLogToolMentions[targetTool] > 0,
+    "code lane session log did not record bridge and target tool mentions",
+  );
+}
+
 export async function main() {
+  const { startQaMockOpenAiServer } =
+    await import("../extensions/qa-lab/src/providers/mock-openai/server.js");
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-"));
   let provider: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
   try {
@@ -610,31 +681,7 @@ export async function main() {
       fakePluginDir,
     });
 
-    assert(
-      normal.providerPlannedTools.includes(targetTool) &&
-        normal.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
-        normal.gatewayOutputText.includes(targetTool),
-      `normal lane did not call ${targetTool}`,
-    );
-    assert(
-      code.providerPlannedTools.includes("tool_search_code") &&
-        code.gatewayOutputText.includes(targetTool) &&
-        code.sessionLogToolMentions[targetTool] > 0,
-      `code lane did not bridge-call ${targetTool}`,
-    );
-    assert(
-      normal.providerDeclaredToolCount > code.providerDeclaredToolCount,
-      `expected Tool Search to expose fewer tools to provider: normal=${normal.providerDeclaredToolCount} code=${code.providerDeclaredToolCount}`,
-    );
-    assert(
-      normal.providerRawBytes > code.providerRawBytes,
-      `expected Tool Search request to be smaller: normal=${normal.providerRawBytes} code=${code.providerRawBytes}`,
-    );
-    assert(
-      code.sessionLogToolMentions.tool_search_code > 0 &&
-        code.sessionLogToolMentions[targetTool] > 0,
-      "code lane session log did not record bridge and target tool mentions",
-    );
+    assertToolSearchLaneResults({ code, normal, targetTool });
 
     const summary = {
       ok: true,

@@ -1,3 +1,4 @@
+// Setup finalize helpers write onboarding output and follow-up state.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
@@ -124,7 +125,7 @@ export async function finalizeSetupWizard(
 
   const withWizardProgress = async <T>(
     label: string,
-    options: { doneMessage?: string | (() => string | undefined) },
+    optionsLocal: { doneMessage?: string | (() => string | undefined) },
     work: (progress: { update: (message: string) => void }) => Promise<T>,
   ): Promise<T> => {
     const progress = prompter.progress(label);
@@ -132,7 +133,9 @@ export async function finalizeSetupWizard(
       return await work(progress);
     } finally {
       progress.stop(
-        typeof options.doneMessage === "function" ? options.doneMessage() : options.doneMessage,
+        typeof optionsLocal.doneMessage === "function"
+          ? optionsLocal.doneMessage()
+          : optionsLocal.doneMessage,
       );
     }
   };
@@ -264,7 +267,9 @@ export async function finalizeSetupWizard(
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
-              warn: (message, title) => prompter.note(message, title),
+              warn: (message, title) => {
+                void prompter.note(message, title);
+              },
               config: nextConfig,
             },
           );
@@ -474,7 +479,7 @@ export async function finalizeSetupWizard(
   );
 
   let controlUiOpened = false;
-  let seededInBackground = false;
+  const seededInBackground = false;
   let hatchChoice: "tui" | "web" | "later" | null = null;
   let launchedTui = false;
 
@@ -524,7 +529,7 @@ export async function finalizeSetupWizard(
     });
 
     if (hatchChoice === "tui") {
-      restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
+      restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
         await launchTuiCli({
           local: true,
@@ -533,7 +538,7 @@ export async function finalizeSetupWizard(
           timeoutMs: HATCH_TUI_TIMEOUT_MS,
         });
       } finally {
-        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
+        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
       }
       launchedTui = true;
     } else if (hatchChoice === "web") {
@@ -639,6 +644,18 @@ export async function finalizeSetupWizard(
         ].join("\n"),
         t("wizard.finalize.webSearchTitle"),
       );
+    } else if (webSearchEnabled !== false && entry.requiresCredential === false) {
+      // Keyless providers (e.g. Parallel Search (Free), DuckDuckGo, Ollama) need
+      // no API key — report ready rather than the credential-required warning.
+      await prompter.note(
+        [
+          t("wizard.finalize.webSearchKeyFree"),
+          "",
+          t("wizard.finalize.webSearchProvider", { provider: label }),
+          t("wizard.finalize.webDocs"),
+        ].join("\n"),
+        t("wizard.finalize.webSearchTitle"),
+      );
     } else if (webSearchEnabled !== false && hasCredential) {
       await prompter.note(
         [
@@ -650,7 +667,7 @@ export async function finalizeSetupWizard(
         ].join("\n"),
         t("wizard.finalize.webSearchTitle"),
       );
-    } else if (!hasCredential) {
+    } else if (entry.requiresCredential !== false && !hasCredential) {
       await prompter.note(
         [
           t("wizard.finalize.webSearchNoKey", { provider: label }),

@@ -1,3 +1,5 @@
+// Covers outbound message send/poll orchestration, target resolution, durable
+// capability checks, gateway fallback, dry runs, and payload planning.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -482,6 +484,19 @@ describe("sendMessage", () => {
     );
 
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+  });
+
+  it("preserves suppressed direct-send status", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValueOnce([]);
+
+    const result = await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hidden",
+    });
+
+    expect(result.deliveryStatus).toBe("suppressed");
   });
 
   it("does not throw best-effort direct send failures", async () => {

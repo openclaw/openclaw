@@ -1,3 +1,4 @@
+// Telegram helper module supports helpers behavior.
 import type { Chat, Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -602,7 +603,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     msg.quote ?? (externalReply as (Message & { quote?: Message["quote"] }) | undefined)?.quote;
   const rawQuoteText = quote?.text;
   const quoteText = resolveTelegramTextContent(rawQuoteText);
-  let body = "";
+  let body;
   let kind: TelegramReplyTarget["kind"] = "reply";
   const filteredQuoteText = hadUnsafeTelegramText(rawQuoteText, quoteText);
 

@@ -1,3 +1,4 @@
+// Splits oxlint into resource-aware shards with heartbeat and timeout handling.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,6 +13,7 @@ const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
 const DEFAULT_SHARD_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_SHARD_KILL_GRACE_MS = 5_000;
+const DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY = 4;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
@@ -38,6 +40,9 @@ const SCRIPTS_SHARD = {
   args: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts"],
 };
 
+/**
+ * Builds the platform-specific oxlint shard list.
+ */
 export function createOxlintShards({
   cwd = process.cwd(),
   env = process.env,
@@ -52,6 +57,9 @@ export function createOxlintShards({
   return [...coreShards, ...extensionShards, SCRIPTS_SHARD];
 }
 
+/**
+ * Splits core oxlint targets into smaller source/package/UI shards.
+ */
 export function createCoreOxlintShards({ cwd = process.cwd(), readDir = fs.readdirSync } = {}) {
   const sourceShards = listSourceRootTargetGroups({ cwd, readDir }).map((targets) => ({
     name: targets.length === 1 ? `core:${targets[0].replaceAll("/", ":")}` : "core:src:root",
@@ -69,6 +77,9 @@ function createCoreShard(target) {
   };
 }
 
+/**
+ * Chunks extension lint targets to avoid Windows command-line and memory limits.
+ */
 export function createWindowsExtensionShards({
   cwd = process.cwd(),
   env = process.env,
@@ -100,18 +111,20 @@ export function createWindowsExtensionShards({
   return shards;
 }
 
+/**
+ * Reads the Windows extension shard chunk size.
+ */
 export function resolveWindowsExtensionChunkSize(env = process.env) {
-  const rawValue = env.OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE;
-  if (rawValue === undefined) {
-    return DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE;
-  }
-
-  const parsedValue = Number.parseInt(rawValue, 10);
-  return Number.isFinite(parsedValue) && parsedValue > 0
-    ? parsedValue
-    : DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE;
+  return resolvePositiveEnvIntWithFallback(
+    env,
+    "OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE",
+    DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE,
+  );
 }
 
+/**
+ * Chooses serial shard execution for constrained hosts or Windows.
+ */
 export function shouldRunOxlintShardsSerial({
   env = process.env,
   platform = process.platform,
@@ -128,11 +141,13 @@ export function shouldRunOxlintShardsSerial({
     return false;
   }
   const localCheckMode = env.OPENCLAW_LOCAL_CHECK_MODE?.trim().toLowerCase();
-  if (localCheckMode === "full" || localCheckMode === "fast") {
-    return false;
-  }
-  if (localCheckMode === "throttled" || localCheckMode === "low-memory") {
-    return true;
+  if (!isRemoteChangedGateEnv(env)) {
+    if (localCheckMode === "full" || localCheckMode === "fast") {
+      return false;
+    }
+    if (localCheckMode === "throttled" || localCheckMode === "low-memory") {
+      return true;
+    }
   }
   const resources = resolveHostResources(hostResources);
   if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
@@ -144,6 +159,12 @@ export function shouldRunOxlintShardsSerial({
   return (
     resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
+  );
+}
+
+function isRemoteChangedGateEnv(env) {
+  return (
+    env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD === "1" || env.OPENCLAW_CHANGED_LANES_RAW_SYNC === "1"
   );
 }
 
@@ -193,6 +214,9 @@ function listSourceRootTargetGroups({ cwd, readDir }) {
   return [...dirs.map((target) => [target]), ...(rootFiles.length > 0 ? [rootFiles] : [])];
 }
 
+/**
+ * Runs selected oxlint shards and returns process-style success/failure.
+ */
 export async function main(extraArgs = process.argv.slice(2), runtimeEnv = process.env) {
   const runner = path.resolve("scripts", "run-oxlint.mjs");
   const shardArgs = parseShardRunnerArgs(extraArgs);
@@ -241,24 +265,26 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
     if ((prepareResult.status ?? 1) !== 0) {
       process.exitCode = prepareResult.status ?? 1;
     } else {
-      const runSerial =
-        shardArgs.splitCore ||
-        shouldRunOxlintShardsSerial({
-          env,
-          platform: process.platform,
-        });
-      const results = runSerial
-        ? await runShardsSerial({
-            entries: selectedShards,
-            env,
-            extraArgs: shardArgs.oxlintArgs,
-            runner,
-          })
-        : await Promise.all(
-            selectedShards.map((shard) =>
-              runShard({ env, extraArgs: shardArgs.oxlintArgs, runner, shard }),
-            ),
-          );
+      const shardConcurrency = resolveOxlintShardConcurrency({
+        env,
+        platform: process.platform,
+        splitCore: shardArgs.splitCore,
+      });
+      const results =
+        shardConcurrency <= 1
+          ? await runShardsSerial({
+              entries: selectedShards,
+              env,
+              extraArgs: shardArgs.oxlintArgs,
+              runner,
+            })
+          : await runShardsParallel({
+              concurrency: Math.min(shardConcurrency, selectedShards.length),
+              entries: selectedShards,
+              env,
+              extraArgs: shardArgs.oxlintArgs,
+              runner,
+            });
       process.exitCode = results.find((status) => status !== 0) ?? 0;
     }
   } finally {
@@ -282,6 +308,9 @@ function resolveHostResources(hostResources) {
   };
 }
 
+/**
+ * Parses shard-runner flags separately from forwarded oxlint args.
+ */
 export function parseShardRunnerArgs(args) {
   const only = new Set();
   const oxlintArgs = [];
@@ -314,12 +343,44 @@ export function parseShardRunnerArgs(args) {
   return { only, oxlintArgs, splitCore };
 }
 
+/**
+ * Filters shards by an optional comma-separated shard name list.
+ */
 export function filterOxlintShards(shards, only) {
   if (only.size === 0) {
     return shards;
   }
 
   return shards.filter((shard) => only.has(shard.name) || only.has(shard.name.split(":")[0]));
+}
+
+/**
+ * Resolves shard concurrency from env, platform, and host resources.
+ */
+export function resolveOxlintShardConcurrency({
+  env = process.env,
+  platform = process.platform,
+  hostResources,
+  splitCore = false,
+} = {}) {
+  if (shouldRunOxlintShardsSerial({ env, platform, hostResources })) {
+    return 1;
+  }
+
+  const explicitConcurrency = resolvePositiveEnvInt(env, "OPENCLAW_OXLINT_SHARD_CONCURRENCY");
+  if (explicitConcurrency !== null) {
+    return explicitConcurrency;
+  }
+
+  if (!splitCore) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const resources = resolveHostResources(hostResources);
+  return Math.max(
+    1,
+    Math.min(DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY, Math.floor(resources.logicalCpuCount / 4)),
+  );
 }
 
 async function runShardsSerial({ entries, env, extraArgs, runner }) {
@@ -333,6 +394,33 @@ async function runShardsSerial({ entries, env, extraArgs, runner }) {
   return results;
 }
 
+async function runShardsParallel({ concurrency, entries, env, extraArgs, runner }) {
+  const results = [];
+  results.length = entries.length;
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    for (;;) {
+      if (isParentTerminationRequested()) {
+        return;
+      }
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      const shard = entries[currentIndex];
+      if (!shard) {
+        return;
+      }
+      results[currentIndex] = await runShard({ env, extraArgs, runner, shard });
+    }
+  });
+
+  await Promise.all(workers);
+  return results.filter((status) => status !== undefined);
+}
+
+/**
+ * Runs one oxlint shard with bounded output, heartbeat, and forced cleanup.
+ */
 export async function runShard({ env, extraArgs, runner, shard }) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
@@ -418,6 +506,9 @@ export async function runShard({ env, extraArgs, runner, shard }) {
   });
 }
 
+/**
+ * Reads the shard heartbeat interval.
+ */
 export function resolveShardHeartbeatMs(env) {
   return resolveNonNegativeEnvInt(
     env,
@@ -426,6 +517,9 @@ export function resolveShardHeartbeatMs(env) {
   );
 }
 
+/**
+ * Reads the per-shard timeout.
+ */
 export function resolveShardTimeoutMs(env) {
   return resolveNonNegativeEnvInt(
     env,
@@ -434,6 +528,9 @@ export function resolveShardTimeoutMs(env) {
   );
 }
 
+/**
+ * Reads the graceful shutdown window before SIGKILL.
+ */
 export function resolveShardKillGraceMs(env) {
   return resolveNonNegativeEnvInt(
     env,
@@ -444,12 +541,49 @@ export function resolveShardKillGraceMs(env) {
 
 function resolveNonNegativeEnvInt(env, key, defaultValue) {
   const rawValue = env[key];
-  if (rawValue === undefined) {
+  if (rawValue === undefined || rawValue === "") {
     return defaultValue;
   }
 
-  const parsedValue = Number.parseInt(rawValue, 10);
-  return Number.isFinite(parsedValue) && parsedValue >= 0 ? parsedValue : defaultValue;
+  const text = String(rawValue).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${key} must be a non-negative integer; got: ${rawValue}`);
+  }
+  const parsedValue = Number(text);
+  if (!Number.isSafeInteger(parsedValue)) {
+    throw new Error(`${key} must be a non-negative integer; got: ${rawValue}`);
+  }
+  return parsedValue;
+}
+
+function resolvePositiveEnvInt(env, key) {
+  const rawValue = env[key];
+  if (rawValue === undefined || rawValue === "") {
+    return null;
+  }
+
+  return parsePositiveEnvInt(rawValue, key);
+}
+
+function resolvePositiveEnvIntWithFallback(env, key, defaultValue) {
+  const rawValue = env[key];
+  if (rawValue === undefined || rawValue === "") {
+    return defaultValue;
+  }
+
+  return parsePositiveEnvInt(rawValue, key);
+}
+
+function parsePositiveEnvInt(rawValue, key) {
+  const text = String(rawValue).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${key} must be a positive integer; got: ${rawValue}`);
+  }
+  const parsedValue = Number(text);
+  if (!Number.isSafeInteger(parsedValue) || parsedValue <= 0) {
+    throw new Error(`${key} must be a positive integer; got: ${rawValue}`);
+  }
+  return parsedValue;
 }
 
 function signalChildProcess({ child, signal, useProcessGroup }) {

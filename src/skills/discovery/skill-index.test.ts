@@ -1,3 +1,4 @@
+// Skill index tests cover normalized skill names and discovery index behavior.
 import { describe, expect, it } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import {
@@ -139,7 +140,11 @@ describe("skill index", () => {
       buildSkillIndexEntries([bundled, unknownBundled, workspace], {
         bundledNames: new Set(["unknown-bundle"]),
         agentSkillFilter: ["workspace"],
-      }).map(({ name, bundled, agentAllowed }) => ({ name, bundled, agentAllowed })),
+      }).map(({ name, bundled: bundledLocal, agentAllowed }) => ({
+        name,
+        bundled: bundledLocal,
+        agentAllowed,
+      })),
     ).toEqual([
       { name: "bundle", bundled: true, agentAllowed: false },
       { name: "unknown-bundle", bundled: true, agentAllowed: false },

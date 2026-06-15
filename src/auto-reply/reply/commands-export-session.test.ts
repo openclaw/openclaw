@@ -1,3 +1,4 @@
+// Tests session export command packaging, filesystem writes, and prompt bundle capture.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -15,7 +16,7 @@ const hoisted = await vi.hoisted(async () => {
       sandboxRuntime: { sandboxed: false, mode: "off" },
     })),
     writeFileMock: vi.fn(
-      async (_filePath: string, dataValue: string, _encoding?: BufferEncoding) => undefined,
+      async (_filePath: string, _dataValue: string, _encoding?: BufferEncoding) => undefined,
     ),
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),

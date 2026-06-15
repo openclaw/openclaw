@@ -1,7 +1,8 @@
+// Workboard tests cover gateway plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./store.js";
+import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -41,7 +42,7 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api });
+    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
 
     expect([...methods.keys()]).toEqual([
       "workboard.cards.list",
@@ -157,7 +158,7 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api });
+    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
 
     const createRespond = vi.fn();
     await methods.get("workboard.cards.create")?.handler({
@@ -202,7 +203,7 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api });
+    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
 
     const createHandler = methods.get("workboard.cards.create")?.handler;
     const respond = vi.fn();
@@ -215,6 +216,49 @@ describe("workboard gateway methods", () => {
     expect(respond.mock.calls[0]?.[2]).toMatchObject({
       message: "labels must be 40 characters or fewer.",
     });
+  });
+
+  it("dispatches workboard cards when gateway params are omitted", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const run = vi.fn().mockResolvedValue({ runId: "run-card" });
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => createMemoryStore()),
+        },
+        subagent: { run },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Ready worker",
+      status: "ready",
+      priority: "urgent",
+    });
+
+    registerWorkboardGatewayMethods({ api, store });
+
+    const respond = vi.fn();
+    await methods.get("workboard.cards.dispatch")?.handler({ respond } as never);
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      started: [expect.objectContaining({ cardId: card.id, runId: "run-card" })],
+    });
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: `subagent:workboard-default-${card.id}`,
+      }),
+    );
   });
 
   it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {
@@ -236,7 +280,7 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api });
+    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
 
     const createRespond = vi.fn();
     await methods.get("workboard.cards.create")?.handler({

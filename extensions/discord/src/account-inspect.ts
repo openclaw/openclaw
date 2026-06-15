@@ -1,3 +1,4 @@
+// Discord plugin module implements account inspect behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -33,8 +34,7 @@ export function inspectDiscordAccount(params: {
   const enabled = params.cfg.channels?.discord?.enabled !== false && merged.enabled !== false;
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const hasAccountToken = Boolean(
-    accountConfig &&
-    Object.prototype.hasOwnProperty.call(accountConfig as Record<string, unknown>, "token"),
+    accountConfig && Object.hasOwn(accountConfig as Record<string, unknown>, "token"),
   );
   const accountToken = inspectDiscordConfiguredToken(accountConfig?.token);
   if (accountToken) {

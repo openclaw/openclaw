@@ -1,3 +1,7 @@
+/**
+ * Browser plugin registration helpers. This file keeps registration lazy while
+ * advertising Browser tools, services, node-host commands, and audits.
+ */
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -28,6 +32,22 @@ function isTruthyEnvValue(value: string | undefined): boolean {
   return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
 }
 
+function deriveChatTypeFromSessionKey(
+  sessionKey: string | undefined,
+): "direct" | "group" | "channel" | undefined {
+  const tokens = new Set(sessionKey?.toLowerCase().split(":").filter(Boolean) ?? []);
+  if (tokens.has("group")) {
+    return "group";
+  }
+  if (tokens.has("channel")) {
+    return "channel";
+  }
+  if (tokens.has("direct") || tokens.has("dm")) {
+    return "direct";
+  }
+  return undefined;
+}
+
 const BROWSER_CLI_DESCRIPTOR = {
   name: "browser",
   description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
@@ -38,6 +58,17 @@ function createLazyBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  activeModel?: {
+    provider?: string;
+    model?: string;
+  };
+  mediaScope?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -67,8 +98,56 @@ function createLazyBrowserTool(opts?: {
   };
 }
 
+function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
+  sandboxBridgeUrl?: string;
+  allowHostControl?: boolean;
+  agentSessionKey?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  activeModel?: {
+    provider?: string;
+    model?: string;
+  };
+  mediaScope?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
+} {
+  const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
+  const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
+  return {
+    ...(ctx.browser?.sandboxBridgeUrl ? { sandboxBridgeUrl: ctx.browser.sandboxBridgeUrl } : {}),
+    ...(ctx.browser?.allowHostControl !== undefined
+      ? { allowHostControl: ctx.browser.allowHostControl }
+      : {}),
+    ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
+    ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+    ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+    ...(ctx.activeModel?.provider || ctx.activeModel?.modelId
+      ? {
+          activeModel: {
+            provider: ctx.activeModel.provider,
+            model: ctx.activeModel.modelId,
+          },
+        }
+      : {}),
+    ...(ctx.sessionKey || mediaChannel
+      ? {
+          mediaScope: {
+            ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
+            ...(mediaChannel ? { channel: mediaChannel } : {}),
+            ...(mediaChatType ? { chatType: mediaChatType } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Browser plugin reload policy. */
 export const browserPluginReload = { restartPrefixes: ["browser"] };
 
+/** Node-host command descriptors exposed by the Browser plugin. */
 export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "browser.proxy",
@@ -80,6 +159,7 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   },
 ];
 
+/** Security audit collectors contributed by the Browser plugin. */
 export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollector[] = [
   async (ctx) => {
     const { collectBrowserSecurityAuditFindings } = await loadBrowserRegistrationRuntimeModule();
@@ -116,13 +196,10 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   };
 }
 
+/** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerTool(((ctx: OpenClawPluginToolContext) =>
-    createLazyBrowserTool({
-      sandboxBridgeUrl: ctx.browser?.sandboxBridgeUrl,
-      allowHostControl: ctx.browser?.allowHostControl,
-      agentSessionKey: ctx.sessionKey,
-    })) as OpenClawPluginToolFactory);
+    createLazyBrowserTool(createBrowserToolOptions(ctx))) as OpenClawPluginToolFactory);
   api.registerCli(
     async ({ program }) => {
       const { registerBrowserCli } = await import("./src/cli/browser-cli.js");

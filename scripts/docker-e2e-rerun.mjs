@@ -161,6 +161,27 @@ function ghWorkflowCommand(lanes, ref, workflow, reuseInputs = {}) {
   return fields.join(" ");
 }
 
+function failureName(failure) {
+  return failure.name || failure.lane || "";
+}
+
+function failedEntryFromRecord(failure, file, ref, workflow, reuseInputs) {
+  const lane = failureName(failure);
+  const targetable = failure.targetable !== false;
+  return {
+    ghWorkflowCommand: targetable
+      ? failure.ghWorkflowCommand || ghWorkflowCommand([lane], ref, workflow, reuseInputs)
+      : "",
+    lane,
+    localRerunCommand: failure.rerunCommand,
+    logFile: failure.logFile,
+    reuseInputs,
+    source: file,
+    status: failure.status,
+    targetable,
+  };
+}
+
 function detectRepo() {
   return run("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]).trim();
 }
@@ -183,31 +204,18 @@ function failedLaneEntriesFromJson(file, ref, workflow) {
   const source = path.basename(file);
   if (source === "failures.json" && Array.isArray(parsed.lanes)) {
     return parsed.lanes
-      .filter((lane) => lane.name)
-      .map((lane) => ({
-        ghWorkflowCommand:
-          lane.ghWorkflowCommand || ghWorkflowCommand([lane.name], ref, workflow, reuseInputs),
-        lane: lane.name,
-        localRerunCommand: lane.rerunCommand,
-        logFile: lane.logFile,
-        reuseInputs,
-        source: file,
-        status: lane.status,
-      }));
+      .filter((lane) => failureName(lane))
+      .map((lane) => failedEntryFromRecord(lane, file, ref, workflow, reuseInputs));
   }
 
   const lanes = Array.isArray(parsed.lanes) ? parsed.lanes : [];
-  return lanes
-    .filter((lane) => lane.status !== 0 && lane.name)
-    .map((lane) => ({
-      ghWorkflowCommand: ghWorkflowCommand([lane.name], ref, workflow, reuseInputs),
-      lane: lane.name,
-      localRerunCommand: lane.rerunCommand,
-      logFile: lane.logFile,
-      reuseInputs,
-      source: file,
-      status: lane.status,
-    }));
+  const failures =
+    Array.isArray(parsed.failures) && parsed.failures.length > 0
+      ? parsed.failures
+      : lanes.filter((lane) => lane.status !== 0);
+  return failures
+    .filter((lane) => failureName(lane))
+    .map((lane) => failedEntryFromRecord(lane, file, ref, workflow, reuseInputs));
 }
 
 function mergeByLane(entries) {
@@ -262,10 +270,10 @@ function runInfo(runId, repo) {
   );
 }
 
-function printEntries(entries, ref, workflow, run) {
-  if (run) {
-    console.log(`Run: ${run.url}`);
-    console.log(`Workflow: ${run.workflowName}`);
+function printEntries(entries, ref, workflow, runValue) {
+  if (runValue) {
+    console.log(`Run: ${runValue.url}`);
+    console.log(`Workflow: ${runValue.workflowName}`);
   }
   console.log(`Ref: ${ref}`);
   console.log(
@@ -275,23 +283,29 @@ function printEntries(entries, ref, workflow, run) {
     console.log("No failed Docker E2E lanes found.");
     return;
   }
-  console.log(`Failed lanes: ${entries.map((entry) => entry.lane).join(", ")}`);
-  console.log("");
-  console.log("Combined GitHub rerun:");
-  console.log(
-    ghWorkflowCommand(
-      entries.map((entry) => entry.lane),
-      ref,
-      workflow,
-      commonReuseInputs(entries),
-    ),
-  );
-  console.log("");
-  console.log("Per-lane GitHub reruns:");
-  for (const entry of entries) {
+  const workflowEntries = entries.filter((entry) => entry.targetable !== false);
+  console.log(`Failed Docker E2E entries: ${entries.map((entry) => entry.lane).join(", ")}`);
+  if (workflowEntries.length > 0) {
+    console.log("");
+    console.log("Combined GitHub rerun:");
     console.log(
-      `- ${entry.lane}: ${entry.ghWorkflowCommand || ghWorkflowCommand([entry.lane], ref, workflow)}`,
+      ghWorkflowCommand(
+        workflowEntries.map((entry) => entry.lane),
+        ref,
+        workflow,
+        commonReuseInputs(workflowEntries),
+      ),
     );
+    console.log("");
+    console.log("Per-lane GitHub reruns:");
+    for (const entry of workflowEntries) {
+      console.log(
+        `- ${entry.lane}: ${entry.ghWorkflowCommand || ghWorkflowCommand([entry.lane], ref, workflow)}`,
+      );
+    }
+  } else {
+    console.log("");
+    console.log("No targetable failed Docker E2E lanes found.");
   }
   console.log("");
   console.log("Local rerun starting points:");
@@ -318,8 +332,8 @@ function main() {
     );
   } else {
     const repo = options.repo || detectRepo();
-    const run = runInfo(options.input, repo);
-    const ref = options.ref || run.headSha || run.headBranch;
+    const runLocal = runInfo(options.input, repo);
+    const ref = options.ref || runLocal.headSha || runLocal.headBranch;
     const outputDir =
       options.dir || path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${options.input}`);
     const artifactNames = downloadDockerArtifacts(options.input, repo, outputDir);
@@ -329,7 +343,7 @@ function main() {
     );
     console.log(`Artifacts: ${artifactNames.join(", ")}`);
     console.log(`Downloaded: ${outputDir}`);
-    printEntries(entries, ref, options.workflow, run);
+    printEntries(entries, ref, options.workflow, runLocal);
   }
 }
 

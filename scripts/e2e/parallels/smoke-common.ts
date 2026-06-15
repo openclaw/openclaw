@@ -1,5 +1,7 @@
+// Smoke Common helper supports OpenClaw script workflows.
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { extractLastOpenClawVersionFromLog } from "./filesystem.ts";
 import { run, say } from "./host-command.ts";
 import { resolveHostIp, resolveHostPort } from "./host-server.ts";
 import { startHostServer } from "./host-server.ts";
@@ -105,7 +107,7 @@ export abstract class SmokeRunController<TOptions extends SmokeRunOptions & Smok
       async () => this.runFreshLane(),
       async () => this.runUpgradeLane(),
       async () => this.writeSummary(),
-      (path) => this.printSummary(path),
+      (pathLocal) => this.printSummary(pathLocal),
     );
   }
 
@@ -301,8 +303,7 @@ export async function extractLastOpenClawVersion(
   phaseName: string,
   pattern: RegExp,
 ): Promise<string> {
-  const text = await readFile(path.join(runDir, `${phaseName}.log`), "utf8").catch(() => "");
-  return [...text.matchAll(pattern)].at(-1)?.[1] ?? "";
+  return await extractLastOpenClawVersionFromLog(path.join(runDir, `${phaseName}.log`), pattern);
 }
 
 export function buildCommonSmokeSummary(input: {

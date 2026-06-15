@@ -1,3 +1,4 @@
+// Telegram plugin module implements account throttler behavior.
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { apiThrottler } from "./bot.runtime.js";
 
@@ -68,7 +69,7 @@ class GroupFairQueue {
   }
 
   private takeNext(): QueuedApiRequest<unknown> | undefined {
-    for (let scanned = 0; scanned < this.laneOrder.length; scanned += 1) {
+    for (let remaining = this.laneOrder.length; remaining > 0; remaining -= 1) {
       this.nextLaneIndex %= this.laneOrder.length;
       const laneKey = this.laneOrder[this.nextLaneIndex];
       const queue = this.lanes.get(laneKey);

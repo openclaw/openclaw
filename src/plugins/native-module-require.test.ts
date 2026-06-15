@@ -1,9 +1,10 @@
+/** Tests native module require behavior for plugin runtime loading. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   clearNativeRequireJavaScriptModuleCache,
   isJavaScriptModulePath,
@@ -11,6 +12,12 @@ import {
 } from "./native-module-require.js";
 
 const tempDirs: string[] = [];
+type NativeEsmGraphProbe = {
+  status: number | null;
+  stderr: string;
+  stdout: string;
+};
+let nativeEsmGraphProbe: NativeEsmGraphProbe;
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-require-"));
@@ -80,7 +87,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
     ).toEqual({ ok: false });
   });
 
-  it("loads native ESM graphs with temporary SDK aliases", () => {
+  beforeAll(() => {
     const dir = makeTempDir();
     const sdkPath = path.join(dir, "sdk.js");
     const modulePath = path.join(dir, "plugin.mjs");
@@ -119,10 +126,17 @@ describe("tryNativeRequireJavaScriptModule", () => {
       cwd: process.cwd(),
       encoding: "utf8",
     });
+    nativeEsmGraphProbe = {
+      status: result.status,
+      stderr: result.stderr,
+      stdout: result.stdout,
+    };
+  });
 
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("adapter");
+  it("loads native ESM graphs with temporary SDK aliases", () => {
+    expect(nativeEsmGraphProbe.stderr).toBe("");
+    expect(nativeEsmGraphProbe.status).toBe(0);
+    expect(nativeEsmGraphProbe.stdout.trim()).toBe("adapter");
   });
 
   it("declines missing dependency errors when the caller can use source transform fallback", () => {

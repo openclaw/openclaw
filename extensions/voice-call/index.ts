@@ -1,3 +1,4 @@
+// Voice Call plugin entrypoint registers its OpenClaw integration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
@@ -300,6 +301,7 @@ export default definePluginEntry({
             coreConfig: api.config as CoreConfig,
             fullConfig: api.config,
             agentRuntime: api.runtime.agent,
+            stateRuntime: api.runtime.state,
             ttsRuntime: api.runtime.tts,
             logger: api.logger,
           });
@@ -811,6 +813,7 @@ export default definePluginEntry({
           program,
           config,
           ensureRuntime,
+          stateRuntime: api.runtime.state,
           logger: api.logger,
         }),
       { commands: ["voicecall"] },
@@ -831,7 +834,7 @@ export default definePluginEntry({
           );
           return;
         }
-        void ensureRuntime().catch((err) => {
+        void ensureRuntime().catch((err: unknown) => {
           api.logger.error(`[voice-call] Failed to start runtime: ${formatErrorMessage(err)}`);
         });
       },

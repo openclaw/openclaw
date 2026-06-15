@@ -1,4 +1,11 @@
+/**
+ * Nodes media action executor.
+ *
+ * Captures camera/photos/screen media from paired nodes and formats media-safe tool results.
+ */
 import crypto from "node:crypto";
+import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   type CameraFacing,
   cameraTempPath,
@@ -13,8 +20,6 @@ import {
   writeScreenRecordToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import { imageMimeFromFormat } from "../../media/mime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";

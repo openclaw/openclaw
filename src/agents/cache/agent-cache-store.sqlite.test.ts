@@ -1,8 +1,9 @@
+/** Tests SQLite-backed scoped agent cache entries and adapter ownership. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it } from "vitest";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
@@ -24,6 +25,8 @@ function createTempStateDir(): string {
 }
 
 afterEach(() => {
+  // SQLite handles are shared by state dir/agent id; close them so temp dirs can
+  // be removed and tests cannot leak rows across cases.
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
@@ -231,6 +234,7 @@ describe("SQLite agent cache store", () => {
     database.db
       .prepare("update cache_entries set expires_at = ? where scope = ? and key = ?")
       .run(Number.MAX_SAFE_INTEGER, "runtime", "invalid");
+    // Simulate a corrupted persisted timestamp that the public writer rejects.
 
     expect(
       readSqliteAgentCacheEntry({

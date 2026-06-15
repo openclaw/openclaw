@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
@@ -171,6 +172,20 @@ class InvokeDispatcherTest {
     }
 
   @Test
+  fun handleInvoke_blocksDeviceAppsWhenSharingDisabled() =
+    runTest {
+      val result =
+        newDispatcher(installedAppsSharingEnabled = false)
+          .handleInvoke(OpenClawDeviceCommand.Apps.rawValue, """{"limit":1}""")
+
+      assertEquals("INSTALLED_APPS_SHARING_DISABLED", result.error?.code)
+      assertEquals(
+        "INSTALLED_APPS_SHARING_DISABLED: enable Installed Apps in Settings",
+        result.error?.message,
+      )
+    }
+
+  @Test
   fun handleInvoke_blocksMotionActivityWhenUnavailable() =
     runTest {
       val result =
@@ -250,6 +265,7 @@ class InvokeDispatcherTest {
     smsTelephonyAvailable: Boolean = true,
     callLogAvailable: Boolean = false,
     photosAvailable: Boolean = true,
+    installedAppsSharingEnabled: Boolean = true,
     debugBuild: Boolean = false,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
@@ -283,8 +299,6 @@ class InvokeDispatcherTest {
         A2UIHandler(
           canvas = canvas,
           json = Json { ignoreUnknownKeys = true },
-          getNodeCanvasHostUrl = { null },
-          getOperatorCanvasHostUrl = { null },
         ),
       debugHandler = DebugHandler(appContext, DeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
@@ -297,10 +311,10 @@ class InvokeDispatcherTest {
       smsTelephonyAvailable = { smsTelephonyAvailable },
       callLogAvailable = { callLogAvailable },
       photosAvailable = { photosAvailable },
+      installedAppsSharingEnabled = { installedAppsSharingEnabled },
       debugBuild = { debugBuild },
       onCanvasA2uiPush = {},
       onCanvasA2uiReset = {},
-      refreshCanvasHostUrl = { null },
       motionActivityAvailable = { motionActivityAvailable },
       motionPedometerAvailable = { motionPedometerAvailable },
     )

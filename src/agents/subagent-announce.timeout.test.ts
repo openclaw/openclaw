@@ -1,5 +1,7 @@
+// Subagent announce timeout tests cover retry timing and fallback requester
+// resolution when completion delivery cannot finish immediately.
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clampTimerTimeoutMs } from "../shared/number-coercion.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
@@ -110,6 +112,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     directIdempotencyKey?: string;
     internalEvents?: unknown;
   }) => {
+    // Retry behavior is modeled here because the outer announce flow only sees
+    // whether direct delivery eventually succeeded or failed.
     const buildRequest = () => ({
       method: "agent",
       expectFinal: true,
@@ -134,8 +138,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       clampTimerTimeoutMs(configOverride.agents?.defaults?.subagents?.announceTimeoutMs) ?? 120_000;
     const retryDelaysMs =
       process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
-    let retryIndex = 0;
-    for (;;) {
+    for (const delayMs of [...retryDelaysMs, undefined]) {
       const request = buildRequest();
       gatewayCalls.push(request);
       try {
@@ -143,13 +146,12 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         return { delivered: true, path: "direct" };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const delayMs = retryDelaysMs[retryIndex];
         if (!/gateway timeout/i.test(message) || delayMs == null) {
           return { delivered: false, path: "direct", error: message };
         }
-        retryIndex += 1;
       }
     }
+    throw new Error("unreachable direct delivery retry loop exit");
   },
   loadRequesterSessionEntry: (sessionKey: string) => ({
     cfg: configOverride,

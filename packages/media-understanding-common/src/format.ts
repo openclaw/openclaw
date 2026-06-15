@@ -1,8 +1,10 @@
+// Media Understanding Common helper module supports format behavior.
 import type { MediaUnderstandingOutput } from "./types.js";
 
 const MEDIA_PLACEHOLDER_RE = /^<media:[^>]+>(\s*\([^)]*\))?$/i;
 const MEDIA_PLACEHOLDER_TOKEN_RE = /^<media:[^>]+>(\s*\([^)]*\))?\s*/i;
 
+/** Extracts user-authored text while ignoring synthetic media placeholder tokens. */
 export function extractMediaUserText(body?: string): string | undefined {
   const trimmed = body?.trim() ?? "";
   if (!trimmed) {
@@ -29,6 +31,7 @@ function formatSection(
   return lines.join("\n");
 }
 
+/** Formats media-understanding outputs into the chat body sent back to the model. */
 export function formatMediaUnderstandingBody(params: {
   body?: string;
   outputs: MediaUnderstandingOutput[];
@@ -90,6 +93,7 @@ export function formatMediaUnderstandingBody(params: {
   return sections.join("\n\n").trim();
 }
 
+/** Formats one or more audio transcript outputs for legacy transcript-only callers. */
 export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): string {
   if (outputs.length === 1) {
     return outputs[0].text;

@@ -1,4 +1,7 @@
-import { asFiniteNumber } from "../../shared/number-coercion.js";
+/**
+ * Detects provider stop turns that contain no assistant-visible content.
+ */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
 type EmptyAssistantTurnLike = {
   content?: unknown;

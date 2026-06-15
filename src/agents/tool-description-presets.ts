@@ -1,3 +1,5 @@
+// Compact built-in summaries shown in tool inventories and model-facing tool
+// descriptions when a longer contextual description is assembled elsewhere.
 export const EXEC_TOOL_DISPLAY_SUMMARY = "Run shell now.";
 export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
 export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, cron, wake events.";
@@ -9,6 +11,7 @@ export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent sess
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
 
+/** Describes the sessions_list tool for model-facing instructions. */
 export function describeSessionsListTool(): string {
   return [
     "List visible sessions; filter by kind, label, agentId, search, activity.",
@@ -16,6 +19,7 @@ export function describeSessionsListTool(): string {
   ].join(" ");
 }
 
+/** Describes the sessions_history tool for model-facing instructions. */
 export function describeSessionsHistoryTool(): string {
   return [
     "Fetch sanitized history for visible session.",
@@ -23,14 +27,16 @@ export function describeSessionsHistoryTool(): string {
   ].join(" ");
 }
 
+/** Describes the sessions_send tool for model-facing instructions. */
 export function describeSessionsSendTool(): string {
   return [
-    "Send message to visible session by sessionKey/label, or configured agent by agentId.",
+    "Send message to visible session by sessionKey/label, or configured agent by agentId; sessionKey wins when redundant label metadata is present.",
     "Thread-scoped chats rejected; target parent channel session.",
     "Creates missing configured-agent main session; waits for reply when available.",
   ].join(" ");
 }
 
+/** Describes the sessions_spawn tool for model-facing instructions. */
 export function describeSessionsSpawnTool(options?: {
   acpAvailable?: boolean;
   threadAvailable?: boolean;
@@ -39,6 +45,13 @@ export function describeSessionsSpawnTool(options?: {
     options?.acpAvailable === false
       ? 'Spawn clean child session; default `runtime="subagent"`.'
       : 'Spawn clean child session; default `runtime="subagent"`; set `runtime="acp"` explicitly for ACP.';
+  const sessionCompletionGuidance =
+    options?.acpAvailable === false
+      ? "After spawning, do non-overlapping work; run-mode results return, session-mode output stays in thread."
+      : 'After spawning, do non-overlapping work; run-mode results return, session-mode output stays in thread unless ACP uses `streamTo="parent"`.';
+  const completionGuidance = options?.threadAvailable
+    ? sessionCompletionGuidance
+    : "After spawning, do non-overlapping work while run-mode results return.";
   const baseDescription = [
     runtimeDescription,
     options?.threadAvailable
@@ -48,6 +61,9 @@ export function describeSessionsSpawnTool(options?: {
     "Native subagents get task in first visible `[Subagent Task]` message.",
     'Native only: `context="fork"` only when child needs current transcript; else omit or `isolated`.',
     "Use for fresh child-session work.",
+    "Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection.",
+    "Avoid delegating quick lookups or single-file reads unless policy prefers delegation.",
+    completionGuidance,
   ];
   if (options?.acpAvailable === false) {
     return baseDescription.join(" ");
@@ -59,6 +75,7 @@ export function describeSessionsSpawnTool(options?: {
   ].join(" ");
 }
 
+/** Describes the session_status tool for model-facing instructions. */
 export function describeSessionStatusTool(): string {
   return [
     "Show /status-like card for current/visible session: model, usage, time, cost, tasks.",
@@ -68,6 +85,7 @@ export function describeSessionStatusTool(): string {
   ].join(" ");
 }
 
+/** Describes the update_plan tool for model-facing instructions. */
 export function describeUpdatePlanTool(): string {
   return [
     "Update current run plan.",

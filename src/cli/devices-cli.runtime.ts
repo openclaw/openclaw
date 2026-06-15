@@ -1,3 +1,10 @@
+// Device pairing runtime commands for gateway and loopback-local fallback operations.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -31,12 +38,6 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { formatCliCommand } from "./command-format.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
@@ -155,6 +156,7 @@ function resolveLocalPairingFallback(
   opts: DevicesRpcOpts,
   error: unknown,
 ): { details: ConnectPairingRequiredDetails } | null {
+  // Local fallback is only safe for implicit loopback gateway URLs.
   const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   const details = readConnectPairingRequiredMessage(message);
   if (!details) {

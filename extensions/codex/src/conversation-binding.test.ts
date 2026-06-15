@@ -1,3 +1,4 @@
+// Codex tests cover conversation binding plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -127,20 +128,20 @@ describe("codex conversation binding", () => {
   it("uses the default Codex auth profile and omits the public OpenAI provider for new binds", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const config = {
-      auth: { order: { "openai-codex": ["openai-codex:default"] } },
+      auth: { order: { openai: ["openai:default"] } },
     };
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
         },
       },
     });
-    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue(["openai-codex:default"]);
+    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue(["openai:default"]);
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
@@ -164,18 +165,18 @@ describe("codex conversation binding", () => {
       provider?: unknown;
     };
     expect(authOrderParams?.cfg).toBe(config);
-    expect(authOrderParams?.provider).toBe("openai-codex");
+    expect(authOrderParams?.provider).toBe("openai");
     const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
       authProfileId?: unknown;
     };
-    expect(sharedClientParams?.authProfileId).toBe("openai-codex:default");
+    expect(sharedClientParams?.authProfileId).toBe("openai:default");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
-      '"authProfileId": "openai-codex:default"',
+      '"authProfileId": "openai:default"',
     );
   });
 
@@ -186,7 +187,7 @@ describe("codex conversation binding", () => {
       profiles: {
         work: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
@@ -622,7 +623,7 @@ describe("codex conversation binding", () => {
       profiles: {
         work: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
         },
       },
@@ -1045,7 +1046,7 @@ describe("codex conversation binding", () => {
         schemaVersion: 1,
         threadId: "thread-1",
         cwd: tempDir,
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
       }),
     );
     const unhandledRejections: unknown[] = [];
@@ -1096,7 +1097,9 @@ describe("codex conversation binding", () => {
         },
         { timeoutMs: 50 },
       );
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(result).toEqual({
         handled: true,
@@ -1198,5 +1201,183 @@ describe("codex conversation binding", () => {
     expect(turnStartParams[0]?.sandboxPolicy).toEqual({
       type: "dangerFullAccess",
     });
+  });
+
+  it("blocks Guardian-mode bound turns with stale no-approval policy on custom model providers", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        model: "local-model",
+        modelProvider: "lmstudio",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method === "turn/start") {
+          turnStartParams.push(requestParams);
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hello",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        timeoutMs: 50,
+        pluginConfig: {
+          appServer: {
+            mode: "guardian",
+          },
+        },
+      },
+    );
+
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toContain(
+      "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+    );
+    expect(turnStartParams).toEqual([]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("infers custom model providers for legacy bound turns without stored modelProvider", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        model: "lmstudio/local-model",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method === "turn/start") {
+          turnStartParams.push(requestParams);
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    await expect(
+      handleCodexConversationInboundClaim(
+        {
+          content: "hello",
+          channel: "telegram",
+          isGroup: false,
+          commandAuthorized: true,
+        },
+        {
+          channelId: "telegram",
+          pluginBinding: {
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: tempDir,
+            channel: "telegram",
+            accountId: "default",
+            conversationId: "5185575566",
+            boundAt: Date.now(),
+            data: {
+              kind: "codex-app-server-session",
+              version: 1,
+              sessionFile,
+              workspaceDir: tempDir,
+            },
+          },
+        },
+        {
+          timeoutMs: 50,
+          pluginConfig: {
+            appServer: {
+              mode: "guardian",
+            },
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+        ),
+      },
+    });
+
+    expect(turnStartParams).toEqual([]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 });

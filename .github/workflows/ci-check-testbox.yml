@@ -15,6 +15,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"
+  PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
 
 jobs:
   check:

@@ -1,3 +1,4 @@
+// Clack prompter adapts wizard prompt requests to Clack terminal prompts.
 import {
   autocomplete,
   autocompleteMultiselect,
@@ -13,6 +14,7 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { note as emitNote } from "../../packages/terminal-core/src/note.js";
 import {
@@ -22,10 +24,11 @@ import {
 } from "../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createCliProgress } from "../cli/progress.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
 
+// Clack-backed WizardPrompter implementation for interactive CLI setup. It
+// converts the generic wizard prompt contract into styled Clack prompts.
 function guardCancel<T>(value: T | symbol): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
@@ -57,6 +60,8 @@ export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boo
   return tokens.every((token) => haystack.includes(token));
 }
 
+// Public factory used by setup/onboard commands. Keep side effects inside method
+// calls so tests can import the module without starting prompts.
 export function createClackPrompter(): WizardPrompter {
   return {
     intro: async (title) => {
@@ -156,6 +161,8 @@ export function createClackPrompter(): WizardPrompter {
         enabled: true,
         fallback: "none",
       });
+      // Drive both Clack spinner UI and OSC progress output for terminals that
+      // display command progress outside the prompt line.
       return {
         update: (message) => {
           spin.message(theme.accent(message));

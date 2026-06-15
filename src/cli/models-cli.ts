@@ -1,3 +1,4 @@
+// Commander registration for model catalog, status, auth, alias, and fallback commands.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -5,6 +6,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 type ModelsCliRuntime = typeof import("./models-cli.runtime.js");
 
 function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  // Model subcommands are heavy; load each implementation once on first use.
   let promise: Promise<T> | undefined;
   return () => (promise ??= load());
 }
@@ -348,6 +350,11 @@ export function registerModelsCli(program: Command) {
     .option("--device-code", "Use the provider device-code auth method", false)
     .option("--profile-id <id>", "Auth profile id override for single-profile login methods")
     .option("--set-default", "Apply the provider's default model recommendation", false)
+    .option(
+      "--force",
+      "Remove existing profiles for the provider before logging in (use when a cached OAuth profile is stuck or you want to switch accounts)",
+      false,
+    )
     .action(async (opts, command) => {
       if (opts.deviceCode && typeof opts.method === "string" && opts.method !== "device-code") {
         throw new Error(
@@ -363,6 +370,7 @@ export function registerModelsCli(program: Command) {
             method: opts.deviceCode ? "device-code" : (opts.method as string | undefined),
             profileId: opts.profileId as string | undefined,
             setDefault: Boolean(opts.setDefault),
+            force: Boolean(opts.force),
             agent,
           },
           defaultRuntime,
@@ -418,7 +426,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("paste-api-key")
     .description("Paste an API key into auth-profiles.json and update config")
-    .requiredOption("--provider <name>", "Provider id (e.g. openai-codex)")
+    .requiredOption("--provider <name>", "Provider id (e.g. openai)")
     .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
     .action(async (opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {

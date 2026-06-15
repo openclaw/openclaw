@@ -1,3 +1,4 @@
+// Voice Call tests cover manager.notify plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
 
@@ -99,7 +100,9 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
 type HarnessManager = Awaited<ReturnType<typeof createManagerHarness>>["manager"];
 
 async function waitForPlaybackDispatch() {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function initiateCallWithMessage(

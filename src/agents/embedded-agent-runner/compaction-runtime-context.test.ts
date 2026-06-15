@@ -1,3 +1,4 @@
+// Coverage for building compaction runtime context from active runner state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../bash-process-registry.js";
@@ -17,6 +18,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       sessionKey: "agent:main:thread:1",
       messageChannel: "slack",
       messageProvider: "slack",
+      chatType: "channel",
       agentAccountId: "acct-1",
       currentChannelId: "C123",
       currentThreadTs: "thread-9",
@@ -28,7 +30,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       config: {} as unknown as OpenClawConfig,
       senderIsOwner: true,
       senderId: "user-123",
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
       thinkLevel: "off",
       reasoningLevel: "on",
@@ -38,6 +40,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.sessionKey).toBe("agent:main:thread:1");
     expect(result.messageChannel).toBe("slack");
     expect(result.messageProvider).toBe("slack");
+    expect(result.chatType).toBe("channel");
     expect(result.agentAccountId).toBe("acct-1");
     expect(result.currentChannelId).toBe("C123");
     expect(result.currentThreadTs).toBe("thread-9");
@@ -48,7 +51,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.agentDir).toBe("/tmp/agent");
     expect(result.senderIsOwner).toBe(true);
     expect(result.senderId).toBe("user-123");
-    expect(result.provider).toBe("openai-codex");
+    expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-5.4");
   });
 
@@ -57,6 +60,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       sessionKey: null,
       messageChannel: null,
       messageProvider: null,
+      chatType: null,
       agentAccountId: null,
       currentChannelId: null,
       currentThreadTs: null,
@@ -71,6 +75,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.sessionKey).toBeUndefined();
     expect(result.messageChannel).toBeUndefined();
     expect(result.messageProvider).toBeUndefined();
+    expect(result.chatType).toBeUndefined();
     expect(result.agentAccountId).toBeUndefined();
     expect(result.currentChannelId).toBeUndefined();
     expect(result.currentThreadTs).toBeUndefined();
@@ -94,7 +99,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("anthropic");
     expect(result.model).toBe("claude-opus-4-6");
-    // Auth profile dropped because provider changed
+    // Auth profile must be dropped when provider changes; otherwise compaction
+    // could send a stale credential to the override provider.
     expect(result.authProfileId).toBeUndefined();
   });
 
@@ -130,6 +136,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   });
 
   it("preserves scoped active process session references for compaction", () => {
+    // Only sessions tied to the same scope are summarized; cross-session process
+    // state would leak unrelated task context into the compaction prompt.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
     const active = createProcessSessionFixture({
@@ -200,10 +208,10 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
         config: {
           agents: { defaults: { compaction: { model: "anthropic/" } } },
         } as unknown as OpenClawConfig,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         authProfileId: "openai:p1",
-        defaultProvider: "openai-codex",
+        defaultProvider: "openai",
         defaultModel: "gpt-5.4",
       }),
     ).toEqual({
@@ -217,7 +225,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     const result = resolveEmbeddedCompactionTarget({
       provider: "openai",
       modelId: "gpt-5.4",
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
       defaultProvider: "openai",
       defaultModel: "gpt-5.4",
     });
@@ -225,13 +233,13 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.4");
-    expect(result.authProfileId).toBe("openai-codex:default");
+    expect(result.authProfileId).toBe("openai:default");
   });
 
   it("keeps openai auth order with Codex profile on canonical OpenAI", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
-        auth: { order: { openai: ["openai-codex:default"] } },
+        auth: { order: { openai: ["openai:default"] } },
       } as unknown as OpenClawConfig,
       provider: "openai",
       modelId: "gpt-5.5",
@@ -307,11 +315,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       config: {
         models: {
           providers: {
-            openai: {
-              baseUrl: "https://openai-compatible.example/v1",
-              models: [{ id: "gpt-5.5" }],
-            },
-            "openai-codex": { models: [{ id: "gpt-5.5" }] },
+            openai: { models: [{ id: "gpt-5.5" }] },
           },
         },
       } as unknown as OpenClawConfig,
@@ -335,7 +339,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       } as unknown as OpenClawConfig,
       provider: "openai",
       modelId: "gpt-5.5",
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
     });
@@ -343,7 +347,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.4");
-    expect(result.authProfileId).toBe("openai-codex:default");
+    expect(result.authProfileId).toBe("openai:default");
   });
 
   it("keeps openai compaction overrides with legacy Codex auth on OpenAI", () => {
@@ -353,7 +357,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       } as unknown as OpenClawConfig,
       provider: "openai",
       modelId: "gpt-5.5",
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
     });
@@ -361,7 +365,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.4");
-    expect(result.authProfileId).toBe("openai-codex:default");
+    expect(result.authProfileId).toBe("openai:default");
   });
 
   it("keeps OpenAI compaction model overrides on canonical OpenAI with Codex runtime", () => {
@@ -370,7 +374,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
         models: {
           providers: {
             openai: { models: [{ id: "gpt-5.5" }, { id: "gpt-5.4-mini" }] },
-            "openai-codex": { models: [{ id: "gpt-5.5" }, { id: "gpt-5.4-mini" }] },
           },
         },
         agents: { defaults: { compaction: { model: "openai/gpt-5.4-mini" } } },

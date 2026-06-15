@@ -1,3 +1,8 @@
+// Security CLI for local/deep audits and safe remediation.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -6,10 +11,6 @@ import type { GatewayAuthMode } from "../config/types.gateway.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
@@ -43,6 +44,7 @@ function buildAuditGatewayAuthOverride(params: {
   token?: string;
   password?: string;
 }) {
+  // Explicit runtime auth overrides must include the matching credential.
   if (!params.mode) {
     return undefined;
   }
@@ -119,7 +121,9 @@ export function registerSecurityCli(program: Command) {
         token,
         password,
       });
-      const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
+      const fixResult = opts.fix
+        ? await fixSecurityFootguns().catch((_err: unknown) => null)
+        : null;
 
       const sourceConfig = getRuntimeConfig();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =

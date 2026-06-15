@@ -1,3 +1,4 @@
+// Model Catalog Core tests cover model catalog normalize behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeModelCatalog, normalizeModelCatalogRows } from "./index.js";
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
@@ -48,6 +49,18 @@ describe("model catalog normalization", () => {
                 },
                 compat: {
                   supportsTools: true,
+                  openRouterRouting: {
+                    only: ["anthropic", 1],
+                    allow_fallbacks: false,
+                    require_parameters: "no",
+                  },
+                  vercelGatewayRouting: { order: ["anthropic", 1], only: "openai" },
+                  zaiToolStream: true,
+                  cacheControlFormat: "anthropic",
+                  sendSessionAffinityHeaders: true,
+                  sendSessionIdHeader: false,
+                  supportsEagerToolInputStreaming: false,
+                  supportsLongCacheRetention: true,
                   supportsStore: "yes",
                   thinkingFormat: "together",
                   unknownFlag: true,
@@ -135,6 +148,14 @@ describe("model catalog normalization", () => {
               },
               compat: {
                 supportsTools: true,
+                openRouterRouting: { only: ["anthropic"], allow_fallbacks: false },
+                vercelGatewayRouting: { order: ["anthropic"] },
+                zaiToolStream: true,
+                cacheControlFormat: "anthropic",
+                sendSessionAffinityHeaders: true,
+                sendSessionIdHeader: false,
+                supportsEagerToolInputStreaming: false,
+                supportsLongCacheRetention: true,
                 thinkingFormat: "together",
               },
               status: "preview",

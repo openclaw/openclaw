@@ -1,3 +1,5 @@
+// Web login methods delegate QR-login start/wait requests to the active channel
+// plugin that owns web login gateway methods.
 import {
   ErrorCodes,
   errorShape,
@@ -12,6 +14,7 @@ import { assertValidParams } from "./validation.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
+/** Resolves the channel plugin that currently owns web QR-login methods. */
 const resolveWebLoginProvider = () =>
   listChannelPlugins().find((plugin) =>
     [
@@ -46,6 +49,11 @@ function respondProviderUnsupported(respond: RespondFn, providerId: string) {
   );
 }
 
+function respondWebLoginUnavailable(respond: RespondFn, err: unknown) {
+  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+}
+
+/** Resolves a concrete provider gateway login method or sends the public error. */
 function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   rawParams: unknown;
   respond: RespondFn;
@@ -70,6 +78,7 @@ function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   return { accountId, provider, run: run.bind(gateway) as NonNullable<WebLoginGateway[TMethod]> };
 }
 
+/** Checks whether the matching channel/account should be restored after login start. */
 function wasChannelRunning(params: {
   context: Parameters<GatewayRequestHandlers["web.login.start"]>[0]["context"];
   channelId: ChannelId;
@@ -89,6 +98,7 @@ function wasChannelRunning(params: {
   return defaultRuntime?.accountId === params.accountId && defaultRuntime.running === true;
 }
 
+/** Gateway handlers for plugin-owned web QR-login flows. */
 export const webHandlers: GatewayRequestHandlers = {
   "web.login.start": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWebLoginStartParams, "web.login.start", respond)) {
@@ -119,11 +129,13 @@ export const webHandlers: GatewayRequestHandlers = {
       if (result.connected) {
         await context.startChannel(provider.id, accountId);
       } else if (wasRunning && !result.qrDataUrl) {
+        // When start fails before producing a QR code, restore the previously
+        // running channel/account so a transient login failure does not stop it.
         await context.startChannel(provider.id, accountId);
       }
       respond(true, result, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respondWebLoginUnavailable(respond, err);
     }
   },
   "web.login.wait": async ({ params, respond, context }) => {
@@ -151,7 +163,7 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       respond(true, result, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respondWebLoginUnavailable(respond, err);
     }
   },
 };

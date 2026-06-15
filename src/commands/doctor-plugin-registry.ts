@@ -1,5 +1,7 @@
+/** Doctor repairs for stale plugin registry entries, managed npm shadows, and peer links. */
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,7 +24,6 @@ import {
   listStaleLocalBundledPluginInstallRecords,
   type StaleLocalBundledPluginInstallRecord,
 } from "../plugins/stale-local-bundled-plugin-install-records.js";
-import { isRecord } from "../shared/record-coerce.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
@@ -80,7 +81,7 @@ function listManagedPluginNpmRoots(params: PluginRegistryDoctorRepairParams): st
 }
 
 function deleteObjectKey(record: Record<string, unknown>, key: string): boolean {
-  if (!Object.prototype.hasOwnProperty.call(record, key)) {
+  if (!Object.hasOwn(record, key)) {
     return false;
   }
   delete record[key];
@@ -246,6 +247,7 @@ function removeManagedNpmPackageLockDependency(params: {
   }
 }
 
+/** Removes managed npm packages that shadow current bundled plugins when repair is enabled. */
 export function maybeRepairStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams,
 ): boolean {
@@ -285,6 +287,7 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
   return true;
 }
 
+/** Removes local install records that shadow current bundled plugin sources. */
 export async function maybeRepairStaleLocalBundledPluginInstallRecords(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<string[]> {
@@ -315,6 +318,7 @@ export async function maybeRepairStaleLocalBundledPluginInstallRecords(
   return stale.map((record) => record.pluginId);
 }
 
+/** Relinks managed npm plugin packages to the current OpenClaw host packages. */
 export async function maybeRepairManagedNpmOpenClawPeerLinks(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<boolean> {
@@ -382,6 +386,12 @@ async function loadInstallRecordsWithoutPluginIds(
   return records;
 }
 
+/**
+ * Runs plugin registry doctor repairs and refreshes the persisted plugin index when needed.
+ *
+ * Stale bundled shadows are removed before registry migration so the rebuilt index resolves the
+ * current bundled source instead of an obsolete managed/local install record.
+ */
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<OpenClawConfig> {

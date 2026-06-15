@@ -1,11 +1,18 @@
+/**
+ * Integration-style tests for before_tool_call behavior.
+ * Covers loop detection, diagnostics, plugin approval, and skill telemetry
+ * around wrapped tool execution.
+ */
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
+  type DiagnosticEventPrivateData,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
 import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
@@ -16,6 +23,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
+  getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -29,7 +37,7 @@ vi.mock("../plugins/hook-runner-global.js", async () => {
   );
   return {
     ...actual,
-    getGlobalHookRunner: vi.fn(),
+    getGlobalHookRunner: vi.fn(actual.getGlobalHookRunner),
   };
 });
 vi.mock("./tools/gateway.js", () => ({
@@ -37,6 +45,37 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+
+function setGlobalHookRunnerForTest(hookRunner: unknown): void {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
+    hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
+      hookRunner: null,
+      registry: null,
+    };
+  }
+  hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+}
+
+function getGlobalHookRunnerForTest(): unknown {
+  const hookRunnerGlobalState = globalThis as Record<
+    symbol,
+    { hookRunner: unknown; registry?: unknown } | undefined
+  >;
+  return hookRunnerGlobalState[hookRunnerGlobalStateKey]?.hookRunner ?? null;
+}
+
+afterEach(() => {
+  setGlobalHookRunnerForTest(null);
+  mockGetGlobalHookRunner.mockReset();
+  mockGetGlobalHookRunner.mockImplementation(
+    () => getGlobalHookRunnerForTest() as ReturnType<typeof getGlobalHookRunner>,
+  );
+});
 
 describe("before_tool_call loop detection behavior", () => {
   let hookRunner: {
@@ -103,7 +142,10 @@ describe("before_tool_call loop detection behavior", () => {
         emitted.push(evt);
       }
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -118,7 +160,10 @@ describe("before_tool_call loop detection behavior", () => {
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -743,7 +788,7 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
     hookRunner.runBeforeToolCall.mockResolvedValue({
       block: true,
       blockReason: "blocked by policy",
@@ -917,29 +962,21 @@ describe("before_tool_call requireApproval handling", () => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
     hookRunner = {
-      hasHooks: vi.fn().mockReturnValue(true),
+      hasHooks: vi.fn((hookName: string) => hookName === "before_tool_call"),
       runBeforeToolCall: vi.fn(),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     // Keep the global singleton aligned as a fallback in case another setup path
     // preloads hook-runner-global before this test's module reset/mocks take effect.
-    const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
-    const hookRunnerGlobalState = globalThis as Record<
-      symbol,
-      { hookRunner: unknown; registry?: unknown } | undefined
-    >;
-    if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
-      hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
-        hookRunner: null,
-        registry: null,
-      };
-    }
-    hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
+    setGlobalHookRunnerForTest(hookRunner);
     mockCallGateway.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  async function runAbortDuringApprovalWait(options?: { onResolution?: ReturnType<typeof vi.fn> }) {
+  async function runAbortDuringApprovalWait(options?: {
+    abortReason?: unknown;
+    onResolution?: ReturnType<typeof vi.fn>;
+  }) {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Abortable",
@@ -951,7 +988,7 @@ describe("before_tool_call requireApproval handling", () => {
     const controller = new AbortController();
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
     mockCallGateway.mockImplementationOnce(() => new Promise(() => {}));
-    setTimeout(() => controller.abort(new Error("run cancelled")), 10);
+    setTimeout(() => controller.abort(options?.abortReason ?? new Error("run cancelled")), 10);
 
     return await runBeforeToolCallHook({
       toolName: "bash",
@@ -1166,6 +1203,63 @@ describe("before_tool_call requireApproval handling", () => {
       }),
     ).resolves.toEqual({ blocked: false, params });
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+  });
+
+  it("reports trusted policy diagnostics through guarded readers", () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const registry = createEmptyPluginRegistry();
+    const unreadableIdPolicy: Record<string, unknown> = {
+      description: "synthetic trusted policy",
+      evaluate: () => undefined,
+    };
+    Object.defineProperty(unreadableIdPolicy, "id", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trusted policy id is unreadable");
+      },
+    });
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "fuzzplugin",
+        pluginName: "Fuzz Plugin",
+        source: "test",
+        policy: unreadableIdPolicy as never,
+      },
+      {
+        pluginId: "mockplugin",
+        pluginName: "Mock Plugin",
+        source: "test",
+        policy: {
+          id: "mockpolicy",
+          description: "mock policy",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    let state: ReturnType<typeof getBeforeToolCallPolicyDiagnosticState> | undefined;
+    try {
+      state = getBeforeToolCallPolicyDiagnosticState();
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+
+    expect(state).toEqual({
+      hasBeforeToolCallHook: false,
+      trustedToolPolicies: [
+        {
+          id: "fuzzplugin",
+          pluginId: "fuzzplugin",
+          pluginName: "Fuzz Plugin",
+        },
+        {
+          id: "mockpolicy",
+          pluginId: "mockplugin",
+          pluginName: "Mock Plugin",
+        },
+      ],
+    });
   });
 
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {
@@ -1436,6 +1530,13 @@ describe("before_tool_call requireApproval handling", () => {
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
   });
 
+  it("classifies non-Error abort reasons as run abort cancellation", async () => {
+    const result = await runAbortDuringApprovalWait({ abortReason: "sessions_yield" });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
+  });
+
   it("removes abort listener after waitDecision resolves", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
@@ -1660,5 +1761,144 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(onResolution).toHaveBeenCalledWith("cancelled");
+  });
+});
+
+describe("before_tool_call tool content private-data capture", () => {
+  type TrustedToolEvent = {
+    event: DiagnosticEventPayload;
+    privateData: DiagnosticEventPrivateData;
+  };
+
+  beforeEach(() => {
+    resetDiagnosticSessionStateForTest();
+    resetDiagnosticEventsForTest();
+  });
+
+  async function withTrustedToolEvents(
+    run: (emitted: TrustedToolEvent[], flush: () => Promise<void>) => Promise<void>,
+  ) {
+    const emitted: TrustedToolEvent[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      if (event.type.startsWith("tool.execution.")) {
+        emitted.push({ event, privateData });
+      }
+    });
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    try {
+      await run(emitted, flush);
+    } finally {
+      stop();
+    }
+  }
+
+  function configWithToolContent(
+    fields: { toolInputs?: boolean; toolOutputs?: boolean } = {
+      toolInputs: true,
+      toolOutputs: true,
+    },
+  ) {
+    return {
+      diagnostics: {
+        enabled: true,
+        otel: {
+          enabled: true,
+          traces: true,
+          captureContent: { enabled: true, ...fields },
+        },
+      },
+    } as unknown as import("../config/types.openclaw.js").OpenClawConfig;
+  }
+
+  it("attaches tool input/output to private data when opted in", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "file body" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+      config: configWithToolContent(),
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await tool.execute("call-1", { path: "/etc/secret" }, undefined, undefined);
+      await flush();
+
+      const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
+      expect(completed?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
+      expect(completed?.privateData.toolContent?.toolOutput).toEqual({
+        content: [{ type: "text", text: "file body" }],
+      });
+      // Public event payload must never carry raw params/results.
+      expect(JSON.stringify(completed?.event)).not.toContain("/etc/secret");
+      expect(JSON.stringify(completed?.event)).not.toContain("file body");
+    });
+  });
+
+  it("omits tool content from private data when capture is not configured", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await tool.execute("call-1", { path: "/etc/secret" }, undefined, undefined);
+      await flush();
+
+      const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
+      expect(completed).toBeDefined();
+      expect(completed?.privateData.toolContent).toBeUndefined();
+    });
+  });
+
+  it("captures only opted-in fields and clones away from live params", async () => {
+    const liveParams = { path: "/etc/secret" };
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "out" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+      config: configWithToolContent({ toolInputs: true, toolOutputs: false }),
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await tool.execute("call-1", liveParams, undefined, undefined);
+      await flush();
+
+      const completed = emitted.find((e) => e.event.type === "tool.execution.completed");
+      expect(completed?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
+      expect(completed?.privateData.toolContent?.toolOutput).toBeUndefined();
+      // Captured snapshot is a clone, not the live params object.
+      expect(completed?.privateData.toolContent?.toolInput).not.toBe(liveParams);
+    });
+  });
+
+  it("attaches tool input but not output on execution errors", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("boom"));
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      runId: "run-1",
+      loopDetection: { enabled: false },
+      config: configWithToolContent(),
+    });
+
+    await withTrustedToolEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("call-1", { path: "/etc/secret" }, undefined, undefined),
+      ).rejects.toThrow("boom");
+      await flush();
+
+      const errored = emitted.find((e) => e.event.type === "tool.execution.error");
+      expect(errored?.privateData.toolContent?.toolInput).toEqual({ path: "/etc/secret" });
+      expect(errored?.privateData.toolContent?.toolOutput).toBeUndefined();
+    });
   });
 });

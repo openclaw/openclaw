@@ -1,8 +1,10 @@
+// Covers shell environment fallback loading.
 import fs from "node:fs";
 import os from "node:os";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
+  clearShellEnvAppliedKeys,
   getShellEnvAppliedKeys,
   getShellPathFromLoginShell,
   loadShellEnvFallback,
@@ -393,6 +395,22 @@ describe("shell env fallback", () => {
       error: "boom",
     });
     expect(getShellEnvAppliedKeys()).toStrictEqual([]);
+  });
+
+  it("clears only discarded shell-applied keys", () => {
+    loadShellEnvFallback({
+      enabled: true,
+      env: {},
+      expectedKeys: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+      exec: (() =>
+        Buffer.from(
+          "OPENAI_API_KEY=openai-shell\0ANTHROPIC_API_KEY=anthropic-shell\0",
+        )) as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+    });
+
+    clearShellEnvAppliedKeys(["OPENAI_API_KEY"]);
+
+    expect(getShellEnvAppliedKeys()).toEqual(["ANTHROPIC_API_KEY"]);
   });
 
   it("resolves PATH via login shell and caches it", () => {

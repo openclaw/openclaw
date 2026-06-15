@@ -1,3 +1,6 @@
+/**
+ * Emits diagnostic model-call events around embedded-agent stream functions.
+ */
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
 import {
   diagnosticErrorCategory,
@@ -12,7 +15,10 @@ import {
   type DiagnosticMemoryUsage,
   emitTrustedDiagnosticEventWithPrivateData,
 } from "../../../infra/diagnostic-events.js";
-import type { DiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
+import {
+  cloneDiagnosticContentValue,
+  type DiagnosticModelContentCapturePolicy,
+} from "../../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -106,15 +112,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function cloneDiagnosticContentValue(value: unknown): unknown {
+function utf8StringByteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+function streamDeltaByteLength(chunk: Record<string, unknown>): number | undefined {
+  const type = chunk.type;
+  if (
+    (type === "text_delta" || type === "thinking_delta" || type === "toolcall_delta") &&
+    typeof chunk.delta === "string"
+  ) {
+    return utf8StringByteLength(chunk.delta);
+  }
+  return undefined;
+}
+
+function responseStreamChunkByteLengthUnchecked(chunk: unknown): number | undefined {
+  if (!isRecord(chunk)) {
+    return utf8JsonByteLength(chunk);
+  }
+  const deltaBytes = streamDeltaByteLength(chunk);
+  if (deltaBytes !== undefined) {
+    return deltaBytes;
+  }
+  if (!("partial" in chunk)) {
+    return utf8JsonByteLength(chunk);
+  }
+  // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
+  // count the new stream payload, not the answer-so-far replay.
+  const { partial: _partial, ...snapshotlessChunk } = chunk;
+  return utf8JsonByteLength(snapshotlessChunk);
+}
+
+function responseStreamChunkByteLength(chunk: unknown): number | undefined {
   try {
-    return structuredClone(value);
+    return responseStreamChunkByteLengthUnchecked(chunk);
   } catch {
-    try {
-      return JSON.parse(JSON.stringify(value)) as unknown;
-    } catch {
-      return String(value);
-    }
+    return undefined;
   }
 }
 
@@ -157,7 +191,7 @@ function observeResponseChunk(
 ): void {
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
   observeOutputMessageContent(state, chunk);
-  const bytes = utf8JsonByteLength(chunk);
+  const bytes = responseStreamChunkByteLength(chunk);
   if (bytes !== undefined) {
     state.responseStreamBytes += bytes;
   }
@@ -486,6 +520,8 @@ async function safeReturnIterator(iterator: AsyncIterator<unknown>): Promise<voi
   }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
+    // Early consumer return should not hang diagnostic completion forever; give
+    // provider cleanup a short chance, then emit completion for the observed call.
     await Promise.race([
       Promise.resolve(returnResult).catch(() => undefined),
       new Promise<void>((resolve) => {
@@ -531,6 +567,8 @@ async function* observeModelCallIterator<T>(
     throw err;
   } finally {
     if (!terminalEmitted) {
+      // A consumer can stop reading before the provider emits done/error. Close
+      // the iterator best-effort and record the call as completed with observed bytes.
       await safeReturnIterator(iterator);
       emitModelCallCompleted(eventBase, startedAt, state);
     }
@@ -546,7 +584,7 @@ function observeModelCallStream<T extends AsyncIterable<unknown>>(
 ): T {
   const observedIterator = () =>
     observeModelCallIterator(createIterator(), eventBase, startedAt, state)[Symbol.asyncIterator]();
-  let hasNonConfigurableIterator = false;
+  let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =
       Object.getOwnPropertyDescriptor(stream, Symbol.asyncIterator)?.configurable === false;
@@ -589,6 +627,11 @@ function observeModelCallResult(
   return result;
 }
 
+/**
+ * Wraps a model stream function with diagnostic model-call lifecycle events,
+ * traceparent propagation, request/response byte accounting, optional captured
+ * model content, progress heartbeats, and plugin hook dispatch.
+ */
 export function wrapStreamFnWithDiagnosticModelCallEvents(
   streamFn: StreamFn,
   ctx: ModelCallDiagnosticContext,
@@ -613,7 +656,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       if (isPromiseLike(result)) {
         return result.then(
           (resolved) => observeModelCallResult(resolved, eventBase, startedAt, state),
-          (err) => {
+          (err: unknown) => {
             emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
             throw err;
           },

@@ -1,3 +1,4 @@
+// Realtime transcription websocket tests cover websocket session lifecycle.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +27,7 @@ async function createRealtimeServer(params?: {
   onText?: (payload: unknown) => void;
 }) {
   const server = createServer();
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const clients = new Set<WebSocket>();
 
   server.on("upgrade", (request, socket, head) => {
@@ -59,13 +60,19 @@ async function createRealtimeServer(params?: {
     });
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   cleanup = async () => {
     for (const ws of clients) {
       ws.terminate();
     }
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   };
   const port = (server.address() as AddressInfo).port;
   return { url: `ws://127.0.0.1:${port}` };

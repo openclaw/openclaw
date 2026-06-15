@@ -1,3 +1,4 @@
+// Media store persists loaded media files and metadata for later references.
 import "../infra/fs-safe-defaults.js";
 import crypto from "node:crypto";
 import { createWriteStream } from "node:fs";
@@ -6,20 +7,25 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import {
+  basenameFromAnyPath,
+  extnameFromAnyPath,
+  nameFromAnyPath,
+} from "@openclaw/media-core/file-name";
+import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/fs-safe.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
-import { basenameFromAnyPath, extnameFromAnyPath, nameFromAnyPath } from "./file-name.js";
-import { detectMime, extensionForMime } from "./mime.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
-export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
+/** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
+export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
@@ -93,6 +99,7 @@ let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
 let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
 let resolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = defaultResolvePinnedHostnameImpl;
 
+/** Overrides network dependencies for media-store tests and restores defaults when omitted. */
 export function setMediaStoreNetworkDepsForTest(deps?: {
   httpRequest?: RequestImpl;
   httpsRequest?: RequestImpl;
@@ -118,21 +125,16 @@ function sanitizeFilename(name: string): string {
   return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
 }
 
-/**
- * Extract original filename from path if it matches the embedded format.
- * Pattern: {original}---{uuid}.{ext} → returns "{original}.{ext}"
- * Falls back to basename if no pattern match, or "file.bin" if empty.
- */
+/** Restores the caller-facing filename from media-store paths with embedded UUID suffixes. */
 export function extractOriginalFilename(filePath: string): string {
   const basename = basenameFromAnyPath(filePath);
   if (!basename) {
     return "file.bin";
-  } // Fallback for empty input
+  }
 
   const ext = extnameFromAnyPath(basename);
   const nameWithoutExt = path.basename(basename, ext);
 
-  // Check for ---{uuid} pattern (36 chars: 8-4-4-4-12 with hyphens)
   const match = nameWithoutExt.match(
     /^(.+)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
   );
@@ -140,13 +142,15 @@ export function extractOriginalFilename(filePath: string): string {
     return `${match[1]}${ext}`;
   }
 
-  return basename; // Fallback: use as-is
+  return basename;
 }
 
+/** Returns the configured absolute media-store root without creating it. */
 export function getMediaDir() {
   return resolveMediaDir();
 }
 
+/** Creates the configured media-store root with private directory permissions. */
 export async function ensureMediaDir() {
   const mediaDir = resolveMediaDir();
   await fs.mkdir(mediaDir, { recursive: true, mode: 0o700 });
@@ -185,6 +189,7 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
   }
 }
 
+/** Prunes expired media files, optionally recursing into scoped media subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   await openMediaStore().pruneExpired({
     maxDepth: options.recursive ? undefined : 1,
@@ -283,9 +288,9 @@ async function downloadToFile(
                 size: total,
               });
             })
-            .catch(async (err) => {
+            .catch(async (err: unknown) => {
               await fs.rm(dest, { force: true }).catch(() => {});
-              reject(err);
+              reject(toLintErrorObject(err, "Non-Error rejection"));
             });
         });
         req.on("error", reject);
@@ -295,6 +300,7 @@ async function downloadToFile(
   });
 }
 
+/** Media-store file metadata returned after bytes are persisted under a safe media ID. */
 export type SavedMedia = {
   id: string;
   path: string;
@@ -392,7 +398,7 @@ async function saveMediaSiblingTempFile(params: {
       mode: MEDIA_FILE_MODE,
       tempPrefix: params.tempPrefix,
       writeTemp: params.writeTemp,
-      resolveFinalPath: (result) => path.join(params.dir, result.id),
+      resolveFinalPath: (resultLocal) => path.join(params.dir, resultLocal.id),
     }),
   );
   return buildSavedMediaResult({ dir: params.dir, ...result });
@@ -460,6 +466,7 @@ async function writeMediaStreamToFile(params: {
   }
 }
 
+/** Stable error categories for unsafe or failed source-file ingestion. */
 export type SaveMediaSourceErrorCode =
   | "invalid-path"
   | "not-found"
@@ -467,6 +474,7 @@ export type SaveMediaSourceErrorCode =
   | "path-mismatch"
   | "too-large";
 
+/** Error raised when saveMediaSource cannot safely read or persist a source path. */
 export class SaveMediaSourceError extends Error {
   code: SaveMediaSourceErrorCode;
 
@@ -501,7 +509,6 @@ function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): Sav
       return new SaveMediaSourceError("invalid-path", "Media path is outside workspace root", {
         cause: err,
       });
-    case "invalid-path":
     default:
       return new SaveMediaSourceError("invalid-path", "Media path is not safe to read", {
         cause: err,
@@ -509,6 +516,7 @@ function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): Sav
   }
 }
 
+/** Saves a local path or HTTP(S) source into the media store after MIME/size validation. */
 export async function saveMediaSource(
   source: string,
   headers?: Record<string, string>,
@@ -557,6 +565,7 @@ export async function saveMediaSource(
   }
 }
 
+/** Saves an in-memory media buffer under a UUID-backed media ID. */
 export async function saveMediaBuffer(
   buffer: Buffer,
   contentType?: string,
@@ -588,6 +597,7 @@ export async function saveMediaBuffer(
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
 }
 
+/** Streams media into a sibling temp file before atomically publishing the final media ID. */
 export async function saveMediaStream(
   stream: AsyncIterable<unknown>,
   contentType?: string,
@@ -667,6 +677,7 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
   }
 }
 
+/** Read result for callers that need media bytes plus the resolved file path. */
 export type ReadMediaBufferResult = {
   id: string;
   path: string;
@@ -674,6 +685,7 @@ export type ReadMediaBufferResult = {
   size: number;
 };
 
+/** Reads a stored media ID with the same path guards and byte limit used by writers. */
 export async function readMediaBuffer(
   id: string,
   subdir = "inbound",
@@ -722,7 +734,21 @@ export async function readMediaBuffer(
  * @param id     The media ID as returned by SavedMedia.id.
  * @param subdir The subdirectory the file was saved into (default "inbound").
  */
-export async function deleteMediaBuffer(id: string, subdir: "inbound" = "inbound"): Promise<void> {
+export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
   await openMediaStore().remove(relativePath);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

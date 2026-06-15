@@ -67,6 +67,27 @@ OpenClaw separates the selected provider/model from why it was selected. That so
 
 The auto fallback primary-probe interval is five minutes and is not configurable. OpenClaw remembers recent probes per session and primary model so a failing primary is not retried on every turn. OpenClaw sends a visible notice when a session moves onto fallback and another notice when it returns to the selected primary; it does not repeat the notice on every sticky fallback turn.
 
+## Auth failure skip cache
+
+By default, every new turn keeps the existing fallback retry behavior: OpenClaw
+will try each configured fallback candidate again, including non-primary
+candidates that recently failed with `auth` or `auth_permanent`.
+
+Operators who prefer to suppress those repeat auth failures can opt in with:
+
+```bash
+OPENCLAW_FALLBACK_SKIP_TTL_MS=60000
+```
+
+When enabled, OpenClaw records an in-memory, session-scoped skip marker for a
+non-primary fallback candidate after an auth-class failure. The marker is keyed
+by session id, provider, and model. Primary candidates are never skipped, so an
+explicit user model selection still surfaces the real auth error. The cache is
+process-local and clears on Gateway restart.
+
+The value is a TTL in milliseconds. `0` or an unset value disables the cache.
+Positive values are clamped between 1 second and 10 minutes.
+
 ## User-visible fallback notices
 
 When a session moves onto an auto-selected fallback, OpenClaw sends a status notice in the same reply surface:
@@ -87,10 +108,10 @@ These notices are operational messages, not assistant content. They are delivere
 
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 
-- Secrets live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (legacy: `~/.openclaw/agent/auth-profiles.json`).
-- Runtime auth-routing state lives in `~/.openclaw/agents/<agentId>/agent/auth-state.json`.
+- Secrets and runtime auth-routing state live in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
-- Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
+- Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into the per-agent auth store on first use).
+- Legacy `auth-profiles.json`, `auth-state.json`, and per-agent `auth.json` files are imported by `openclaw doctor --fix`.
 
 More detail: [OAuth](/concepts/oauth)
 
@@ -106,7 +127,7 @@ OAuth logins create distinct profiles so multiple accounts can coexist.
 - Default: `provider:default` when no email is available.
 - OAuth with email: `provider:<email>` (for example `google-antigravity:user@gmail.com`).
 
-Profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` under `profiles`.
+Profiles live in the per-agent `openclaw-agent.sqlite` auth profile store.
 
 ## Rotation order
 
@@ -120,7 +141,7 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
     `auth.profiles` filtered by provider.
   </Step>
   <Step title="Stored profiles">
-    Entries in `auth-profiles.json` for the provider.
+    Per-agent SQLite auth profile entries for the provider.
   </Step>
 </Steps>
 
@@ -208,7 +229,7 @@ Cooldowns use exponential backoff:
 - 25 minutes
 - 1 hour (cap)
 
-State is stored in `auth-state.json` under `usageStats`:
+State is stored in the per-agent SQLite auth state under `usageStats`:
 
 ```json
 {
@@ -232,7 +253,7 @@ Not every billing-shaped response is `402`, and not every HTTP `402` lands here.
 Meanwhile temporary `402` usage-window and organization/workspace spend-limit errors are classified as `rate_limit` when the message looks retryable (for example `weekly usage limit exhausted`, `daily limit reached, resets tomorrow`, or `organization spending limit exceeded`). Those stay on the short cooldown/failover path instead of the long billing-disable path.
 </Note>
 
-State is stored in `auth-state.json`:
+State is stored in the per-agent SQLite auth state:
 
 ```json
 {

@@ -1,3 +1,4 @@
+// Signal tests cover client adapter plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   signalRpcRequest as signalRpcRequestImpl,
@@ -107,17 +108,13 @@ function expectRpcCall(params: {
   expect(method).toBe(params.method);
   if (params.rpcParams) {
     expectFields(requireRecord(rpcParams, "rpc params"), params.rpcParams);
-  } else {
-    if (rpcParams === undefined) {
-      throw new Error("expected rpc params argument");
-    }
+  } else if (rpcParams === undefined) {
+    throw new Error("expected rpc params argument");
   }
   if (params.options) {
     expectFields(requireRecord(options, "rpc options"), params.options);
-  } else {
-    if (options === undefined) {
-      throw new Error("expected rpc options argument");
-    }
+  } else if (options === undefined) {
+    throw new Error("expected rpc options argument");
   }
 }
 
@@ -166,7 +163,10 @@ describe("detectSignalApiMode", () => {
 
   it("prefers native even when the container probe resolves first", async () => {
     mockNativeCheck.mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, status: 200 }), 1)),
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ ok: true, status: 200 }), 1);
+        }),
     );
     mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
 

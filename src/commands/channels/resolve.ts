@@ -1,3 +1,9 @@
+// Implements `openclaw channels resolve` for provider-specific user/group target resolution.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelResolveKind,
@@ -17,11 +23,6 @@ import {
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
 export type ChannelsResolveOptions = {
@@ -120,6 +121,7 @@ function formatResolveResult(result: ResolveResult): string {
   return `${result.input} -> ${result.id}${name}${note}`;
 }
 
+/** Resolve user/group/channel labels into plugin-specific stable target ids. */
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const loadedRaw = getRuntimeConfig();
@@ -207,7 +209,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 
-  let results: ResolveResult[] = [];
+  let results: ResolveResult[];
   if (preferredKind) {
     const resolved = await plugin.resolver.resolveTargets({
       cfg,

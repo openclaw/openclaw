@@ -1,3 +1,4 @@
+// Verifies channel metadata validation and plugin capability lookups.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -381,7 +382,7 @@ describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () =
   });
 
   it("loads a plugin metadata snapshot once during plugin validation", () => {
-    const loadPluginMetadataSnapshot = vi.fn((configForTest: unknown) => ({
+    const loadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) => ({
       manifestRegistry: createPluginConfigSchemaRegistry(),
     }));
 

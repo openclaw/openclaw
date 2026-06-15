@@ -1,3 +1,4 @@
+// Feishu tests cover streaming card plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -180,7 +181,7 @@ describe("FeishuStreamingSession", () => {
 
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: " small",
+      content: "hello small",
       sequence: 2,
       uuid: "s_card_1_2",
     });
@@ -212,13 +213,13 @@ describe("FeishuStreamingSession", () => {
 
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "!",
+      content: "hello!",
       sequence: 2,
       uuid: "s_card_2_2",
     });
   });
 
-  it("retries unsent suffix content after a failed delta update", async () => {
+  it("retries cumulative content after a failed streaming update", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_000);
     const updateBodies: string[] = [];
@@ -245,18 +246,18 @@ describe("FeishuStreamingSession", () => {
 
     expect(updateBodies).toHaveLength(2);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: " world",
+      content: "hello world",
       sequence: 2,
       uuid: "s_card_3_2",
     });
     expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
-      content: " world!",
+      content: "hello world!",
       sequence: 3,
       uuid: "s_card_3_3",
     });
   });
 
-  it("retries unsent suffix content after a non-OK delta update", async () => {
+  it("retries cumulative content after a non-OK streaming update", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_500);
     const updateBodies: string[] = [];
@@ -283,12 +284,12 @@ describe("FeishuStreamingSession", () => {
 
     expect(updateBodies).toHaveLength(2);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: " world",
+      content: "hello world",
       sequence: 2,
       uuid: "s_card_5_2",
     });
     expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
-      content: " world!",
+      content: "hello world!",
       sequence: 3,
       uuid: "s_card_5_3",
     });
@@ -380,6 +381,43 @@ describe("FeishuStreamingSession", () => {
     expect(replaceBodies).toHaveLength(1);
     expect(log).toHaveBeenCalledWith(
       "Final replace failed: Error: Replace card content failed with HTTP 500",
+    );
+  });
+
+  it("reports no visible content when final close update fails before any accepted text", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_800);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
+    const log = vi.fn();
+
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_final_update_non_ok",
+        appSecret: "secret",
+      },
+      log,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_7",
+        messageId: "om_7",
+        sequence: 1,
+        currentText: "",
+        sentText: "",
+        hasNote: false,
+      },
+      lastUpdateTime: 3_000,
+    });
+
+    await expect(session.close("final answer")).resolves.toBe(false);
+
+    expect(updateBodies).toHaveLength(1);
+    expect(replaceBodies).toHaveLength(0);
+    expect(log).toHaveBeenCalledWith(
+      "Final update failed: Error: Update card content failed with HTTP 500",
     );
   });
 

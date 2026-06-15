@@ -1,3 +1,4 @@
+// Comfy plugin module implements workflow runtime behavior.
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
@@ -440,7 +441,9 @@ async function waitForLocalHistory(params: {
     }
 
     const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
 }
 
@@ -479,7 +482,9 @@ async function waitForCloudCompletion(params: {
     }
 
     const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
 }
 

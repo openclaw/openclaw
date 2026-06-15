@@ -1,8 +1,8 @@
+// Test project script tests cover fixture project discovery and validation.
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const {
   applyParallelVitestCachePaths,
@@ -107,23 +107,32 @@ const {
   ) => number;
 };
 
-const require = createRequire(import.meta.url);
-const resolveExpectedVitestCliEntry = () => {
-  const vitestPackageJson = require.resolve("vitest/package.json");
-  return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
+const runVitestModulePath = "../../scripts/run-vitest.mjs";
+const { resolveVitestCliEntry, resolveVitestNodeArgs } = (await import(
+  runVitestModulePath
+)) as unknown as {
+  resolveVitestCliEntry: () => string;
+  resolveVitestNodeArgs: (env: NodeJS.ProcessEnv) => string[];
 };
-const resolveExpectedVitestNodeArgs = (env: NodeJS.ProcessEnv) =>
-  ["1", "true", "yes", "on"].includes(env.OPENCLAW_VITEST_ENABLE_MAGLEV?.trim().toLowerCase() ?? "")
-    ? []
-    : ["--no-maglev"];
 const VITEST_NODE_PREFIX = [
   "exec",
   "node",
-  ...resolveExpectedVitestNodeArgs(process.env),
-  resolveExpectedVitestCliEntry(),
+  ...resolveVitestNodeArgs(process.env),
+  resolveVitestCliEntry(),
 ];
 
 describe("test-projects args", () => {
+  beforeAll(() => {
+    for (const target of [
+      "src/gateway/gateway-connection.test-mocks.ts",
+      "extensions/memory-core/src/memory/test-runtime-mocks.ts",
+      "test/helpers/temp-dir.ts",
+      "src/commands/onboard-non-interactive.test-helpers.ts",
+    ]) {
+      buildVitestRunPlans([target]);
+    }
+  });
+
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
     expect(parseTestProjectsArgs(["--", "src/foo.test.ts", "-t", "target"])).toEqual({
       forwardedArgs: ["src/foo.test.ts", "-t", "target"],
@@ -506,25 +515,29 @@ describe("test-projects args", () => {
     ).toBe(1);
   });
 
-  it("keeps conservative core full-suite runs on aggregate shards", () => {
+  it("keeps conservative local full-suite runs on leaf project configs", () => {
     const originalVitestMaxWorkers = process.env.OPENCLAW_VITEST_MAX_WORKERS;
     const originalTestWorkers = process.env.OPENCLAW_TEST_WORKERS;
     const originalProjectParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const originalLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const originalCi = process.env.CI;
+    const originalActions = process.env.GITHUB_ACTIONS;
     try {
       process.env.OPENCLAW_VITEST_MAX_WORKERS = "1";
       delete process.env.OPENCLAW_TEST_WORKERS;
       delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
       delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      delete process.env.CI;
+      delete process.env.GITHUB_ACTIONS;
 
       const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
 
-      expect(configs).toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
-      expect(configs).toContain("test/vitest/vitest.full-core-support-boundary.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.boundary.config.ts");
-      expect(configs).toContain("test/vitest/vitest.full-agentic.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.agents.config.ts");
-      expect(configs).not.toContain("test/vitest/vitest.plugins.config.ts");
+      expect(configs).toContain("test/vitest/vitest.unit-fast.config.ts");
+      expect(configs).toContain("test/vitest/vitest.boundary.config.ts");
+      expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
+      expect(configs).toContain("test/vitest/vitest.plugins.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
     } finally {
       if (originalVitestMaxWorkers === undefined) {
         delete process.env.OPENCLAW_VITEST_MAX_WORKERS;
@@ -545,6 +558,16 @@ describe("test-projects args", () => {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
       } else {
         process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = originalLeafShards;
+      }
+      if (originalCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = originalCi;
+      }
+      if (originalActions === undefined) {
+        delete process.env.GITHUB_ACTIONS;
+      } else {
+        process.env.GITHUB_ACTIONS = originalActions;
       }
     }
   });
@@ -679,6 +702,8 @@ describe("test-projects args", () => {
         includePatterns: [
           "extensions/memory-core/src/memory/index.test.ts",
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
+          "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
+          "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
         ],
         watchMode: false,
       },
@@ -848,9 +873,12 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/scripts/docs-link-audit.test.ts",
           "src/scripts/sync-plugin-versions.test.ts",
+          "test/helpers/temp-dir.test.ts",
+          "test/scripts/ios-configure-signing.test.ts",
           "test/scripts/ios-pin-version.test.ts",
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
+          "test/scripts/report-test-temp-creations.test.ts",
           "test/test-env.test.ts",
           "test/vitest-scoped-config.test.ts",
         ],
@@ -929,11 +957,11 @@ describe("test-projects args", () => {
   });
 
   it("routes direct OpenAI provider extension file targets to the OpenAI provider config", () => {
-    expect(buildVitestRunPlans(["extensions/openai/openai-codex-provider.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["extensions/openai/openai-chatgpt-provider.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.extension-provider-openai.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/openai/openai-codex-provider.test.ts"],
+        includePatterns: ["extensions/openai/openai-chatgpt-provider.test.ts"],
         watchMode: false,
       },
     ]);

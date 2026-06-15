@@ -1,4 +1,8 @@
+/**
+ * Updates persisted session metadata after agent command runs.
+ */
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   canonicalizeAbsoluteSessionFilePath,
   mergeSessionEntry,
@@ -13,7 +17,6 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
@@ -52,6 +55,7 @@ function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntr
   return next;
 }
 
+/** Applies run result metadata, usage, and CLI bindings to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
   contextTokensOverride?: number;
@@ -108,15 +112,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const contextTokens =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
-      : typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
-        ? params.contextTokensOverride
-        : ((await getContextModule()).resolveContextTokensForModel({
-            cfg,
-            provider: providerUsed,
-            model: modelUsed,
-            fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-            allowAsyncLoad: false,
-          }) ?? DEFAULT_CONTEXT_TOKENS);
+      : ((await getContextModule()).resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          contextTokensOverride: params.contextTokensOverride,
+          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
@@ -182,12 +185,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
     });
   }
   if (!preserveUserFacingRunState) {
-    if (agentHarnessId) {
-      next.agentHarnessId = agentHarnessId;
-    } else if (result.meta.executionTrace?.runner === "cli") {
-      next.agentHarnessId = undefined;
+    if (!preserveRuntimeModel) {
+      if (agentHarnessId) {
+        next.agentHarnessId = agentHarnessId;
+      } else if (result.meta.executionTrace?.runner === "cli") {
+        next.agentHarnessId = undefined;
+      }
     }
-    if (isCliProvider(providerUsed, cfg)) {
+    if (!preserveRuntimeModel && isCliProvider(providerUsed, cfg)) {
       const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
       if (result.meta.agentMeta?.clearCliSessionBinding === true) {
         clearCliSession(next, providerUsed);
@@ -302,7 +307,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
     {
       takeCacheOwnership: true,
       maintenanceConfig,
-      resolveSingleEntryPersistence: (entry) => (entry ? { sessionKey, entry } : undefined),
+      resolveSingleEntryPersistence: (entryLocal) =>
+        entryLocal ? { sessionKey, entry: entryLocal } : undefined,
     },
   );
   if (persisted) {
@@ -310,6 +316,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
 }
 
+/** Clears a stored CLI session binding after a failed or invalidated run. */
 export async function clearCliSessionInStore(params: {
   provider: string;
   sessionKey: string;
@@ -335,6 +342,7 @@ export async function clearCliSessionInStore(params: {
   return persisted;
 }
 
+/** Records CLI compaction metadata on the persisted session entry. */
 export async function recordCliCompactionInStore(params: {
   provider: string;
   sessionKey: string;

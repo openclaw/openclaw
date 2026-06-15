@@ -1,3 +1,4 @@
+// Discord helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const discordChannelConfigUiHints = {
@@ -16,6 +17,22 @@ export const discordChannelConfigUiHints = {
   configWrites: {
     label: "Discord Config Writes",
     help: "Allow Discord to write config in response to channel events/commands (default: true).",
+  },
+  mentionPatterns: {
+    label: "Discord Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Discord channel IDs. Native Discord @mentions still trigger even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Discord Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Discord Mention Pattern Allowlist",
+    help: "Discord channel IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Discord Mention Pattern Denylist",
+    help: "Discord channel IDs where configured regex mention patterns are disabled. Native @mentions still trigger.",
   },
   proxy: {
     label: "Discord Proxy URL",
@@ -195,7 +212,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.model": {
     label: "Discord Voice Model",
-    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai-codex/gpt-5.5). Leave unset to inherit the routed agent model.",
+    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai/gpt-5.5). Leave unset to inherit the routed agent model.",
   },
   "voice.mode": {
     label: "Discord Voice Mode",

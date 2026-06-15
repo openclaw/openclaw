@@ -1,3 +1,4 @@
+// LLM Runtime module implements stream behavior.
 import type {
   Api,
   AssistantMessage,
@@ -8,8 +9,6 @@ import type {
   SimpleStreamOptions,
   StreamOptions,
 } from "../../llm-core/src/index.js";
-// Type-only source import keeps plugin SDK declarations self-contained; package
-// runtime emits no llm-core import from this module.
 import { getApiProvider } from "./api-registry.js";
 
 function resolveApiProvider(api: Api) {
@@ -20,6 +19,7 @@ function resolveApiProvider(api: Api) {
   return provider;
 }
 
+/** Streams a provider turn through the registered implementation for the model API. */
 export function stream<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
@@ -29,6 +29,7 @@ export function stream<TApi extends Api>(
   return provider.stream(model, context, options as StreamOptions);
 }
 
+/** Runs a provider turn and resolves the final assistant message result. */
 export async function complete<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
@@ -38,6 +39,7 @@ export async function complete<TApi extends Api>(
   return s.result();
 }
 
+/** Streams a simple provider turn through the registered implementation for the model API. */
 export function streamSimple<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
@@ -47,6 +49,7 @@ export function streamSimple<TApi extends Api>(
   return provider.streamSimple(model, context, options);
 }
 
+/** Runs a simple provider turn and resolves the final assistant message result. */
 export async function completeSimple<TApi extends Api>(
   model: Model<TApi>,
   context: Context,

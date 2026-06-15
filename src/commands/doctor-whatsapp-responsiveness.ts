@@ -1,3 +1,4 @@
+/** Doctor hints for WhatsApp responsiveness when local TUI clients block gateway work. */
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -51,6 +52,7 @@ function parsePsPidLine(line: string): LocalTuiProcess | null {
   return { pid, command };
 }
 
+/** Lists local OpenClaw TUI processes that can contend with gateway responsiveness. */
 export function listLocalTuiProcesses(): LocalTuiProcess[] {
   if (process.platform === "win32") {
     return [];
@@ -101,9 +103,12 @@ function isProcessAlive(controller: ProcessController, pid: number): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
+/** Terminates local TUI processes with SIGTERM, then SIGKILL for remaining pids. */
 export async function terminateLocalTuiProcesses(params: {
   processes: LocalTuiProcess[];
   controller?: ProcessController;
@@ -143,6 +148,7 @@ export async function terminateLocalTuiProcesses(params: {
   return { stopped, failed };
 }
 
+/** Emits WhatsApp responsiveness warnings and optionally stops contending local TUI clients. */
 export async function noteWhatsappResponsivenessHealth(params: {
   cfg: OpenClawConfig;
   status?: Pick<StatusSummary, "eventLoop"> | null;

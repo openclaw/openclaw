@@ -1,3 +1,4 @@
+// Synology Chat tests cover client plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
@@ -180,7 +181,7 @@ describe("sendMessage", () => {
     if (!request) {
       throw new Error("expected Synology Chat webhook request");
     }
-    const body = vi.mocked(request.write).mock.calls[0]?.[0];
+    const body = vi.mocked(request["write"]).mock.calls[0]?.[0];
     if (typeof body !== "string") {
       throw new Error("expected Synology Chat webhook body");
     }
@@ -199,7 +200,7 @@ describe("sendMessage", () => {
     if (!request) {
       throw new Error("expected Synology Chat webhook request");
     }
-    const body = vi.mocked(request.write).mock.calls[0]?.[0];
+    const body = vi.mocked(request["write"]).mock.calls[0]?.[0];
     if (typeof body !== "string") {
       throw new Error("expected Synology Chat webhook body");
     }

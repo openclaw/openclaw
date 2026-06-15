@@ -1,3 +1,5 @@
+// Runtime fetch adapter preserves undici dispatcher support and normalizes
+// headers/FormData before calling the runtime fetch implementation.
 import type { Dispatcher } from "undici";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
 import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
@@ -23,6 +25,8 @@ function normalizeRuntimeFormData(
   body: unknown,
   RuntimeFormData: RuntimeFormDataCtor | undefined,
 ): BodyInit | null | undefined {
+  // Node global FormData and undici runtime FormData can differ; rebuild into
+  // the runtime constructor so multipart uploads stream correctly.
   if (!isFormDataLike(body) || typeof RuntimeFormData !== "function") {
     return body as BodyInit | null | undefined;
   }
@@ -30,6 +34,8 @@ function normalizeRuntimeFormData(
     return body;
   }
 
+  // Node's global FormData and undici's runtime FormData can be different
+  // constructors. Rebuild entries so runtime fetch can stream multipart bodies.
   const next = new RuntimeFormData();
   for (const [key, value] of body.entries()) {
     const namedValue = value as FormDataEntryValueWithOptionalName;
@@ -66,6 +72,8 @@ function normalizeRuntimeRequestInit(
     return initWithNormalizedHeaders;
   }
 
+  // The rebuilt FormData will choose its own boundary and length; stale caller
+  // values make undici send an invalid multipart request.
   const headers = new Headers(normalizedHeaders);
   headers.delete("content-length");
   headers.delete("content-type");
@@ -76,6 +84,7 @@ function normalizeRuntimeRequestInit(
   };
 }
 
+/** Returns true for Vitest-style mocked fetch functions that should stay injectable. */
 export function isMockedFetch(fetchImpl: FetchLike | undefined): boolean {
   if (typeof fetchImpl !== "function") {
     return false;
@@ -83,6 +92,7 @@ export function isMockedFetch(fetchImpl: FetchLike | undefined): boolean {
   return typeof (fetchImpl as FetchLike & { mock?: unknown }).mock === "object";
 }
 
+/** Uses the undici runtime fetch so callers can pass dispatcher-aware options. */
 export async function fetchWithRuntimeDispatcher(
   input: RequestInfo | URL,
   init?: DispatcherAwareRequestInit,
@@ -98,6 +108,10 @@ export async function fetchWithRuntimeDispatcher(
   )) as Response;
 }
 
+/**
+ * Uses test-injected global fetch when present, otherwise preserves dispatcher
+ * support by routing through the undici runtime fetch.
+ */
 export async function fetchWithRuntimeDispatcherOrMockedGlobal(
   input: RequestInfo | URL,
   init?: DispatcherAwareRequestInit,

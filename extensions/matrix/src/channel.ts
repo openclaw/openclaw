@@ -1,3 +1,4 @@
+// Matrix plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
@@ -542,9 +543,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
         probeAccount: async ({ account, timeoutMs, cfg }) =>
           await createMatrixProbeAccount({
-            resolveMatrixAuth: async ({ cfg, accountId }) =>
+            resolveMatrixAuth: async ({ cfg: cfgLocal, accountId }) =>
               (await loadMatrixChannelRuntime()).resolveMatrixAuth({
-                cfg,
+                cfg: cfgLocal,
                 accountId,
               }),
             probeMatrix: async (params) =>

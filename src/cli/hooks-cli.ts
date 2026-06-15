@@ -1,3 +1,4 @@
+// Hooks CLI for listing, checking, toggling, installing, and updating hook integrations.
 import type { Command } from "commander";
 import {
   decorativeEmoji,
@@ -50,6 +51,7 @@ function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntr
 }
 
 function buildHooksReport(config: OpenClawConfig): HookStatusReport {
+  // Plugin-managed and workspace hooks share one resolved policy view for status/actions.
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
   const pluginReport = buildPluginDiagnosticsReport({ config, workspaceDir });
@@ -530,6 +532,10 @@ export function registerHooksCli(program: Command): void {
     .requiredOption("--relay-id <id>", "Native hook relay id")
     .option("--generation <generation>", "Native hook relay registration generation")
     .requiredOption("--event <event>", "Native hook event")
+    .option(
+      "--pre-tool-use-unavailable <mode>",
+      "PreToolUse fallback mode when the originating relay is unavailable",
+    )
     .option("--timeout <ms>", "Gateway timeout in ms", "5000")
     .action(async (opts: NativeHookRelayCliOptions) =>
       runHooksCliAction(async () => {
@@ -547,7 +553,7 @@ export function registerHooksCli(program: Command): void {
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
       );
-      await runPluginInstallCommand({ raw, opts });
+      await runPluginInstallCommand({ raw, opts, invalidateRuntimeCache: false });
     });
 
   hooks

@@ -1,3 +1,4 @@
+// Openai tests cover openclaw.plugin plugin behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -29,7 +30,23 @@ const manifest = JSON.parse(
   setup?: {
     providers?: Array<{ id: string }>;
   };
+  modelCatalog?: {
+    suppressions?: Array<{
+      provider?: string;
+      model?: string;
+      when?: {
+        baseUrlHosts?: string[];
+        providerConfigApiIn?: string[];
+      };
+    }>;
+  };
+  providerEndpoints?: Array<{
+    endpointClass?: string;
+    hosts?: string[];
+    hostSuffixes?: string[];
+  }>;
   providerAuthAliases?: Record<string, string>;
+  legacyPluginIds?: string[];
 };
 
 const packageJson = JSON.parse(
@@ -95,17 +112,33 @@ describe("OpenAI plugin manifest", () => {
     expect(packageJson.dependencies?.ws).toBe("8.21.0");
   });
 
-  it("keeps removed Codex CLI import auth choice as a deprecated OpenAI login alias", () => {
+  it("exposes only current OpenAI login choices", () => {
     const openAiLogin = manifest.providerAuthChoices?.find(
       (choice) => choice.choiceId === "openai",
     );
 
-    expect(openAiLogin?.deprecatedChoiceIds).toContain("openai-codex-import");
+    expect(openAiLogin?.deprecatedChoiceIds).toBeUndefined();
   });
 
-  it("keeps legacy OpenAI Codex setup lookup routed to the OpenAI setup runtime", () => {
+  it("routes setup through the OpenAI setup runtime", () => {
+    expect(manifest.legacyPluginIds).toBeUndefined();
     expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
-    expect(manifest.providerAuthAliases?.["openai-codex"]).toBe("openai");
+    expect(manifest.providerAuthAliases).toBeUndefined();
+  });
+
+  it("classifies ChatGPT backend traffic with the supported OpenAI endpoint class", () => {
+    const chatGptEndpoint = manifest.providerEndpoints?.find((endpoint) =>
+      endpoint.hosts?.includes("chatgpt.com"),
+    );
+    expect(chatGptEndpoint?.endpointClass).toBe("openai");
+  });
+
+  it("classifies regional API hosts as public OpenAI endpoints", () => {
+    const publicEndpoint = manifest.providerEndpoints?.find((endpoint) =>
+      endpoint.hosts?.includes("api.openai.com"),
+    );
+    expect(publicEndpoint?.endpointClass).toBe("openai-public");
+    expect(publicEndpoint?.hostSuffixes).toContain(".api.openai.com");
   });
 
   it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
@@ -149,6 +182,17 @@ describe("OpenAI plugin manifest", () => {
     );
     expect(choices.map((choice) => choice.groupHint)).not.toContain("Codex OAuth + API key");
     expect(choices.map((choice) => choice.groupHint)).not.toContain("API key or Codex sign-in");
+  });
+
+  it("keeps Spark suppression conditional on direct OpenAI API rows", () => {
+    const sparkSuppression = manifest.modelCatalog?.suppressions?.find(
+      (suppression) =>
+        suppression.provider === "openai" && suppression.model === "gpt-5.3-codex-spark",
+    );
+
+    expect(sparkSuppression?.when).toEqual({
+      baseUrlHosts: ["api.openai.com"],
+    });
   });
 
   it("keeps auth choice copy aligned with provider wizard metadata", () => {

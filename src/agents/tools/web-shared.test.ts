@@ -1,9 +1,15 @@
+// Shared web helper tests cover timeout normalization and process-local cache
+// expiry guards.
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+} from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_SECONDS } from "../../shared/number-coercion.js";
 import {
   readCache,
   resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
+  withTimeout,
   writeCache,
   type CacheEntry,
 } from "./web-shared.js";
@@ -28,6 +34,8 @@ describe("web shared timeout seconds", () => {
   });
 
   it("drops cached values while the process clock is invalid", () => {
+    // Bad system clocks can make cache expiry nonsensical; fail closed instead
+    // of serving stale web data indefinitely.
     const cache = new Map<string, CacheEntry<string>>();
     writeCache(cache, "key", "old", 60_000);
     expect(readCache(cache, "key")?.value).toBe("old");
@@ -62,5 +70,19 @@ describe("web shared timeout seconds", () => {
     expect(cache.size).toBe(100);
     expect(cache.get("key-0")?.value).toBe("value-0");
     expect(cache.has("invalid")).toBe(false);
+  });
+});
+
+describe("web shared withTimeout", () => {
+  it("clamps oversized timeoutMs before scheduling", () => {
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+
+    const signal = withTimeout(undefined, Number.MAX_SAFE_INTEGER);
+    signal.dispatchEvent(new Event("abort"));
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });

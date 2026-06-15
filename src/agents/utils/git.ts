@@ -1,8 +1,11 @@
+/**
+ * Git source parsing helpers.
+ *
+ * Normalizes git-style package references into clone URL, host/path, and optional ref metadata.
+ */
 import hostedGitInfo from "hosted-git-info";
 
-/**
- * Parsed git URL information.
- */
+/** Parsed git URL information. */
 export type GitSource = {
   /** Always "git" for git sources */
   type: "git";
@@ -79,8 +82,8 @@ function splitRef(url: string): { repo: string; ref?: string } {
 function parseGenericGitUrl(url: string): GitSource | null {
   const { repo: repoWithoutRef, ref } = splitRef(url);
   let repo = repoWithoutRef;
-  let host = "";
-  let path = "";
+  let host;
+  let path;
 
   const scpLikeMatch = repoWithoutRef.match(/^git@([^:]+):(.+)$/);
   if (scpLikeMatch) {

@@ -1,3 +1,4 @@
+// Covers miscellaneous config schema defaults and validation cases.
 import { describe, expect, it } from "vitest";
 import {
   getConfigValueAtPath,
@@ -475,6 +476,32 @@ describe("ui.seamColor", () => {
   it("rejects invalid hex length", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500FF" } });
     expect(res.ok).toBe(false);
+  });
+});
+
+describe("tui.footer.showRemoteHost", () => {
+  it("accepts the TUI remote-host footer toggle", () => {
+    const result = OpenClawSchema.safeParse({
+      tui: {
+        footer: {
+          showRemoteHost: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown TUI footer keys", () => {
+    const result = OpenClawSchema.safeParse({
+      tui: {
+        footer: {
+          showLocalHost: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 

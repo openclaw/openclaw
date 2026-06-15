@@ -1,3 +1,4 @@
+// Normalizes MCP server config for runtime launch and validation.
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
 import {
@@ -31,6 +32,7 @@ type ConfigMcpWriteResult =
     }
   | { ok: false; path: string; error: string };
 
+/** Include/exclude tool selection stored for a configured MCP server. */
 export type McpServerToolSelection = {
   include?: string[];
   exclude?: string[];
@@ -118,6 +120,59 @@ export async function updateConfiguredMcpServerTools(params: {
       ok: false,
       path: loaded.path,
       error: `Config invalid after MCP tool selection update (${issue.path}: ${issue.message}).`,
+    };
+  }
+  await replaceConfigFile({
+    nextConfig: validated.config,
+    baseHash: loaded.baseHash,
+  });
+  return {
+    ok: true,
+    path: loaded.path,
+    config: validated.config,
+    mcpServers: servers,
+    updated: true,
+  };
+}
+
+export async function updateConfiguredMcpServer(params: {
+  name: string;
+  update: (server: Record<string, unknown>) => Record<string, unknown>;
+}): Promise<ConfigMcpWriteResult> {
+  const name = params.name.trim();
+  if (!name) {
+    return { ok: false, path: "", error: "MCP server name is required." };
+  }
+
+  const loaded = await listConfiguredMcpServers();
+  if (!loaded.ok) {
+    return loaded;
+  }
+  if (!Object.hasOwn(loaded.mcpServers, name)) {
+    return {
+      ok: true,
+      path: loaded.path,
+      config: loaded.config,
+      mcpServers: loaded.mcpServers,
+      updated: false,
+    };
+  }
+
+  const next = structuredClone(loaded.config);
+  const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
+  servers[name] = canonicalizeConfiguredMcpServer(params.update({ ...servers[name] }));
+  next.mcp = {
+    ...next.mcp,
+    servers,
+  };
+
+  const validated = validateConfigObjectWithPlugins(next);
+  if (!validated.ok) {
+    const issue = validated.issues[0];
+    return {
+      ok: false,
+      path: loaded.path,
+      error: `Config invalid after MCP configure (${issue.path}: ${issue.message}).`,
     };
   }
   await replaceConfigFile({

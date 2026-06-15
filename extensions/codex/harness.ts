@@ -1,5 +1,10 @@
+/**
+ * Codex app-server agent harness registration and lazy runtime boundaries.
+ */
 import type {
   AgentHarness,
+  AgentHarnessCompactParams,
+  AgentHarnessCompactResult,
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
@@ -8,7 +13,7 @@ import type {
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
 
-const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai-codex", "openai"]);
+const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",
@@ -19,8 +24,19 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "thread-bootstrap-projection",
 ] as const satisfies readonly ContextEngineHostCapability[];
 
+/** Public model-listing types exposed for Codex app-server catalog callers. */
 export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
 
+type CodexAppServerAgentHarness = AgentHarness & {
+  compactAfterContextEngine?(
+    params: AgentHarnessCompactParams,
+  ): Promise<AgentHarnessCompactResult | undefined>;
+};
+
+/**
+ * Creates the Codex app-server harness used for attempts, side questions,
+ * compaction, reset, and disposal.
+ */
 export function createCodexAppServerAgentHarness(options?: {
   id?: string;
   label?: string;
@@ -33,7 +49,7 @@ export function createCodexAppServerAgentHarness(options?: {
       id.trim().toLowerCase(),
     ),
   );
-  return {
+  const harness: CodexAppServerAgentHarness = {
     id: options?.id ?? "codex",
     label: options?.label ?? "Codex agent harness",
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
@@ -51,6 +67,8 @@ export function createCodexAppServerAgentHarness(options?: {
       };
     },
     runAttempt: async (params) => {
+      // Keep app-server runtime code behind lazy imports so plugin discovery and
+      // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
@@ -70,6 +88,13 @@ export function createCodexAppServerAgentHarness(options?: {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
+    compactAfterContextEngine: async (params) => {
+      const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
+      return maybeCompactCodexAppServerSession(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        allowNonManualNativeRequest: true,
+      });
+    },
     reset: async (params) => {
       if (params.sessionFile) {
         const { clearCodexAppServerBinding } = await import("./src/app-server/session-binding.js");
@@ -82,4 +107,5 @@ export function createCodexAppServerAgentHarness(options?: {
       await clearSharedCodexAppServerClientAndWait();
     },
   };
+  return harness;
 }

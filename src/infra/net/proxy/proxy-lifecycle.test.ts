@@ -1,3 +1,5 @@
+// Exercises managed proxy lifecycle ownership, env inheritance, Proxyline
+// reuse, loopback bypass policy, TLS trust, and cleanup behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,13 +11,13 @@ const {
   proxylineStopMock,
   proxylineUnregisterBypassMock,
 } = vi.hoisted(() => {
-  const proxylineStopMock = vi.fn();
-  const proxylineUnregisterBypassMock = vi.fn();
-  const proxylineRegisterBypassMock = vi.fn(() => proxylineUnregisterBypassMock);
+  const proxylineStopMockLocal = vi.fn();
+  const proxylineUnregisterBypassMockLocal = vi.fn();
+  const proxylineRegisterBypassMockLocal = vi.fn(() => proxylineUnregisterBypassMockLocal);
   return {
-    proxylineRegisterBypassMock,
-    proxylineStopMock,
-    proxylineUnregisterBypassMock,
+    proxylineRegisterBypassMock: proxylineRegisterBypassMockLocal,
+    proxylineStopMock: proxylineStopMockLocal,
+    proxylineUnregisterBypassMock: proxylineUnregisterBypassMockLocal,
     installGlobalProxyMock: vi.fn(() => ({
       active: true,
       createNodeAgent: vi.fn(),
@@ -23,8 +25,8 @@ const {
       createWebSocketAgent: vi.fn(),
       explain: vi.fn(),
       mode: "managed",
-      registerBypass: proxylineRegisterBypassMock,
-      stop: proxylineStopMock,
+      registerBypass: proxylineRegisterBypassMockLocal,
+      stop: proxylineStopMockLocal,
       withBypass: vi.fn(),
     })),
   };
@@ -115,6 +117,8 @@ describe("startProxy", () => {
   });
 
   afterEach(() => {
+    resetProxyLifecycleForTests();
+    resetActiveManagedProxyStateForTests();
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }

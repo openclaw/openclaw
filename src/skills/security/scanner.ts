@@ -1,3 +1,4 @@
+// Skill security scanner inspects skill files and manifests for unsafe patterns.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../../infra/errors.js";
@@ -588,7 +589,7 @@ async function walkDirWithLimit(
 }
 
 async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
-  let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
+  let st: Awaited<ReturnType<typeof fs.stat>> | null;
   try {
     st = await fs.stat(dirPath);
   } catch (err) {
@@ -645,7 +646,7 @@ async function resolveForcedFiles(params: {
       continue;
     }
 
-    let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
+    let st: Awaited<ReturnType<typeof fs.stat>> | null;
     try {
       st = await fs.stat(includePath);
     } catch (err) {
@@ -713,7 +714,7 @@ async function scanFileWithCache(params: {
   maxFileBytes: number;
 }): Promise<{ scanned: boolean; findings: SkillScanFinding[] }> {
   const { filePath, maxFileBytes } = params;
-  let st: Awaited<ReturnType<typeof fs.stat>> | null = null;
+  let st: Awaited<ReturnType<typeof fs.stat>> | null;
   try {
     st = await fs.stat(filePath);
   } catch (err) {

@@ -1,3 +1,5 @@
+// Image runtime tests cover model-backed image routing, auth/profile handling,
+// provider payload transforms, and MiniMax/Copilot special paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -55,6 +57,8 @@ function requireMockCallAt<const Calls extends readonly unknown[][]>(
   index: number,
   label: string,
 ): Calls[number] {
+  // Tests inspect exact dependency calls because image runtime behavior is
+  // mostly provider/auth orchestration.
   const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`Expected ${label} call ${index}`);
@@ -765,7 +769,7 @@ describe("describeImageWithModel", () => {
   it("passes image prompt as system instructions for codex image requests", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.4",
         input: ["text", "image"],
         baseUrl: "https://chatgpt.com/backend-api",
@@ -773,8 +777,8 @@ describe("describeImageWithModel", () => {
     });
     completeMock.mockResolvedValue({
       role: "assistant",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       model: "gpt-5.4",
       stopReason: "stop",
       timestamp: Date.now(),
@@ -784,7 +788,7 @@ describe("describeImageWithModel", () => {
     const result = await describeImageWithModel({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       buffer: Buffer.from("png-bytes"),
       fileName: "image.png",
@@ -801,7 +805,7 @@ describe("describeImageWithModel", () => {
     const firstCall = requireFirstMockCall(completeMock, "image completion");
     const [completionModel, context, options] = firstCall;
     expect(completionModel).toEqual({
-      provider: "openai-codex",
+      provider: "openai",
       id: "gpt-5.4",
       input: ["text", "image"],
       baseUrl: "https://chatgpt.com/backend-api",
@@ -1025,16 +1029,81 @@ describe("describeImageWithModel", () => {
       timeoutMs: 25,
     });
 
-    const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
+    const assertion = expect(result).rejects.toThrow(
+      "image description request timed out after 25ms",
+    );
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
     const firstCall = requireFirstMockCall(completeMock, "timed image completion");
-    const [, , options] = firstCall;
+    const options = firstCall[2];
     if (!options?.signal) {
       throw new Error("Expected image completion abort signal");
     }
     expect(options.signal.aborted).toBe(true);
     expect(options.timeoutMs).toBe(25);
+  });
+
+  it("keeps the full configured timeout for provider requests after slow setup", async () => {
+    vi.useFakeTimers();
+    const slowSetupMs = 400;
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    resolveModelAsyncMock.mockImplementationOnce(
+      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, slowSetupMs);
+        });
+        const authStorage = {
+          setRuntimeApiKey: setRuntimeApiKeyMock,
+        };
+        const modelRegistry = discoverModelsMock(authStorage, agentDir);
+        const model = resolveModelWithRegistryMock({
+          provider,
+          modelId,
+          modelRegistry,
+          cfg,
+          agentDir,
+        });
+        return { authStorage, model, modelRegistry };
+      },
+    );
+    completeMock.mockImplementation(() => new Promise(() => {}));
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    await vi.advanceTimersByTimeAsync(slowSetupMs);
+    await Promise.resolve();
+    expect(completeMock).toHaveBeenCalledTimes(1);
+    const firstCall = requireFirstMockCall(completeMock, "slow setup image completion");
+    const options = firstCall[2];
+    if (!options?.signal) {
+      throw new Error("Expected image completion abort signal");
+    }
+    expect(options.timeoutMs).toBe(1000);
+
+    const assertion = expect(result).rejects.toThrow(
+      `image description request timed out after 1000ms (setup took ${slowSetupMs}ms before provider request started)`,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    await assertion;
+    expect(options.signal.aborted).toBe(true);
   });
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {
@@ -1053,7 +1122,9 @@ describe("describeImageWithModel", () => {
       timeoutMs: 25,
     });
 
-    const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
+    const assertion = expect(result).rejects.toThrow(
+      "image description setup timed out after 25ms before provider request started",
+    );
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
     expect(completeMock).not.toHaveBeenCalled();
@@ -1322,7 +1393,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    const options = requireFirstMockCall(completeMock, "image completion")[2];
     expect(options.maxTokens).toBe(4096);
   });
 
@@ -1359,7 +1430,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    const options = requireFirstMockCall(completeMock, "image completion")[2];
     expect(options.maxTokens).toBe(1024);
   });
 });

@@ -1,10 +1,12 @@
-import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
+// Chat command invocation helpers execute skill-provided chat command handlers.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
 import type { SkillCommandSpec } from "../types.js";
 
+/** Lists slash command names reserved by built-in chat commands and callers. */
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
   const reserved = new Set<string>();
   for (const command of getChatCommands()) {
@@ -28,6 +30,7 @@ export function listReservedChatSlashCommandNames(extraNames: string[] = []): Se
   return reserved;
 }
 
+// Skill commands allow spaces/underscores in names but compare through dash-normalized lookup.
 function normalizeSkillCommandLookup(value: string): string {
   return (normalizeOptionalLowercaseString(value) ?? "").replace(/[\s_]+/g, "-");
 }

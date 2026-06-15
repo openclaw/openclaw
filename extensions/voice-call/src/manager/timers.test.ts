@@ -1,3 +1,4 @@
+// Voice Call tests cover timers plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -132,7 +133,9 @@ describe("voice-call manager timers", () => {
     rejectTranscriptWaiter(ctx as never, "call-2", "provider failed");
     await expect(another).rejects.toThrow("provider failed");
 
-    const timedOut = waitForFinalTranscript(ctx as never, "call-3").catch((error) => error);
+    const timedOut = waitForFinalTranscript(ctx as never, "call-3").catch(
+      (error: unknown) => error,
+    );
     await vi.advanceTimersByTimeAsync(1_000);
     const timeoutError = await timedOut;
     expect(timeoutError).toBeInstanceOf(Error);

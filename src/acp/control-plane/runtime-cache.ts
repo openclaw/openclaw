@@ -1,5 +1,11 @@
-import type { AcpRuntime, AcpRuntimeHandle, AcpRuntimeSessionMode } from "../runtime/types.js";
+/** Small touch-aware cache for process-local ACP runtime handles. */
+import type {
+  AcpRuntime,
+  AcpRuntimeHandle,
+  AcpRuntimeSessionMode,
+} from "@openclaw/acp-core/runtime/types";
 
+/** Cached runtime handle plus the configuration signature that made it reusable. */
 export type CachedRuntimeState = {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -16,6 +22,7 @@ type RuntimeCacheEntry = {
   lastTouchedAt: number;
 };
 
+/** Snapshot entry used for idle eviction and cache diagnostics. */
 export type CachedRuntimeSnapshot = {
   actorKey: string;
   state: CachedRuntimeState;
@@ -23,6 +30,7 @@ export type CachedRuntimeSnapshot = {
   idleMs: number;
 };
 
+/** Map-backed cache that tracks last-touch time per actor key. */
 export class RuntimeCache {
   private readonly cache = new Map<string, RuntimeCacheEntry>();
 

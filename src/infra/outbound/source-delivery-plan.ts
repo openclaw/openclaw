@@ -1,7 +1,10 @@
+// Source-delivery plans decide whether final output is visible through the
+// message tool, direct fallback delivery, both, or neither.
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 
+/** Owner responsible for making source delivery visible to the user. */
 export type SourceVisibleDeliveryOwner =
   | "automatic_source"
   | "message_tool"
@@ -9,6 +12,7 @@ export type SourceVisibleDeliveryOwner =
   | "direct_fallback"
   | "none";
 
+/** Reason code explaining why source delivery policy took this shape. */
 export type SourceDeliveryPlanReason =
   | "config"
   | "room_event"
@@ -18,6 +22,7 @@ export type SourceDeliveryPlanReason =
   | "media_completion"
   | "subagent_completion";
 
+/** Configured or inferred destination source delivery must satisfy. */
 export type SourceDeliveryTarget = {
   channel?: string;
   to?: string;
@@ -25,6 +30,7 @@ export type SourceDeliveryTarget = {
   threadId?: string | number;
 };
 
+/** Message-tool destination observed during a run. */
 export type SourceDeliveryMessageToolTarget = {
   tool?: string;
   provider?: string;
@@ -37,12 +43,14 @@ export type SourceDeliveryMessageToolTarget = {
   mediaUrls?: string[];
 };
 
+/** Visible message-tool delivery with target verification state. */
 export type SourceDeliveryVisibleDelivery = {
   via: "message_tool";
   target: SourceDeliveryMessageToolTarget;
   verifiedTarget: boolean;
 };
 
+/** Resolved source-delivery satisfaction result after a run. */
 export type SourceDeliveryOutcome = {
   visibleDeliveries: SourceDeliveryVisibleDelivery[];
   verifiedMessageToolDelivery: boolean;
@@ -50,6 +58,7 @@ export type SourceDeliveryOutcome = {
   unverifiedMessageToolDelivery: boolean;
 };
 
+/** Policy contract that decides message-tool ownership and fallback delivery. */
 export type SourceDeliveryPlan = {
   owner: SourceVisibleDeliveryOwner;
   reason: SourceDeliveryPlanReason;
@@ -60,6 +69,7 @@ export type SourceDeliveryPlan = {
     enabled: boolean;
     force: boolean;
     requireExplicitTarget: boolean;
+    requireExplicitTargetEvidence: boolean;
     defaultTarget: boolean;
   };
   fallback: {
@@ -99,6 +109,8 @@ function deliveryTargetsMatch(channel: string, targetTo: string, deliveryTo: str
     targetKind === deliveryKind &&
     ["channel", "conversation", "group", "user"].includes(targetKind)
   ) {
+    // Some provider-owned ids are case-sensitive while Slack/Discord ids are
+    // compared case-insensitively; decide that before generic target normalization.
     const targetId = targetPrefixed?.[2]?.trim();
     const deliveryId = deliveryPrefixed?.[2]?.trim();
     if (caseSensitivePrefixedTargetProviders.has(channel)) {
@@ -122,6 +134,7 @@ function extractTopicThreadId(targetTo: string): string | undefined {
   return targetTo.match(/:topic:(\d+)$/i)?.[1];
 }
 
+/** Compares a message-tool target with the required source delivery target. */
 export function sourceDeliveryTargetsMatch(
   target: SourceDeliveryMessageToolTarget,
   delivery: SourceDeliveryTarget,
@@ -154,6 +167,7 @@ export function sourceDeliveryTargetsMatch(
   return deliveryThreadId === targetThreadId;
 }
 
+/** Builds a source delivery plan from ownership and fallback inputs. */
 export function createSourceDeliveryPlan(params: {
   owner: SourceVisibleDeliveryOwner;
   reason: SourceDeliveryPlanReason;
@@ -161,6 +175,7 @@ export function createSourceDeliveryPlan(params: {
   messageToolEnabled?: boolean;
   messageToolForced?: boolean;
   requireExplicitMessageTarget?: boolean;
+  requireExplicitMessageTargetEvidence?: boolean;
   directFallback?: boolean;
   skipFallbackWhenMessageToolSentToTarget?: boolean;
   fallbackBestEffort?: boolean;
@@ -184,6 +199,7 @@ export function createSourceDeliveryPlan(params: {
       enabled: params.messageToolEnabled ?? messageToolOwnsDelivery,
       force: params.messageToolForced ?? messageToolOwnsDelivery,
       requireExplicitTarget: params.requireExplicitMessageTarget ?? false,
+      requireExplicitTargetEvidence: params.requireExplicitMessageTargetEvidence ?? false,
       defaultTarget: Boolean(params.target?.channel || params.target?.to),
     },
     fallback: {
@@ -216,6 +232,7 @@ function resolveImplicitMessageToolDeliveryTarget(
   };
 }
 
+/** Evaluates whether observed message-tool sends satisfy the source delivery plan. */
 export function resolveSourceDeliveryOutcome(
   plan: SourceDeliveryPlan,
   params: {
@@ -225,10 +242,12 @@ export function resolveSourceDeliveryOutcome(
 ): SourceDeliveryOutcome {
   const didSendViaMessageTool = params.didSendViaMessageTool === true;
   const explicitTargets = params.messageToolSentTargets ?? [];
+  // Cron completion accounting needs concrete target evidence. Legacy
+  // message-tool-owned flows may still use the plan target as the implicit send.
   const sentTargets =
     explicitTargets.length > 0
       ? explicitTargets
-      : didSendViaMessageTool
+      : didSendViaMessageTool && !plan.messageTool.requireExplicitTargetEvidence
         ? [resolveImplicitMessageToolDeliveryTarget(plan)].filter(
             (target): target is SourceDeliveryMessageToolTarget => Boolean(target),
           )

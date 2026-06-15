@@ -1,10 +1,13 @@
+// Media Generation Core module implements model ref behavior.
 import { normalizeOptionalString } from "./string.js";
 
+/** Provider/model pair parsed from a generation model reference like `provider/model`. */
 export type ParsedGenerationModelRef = {
   provider: string;
   model: string;
 };
 
+/** Parses strict generation model refs and rejects missing provider or model segments. */
 export function parseGenerationModelRef(raw: string | undefined): ParsedGenerationModelRef | null {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Audits docs links, routes, redirects, and Mintlify anchors.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,7 +49,11 @@ function normalizeSlashes(p) {
   return p.replace(/\\/g, "/");
 }
 
-/** @param {string} p */
+/**
+ * Normalizes a docs route by stripping query, hash, and edge slashes.
+ *
+ * @param {string} p
+ */
 export function normalizeRoute(p) {
   const [withoutFragment] = p.split("#");
   const [withoutQuery] = withoutFragment.split("?");
@@ -275,47 +280,71 @@ export function sanitizeDocsConfigForEnglishOnly(value) {
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
-function prepareMirroredDocsDir(sourceDir = DOCS_DIR) {
+/**
+ * Prepares a docs directory, mirroring ClawHub docs when available.
+ *
+ * @param {string} [sourceDir]
+ * @param {{
+ *   resolveClawHubRepoPathImpl?: typeof resolveClawHubRepoPath;
+ *   syncClawHubDocsTreeImpl?: typeof syncClawHubDocsTree;
+ * }} [options]
+ */
+export function prepareMirroredDocsDir(sourceDir = DOCS_DIR, options = {}) {
   const sourceRoot = path.resolve(sourceDir);
   if (sourceRoot !== path.resolve(DOCS_DIR)) {
     return { dir: sourceRoot, mirroredClawHub: false, cleanup: () => {} };
   }
 
-  const clawhubRepo = resolveClawHubRepoPath("", { required: false });
+  const resolveClawHubRepoPathImpl = options.resolveClawHubRepoPathImpl ?? resolveClawHubRepoPath;
+  const syncClawHubDocsTreeImpl = options.syncClawHubDocsTreeImpl ?? syncClawHubDocsTree;
+  const clawhubRepo = resolveClawHubRepoPathImpl("", { required: false });
   if (!clawhubRepo) {
     return { dir: sourceRoot, mirroredClawHub: false, cleanup: () => {} };
   }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-link-audit-"));
-  fs.cpSync(sourceRoot, tempDir, { recursive: true });
-  syncClawHubDocsTree(tempDir, { repoPath: clawhubRepo, required: false });
-  return {
-    dir: tempDir,
-    mirroredClawHub: true,
-    cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
-  };
+  try {
+    fs.cpSync(sourceRoot, tempDir, { recursive: true });
+    syncClawHubDocsTreeImpl(tempDir, { repoPath: clawhubRepo, required: false });
+    return {
+      dir: tempDir,
+      mirroredClawHub: true,
+      cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
+/**
+ * Creates an English-only temporary docs tree for Mintlify anchor checks.
+ */
 export function prepareAnchorAuditDocsDir(sourceDir = DOCS_DIR) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-anchor-audit-"));
-  fs.cpSync(sourceDir, tempDir, { recursive: true });
+  try {
+    fs.cpSync(sourceDir, tempDir, { recursive: true });
 
-  for (const entry of fs.readdirSync(tempDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
+    for (const entry of fs.readdirSync(tempDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (!isGeneratedTranslatedDoc(`${entry.name}/`)) {
+        continue;
+      }
+      fs.rmSync(path.join(tempDir, entry.name), { recursive: true, force: true });
     }
-    if (!isGeneratedTranslatedDoc(`${entry.name}/`)) {
-      continue;
-    }
-    fs.rmSync(path.join(tempDir, entry.name), { recursive: true, force: true });
+
+    const docsJsonPath = path.join(tempDir, "docs.json");
+    const docsConfig = JSON.parse(fs.readFileSync(docsJsonPath, "utf8"));
+    const sanitized = sanitizeDocsConfigForEnglishOnly(docsConfig);
+    fs.writeFileSync(docsJsonPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf8");
+
+    return tempDir;
+  } catch (error) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    throw error;
   }
-
-  const docsJsonPath = path.join(tempDir, "docs.json");
-  const docsConfig = JSON.parse(fs.readFileSync(docsJsonPath, "utf8"));
-  const sanitized = sanitizeDocsConfigForEnglishOnly(docsConfig);
-  fs.writeFileSync(docsJsonPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf8");
-
-  return tempDir;
 }
 
 /** @param {string} version */
@@ -387,6 +416,9 @@ export function resolveMintlifyAnchorAuditInvocation(params) {
   return createMintlifyPnpmRunnerSpawnSpec(params);
 }
 
+/**
+ * Audits local docs links against route, file, and redirect indexes.
+ */
 export function auditDocsLinks(options = {}) {
   const docsDir = options.docsDir ?? DOCS_DIR;
   const index = buildAuditIndex(docsDir, {
@@ -518,6 +550,8 @@ export function auditDocsLinks(options = {}) {
 }
 
 /**
+ * Runs the docs link audit CLI.
+ *
  * @param {{
  *   args?: string[];
  *   comSpec?: string;
@@ -528,6 +562,11 @@ export function auditDocsLinks(options = {}) {
  *   platform?: NodeJS.Platform;
  *   spawnSyncImpl?: typeof spawnSync;
  *   prepareAnchorAuditDocsDirImpl?: (sourceDir?: string) => string;
+ *   prepareMirroredDocsDirImpl?: (sourceDir?: string) => {
+ *     dir: string;
+ *     mirroredClawHub: boolean;
+ *     cleanup: () => void;
+ *   };
  *   cleanupAnchorAuditDocsDirImpl?: (dir: string) => void;
  * }} [options]
  */
@@ -540,10 +579,12 @@ export function runDocsLinkAuditCli(options = {}) {
     const cleanupAnchorAuditDocsDirImpl =
       options.cleanupAnchorAuditDocsDirImpl ??
       ((dir) => fs.rmSync(dir, { recursive: true, force: true }));
-    const mirroredDocsDir = prepareMirroredDocsDir(DOCS_DIR);
-    const anchorDocsDir = prepareAnchorAuditDocsDirImpl(mirroredDocsDir.dir);
+    const prepareMirroredDocsDirImpl = options.prepareMirroredDocsDirImpl ?? prepareMirroredDocsDir;
+    const mirroredDocsDir = prepareMirroredDocsDirImpl(DOCS_DIR);
+    let anchorDocsDir;
 
     try {
+      anchorDocsDir = prepareAnchorAuditDocsDirImpl(mirroredDocsDir.dir);
       // Use the npm Mintlify package explicitly. Some developer machines also
       // have the Swift Package Manager tool named `mint` on PATH, and that
       // binary exits with "command 'broken-links' not found".
@@ -565,7 +606,9 @@ export function runDocsLinkAuditCli(options = {}) {
 
       return result.status ?? 1;
     } finally {
-      cleanupAnchorAuditDocsDirImpl(anchorDocsDir);
+      if (anchorDocsDir) {
+        cleanupAnchorAuditDocsDirImpl(anchorDocsDir);
+      }
       mirroredDocsDir.cleanup();
     }
   }

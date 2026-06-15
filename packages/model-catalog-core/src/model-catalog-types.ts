@@ -1,7 +1,10 @@
+// Shared model catalog data contracts for provider manifests and normalized rows.
+
+/** Supported API protocols for model catalog entries. */
 export const MODEL_CATALOG_APIS = [
   "openai-completions",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "anthropic-messages",
   "google-generative-ai",
   "google-vertex",
@@ -11,8 +14,10 @@ export const MODEL_CATALOG_APIS = [
   "azure-openai-responses",
 ] as const;
 
+/** API protocol for a model catalog entry. */
 export type ModelCatalogApi = (typeof MODEL_CATALOG_APIS)[number];
 
+/** Supported model thinking/reasoning wire formats. */
 export const MODEL_CATALOG_THINKING_FORMATS = [
   "openai",
   "openrouter",
@@ -23,12 +28,15 @@ export const MODEL_CATALOG_THINKING_FORMATS = [
   "zai",
 ] as const;
 
+/** Thinking/reasoning wire format for model compatibility. */
 export type ModelCatalogThinkingFormat = (typeof MODEL_CATALOG_THINKING_FORMATS)[number];
 
+/** Narrow a string to a supported model catalog thinking format. */
 export function isModelCatalogThinkingFormat(value: string): value is ModelCatalogThinkingFormat {
   return (MODEL_CATALOG_THINKING_FORMATS as readonly string[]).includes(value);
 }
 
+/** Compatibility flags and provider-specific routing metadata for one model. */
 export type ModelCatalogCompatConfig = {
   supportsStore?: boolean;
   supportsDeveloperRole?: boolean;
@@ -39,6 +47,14 @@ export type ModelCatalogCompatConfig = {
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
   requiresThinkingAsText?: boolean;
+  openRouterRouting?: ModelCatalogOpenRouterRouting;
+  vercelGatewayRouting?: ModelCatalogVercelGatewayRouting;
+  zaiToolStream?: boolean;
+  cacheControlFormat?: "anthropic";
+  sendSessionAffinityHeaders?: boolean;
+  sendSessionIdHeader?: boolean;
+  supportsEagerToolInputStreaming?: boolean;
+  supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;
   supportsTools?: boolean;
   requiresStringContent?: boolean;
@@ -55,6 +71,55 @@ export type ModelCatalogCompatConfig = {
   visibleReasoningDetailTypes?: string[];
 };
 
+/** OpenRouter routing preferences copied into request metadata. */
+export type ModelCatalogOpenRouterRouting = {
+  allow_fallbacks?: boolean;
+  require_parameters?: boolean;
+  data_collection?: "deny" | "allow";
+  zdr?: boolean;
+  enforce_distillable_text?: boolean;
+  order?: string[];
+  only?: string[];
+  ignore?: string[];
+  quantizations?: string[];
+  sort?:
+    | string
+    | {
+        by?: string;
+        partition?: string | null;
+      };
+  max_price?: {
+    prompt?: number | string;
+    completion?: number | string;
+    image?: number | string;
+    audio?: number | string;
+    request?: number | string;
+  };
+  preferred_min_throughput?:
+    | number
+    | {
+        p50?: number;
+        p75?: number;
+        p90?: number;
+        p99?: number;
+      };
+  preferred_max_latency?:
+    | number
+    | {
+        p50?: number;
+        p75?: number;
+        p90?: number;
+        p99?: number;
+      };
+};
+
+/** Vercel AI Gateway routing preferences. */
+export type ModelCatalogVercelGatewayRouting = {
+  only?: string[];
+  order?: string[];
+};
+
+/** Image input limits for a model. */
 export type ModelCatalogImageInputConfig = {
   maxBytes?: number;
   maxPixels?: number;
@@ -63,13 +128,18 @@ export type ModelCatalogImageInputConfig = {
   tokenMode?: "tile" | "detail" | "provider";
 };
 
+/** Media input limits for a model. */
 export type ModelCatalogMediaInputConfig = {
   image?: ModelCatalogImageInputConfig;
 };
 
+/** Supported input modality for a model. */
 export type ModelCatalogInput = "text" | "image" | "document";
+/** Discovery lifecycle for a provider catalog. */
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
+/** Availability state for a model. */
 export type ModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
+/** Source of a model catalog row. */
 export type ModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -77,6 +147,7 @@ export type ModelCatalogSource =
   | "config"
   | "runtime-refresh";
 
+/** Unified catalog kind across text and generated media models. */
 export type UnifiedModelCatalogKind =
   | "text"
   | "voice"
@@ -84,6 +155,7 @@ export type UnifiedModelCatalogKind =
   | "video_generation"
   | "music_generation";
 
+/** Source for unified model catalog entries. */
 export type UnifiedModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -93,6 +165,7 @@ export type UnifiedModelCatalogSource =
   | "configured"
   | "runtime-refresh";
 
+/** Unified model catalog entry for provider/model pickers. */
 export type UnifiedModelCatalogEntry<TCapabilities = unknown> = {
   kind: UnifiedModelCatalogKind;
   provider: string;
@@ -110,6 +183,7 @@ export type UnifiedModelCatalogEntry<TCapabilities = unknown> = {
   warnings?: readonly string[];
 };
 
+/** Tiered token cost row. */
 export type ModelCatalogTieredCost = {
   input: number;
   output: number;
@@ -118,6 +192,7 @@ export type ModelCatalogTieredCost = {
   range: [number, number] | [number];
 };
 
+/** Token cost metadata for one model. */
 export type ModelCatalogCost = {
   input?: number;
   output?: number;
@@ -126,6 +201,7 @@ export type ModelCatalogCost = {
   tieredPricing?: ModelCatalogTieredCost[];
 };
 
+/** Provider manifest model entry. */
 export type ModelCatalogModel = {
   id: string;
   name?: string;
@@ -147,6 +223,7 @@ export type ModelCatalogModel = {
   tags?: string[];
 };
 
+/** Provider manifest catalog entry. */
 export type ModelCatalogProvider = {
   baseUrl?: string;
   api?: ModelCatalogApi;
@@ -154,12 +231,14 @@ export type ModelCatalogProvider = {
   models: ModelCatalogModel[];
 };
 
+/** Provider alias entry. */
 export type ModelCatalogAlias = {
   provider: string;
   api?: ModelCatalogApi;
   baseUrl?: string;
 };
 
+/** Suppression rule for hiding a provider/model under matching config. */
 export type ModelCatalogSuppression = {
   provider: string;
   model: string;
@@ -170,6 +249,7 @@ export type ModelCatalogSuppression = {
   };
 };
 
+/** Raw model catalog manifest shape. */
 export type ModelCatalog = {
   providers?: Record<string, ModelCatalogProvider>;
   aliases?: Record<string, ModelCatalogAlias>;
@@ -178,6 +258,7 @@ export type ModelCatalog = {
   runtimeAugment?: boolean;
 };
 
+/** Normalized model catalog row used by runtime lookup and UI surfaces. */
 export type NormalizedModelCatalogRow = {
   provider: string;
   id: string;

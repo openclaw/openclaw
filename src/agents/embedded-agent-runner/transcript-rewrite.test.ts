@@ -1,3 +1,5 @@
+// Transcript rewrite tests cover in-memory and persisted JSONL rewrites for
+// tool-result externalization, labels, compaction markers, and write locks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +22,7 @@ vi.mock("../session-write-lock.js", () =>
 
 let rewriteTranscriptEntriesInSessionFile: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionFile;
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
+let rewriteTranscriptEntriesInRuntimeTranscript: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInRuntimeTranscript;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let installSessionToolResultGuard: typeof import("../session-tool-result-guard.js").installSessionToolResultGuard;
 
@@ -52,6 +55,8 @@ function getMessageContent(message: AgentMessage): unknown {
 }
 
 function createReadRewriteSession(options?: { tailAssistantText?: string }) {
+  // Read rewrite fixtures include a suffix assistant turn so branch rewrites
+  // must re-append downstream entries after replacing the tool result.
   const sessionManager = SessionManager.inMemory();
   const entryIds = appendSessionMessages(sessionManager, [
     asAppendMessage({
@@ -137,6 +142,8 @@ function findAssistantEntryByText(sessionManager: SessionManager, text: string) 
 }
 
 function requireValue<T>(value: T | undefined, label: string): T {
+  // Fail with a labeled invariant instead of letting optional entries produce
+  // weak assertions later in transcript-branch tests.
   if (value === undefined) {
     throw new Error(`expected ${label}`);
   }
@@ -153,8 +160,11 @@ function requireString(value: string | undefined, label: string): string {
 beforeAll(async () => {
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
-  ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =
-    await import("./transcript-rewrite.js"));
+  ({
+    rewriteTranscriptEntriesInRuntimeTranscript,
+    rewriteTranscriptEntriesInSessionFile,
+    rewriteTranscriptEntriesInSessionManager,
+  } = await import("./transcript-rewrite.js"));
 });
 
 beforeEach(() => {
@@ -221,6 +231,8 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   });
 
   it("remaps compaction keep markers when rewritten entries change ids", () => {
+    // Re-appending entries changes ids; compaction records must follow the new
+    // first-kept entry or future branch reconstruction points at stale ids.
     const {
       sessionManager,
       toolResultEntryId,
@@ -298,6 +310,25 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {
+  it("does not create session metadata for missing runtime transcripts", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}\n", "utf8");
+
+    const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+      scope: {
+        agentId: "main",
+        sessionId: "missing-session",
+        sessionKey: "agent:main:missing",
+        storePath,
+      },
+      request: { replacements: [] },
+    });
+
+    expect(result.changed).toBe(false);
+    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
+  });
+
   it("aborts under the write lock when the active suffix contains an unexpected entry", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-guard-"));
     const sessionManager = SessionManager.create(dir, dir);

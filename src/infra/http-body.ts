@@ -1,6 +1,7 @@
+// Reads HTTP request bodies with timeout and byte limits.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "./errors.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 

@@ -1,3 +1,4 @@
+// Minimax plugin module implements tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -58,8 +59,8 @@ export async function minimaxTTS(params: {
     baseUrl,
     model,
     voiceId,
-    speed = 1.0,
-    vol = 1.0,
+    speed = 1,
+    vol = 1,
     pitch = 0,
     format = "mp3",
     sampleRate = 32000,

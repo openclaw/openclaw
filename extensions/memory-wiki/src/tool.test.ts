@@ -1,10 +1,11 @@
+// Memory Wiki tests cover tool plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { createWikiApplyTool, createWikiLintTool } from "./tool.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { createWikiApplyTool, createWikiLintTool } from "./tool.js";
 
 function asSchemaObject(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -13,8 +14,32 @@ function asSchemaObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function unionLiteralValues(schema: Record<string, unknown>): string[] {
+  const variants = schema.anyOf ?? schema.oneOf;
+  if (!Array.isArray(variants)) {
+    throw new Error("Expected union schema variants");
+  }
+  return variants
+    .map((variant) => asSchemaObject(variant).const)
+    .filter((value): value is string => typeof value === "string")
+    .toSorted();
+}
+
 describe("memory-wiki tools", () => {
   const harness = createMemoryWikiTestHarness();
+
+  it("accepts CLI-style operation aliases in wiki_apply schema", () => {
+    const tool = createWikiApplyTool({} as ResolvedMemoryWikiConfig);
+    const applyProperties = asSchemaObject(asSchemaObject(tool.parameters).properties);
+    const opSchema = asSchemaObject(applyProperties.op);
+
+    expect(unionLiteralValues(opSchema)).toEqual([
+      "create_synthesis",
+      "metadata",
+      "synthesis",
+      "update_metadata",
+    ]);
+  });
 
   it("allows provenance metadata in wiki_apply claim evidence", () => {
     const tool = createWikiApplyTool({} as ResolvedMemoryWikiConfig);

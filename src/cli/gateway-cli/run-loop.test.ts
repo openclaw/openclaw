@@ -1,3 +1,4 @@
+// Gateway run loop tests cover foreground gateway lifecycle and restart behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server.impl.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
@@ -53,7 +54,20 @@ const getInspectableActiveTaskRestartBlockers = vi.fn(
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
+const advanceCronActiveJobGeneration = vi.fn();
+const resetCronActiveJobs = vi.fn();
+const abortActiveCronTaskRuns = vi.fn((_reason?: string) => 0);
+const retireActiveCronTaskRunTracking = vi.fn();
+const waitForActiveCronTaskRuns = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  active: 0,
+}));
+const waitForActiveCronJobs = vi.fn(async (_timeoutMs?: number) => ({
+  drained: true,
+  active: 0,
+}));
 const reloadTaskRegistryFromStore = vi.fn();
+const rotateAgentEventLifecycleGeneration = vi.fn();
 const clearRuntimeConfigSnapshot = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   (_opts?: { env?: NodeJS.ProcessEnv }) => {
@@ -74,7 +88,7 @@ const markUpdateRestartSentinelFailure = vi.fn<(reason: string) => Promise<null>
   async (_reason: string) => null,
 );
 const abortEmbeddedAgentRun = vi.fn(
-  (_sessionId?: string, _opts?: { mode?: "all" | "compacting" }) => false,
+  (_sessionId?: string, _opts?: { mode?: "all" | "compacting"; reason?: "restart" }) => false,
 );
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const listActiveEmbeddedRunSessionIds = vi.fn(() => [] as string[]);
@@ -149,8 +163,24 @@ vi.mock("../../process/command-queue.js", () => ({
   resetAllLanes: () => resetAllLanes(),
 }));
 
+vi.mock("../../cron/active-jobs.js", () => ({
+  advanceCronActiveJobGeneration: () => advanceCronActiveJobGeneration(),
+  resetCronActiveJobs: () => resetCronActiveJobs(),
+  waitForActiveCronJobs: (timeoutMs: number) => waitForActiveCronJobs(timeoutMs),
+}));
+
+vi.mock("../../tasks/cron-task-cancel.js", () => ({
+  abortActiveCronTaskRuns: (reason?: string) => abortActiveCronTaskRuns(reason),
+  retireActiveCronTaskRunTracking: () => retireActiveCronTaskRunTracking(),
+  waitForActiveCronTaskRuns: (timeoutMs: number) => waitForActiveCronTaskRuns(timeoutMs),
+}));
+
 vi.mock("../../tasks/runtime-internal.js", () => ({
   reloadTaskRegistryFromStore: () => reloadTaskRegistryFromStore(),
+}));
+
+vi.mock("../../infra/agent-events.js", () => ({
+  rotateAgentEventLifecycleGeneration: () => rotateAgentEventLifecycleGeneration(),
 }));
 
 vi.mock("../../config/runtime-snapshot.js", () => ({
@@ -162,8 +192,10 @@ vi.mock("../../tasks/task-registry.maintenance.js", () => ({
 }));
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
-  abortEmbeddedAgentRun: (sessionId?: string, opts?: { mode?: "all" | "compacting" }) =>
-    abortEmbeddedAgentRun(sessionId, opts),
+  abortEmbeddedAgentRun: (
+    sessionId?: string,
+    opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  ) => abortEmbeddedAgentRun(sessionId, opts),
   getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
   listActiveEmbeddedRunSessionIds: () => listActiveEmbeddedRunSessionIds(),
   listActiveEmbeddedRunSessionKeys: () => listActiveEmbeddedRunSessionKeys(),
@@ -321,7 +353,9 @@ async function runLoopWithStart(params: {
 
 async function waitForStart(started: Promise<void>) {
   await started;
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function waitForLoopCondition(predicate: () => boolean, message: string) {
@@ -330,7 +364,9 @@ async function waitForLoopCondition(predicate: () => boolean, message: string) {
     if (predicate()) {
       return;
     }
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
   throw new Error(message);
 }
@@ -412,13 +448,19 @@ describe("runGatewayLoop", () => {
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       const sigterm = captureSignal("SIGTERM");
       const sigint = captureSignal("SIGINT");
 
       sigterm();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledOnce();
       expect(markGatewayDraining).toHaveBeenCalledOnce();
@@ -426,7 +468,9 @@ describe("runGatewayLoop", () => {
       expectRestartCloseCall(closeFirst, 90_000);
       await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       sigint();
       await expect(exited).resolves.toBe(0);
@@ -449,8 +493,12 @@ describe("runGatewayLoop", () => {
       const sigint = captureSignal("SIGINT");
 
       sigterm();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(2_500);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(2_500);
@@ -471,8 +519,12 @@ describe("runGatewayLoop", () => {
       const sigint = captureSignal("SIGINT");
 
       sigterm();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expectRestartCloseCall(close, 15_000);
       expect(start).toHaveBeenCalledTimes(2);
@@ -494,12 +546,22 @@ describe("runGatewayLoop", () => {
       const sigint = captureSignal("SIGINT");
 
       sigterm();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(undefined);
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(abortEmbeddedAgentRun).not.toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expectRestartCloseCall(close, 15_000);
       expect(start).toHaveBeenCalledTimes(2);
 
@@ -526,12 +588,22 @@ describe("runGatewayLoop", () => {
       const sigint = captureSignal("SIGINT");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(undefined);
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(abortEmbeddedAgentRun).not.toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
+      expect(abortEmbeddedAgentRun).not.toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expectRestartCloseCall(close, 15_000);
       expect(start).toHaveBeenCalledTimes(2);
 
@@ -557,13 +629,23 @@ describe("runGatewayLoop", () => {
       const sigint = captureSignal("SIGINT");
 
       sigterm();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expect(gatewayLog.warn).toHaveBeenCalledWith(ACTIVE_RUN_DRAIN_TIMEOUT_LOG);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
@@ -606,13 +688,23 @@ describe("runGatewayLoop", () => {
       const sigint = captureSignal("SIGINT");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(waitForActiveTasks).not.toHaveBeenCalled();
       expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {
           gateway: {
@@ -623,7 +715,7 @@ describe("runGatewayLoop", () => {
         },
         sessionIds: new Set(["session-deferral-timeout"]),
         sessionKeys: new Set(["agent:main:deferral-timeout"]),
-        reason: "config reload forced restart",
+        reason: "gateway restart drain",
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledOnce();
       expectRestartCloseCall(close, 0);
@@ -661,12 +753,19 @@ describe("runGatewayLoop", () => {
       const sigint = captureSignal("SIGINT");
 
       sigterm();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(waitForActiveTasks).not.toHaveBeenCalled();
       expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {
           gateway: {
@@ -677,7 +776,7 @@ describe("runGatewayLoop", () => {
         },
         sessionIds: new Set(["session-forced-task"]),
         sessionKeys: new Set(["agent:main:forced-task"]),
-        reason: "forced gateway restart",
+        reason: "gateway restart drain",
       });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "restart blocked by active background task run(s): taskId=task-force runId=run-force status=running runtime=cron label=forced",
@@ -763,18 +862,28 @@ describe("runGatewayLoop", () => {
       const sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
       expect(start).toHaveBeenCalledTimes(1);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       sigusr1();
 
       await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
       expect(waitForActiveTasks).toHaveBeenCalledWith(1_234);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(1_234);
-      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "all",
+        reason: "restart",
+      });
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {
           gateway: {
@@ -785,27 +894,58 @@ describe("runGatewayLoop", () => {
         },
         sessionIds: new Set(["session-issue-82433"]),
         sessionKeys: new Set(["agent:main:issue-82433"]),
-        reason: "gateway restart drain timeout",
+        reason: "gateway restart drain",
       });
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expectRestartCloseCall(closeFirst, 1_234);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+      expect(waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
+      expect(waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(1);
+      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(1);
+      expect(resetCronActiveJobs).toHaveBeenCalledTimes(1);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
+      expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(1);
       expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
+      expect(
+        rotateAgentEventLifecycleGeneration.mock.invocationCallOrder[0] ?? Infinity,
+      ).toBeLessThan(resetAllLanes.mock.invocationCallOrder[0] ?? Infinity);
+      expect(advanceCronActiveJobGeneration.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        abortActiveCronTaskRuns.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(waitForActiveCronJobs.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(retireActiveCronTaskRunTracking.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        resetCronActiveJobs.mock.invocationCallOrder[0] ?? Infinity,
+      );
+      expect(resetCronActiveJobs.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+        resetAllLanes.mock.invocationCallOrder[0] ?? Infinity,
+      );
 
       sigusr1();
 
       await startedThird;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expectRestartCloseCall(closeSecond, 1_234);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledTimes(2);
+      expect(waitForActiveCronTaskRuns).toHaveBeenCalledTimes(2);
+      expect(waitForActiveCronJobs).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
+      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(2);
+      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(2);
+      expect(resetCronActiveJobs).toHaveBeenCalledTimes(2);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(2);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
+      expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(2);
       expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
@@ -815,6 +955,42 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("advances stale cron active markers after bounded restart cron-run drain", async () => {
+    vi.clearAllMocks();
+    waitForActiveCronJobs.mockResolvedValueOnce({ drained: false, active: 1 });
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    respawnGatewayProcessForUpdate.mockReturnValue({
+      mode: "disabled",
+      detail: "OPENCLAW_NO_RESPAWN",
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigint = captureSignal("SIGINT");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () => start.mock.calls.length >= 2,
+        "expected SIGUSR1 to trigger restart",
+      );
+
+      expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
+      expect(waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
+      expect(waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
+      expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(advanceCronActiveJobGeneration).toHaveBeenCalledTimes(1);
+      expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(1);
+      expect(resetCronActiveJobs).toHaveBeenCalledTimes(1);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "cron run drain timed out during restart lifecycle reset after retiring old cron admission; 0 task handle(s) and 1 active marker(s) remain after aborting old cron runs",
+      );
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
     });
   });
 
@@ -863,7 +1039,9 @@ describe("runGatewayLoop", () => {
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
 
@@ -950,7 +1128,9 @@ describe("runGatewayLoop", () => {
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       const sigint = captureSignal("SIGINT");
 
       sigint();
@@ -980,7 +1160,9 @@ describe("runGatewayLoop", () => {
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       const sigusr1 = captureSignal("SIGUSR1");
       const sigint = captureSignal("SIGINT");
 
@@ -1040,7 +1222,9 @@ describe("runGatewayLoop", () => {
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
 
@@ -1098,7 +1282,9 @@ describe("runGatewayLoop", () => {
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       const sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
 
@@ -1111,7 +1297,9 @@ describe("runGatewayLoop", () => {
             ),
           "expected failed restart startup to be logged",
         );
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         expect(start).toHaveBeenCalledTimes(2);
 
         sigusr1();
@@ -1151,8 +1339,12 @@ describe("runGatewayLoop", () => {
       const sigusr1 = captureSignal("SIGUSR1");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
       expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
@@ -1171,7 +1363,9 @@ describe("runGatewayLoop", () => {
       const sigusr1 = captureSignal("SIGUSR1");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
         delayMs: 0,
@@ -1196,7 +1390,9 @@ describe("runGatewayLoop", () => {
       const sigusr1 = captureSignal("SIGUSR1");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
@@ -1238,8 +1434,12 @@ describe("runGatewayLoop", () => {
       const sigint = captureSignal("SIGINT");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(consumeGatewaySigusr1RestartAuthorization).toHaveBeenCalledOnce();
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledOnce();
@@ -1253,7 +1453,7 @@ describe("runGatewayLoop", () => {
         },
         sessionIds: new Set(["session-file-intent"]),
         sessionKeys: new Set(["agent:main:file-intent"]),
-        reason: "file-intent restart",
+        reason: "gateway restart drain",
       });
       expect(start).toHaveBeenCalledTimes(2);
 
@@ -1400,15 +1600,21 @@ describe("runGatewayLoop", () => {
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
         lockPort: 18789,
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       const sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       sigusr1();
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
@@ -1557,12 +1763,16 @@ describe("runGatewayLoop", () => {
         .mockResolvedValueOnce({ close: closeSecond });
 
       await runLoopWithStart({ start, runtime, lockPort: 18789, waitForHealthyChild });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       const sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(waitForHealthyChild).toHaveBeenCalledWith(18789, 8888, "127.0.0.1");
       expect(kill).toHaveBeenCalledTimes(1);
@@ -1613,8 +1823,12 @@ describe("runGatewayLoop", () => {
       const sigterm = captureSignal("SIGTERM");
 
       sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(gatewayLog.error).toHaveBeenCalledWith(
         "SIGUSR1 handler failed: lifecycle module corrupted",
@@ -1642,8 +1856,12 @@ describe("runGatewayLoop", () => {
       sigusr1();
       // The catch handler clears the restart token from the eagerly-loaded
       // lifecycle runtime, so wait for the async signal body to reject.
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(gatewayLog.error).toHaveBeenCalledWith(
         "SIGUSR1 handler failed: sigusr1 lifecycle import failed",

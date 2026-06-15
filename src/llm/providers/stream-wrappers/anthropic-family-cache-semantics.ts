@@ -1,7 +1,8 @@
+// Anthropic-family cache wrapper preserves cache-control semantics in tool payloads.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 type AnthropicCacheRetentionFamily =
   | "anthropic-direct"

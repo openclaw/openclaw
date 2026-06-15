@@ -1,3 +1,4 @@
+// Legacy auth-choice alias handling for CLI/onboarding compatibility.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveManifestDeprecatedProviderAuthChoice,
@@ -5,12 +6,7 @@ import {
 } from "../plugins/provider-auth-choices.js";
 import type { AuthChoice } from "./onboard-types.js";
 
-const LEGACY_REPLACEMENT_AUTH_CHOICES = new Set([
-  "claude-cli",
-  "codex-cli",
-  "openai-codex",
-  "openai-codex-device-code",
-]);
+const LEGACY_REPLACEMENT_AUTH_CHOICES = new Set(["claude-cli"]);
 
 function resolveLegacyCliBackendChoice(
   choice: string,
@@ -30,6 +26,7 @@ function resolveReplacementLabel(choiceLabel: string): string {
   return choiceLabel.trim() || "the replacement auth choice";
 }
 
+/** List deprecated CLI auth-choice aliases that manifest providers still recognize. */
 export function resolveLegacyAuthChoiceAliasesForCli(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -39,9 +36,10 @@ export function resolveLegacyAuthChoiceAliasesForCli(params?: {
     .flatMap((choice) => choice.deprecatedChoiceIds ?? [])
     .filter((choice): choice is AuthChoice => LEGACY_REPLACEMENT_AUTH_CHOICES.has(choice))
     .toSorted((left, right) => left.localeCompare(right));
-  return manifestCliAliases;
+  return Array.from(new Set(manifestCliAliases));
 }
 
+/** Map old onboard auth choices to their current provider-backed choices. */
 export function normalizeLegacyOnboardAuthChoice(
   authChoice: AuthChoice | undefined,
   params?: {
@@ -62,6 +60,7 @@ export function normalizeLegacyOnboardAuthChoice(
   return authChoice;
 }
 
+/** Return true when an auth choice is a deprecated provider alias. */
 export function isDeprecatedAuthChoice(
   authChoice: AuthChoice | undefined,
   params?: {
@@ -75,6 +74,7 @@ export function isDeprecatedAuthChoice(
   );
 }
 
+/** Resolve the current replacement and warning text for a deprecated auth choice. */
 export function resolveDeprecatedAuthChoiceReplacement(
   authChoice: AuthChoice,
   params?: {
@@ -102,6 +102,7 @@ export function resolveDeprecatedAuthChoiceReplacement(
   };
 }
 
+/** Format the non-interactive error shown when a deprecated auth choice was supplied. */
 export function formatDeprecatedNonInteractiveAuthChoiceError(
   authChoice: AuthChoice,
   params?: {

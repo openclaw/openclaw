@@ -1,3 +1,4 @@
+// Matrix tests cover subagent hooks plugin behavior.
 import type { OpenClawPluginApi as MatrixEntryPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import {
   getRequiredHookHandler,
@@ -55,7 +56,10 @@ const fakeApi = { config: {} } as never;
 function registerHandlersForTest(config: Record<string, unknown> = {}) {
   return registerHookHandlersForTest<MatrixEntryPluginApi>({
     config,
-    register: registerMatrixSubagentHooks,
+    register: (api) => {
+      registerMatrixSubagentHooks(api);
+      api.on("subagent_spawning", (event) => handleMatrixSubagentSpawning(api, event));
+    },
   });
 }
 

@@ -1,9 +1,12 @@
+// Matches plugin config contracts against config paths and values.
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 export type PluginConfigContractMatch = {
+  /** Concrete config path matched by the contract pattern. */
   path: string;
+  /** Config value stored at the matched path. */
   value: unknown;
 };
 
@@ -28,6 +31,7 @@ function parseCanonicalArrayIndex(segment: string, length: number): number | nul
   return index !== undefined && index < length ? index : null;
 }
 
+/** Collect concrete config values that match a plugin contract path pattern. */
 export function collectPluginConfigContractMatches(params: {
   root: unknown;
   pathPattern: string;
@@ -42,6 +46,7 @@ export function collectPluginConfigContractMatches(params: {
     const nextStates: TraversalState[] = [];
     for (const state of states) {
       if (segment === "*") {
+        // Wildcards fan out across arrays and records so contracts can cover account maps/lists.
         if (Array.isArray(state.value)) {
           for (const [index, value] of state.value.entries()) {
             nextStates.push({
@@ -71,7 +76,7 @@ export function collectPluginConfigContractMatches(params: {
         }
         continue;
       }
-      if (!isRecord(state.value) || !Object.prototype.hasOwnProperty.call(state.value, segment)) {
+      if (!isRecord(state.value) || !Object.hasOwn(state.value, segment)) {
         continue;
       }
       nextStates.push({

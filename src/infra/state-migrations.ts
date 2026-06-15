@@ -1,7 +1,10 @@
+// Applies persisted state migrations across OpenClaw config files.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listBundledChannelLegacySessionSurfaces,
@@ -17,6 +20,7 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -24,7 +28,24 @@ import {
   countPluginStateLiveEntries,
   createPluginStateKeyedStore,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+  type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
+import {
+  listPluginDoctorStateMigrationEntries,
+  type PluginDoctorStateMigrationContext,
+  type PluginDoctorStateMigration,
+} from "../plugins/doctor-contract-registry.js";
+import {
+  parseInstalledPluginIndex,
+  readPersistedInstalledPluginIndexSync,
+  resolveLegacyInstalledPluginIndexStorePath,
+  writePersistedInstalledPluginIndexSync,
+} from "../plugins/installed-plugin-index-store.js";
+import {
+  INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
+  INSTALLED_PLUGIN_INDEX_VERSION,
+  type InstalledPluginIndex,
+} from "../plugins/installed-plugin-index.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -34,10 +55,14 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { expandHomePrefix } from "./home-dir.js";
+import {
+  detectOpenClawStateDatabaseSchemaMigrations,
+  repairOpenClawStateDatabaseSchema,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -78,17 +103,41 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     plans: ChannelLegacyStateMigrationPlan[];
   };
+  pluginPlans?: {
+    hasLegacy: boolean;
+    plans: DetectedPluginDoctorStateMigrationPlan[];
+  };
   pluginStateSidecar: {
     sourcePath: string;
     hasLegacy: boolean;
+  };
+  pluginInstallIndex: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  stateSchema: {
+    hasLegacy: boolean;
+    preview: string[];
   };
   taskStateSidecars: {
     taskRunsPath: string;
     flowRunsPath: string;
     hasLegacy: boolean;
   };
+  deliveryQueues: {
+    outboundPath: string;
+    sessionPath: string;
+    hasLegacy: boolean;
+  };
+  execApprovals: {
+    sourcePath: string;
+    targetPath: string;
+    hasLegacy: boolean;
+  };
   preview: string[];
 };
+
+type LegacyExecApprovalsMigrationDetection = LegacyStateDetection["execApprovals"];
 
 type MigrationLogger = {
   info: (message: string) => void;
@@ -120,14 +169,24 @@ type LegacyPluginStateSidecarRow = {
 type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
 type SqliteBindRow = Record<string, SQLInputValue>;
 
+type DetectedPluginDoctorStateMigrationPlan = {
+  pluginId: string;
+  migration: PluginDoctorStateMigration;
+  preview: string[];
+};
+
 const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-
-class LegacyPluginStateSidecarConflictError extends Error {
-  constructor(readonly conflictedKeys: string[]) {
-    super("legacy plugin-state sidecar conflicts with shared state");
-  }
-}
+const LEGACY_DELIVERY_QUEUE_DIRS = [
+  { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
+  { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
+] as const;
+const EXEC_APPROVALS_FILENAME = "exec-approvals.json";
+const EXEC_APPROVALS_SOCKET_FILENAME = "exec-approvals.sock";
+type LegacyDeliveryQueueFile = {
+  sourcePath: string;
+  status: "pending" | "failed";
+};
 
 class LegacyTaskStateSidecarConflictError extends Error {
   constructor(readonly conflictedKeys: string[]) {
@@ -183,6 +242,43 @@ function resolveLegacyFlowRunsSidecarPath(stateDir: string): string {
   return path.join(stateDir, "flows", "registry.sqlite");
 }
 
+function resolveDefaultExecApprovalsStateDir(
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string {
+  return path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+}
+
+function resolveDefaultExecApprovalsPath(env: NodeJS.ProcessEnv, homedir: () => string): string {
+  return path.join(resolveDefaultExecApprovalsStateDir(env, homedir), EXEC_APPROVALS_FILENAME);
+}
+
+function resolveExecApprovalsPathForStateDir(stateDir: string): string {
+  return path.join(stateDir, EXEC_APPROVALS_FILENAME);
+}
+
+function resolveExecApprovalsSocketPathForStateDir(stateDir: string): string {
+  return path.join(stateDir, EXEC_APPROVALS_SOCKET_FILENAME);
+}
+
+function detectLegacyExecApprovalsMigration(params: {
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  stateDir: string;
+}): LegacyExecApprovalsMigrationDetection {
+  const sourcePath = resolveDefaultExecApprovalsPath(params.env, params.homedir);
+  const targetPath = resolveExecApprovalsPathForStateDir(params.stateDir);
+  return {
+    sourcePath,
+    targetPath,
+    hasLegacy:
+      Boolean(params.env.OPENCLAW_STATE_DIR?.trim()) &&
+      path.resolve(sourcePath) !== path.resolve(targetPath) &&
+      fileExists(sourcePath) &&
+      !fileExists(targetPath),
+  };
+}
+
 function readLegacyPluginStateSidecarRows(sourcePath: string): LegacyPluginStateSidecarRow[] {
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
@@ -221,6 +317,11 @@ function legacyPluginStateRowsMatch(
   );
 }
 
+function isLegacyPluginStateRowExpired(row: LegacyPluginStateSidecarRow, now: number): boolean {
+  const expiresAt = normalizeLegacySqliteInteger(row.expires_at);
+  return expiresAt !== null && expiresAt <= now;
+}
+
 function archiveLegacyPluginStateSidecar(params: {
   sourcePath: string;
   changes: string[];
@@ -251,6 +352,186 @@ function archiveLegacyPluginStateSidecar(params: {
   params.changes.push(
     `Archived plugin-state sidecar legacy source → ${params.sourcePath}.migrated`,
   );
+}
+
+function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPluginIndex | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
+    const current = parseInstalledPluginIndex(parsed);
+    if (current) {
+      return current;
+    }
+    const installRecords =
+      readLegacyTopLevelInstallRecords(parsed) ?? readLegacyEmbeddedInstallRecords(parsed);
+    if (!installRecords || typeof installRecords !== "object" || Array.isArray(installRecords)) {
+      return null;
+    }
+    return parseInstalledPluginIndex({
+      version: INSTALLED_PLUGIN_INDEX_VERSION,
+      hostContractVersion: "legacy",
+      compatRegistryVersion: "legacy",
+      migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
+      policyHash: "legacy",
+      generatedAtMs: 0,
+      installRecords,
+      plugins: [],
+      diagnostics: [],
+    });
+  } catch {
+    return null;
+  }
+}
+
+function readLegacyTopLevelInstallRecords(parsed: unknown): unknown {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const legacy = parsed as { installRecords?: unknown; records?: unknown };
+  return legacy.installRecords ?? legacy.records;
+}
+
+function readLegacyEmbeddedInstallRecords(parsed: unknown): Record<string, unknown> | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const plugins = (parsed as { plugins?: unknown }).plugins;
+  if (!Array.isArray(plugins)) {
+    return null;
+  }
+  const records: Record<string, unknown> = {};
+  for (const plugin of plugins) {
+    if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) {
+      continue;
+    }
+    const pluginId = (plugin as { pluginId?: unknown }).pluginId;
+    const installRecord = (plugin as { installRecord?: unknown }).installRecord;
+    if (
+      typeof pluginId === "string" &&
+      pluginId.trim() &&
+      installRecord &&
+      typeof installRecord === "object" &&
+      !Array.isArray(installRecord)
+    ) {
+      records[pluginId] = installRecord;
+    }
+  }
+  return Object.keys(records).length > 0 ? records : null;
+}
+
+function legacyInstalledPluginIndexMatches(
+  current: InstalledPluginIndex,
+  legacy: InstalledPluginIndex,
+): boolean {
+  return (
+    JSON.stringify(current.installRecords) === JSON.stringify(legacy.installRecords) &&
+    JSON.stringify(current.plugins) === JSON.stringify(legacy.plugins) &&
+    JSON.stringify(current.diagnostics) === JSON.stringify(legacy.diagnostics)
+  );
+}
+
+function readInstallRecordField(
+  record: InstalledPluginIndex["installRecords"][string],
+  key: string,
+): unknown {
+  return (record as Partial<Record<string, unknown>>)[key];
+}
+
+function readInstallRecordStringField(
+  record: InstalledPluginIndex["installRecords"][string],
+  key: string,
+): string | undefined {
+  const value = readInstallRecordField(record, key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function legacyInstallRecordHasCurrentResolvedIdentity(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  if (legacySpec) {
+    return currentResolvedSpec === legacySpec;
+  }
+  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
+  return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
+}
+
+function legacyInstallRecordCoveredByCurrent(
+  currentRecord: InstalledPluginIndex["installRecords"][string],
+  legacyRecord: InstalledPluginIndex["installRecords"][string],
+): boolean {
+  if (currentRecord.source !== legacyRecord.source) {
+    return false;
+  }
+  for (const key of Object.keys(legacyRecord).toSorted()) {
+    const currentValue = readInstallRecordField(currentRecord, key);
+    if (currentValue === readInstallRecordField(legacyRecord, key)) {
+      continue;
+    }
+    if (
+      key === "spec" &&
+      legacyInstallRecordHasCurrentResolvedIdentity({ currentRecord, legacyRecord })
+    ) {
+      continue;
+    }
+    if ((key === "resolvedAt" || key === "installedAt") && typeof currentValue === "string") {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+function mergeLegacyInstalledPluginIndexRecords(
+  current: InstalledPluginIndex,
+  legacy: InstalledPluginIndex,
+): { merged: InstalledPluginIndex; addedCount: number; conflicts: string[] } {
+  const installRecords = { ...current.installRecords };
+  const conflicts: string[] = [];
+  let addedCount = 0;
+  for (const [pluginId, legacyRecord] of Object.entries(legacy.installRecords)) {
+    const currentRecord = installRecords[pluginId];
+    if (!currentRecord) {
+      installRecords[pluginId] = legacyRecord;
+      addedCount += 1;
+      continue;
+    }
+    if (!legacyInstallRecordCoveredByCurrent(currentRecord, legacyRecord)) {
+      conflicts.push(pluginId);
+    }
+  }
+  return {
+    merged: {
+      ...current,
+      installRecords,
+    },
+    addedCount,
+    conflicts,
+  };
+}
+
+function archiveLegacyInstalledPluginIndex(params: {
+  sourcePath: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  const archivedPath = `${params.sourcePath}.migrated`;
+  if (fileExists(archivedPath)) {
+    params.warnings.push(
+      `Left migrated plugin install index in place because archive already exists: ${archivedPath}`,
+    );
+    return;
+  }
+  try {
+    fs.renameSync(params.sourcePath, archivedPath);
+    params.changes.push(`Archived plugin install index legacy source → ${archivedPath}`);
+  } catch (err) {
+    params.warnings.push(
+      `Failed archiving plugin install index ${params.sourcePath}: ${String(err)}`,
+    );
+  }
 }
 
 function archiveLegacyTaskStateSidecar(params: {
@@ -284,6 +565,51 @@ function archiveLegacyTaskStateSidecar(params: {
   params.changes.push(
     `Archived ${params.label} sidecar legacy source → ${params.sourcePath}.migrated`,
   );
+}
+
+function hardenLegacyImportSource(params: {
+  sourcePath: string;
+  label: string;
+  warnings: string[];
+}): boolean {
+  try {
+    fs.chmodSync(params.sourcePath, 0o600);
+    return true;
+  } catch (err) {
+    params.warnings.push(`Failed securing ${params.label} legacy source: ${String(err)}`);
+    return false;
+  }
+}
+
+function archiveLegacyImportSource(params: {
+  sourcePath: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  const archivedPath = `${params.sourcePath}.migrated`;
+  if (fileExists(archivedPath)) {
+    params.warnings.push(
+      `Left migrated ${params.label} source in place because ${archivedPath} already exists`,
+    );
+    return;
+  }
+  if (!hardenLegacyImportSource(params)) {
+    return;
+  }
+  try {
+    fs.renameSync(params.sourcePath, archivedPath);
+    try {
+      fs.chmodSync(archivedPath, 0o600);
+    } catch (err) {
+      params.warnings.push(
+        `Failed securing archived ${params.label} legacy source: ${String(err)}`,
+      );
+    }
+    params.changes.push(`Archived ${params.label} legacy source → ${archivedPath}`);
+  } catch (err) {
+    params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
+  }
 }
 
 function listSqliteColumns(db: DatabaseSync, table: string): Set<string> {
@@ -332,6 +658,19 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
   const ownerKey = ownerRaw || requesterRaw || `system:${runtime}:${sourceId || taskId}`;
   const scopeRaw = typeof row.scope_kind === "string" ? row.scope_kind : "";
   const scopeKind = scopeRaw === "system" || ownerKey.startsWith("system:") ? "system" : "session";
+  const childSessionKey =
+    typeof row.child_session_key === "string" ? row.child_session_key.trim() : "";
+  const persistedAgentId = typeof row.agent_id === "string" ? row.agent_id.trim() : "";
+  const isSpawnRuntime = runtime === "subagent" || runtime === "acp";
+  const childAgentId = isSpawnRuntime ? parseAgentSessionKey(childSessionKey)?.agentId : undefined;
+  const requesterAgentId =
+    (typeof row.requester_agent_id === "string" ? row.requester_agent_id.trim() : "") ||
+    (isSpawnRuntime
+      ? (parseAgentSessionKey(ownerKey)?.agentId ??
+        parseAgentSessionKey(requesterRaw)?.agentId ??
+        (childAgentId && persistedAgentId !== childAgentId ? persistedAgentId : ""))
+      : "");
+  const executorAgentId = requesterAgentId ? childAgentId || persistedAgentId : persistedAgentId;
   return {
     task_id: taskId,
     runtime,
@@ -340,10 +679,11 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
     requester_session_key: scopeKind === "system" ? "" : requesterRaw || ownerKey,
     owner_key: ownerKey,
     scope_kind: scopeKind,
-    child_session_key: legacyBindValue(row.child_session_key),
+    child_session_key: childSessionKey || null,
     parent_flow_id: legacyBindValue(row.parent_flow_id),
     parent_task_id: legacyBindValue(row.parent_task_id),
-    agent_id: legacyBindValue(row.agent_id),
+    agent_id: executorAgentId || null,
+    requester_agent_id: requesterAgentId || null,
     run_id: legacyBindValue(row.run_id),
     label: legacyBindValue(row.label),
     task: legacyBindValue(row.task ?? ""),
@@ -434,6 +774,7 @@ function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
       pickLegacyColumn(columns, "parent_flow_id"),
       pickLegacyColumn(columns, "parent_task_id"),
       pickLegacyColumn(columns, "agent_id"),
+      pickLegacyColumn(columns, "requester_agent_id"),
       pickLegacyColumn(columns, "run_id"),
       pickLegacyColumn(columns, "label"),
       "task",
@@ -525,15 +866,15 @@ function insertTaskRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
     `
       INSERT INTO task_runs (
         task_id, runtime, task_kind, source_id, requester_session_key, owner_key, scope_kind,
-        child_session_key, parent_flow_id, parent_task_id, agent_id, run_id, label, task, status,
-        delivery_status, notify_policy, created_at, started_at, ended_at, last_event_at,
-        cleanup_after, error, progress_summary, terminal_summary, terminal_outcome
+        child_session_key, parent_flow_id, parent_task_id, agent_id, requester_agent_id, run_id,
+        label, task, status, delivery_status, notify_policy, created_at, started_at, ended_at,
+        last_event_at, cleanup_after, error, progress_summary, terminal_summary, terminal_outcome
       ) VALUES (
         @task_id, @runtime, @task_kind, @source_id, @requester_session_key, @owner_key,
-        @scope_kind, @child_session_key, @parent_flow_id, @parent_task_id, @agent_id, @run_id,
-        @label, @task, @status, @delivery_status, @notify_policy, @created_at, @started_at,
-        @ended_at, @last_event_at, @cleanup_after, @error, @progress_summary, @terminal_summary,
-        @terminal_outcome
+        @scope_kind, @child_session_key, @parent_flow_id, @parent_task_id, @agent_id,
+        @requester_agent_id, @run_id, @label, @task, @status, @delivery_status, @notify_policy,
+        @created_at, @started_at, @ended_at, @last_event_at, @cleanup_after, @error,
+        @progress_summary, @terminal_summary, @terminal_outcome
       )
     `,
   ).run(row);
@@ -607,6 +948,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
           "parent_flow_id",
           "parent_task_id",
           "agent_id",
+          "requester_agent_id",
           "run_id",
           "label",
           "task",
@@ -797,6 +1139,284 @@ async function migrateLegacyTaskStateSidecars(params: {
   };
 }
 
+function resolveLegacyDeliveryQueuePath(stateDir: string, dirName: string): string {
+  return path.join(stateDir, dirName);
+}
+
+function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQueueFile[] {
+  const pending = safeReadDir(queueDir)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => ({ sourcePath: path.join(queueDir, entry.name), status: "pending" as const }));
+  const failedDir = path.join(queueDir, "failed");
+  const failed = safeReadDir(failedDir)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => ({
+      sourcePath: path.join(failedDir, entry.name),
+      status: "failed" as const,
+    }));
+  return [...pending, ...failed];
+}
+
+function listLegacyDeliveryQueueDeliveredMarkers(queueDir: string): string[] {
+  return safeReadDir(queueDir)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".delivered"))
+    .map((entry) => path.join(queueDir, entry.name));
+}
+
+function readLegacyDeliveryQueueEntry(sourcePath: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function legacyQueueMetadata(entry: Record<string, unknown>): {
+  entryKind: string | null;
+  sessionKey: string | null;
+  channel: string | null;
+  target: string | null;
+  accountId: string | null;
+} {
+  const session = entry.session as { key?: unknown } | undefined;
+  const route = entry.route as { channel?: unknown; to?: unknown; accountId?: unknown } | undefined;
+  const deliveryContext = entry.deliveryContext as
+    | { channel?: unknown; to?: unknown; accountId?: unknown }
+    | undefined;
+  const stringOrNull = (value: unknown) => (typeof value === "string" ? value : null);
+  return {
+    entryKind: stringOrNull(entry.kind) ?? "outbound",
+    sessionKey: stringOrNull(entry.sessionKey) ?? stringOrNull(session?.key),
+    channel:
+      stringOrNull(entry.channel) ??
+      stringOrNull(route?.channel) ??
+      stringOrNull(deliveryContext?.channel),
+    target: stringOrNull(entry.to) ?? stringOrNull(route?.to) ?? stringOrNull(deliveryContext?.to),
+    accountId:
+      stringOrNull(entry.accountId) ??
+      stringOrNull(route?.accountId) ??
+      stringOrNull(deliveryContext?.accountId),
+  };
+}
+
+function buildLegacyDeliveryQueueRow(params: {
+  queueName: string;
+  id: string;
+  status: "pending" | "failed";
+  entry: Record<string, unknown>;
+  now: number;
+}): SqliteBindRow {
+  const enqueuedAt =
+    typeof params.entry.enqueuedAt === "number" ? params.entry.enqueuedAt : params.now;
+  const retryCount = typeof params.entry.retryCount === "number" ? params.entry.retryCount : 0;
+  const failedAt =
+    params.status === "failed"
+      ? typeof params.entry.failedAt === "number"
+        ? params.entry.failedAt
+        : typeof params.entry.lastAttemptAt === "number"
+          ? params.entry.lastAttemptAt
+          : enqueuedAt
+      : null;
+  const meta = legacyQueueMetadata(params.entry);
+  return {
+    queue_name: params.queueName,
+    id: params.id,
+    status: params.status,
+    entry_kind: meta.entryKind,
+    session_key: meta.sessionKey,
+    channel: meta.channel,
+    target: meta.target,
+    account_id: meta.accountId,
+    retry_count: retryCount,
+    last_attempt_at:
+      typeof params.entry.lastAttemptAt === "number" ? params.entry.lastAttemptAt : null,
+    last_error: typeof params.entry.lastError === "string" ? params.entry.lastError : null,
+    recovery_state:
+      typeof params.entry.recoveryState === "string" ? params.entry.recoveryState : null,
+    platform_send_started_at:
+      typeof params.entry.platformSendStartedAt === "number"
+        ? params.entry.platformSendStartedAt
+        : null,
+    entry_json: JSON.stringify({ ...params.entry, id: params.id, enqueuedAt, retryCount }),
+    enqueued_at: enqueuedAt,
+    updated_at: params.now,
+    failed_at: failedAt,
+  };
+}
+
+function legacyDeliveryQueueRowsMatch(
+  existing: Record<string, unknown>,
+  incoming: SqliteBindRow,
+): boolean {
+  return [
+    "status",
+    "entry_kind",
+    "session_key",
+    "channel",
+    "target",
+    "account_id",
+    "retry_count",
+    "last_attempt_at",
+    "last_error",
+    "recovery_state",
+    "platform_send_started_at",
+    "entry_json",
+    "enqueued_at",
+    "failed_at",
+  ].every((column) => {
+    const left = existing[column];
+    const right = incoming[column];
+    if (typeof left === "bigint" || typeof right === "bigint") {
+      return (
+        normalizeLegacySqliteInteger(left as number | bigint | null) ===
+        normalizeLegacySqliteInteger(right as number | bigint | null)
+      );
+    }
+    return left === right;
+  });
+}
+
+function removeLegacyDeliveryQueueDir(params: {
+  queueDir: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  try {
+    fs.rmSync(params.queueDir, { recursive: true });
+    params.changes.push(`Removed ${params.label} legacy source ${params.queueDir}`);
+  } catch (err) {
+    params.warnings.push(`Failed removing ${params.label} ${params.queueDir}: ${String(err)}`);
+  }
+}
+
+function removeLegacyDeliveryQueueMarkers(
+  markerPaths: string[],
+  label: string,
+  warnings: string[],
+): number | null {
+  let removed = 0;
+  for (const markerPath of markerPaths) {
+    try {
+      fs.rmSync(markerPath, { force: true });
+      removed++;
+    } catch (err) {
+      warnings.push(`Failed removing ${label} marker ${markerPath}: ${String(err)}`);
+      return null;
+    }
+  }
+  return removed;
+}
+
+async function migrateLegacyDeliveryQueues(params: {
+  stateDir: string;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const queue of LEGACY_DELIVERY_QUEUE_DIRS) {
+    const queueDir = resolveLegacyDeliveryQueuePath(params.stateDir, queue.dirName);
+    const files = listLegacyDeliveryQueueFiles(queueDir);
+    const markerPaths = listLegacyDeliveryQueueDeliveredMarkers(queueDir);
+    if (files.length === 0 && markerPaths.length === 0) {
+      continue;
+    }
+    let imported = 0;
+    let skipped = 0;
+    const conflicts: string[] = [];
+    try {
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const insert = db.prepare(
+            `
+            INSERT INTO delivery_queue_entries (
+              queue_name, id, status, entry_kind, session_key, channel, target, account_id,
+              retry_count, last_attempt_at, last_error, recovery_state,
+              platform_send_started_at, entry_json, enqueued_at, updated_at, failed_at
+            ) VALUES (
+              @queue_name, @id, @status, @entry_kind, @session_key, @channel, @target,
+              @account_id, @retry_count, @last_attempt_at, @last_error, @recovery_state,
+              @platform_send_started_at, @entry_json, @enqueued_at, @updated_at, @failed_at
+            )
+          `,
+          );
+          const now = Date.now();
+          for (const file of files) {
+            const entry = readLegacyDeliveryQueueEntry(file.sourcePath);
+            const id =
+              typeof entry?.id === "string" ? entry.id : path.basename(file.sourcePath, ".json");
+            if (!entry || !id) {
+              skipped++;
+              continue;
+            }
+            const row = buildLegacyDeliveryQueueRow({
+              queueName: queue.queueName,
+              id,
+              status: file.status,
+              entry,
+              now,
+            });
+            const existing = db
+              .prepare(
+                `
+                SELECT status, entry_kind, session_key, channel, target, account_id,
+                       retry_count, last_attempt_at, last_error, recovery_state,
+                       platform_send_started_at, entry_json, enqueued_at, failed_at
+                  FROM delivery_queue_entries
+                 WHERE queue_name = ? AND id = ?
+              `,
+              )
+              .get(queue.queueName, id);
+            if (existing) {
+              if (!legacyDeliveryQueueRowsMatch(existing as Record<string, unknown>, row)) {
+                conflicts.push(id);
+              }
+              continue;
+            }
+            insert.run(row);
+            imported++;
+          }
+        },
+        { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+      );
+    } catch (err) {
+      warnings.push(`Failed migrating ${queue.label} ${queueDir}: ${String(err)}`);
+      continue;
+    }
+    const removedMarkers = removeLegacyDeliveryQueueMarkers(markerPaths, queue.label, warnings);
+    if (removedMarkers === null) {
+      continue;
+    }
+    if (removedMarkers > 0) {
+      changes.push(
+        `Removed ${removedMarkers} ${queue.label} delivered ${removedMarkers === 1 ? "marker" : "markers"}`,
+      );
+    }
+    if (imported > 0) {
+      changes.push(
+        `Migrated ${imported} ${queue.label} ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
+      );
+    }
+    if (skipped > 0) {
+      warnings.push(
+        `Skipped ${skipped} malformed ${queue.label} ${skipped === 1 ? "entry" : "entries"}`,
+      );
+      warnings.push(`Left ${queue.label} in place because malformed entries need manual cleanup`);
+      continue;
+    }
+    if (conflicts.length > 0) {
+      warnings.push(
+        `Left ${queue.label} in place because ${conflicts.length} ${conflicts.length === 1 ? "entry" : "entries"} already existed in shared state: ${conflicts[0]}`,
+      );
+      continue;
+    }
+    removeLegacyDeliveryQueueDir({ queueDir, label: queue.label, changes, warnings });
+  }
+  return { changes, warnings };
+}
+
 async function migrateLegacyPluginStateSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
@@ -821,6 +1441,7 @@ async function migrateLegacyPluginStateSidecar(params: {
     const conflictedKeys: string[] = [];
     const rowsToInsert: LegacyPluginStateSidecarRow[] = [];
     let imported = 0;
+    let skippedExpired = 0;
     const now = Date.now();
     runOpenClawStateWriteTransaction(
       ({ db }) => {
@@ -845,16 +1466,22 @@ async function migrateLegacyPluginStateSidecar(params: {
               .where("namespace", "=", row.namespace)
               .where("entry_key", "=", row.entry_key),
           );
+          const legacyExpired = isLegacyPluginStateRowExpired(row, now);
           if (existing) {
             if (!legacyPluginStateRowsMatch(existing, row)) {
-              conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
+              if (legacyExpired) {
+                skippedExpired += 1;
+              } else {
+                conflictedKeys.push(`${row.plugin_id}/${row.namespace}/${row.entry_key}`);
+              }
             }
             continue;
           }
+          if (legacyExpired) {
+            skippedExpired += 1;
+            continue;
+          }
           rowsToInsert.push(row);
-        }
-        if (conflictedKeys.length > 0) {
-          throw new LegacyPluginStateSidecarConflictError(conflictedKeys);
         }
         for (const row of rowsToInsert) {
           executeSqliteQuerySync(
@@ -883,15 +1510,20 @@ async function migrateLegacyPluginStateSidecar(params: {
         `Migrated ${imported} plugin-state sidecar ${imported === 1 ? "entry" : "entries"} → shared SQLite state`,
       );
     }
-  } catch (err) {
-    if (err instanceof LegacyPluginStateSidecarConflictError) {
+    if (conflictedKeys.length > 0) {
       return {
         changes,
         warnings: [
-          `Left plugin-state sidecar in place because ${err.conflictedKeys.length} ${err.conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${err.conflictedKeys[0]}`,
+          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row" : "rows"} already existed in shared state: ${conflictedKeys[0]}`,
         ],
       };
     }
+    if (skippedExpired > 0) {
+      changes.push(
+        `Dropped ${skippedExpired} expired plugin-state sidecar ${skippedExpired === 1 ? "entry" : "entries"}`,
+      );
+    }
+  } catch (err) {
     return {
       changes,
       warnings: [`Failed migrating plugin-state sidecar ${sourcePath}: ${String(err)}`],
@@ -899,6 +1531,70 @@ async function migrateLegacyPluginStateSidecar(params: {
   }
 
   archiveLegacyPluginStateSidecar({ sourcePath, changes, warnings });
+  return { changes, warnings };
+}
+
+async function migrateLegacyInstalledPluginIndex(params: {
+  stateDir: string;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
+  if (!fileExists(sourcePath)) {
+    return { changes: [], warnings: [] };
+  }
+
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const legacy = readLegacyInstalledPluginIndex(sourcePath);
+  if (!legacy) {
+    return {
+      changes,
+      warnings: [`Left plugin install index in place because ${sourcePath} is invalid`],
+    };
+  }
+
+  const storeOptions = { stateDir: params.stateDir };
+  const current = readPersistedInstalledPluginIndexSync(storeOptions);
+  if (current && !legacyInstalledPluginIndexMatches(current, legacy)) {
+    const merged = mergeLegacyInstalledPluginIndexRecords(current, legacy);
+    if (merged.addedCount > 0) {
+      try {
+        writePersistedInstalledPluginIndexSync(merged.merged, storeOptions);
+        changes.push(
+          `Merged ${merged.addedCount} legacy plugin install ${merged.addedCount === 1 ? "record" : "records"} → shared SQLite state`,
+        );
+      } catch (err) {
+        return {
+          changes,
+          warnings: [`Failed merging plugin install index ${sourcePath}: ${String(err)}`],
+        };
+      }
+    }
+    if (merged.conflicts.length > 0) {
+      return {
+        changes,
+        warnings: [
+          `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${merged.conflicts.join(", ")}`,
+        ],
+      };
+    }
+  }
+
+  if (!current) {
+    try {
+      writePersistedInstalledPluginIndexSync(legacy, storeOptions);
+      const recordCount = Object.keys(legacy.installRecords).length;
+      changes.push(
+        `Migrated plugin install index ${recordCount} ${recordCount === 1 ? "record" : "records"} → shared SQLite state`,
+      );
+    } catch (err) {
+      return {
+        changes,
+        warnings: [`Failed migrating plugin install index ${sourcePath}: ${String(err)}`],
+      };
+    }
+  }
+
+  archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
   return { changes, warnings };
 }
 
@@ -943,11 +1639,12 @@ async function runLegacyMigrationPlans(
   for (const plan of plans) {
     if (plan.kind === "plugin-state-import") {
       await withPluginStateImportEnv(plan, async () => {
-        let storeEntries: Array<{ key: string; value: unknown }> = [];
-        let pluginEntryCount = 0;
+        let storeEntries: Array<{ key: string; value: unknown }>;
+        let pluginEntryCount;
         const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
           namespace: plan.namespace,
           maxEntries: plan.maxEntries,
+          ...(plan.defaultTtlMs != null ? { defaultTtlMs: plan.defaultTtlMs } : {}),
         });
         try {
           storeEntries = await store.entries();
@@ -962,59 +1659,94 @@ async function runLegacyMigrationPlans(
         const existingValuesByKey = new Map(storeEntries.map(({ key, value }) => [key, value]));
         const expectedKeys = new Set(existingKeys);
         let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
-        const entries = await plan.readEntries();
-        const missingEntries = entries.filter(
-          ({ key }) => !existingKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
-        );
+        let entries: Awaited<ReturnType<typeof plan.readEntries>>;
+        try {
+          entries = await plan.readEntries();
+        } catch (err) {
+          warnings.push(`Failed reading ${plan.label} legacy source: ${String(err)}`);
+          return;
+        }
+        const candidateEntries: Array<{
+          key: string;
+          targetKey: string;
+          value: unknown;
+          ttlMs?: number;
+          existedBefore: boolean;
+        }> = [];
+        const failedTargetKeys = new Set<string>();
+        let missingEntryCount = 0;
+        for (const entry of entries) {
+          const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
+          const existingValue = existingValuesByKey.get(targetKey);
+          if (existingKeys.has(targetKey)) {
+            const shouldReplace =
+              existingValue !== undefined &&
+              (await plan.shouldReplaceExistingEntry?.({
+                key: entry.key,
+                existingValue,
+                incomingValue: entry.value,
+              }));
+            if (shouldReplace) {
+              candidateEntries.push({ ...entry, targetKey, existedBefore: true });
+            }
+            continue;
+          }
+          candidateEntries.push({ ...entry, targetKey, existedBefore: false });
+          missingEntryCount++;
+        }
         const pluginRemainingCapacity = Math.max(
           0,
           MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - pluginEntryCount,
         );
-        if (missingEntries.length > pluginRemainingCapacity) {
+        if (missingEntryCount > pluginRemainingCapacity) {
           warnings.push(
-            `Skipped migrating ${plan.label} because plugin state has room for ${pluginRemainingCapacity} of ${missingEntries.length} missing entries; left legacy source in place`,
+            `Skipped migrating ${plan.label} because plugin state has room for ${pluginRemainingCapacity} of ${missingEntryCount} missing entries; left legacy source in place`,
           );
           return;
         }
         let imported = 0;
-        const importedKeys: string[] = [];
-        for (const entry of entries) {
-          const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
-          if (existingKeys.has(targetKey)) {
-            continue;
-          }
-          if (remainingCapacity <= 0) {
+        const changedKeys: string[] = [];
+        for (const entry of candidateEntries) {
+          if (!entry.existedBefore && remainingCapacity <= 0) {
             break;
           }
           try {
             await store.register(
-              targetKey,
+              entry.targetKey,
               entry.value,
               entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
             );
             const nextExpectedKeys = new Set(expectedKeys);
-            nextExpectedKeys.add(targetKey);
+            nextExpectedKeys.add(entry.targetKey);
             const liveKeys = new Set((await store.entries()).map(({ key }) => key));
             const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
             if (missingKey) {
-              for (const importedKey of importedKeys.toReversed()) {
-                await store.delete(importedKey);
+              for (const changedKey of changedKeys.toReversed()) {
+                if (existingValuesByKey.has(changedKey)) {
+                  await store.register(changedKey, existingValuesByKey.get(changedKey));
+                } else {
+                  await store.delete(changedKey);
+                }
               }
-              await store.delete(targetKey);
-              if (existingValuesByKey.has(missingKey)) {
-                await store.register(missingKey, existingValuesByKey.get(missingKey));
+              if (existingValuesByKey.has(entry.targetKey)) {
+                await store.register(entry.targetKey, existingValuesByKey.get(entry.targetKey));
+              } else {
+                await store.delete(entry.targetKey);
               }
               warnings.push(
                 `Stopped migrating ${plan.label} because plugin state cap evicted ${missingKey}; left legacy source in place`,
               );
               return;
             }
-            expectedKeys.add(targetKey);
-            existingKeys.add(targetKey);
-            importedKeys.push(targetKey);
-            remainingCapacity--;
+            expectedKeys.add(entry.targetKey);
+            existingKeys.add(entry.targetKey);
+            changedKeys.push(entry.targetKey);
+            if (!entry.existedBefore) {
+              remainingCapacity--;
+            }
             imported++;
           } catch (err) {
+            failedTargetKeys.add(entry.targetKey);
             warnings.push(`Failed migrating ${plan.label} entry ${entry.key}: ${String(err)}`);
           }
         }
@@ -1028,23 +1760,27 @@ async function runLegacyMigrationPlans(
           cleanupKeys = expectedKeys;
         }
         const allEntriesCovered =
-          entries.length > 0 &&
-          entries.every(({ key }) =>
-            cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
-          );
+          (entries.length === 0 && plan.cleanupWhenEmpty === true) ||
+          (entries.length > 0 &&
+            entries.every(
+              ({ key }) =>
+                cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
+                !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+            ));
         if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
-          const archivedPath = `${plan.sourcePath}.migrated`;
-          if (fileExists(archivedPath)) {
-            warnings.push(
-              `Left migrated ${plan.label} source in place because ${archivedPath} already exists`,
-            );
-            return;
-          }
+          archiveLegacyImportSource({
+            sourcePath: plan.sourcePath,
+            label: plan.label,
+            changes,
+            warnings,
+          });
+        }
+        if (allEntriesCovered && plan.removeSource) {
           try {
-            fs.renameSync(plan.sourcePath, archivedPath);
-            changes.push(`Archived ${plan.label} legacy source → ${archivedPath}`);
+            await plan.removeSource();
+            changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
           } catch (err) {
-            warnings.push(`Failed archiving ${plan.label} legacy source: ${String(err)}`);
+            warnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
           }
         }
       });
@@ -1299,6 +2035,83 @@ function canonicalizeSessionStore(params: {
   }
 
   return { store: canonical, legacyKeys };
+}
+
+function resolveStaleLegacySessionFile(params: {
+  entry: unknown;
+  legacyDir: string;
+  targetDir: string;
+}): string | undefined {
+  if (!params.entry || typeof params.entry !== "object" || Array.isArray(params.entry)) {
+    return undefined;
+  }
+  const entry = params.entry as SessionEntryLike;
+  const rawSessionFile = entry.sessionFile;
+  if (typeof rawSessionFile !== "string") {
+    return undefined;
+  }
+  const legacySessionFile = path.isAbsolute(rawSessionFile)
+    ? path.resolve(rawSessionFile)
+    : path.resolve(params.legacyDir, rawSessionFile);
+  const relative = path.relative(path.resolve(params.legacyDir), legacySessionFile);
+  if (relative.startsWith("..") || path.isAbsolute(relative) || fileExists(legacySessionFile)) {
+    return undefined;
+  }
+  const legacyBackupHasTranscript = safeReadDir(path.dirname(params.legacyDir)).some(
+    (dirent) =>
+      dirent.isDirectory() &&
+      dirent.name.startsWith(`${path.basename(params.legacyDir)}.legacy-`) &&
+      fileExists(
+        path.join(path.dirname(params.legacyDir), dirent.name, path.basename(legacySessionFile)),
+      ),
+  );
+  if (legacyBackupHasTranscript) {
+    return undefined;
+  }
+  const parsed = path.parse(path.basename(legacySessionFile));
+  const hasCollisionRename = safeReadDir(params.targetDir).some(
+    (dirent) =>
+      dirent.isFile() &&
+      dirent.name.startsWith(`${parsed.name}.legacy-`) &&
+      dirent.name.endsWith(parsed.ext),
+  );
+  if (hasCollisionRename) {
+    return undefined;
+  }
+  const targetSessionFile = path.join(params.targetDir, path.basename(legacySessionFile));
+  if (!fileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
+    return undefined;
+  }
+  const readFirstLine = () => {
+    const fd = fs.openSync(targetSessionFile, "r");
+    try {
+      const buffer = Buffer.alloc(8192);
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      if (bytesRead <= 0) {
+        return undefined;
+      }
+      const chunk = buffer.subarray(0, bytesRead).toString("utf8");
+      const newline = chunk.indexOf("\n");
+      return newline >= 0 ? chunk.slice(0, newline) : chunk;
+    } finally {
+      fs.closeSync(fd);
+    }
+  };
+  try {
+    const firstLine = readFirstLine();
+    const header = firstLine ? (JSON.parse(firstLine) as unknown) : undefined;
+    if (!header || typeof header !== "object" || Array.isArray(header)) {
+      return undefined;
+    }
+    if ((header as { type?: unknown }).type === "session") {
+      return (header as { id?: unknown }).id === entry.sessionId ? targetSessionFile : undefined;
+    }
+    const canonicalFileName =
+      path.basename(entry.sessionId) === entry.sessionId ? `${entry.sessionId}.jsonl` : undefined;
+    return canonicalFileName === path.basename(targetSessionFile) ? targetSessionFile : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function skipJson5Trivia(raw: string, index: number): number {
@@ -1663,13 +2476,27 @@ export async function autoMigrateLegacyStateDir(params: {
   }
   autoMigrateStateDirChecked = true;
 
+  const homedir = params.homedir ?? os.homedir;
   const env = params.env ?? process.env;
-  if (env.OPENCLAW_STATE_DIR?.trim()) {
-    return { migrated: false, skipped: true, changes: [], warnings: [] };
+  const warnings: string[] = [];
+  const changes: string[] = [];
+  const hasCustomStateDir = Boolean(env.OPENCLAW_STATE_DIR?.trim());
+  const targetDir = hasCustomStateDir ? resolveStateDir(env, homedir) : resolveNewStateDir(homedir);
+  const migratePluginInstallIndex = async () => {
+    const result = await migrateLegacyInstalledPluginIndex({ stateDir: targetDir });
+    changes.push(...result.changes);
+    warnings.push(...result.warnings);
+  };
+  if (hasCustomStateDir) {
+    await migratePluginInstallIndex();
+    return {
+      migrated: changes.length > 0,
+      skipped: changes.length === 0 && warnings.length === 0,
+      changes,
+      warnings,
+    };
   }
 
-  const homedir = params.homedir ?? os.homedir;
-  const targetDir = resolveNewStateDir(homedir);
   const legacyDirs = resolveLegacyStateDirs(homedir);
   let legacyDir = legacyDirs.find((dir) => {
     try {
@@ -1678,17 +2505,16 @@ export async function autoMigrateLegacyStateDir(params: {
       return false;
     }
   });
-  const warnings: string[] = [];
-  const changes: string[] = [];
 
-  let legacyStat: fs.Stats | null = null;
+  let legacyStat: fs.Stats | null;
   try {
     legacyStat = legacyDir ? fs.lstatSync(legacyDir) : null;
   } catch {
     legacyStat = null;
   }
   if (!legacyStat) {
-    return { migrated: false, skipped: false, changes, warnings };
+    await migratePluginInstallIndex();
+    return { migrated: changes.length > 0, skipped: false, changes, warnings };
   }
   if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
     warnings.push(`Legacy state path is not a directory: ${legacyDir}`);
@@ -1705,7 +2531,8 @@ export async function autoMigrateLegacyStateDir(params: {
       return { migrated: false, skipped: false, changes, warnings };
     }
     if (path.resolve(legacyTarget) === path.resolve(targetDir)) {
-      return { migrated: false, skipped: false, changes, warnings };
+      await migratePluginInstallIndex();
+      return { migrated: changes.length > 0, skipped: false, changes, warnings };
     }
     if (legacyDirs.some((dir) => path.resolve(dir) === path.resolve(legacyTarget))) {
       legacyDir = legacyTarget;
@@ -1737,12 +2564,14 @@ export async function autoMigrateLegacyStateDir(params: {
 
   if (isDirPath(targetDir)) {
     if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
-      return { migrated: false, skipped: false, changes, warnings };
+      await migratePluginInstallIndex();
+      return { migrated: changes.length > 0, skipped: false, changes, warnings };
     }
+    await migratePluginInstallIndex();
     warnings.push(
       `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
     );
-    return { migrated: false, skipped: false, changes, warnings };
+    return { migrated: changes.length > 0, skipped: false, changes, warnings };
   }
 
   try {
@@ -1796,6 +2625,7 @@ export async function autoMigrateLegacyStateDir(params: {
     }
   }
 
+  await migratePluginInstallIndex();
   return { migrated: changes.length > 0, skipped: false, changes, warnings };
 }
 
@@ -1816,22 +2646,29 @@ export async function autoMigrateLegacyTaskStateSidecars(params: {
 
   const stateDir = resolveStateDir(params.env ?? process.env, params.homedir);
   const result = await migrateLegacyTaskStateSidecars({ stateDir });
+  const execApprovals = migrateLegacyExecApprovals(
+    detectLegacyExecApprovalsMigration({
+      env: params.env ?? process.env,
+      homedir: params.homedir ?? os.homedir,
+      stateDir,
+    }),
+  );
+  const changes = [...result.changes, ...execApprovals.changes];
+  const warnings = [...result.warnings, ...execApprovals.warnings];
   const logger = params.log ?? createSubsystemLogger("state-migrations");
-  if (result.changes.length > 0) {
-    logger.info(
-      `Auto-migrated legacy task state:\n${result.changes.map((entry) => `- ${entry}`).join("\n")}`,
-    );
+  if (changes.length > 0) {
+    logger.info(`Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`);
   }
-  if (result.warnings.length > 0) {
+  if (warnings.length > 0) {
     logger.warn(
-      `Legacy task state migration warnings:\n${result.warnings.map((entry) => `- ${entry}`).join("\n")}`,
+      `Legacy state migration warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
     );
   }
   return {
-    migrated: result.changes.length > 0,
+    migrated: changes.length > 0,
     skipped: false,
-    changes: result.changes,
-    warnings: result.warnings,
+    changes,
+    warnings,
   };
 }
 
@@ -1845,8 +2682,8 @@ async function collectChannelLegacyStateMigrationPlans(params: {
   // Legacy state detection belongs on a narrow setup-entry surface so doctor
   // does not cold-load unrelated runtime channel code.
   const detectors = listBundledChannelLegacyStateMigrationDetectors({ config: params.cfg });
-  for (const detectLegacyStateMigrations of detectors) {
-    const detected = await detectLegacyStateMigrations({
+  for (const detectLegacyStateMigrationsLocal of detectors) {
+    const detected = await detectLegacyStateMigrationsLocal({
       cfg: params.cfg,
       env: params.env,
       stateDir: params.stateDir,
@@ -1865,6 +2702,49 @@ async function collectChannelLegacyStateMigrationPlans(params: {
   return plans;
 }
 
+async function collectPluginDoctorStateMigrationPlans(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+}): Promise<DetectedPluginDoctorStateMigrationPlan[]> {
+  const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
+  for (const entry of listPluginDoctorStateMigrationEntries({
+    config: params.cfg,
+    env: params.env,
+  })) {
+    const detected = await entry.migration.detectLegacyState({
+      config: params.cfg,
+      env: params.env,
+      stateDir: params.stateDir,
+      oauthDir: params.oauthDir,
+      context: createPluginDoctorStateMigrationContext(entry.pluginId, params.env),
+    });
+    if (detected?.preview.length) {
+      plans.push({
+        pluginId: entry.pluginId,
+        migration: entry.migration,
+        preview: detected.preview,
+      });
+    }
+  }
+  return plans;
+}
+
+function createPluginDoctorStateMigrationContext(
+  pluginId: string,
+  env: NodeJS.ProcessEnv,
+): PluginDoctorStateMigrationContext {
+  return {
+    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
+      return createPluginStateKeyedStore<T>(pluginId, {
+        ...options,
+        env: options.env ?? env,
+      });
+    },
+  };
+}
+
 export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -1874,6 +2754,7 @@ export async function detectLegacyStateMigrations(params: {
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
+  const execApprovals = detectLegacyExecApprovalsMigration({ env, homedir, stateDir });
 
   const targetAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
   const rawMainKey = params.cfg.session?.mainKey;
@@ -1903,21 +2784,55 @@ export async function detectLegacyStateMigrations(params: {
         scope: targetScope,
       })
     : [];
+  const hasStaleSessionFiles =
+    targetSessionParsed.ok &&
+    Object.values(targetSessionParsed.store).some((entry) =>
+      Boolean(
+        resolveStaleLegacySessionFile({
+          entry,
+          legacyDir: sessionsLegacyDir,
+          targetDir: sessionsTargetDir,
+        }),
+      ),
+    );
 
   const legacyAgentDir = path.join(stateDir, "agent");
   const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
   const hasLegacyAgentDir = existsDir(legacyAgentDir);
   const pluginStateSidecarPath = resolveLegacyPluginStateSidecarPath(stateDir);
   const hasPluginStateSidecar = fileExists(pluginStateSidecarPath);
+  const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
+  const hasPluginInstallIndex = fileExists(pluginInstallIndexPath);
+  const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
+    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+  });
   const taskRunsSidecarPath = resolveLegacyTaskRunsSidecarPath(stateDir);
   const flowRunsSidecarPath = resolveLegacyFlowRunsSidecarPath(stateDir);
   const hasTaskStateSidecars = fileExists(taskRunsSidecarPath) || fileExists(flowRunsSidecarPath);
+  const deliveryQueuePaths = {
+    outboundPath: resolveLegacyDeliveryQueuePath(stateDir, "delivery-queue"),
+    sessionPath: resolveLegacyDeliveryQueuePath(stateDir, "session-delivery-queue"),
+  };
+  const hasDeliveryQueues =
+    listLegacyDeliveryQueueFiles(deliveryQueuePaths.outboundPath).length > 0 ||
+    listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.outboundPath).length > 0 ||
+    listLegacyDeliveryQueueFiles(deliveryQueuePaths.sessionPath).length > 0 ||
+    listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.sessionPath).length > 0;
   const channelPlans = await collectChannelLegacyStateMigrationPlans({
     cfg: params.cfg,
     env,
     stateDir,
     oauthDir,
   });
+  const pluginPlans =
+    stateSchemaMigrations.length > 0
+      ? []
+      : await collectPluginDoctorStateMigrationPlans({
+          cfg: params.cfg,
+          env,
+          stateDir,
+          oauthDir,
+        });
 
   const preview: string[] = [];
   if (hasLegacySessions) {
@@ -1926,11 +2841,23 @@ export async function detectLegacyStateMigrations(params: {
   if (legacyKeys.length > 0) {
     preview.push(`- Sessions: canonicalize legacy keys in ${sessionsTargetStorePath}`);
   }
+  if (hasStaleSessionFiles) {
+    preview.push(`- Sessions: repair migrated transcript paths in ${sessionsTargetStorePath}`);
+  }
   if (hasLegacyAgentDir) {
     preview.push(`- Agent dir: ${legacyAgentDir} → ${targetAgentDir}`);
   }
   if (hasPluginStateSidecar) {
     preview.push(`- Plugin state sidecar: ${pluginStateSidecarPath} → shared SQLite state`);
+  }
+  if (hasPluginInstallIndex) {
+    preview.push(`- Plugin install index: ${pluginInstallIndexPath} → shared SQLite state`);
+  }
+  if (stateSchemaMigrations.length > 0) {
+    preview.push("- Shared SQLite schema: agent database registry primary key → agent_id,path");
+    preview.push(
+      "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
+    );
   }
   if (fileExists(taskRunsSidecarPath)) {
     preview.push(`- Task registry sidecar: ${taskRunsSidecarPath} → shared SQLite state`);
@@ -1938,8 +2865,17 @@ export async function detectLegacyStateMigrations(params: {
   if (fileExists(flowRunsSidecarPath)) {
     preview.push(`- Task flow sidecar: ${flowRunsSidecarPath} → shared SQLite state`);
   }
+  if (hasDeliveryQueues) {
+    preview.push("- Delivery queues: legacy JSON queue files → shared SQLite state");
+  }
+  if (execApprovals.hasLegacy) {
+    preview.push(`- Exec approvals: ${execApprovals.sourcePath} → ${execApprovals.targetPath}`);
+  }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
+  }
+  if (pluginPlans.length > 0) {
+    preview.push(...pluginPlans.flatMap((plan) => plan.preview));
   }
 
   return {
@@ -1953,7 +2889,7 @@ export async function detectLegacyStateMigrations(params: {
       legacyStorePath: sessionsLegacyStorePath,
       targetDir: sessionsTargetDir,
       targetStorePath: sessionsTargetStorePath,
-      hasLegacy: hasLegacySessions || legacyKeys.length > 0,
+      hasLegacy: hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles,
       legacyKeys,
     },
     agentDir: {
@@ -1965,15 +2901,32 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: channelPlans.length > 0,
       plans: channelPlans,
     },
+    pluginPlans: {
+      hasLegacy: pluginPlans.length > 0,
+      plans: pluginPlans,
+    },
     pluginStateSidecar: {
       sourcePath: pluginStateSidecarPath,
       hasLegacy: hasPluginStateSidecar,
+    },
+    pluginInstallIndex: {
+      sourcePath: pluginInstallIndexPath,
+      hasLegacy: hasPluginInstallIndex,
+    },
+    stateSchema: {
+      hasLegacy: stateSchemaMigrations.length > 0,
+      preview: stateSchemaMigrations.map((migration) => migration.path),
     },
     taskStateSidecars: {
       taskRunsPath: taskRunsSidecarPath,
       flowRunsPath: flowRunsSidecarPath,
       hasLegacy: hasTaskStateSidecars,
     },
+    deliveryQueues: {
+      ...deliveryQueuePaths,
+      hasLegacy: hasDeliveryQueues,
+    },
+    execApprovals,
     preview,
   };
 }
@@ -1981,6 +2934,7 @@ export async function detectLegacyStateMigrations(params: {
 async function migrateLegacySessions(
   detected: LegacyStateDetection,
   now: () => number,
+  options: { recoverCorruptTargetStore?: boolean } = {},
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -2012,6 +2966,19 @@ async function migrateLegacySessions(
     scope: detected.targetScope,
   });
 
+  let repairedStaleSessionFiles = false;
+  for (const entry of Object.values(canonicalizedTarget.store)) {
+    const targetSessionFile = resolveStaleLegacySessionFile({
+      entry,
+      legacyDir: detected.sessions.legacyDir,
+      targetDir: detected.sessions.targetDir,
+    });
+    if (targetSessionFile) {
+      entry.sessionFile = targetSessionFile;
+      repairedStaleSessionFiles = true;
+    }
+  }
+
   const merged: Record<string, SessionEntryLike> = { ...canonicalizedTarget.store };
   for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
     merged[key] = mergeSessionEntry({
@@ -2025,11 +2992,12 @@ async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
   });
+  let migratedDirectChatKey: string | undefined;
   if (!merged[mainKey]) {
     const latest = pickLatestLegacyDirectEntry(legacyStore);
     if (latest?.sessionId) {
       merged[mainKey] = latest;
-      changes.push(`Migrated latest direct-chat session → ${mainKey}`);
+      migratedDirectChatKey = mainKey;
     }
   }
 
@@ -2039,7 +3007,29 @@ async function migrateLegacySessions(
     );
   }
 
+  const targetExists = fileExists(detected.sessions.targetStorePath);
+  let targetReadable = !targetExists || targetParsed.ok;
+  if (!targetReadable) {
+    if (options.recoverCorruptTargetStore) {
+      const archivedTargetPath = `${detected.sessions.targetStorePath}.corrupt-${now()}`;
+      try {
+        fs.renameSync(detected.sessions.targetStorePath, archivedTargetPath);
+        changes.push(`Archived corrupt target sessions store → ${archivedTargetPath}`);
+        targetReadable = true;
+      } catch (err) {
+        warnings.push(
+          `Target sessions store unreadable; failed to archive ${detected.sessions.targetStorePath}: ${String(err)}`,
+        );
+      }
+    } else {
+      warnings.push(
+        `Target sessions store unreadable; left untouched to avoid overwriting at ${detected.sessions.targetStorePath}. Run openclaw doctor --fix to archive it and retry the legacy merge.`,
+      );
+    }
+  }
+
   if (
+    targetReadable &&
     (legacyParsed.ok || targetParsed.ok) &&
     (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
   ) {
@@ -2054,12 +3044,23 @@ async function migrateLegacySessions(
     await saveSessionStore(detected.sessions.targetStorePath, normalized, {
       skipMaintenance: true,
     });
+    if (migratedDirectChatKey) {
+      changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
+    }
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
     if (canonicalizedTarget.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
     }
+    if (repairedStaleSessionFiles) {
+      changes.push("Repaired migrated session transcript paths");
+    }
   }
 
+  if (!targetReadable) {
+    return { changes, warnings };
+  }
+
+  const movedSessionFiles = new Map<string, string>();
   const entries = safeReadDir(detected.sessions.legacyDir);
   for (const entry of entries) {
     if (!entry.isFile()) {
@@ -2069,19 +3070,55 @@ async function migrateLegacySessions(
       continue;
     }
     const from = path.join(detected.sessions.legacyDir, entry.name);
-    const to = path.join(detected.sessions.targetDir, entry.name);
+    let to = path.join(detected.sessions.targetDir, entry.name);
     if (fileExists(to)) {
-      continue;
+      const parsed = path.parse(entry.name);
+      to = path.join(detected.sessions.targetDir, `${parsed.name}.legacy-${now()}${parsed.ext}`);
     }
     try {
       fs.renameSync(from, to);
+      movedSessionFiles.set(path.resolve(from), to);
       changes.push(`Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`);
     } catch (err) {
       warnings.push(`Failed moving ${from}: ${String(err)}`);
     }
   }
 
-  if (legacyParsed.ok) {
+  if (movedSessionFiles.size > 0) {
+    let rewroteSessionFiles = false;
+    for (const entry of Object.values(merged)) {
+      const rawSessionFile = entry.sessionFile;
+      const legacySessionFile =
+        typeof rawSessionFile === "string"
+          ? path.resolve(detected.sessions.legacyDir, rawSessionFile)
+          : typeof entry.sessionId === "string"
+            ? path.join(detected.sessions.legacyDir, `${entry.sessionId}.jsonl`)
+            : undefined;
+      const movedSessionFile = legacySessionFile
+        ? movedSessionFiles.get(path.resolve(legacySessionFile))
+        : undefined;
+      if (!movedSessionFile) {
+        continue;
+      }
+      entry.sessionFile = movedSessionFile;
+      rewroteSessionFiles = true;
+    }
+    if (rewroteSessionFiles) {
+      const normalized: Record<string, SessionEntry> = {};
+      for (const [key, entry] of Object.entries(merged)) {
+        const normalizedEntry = normalizeSessionEntry(entry);
+        if (normalizedEntry) {
+          normalized[key] = normalizedEntry;
+        }
+      }
+      await saveSessionStore(detected.sessions.targetStorePath, normalized, {
+        skipMaintenance: true,
+      });
+      changes.push("Rewrote migrated session transcript paths");
+    }
+  }
+
+  if (legacyParsed.ok && targetReadable) {
     try {
       if (fileExists(detected.sessions.legacyStorePath)) {
         fs.rmSync(detected.sessions.legacyStorePath, { force: true });
@@ -2152,40 +3189,305 @@ export async function migrateLegacyAgentDir(
   return { changes, warnings };
 }
 
+async function runPluginDoctorStateMigrationPlans(params: {
+  detected: LegacyStateDetection;
+  config: OpenClawConfig;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const refreshedPlans = await collectPluginDoctorStateMigrationPlans({
+    cfg: params.config,
+    env: process.env,
+    stateDir: params.detected.stateDir,
+    oauthDir: params.detected.oauthDir,
+  });
+  const plans =
+    refreshedPlans.length > 0 ? refreshedPlans : (params.detected.pluginPlans?.plans ?? []);
+  for (const plan of plans) {
+    try {
+      const result = await plan.migration.migrateLegacyState({
+        config: params.config,
+        env: process.env,
+        stateDir: params.detected.stateDir,
+        oauthDir: params.detected.oauthDir,
+        context: createPluginDoctorStateMigrationContext(plan.pluginId, process.env),
+      });
+      changes.push(...result.changes);
+      warnings.push(...result.warnings);
+    } catch (err) {
+      warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
+    }
+  }
+  return { changes, warnings };
+}
+
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isDefaultLegacyExecApprovalsSocketPath(params: {
+  socketPath: string;
+  sourcePath: string;
+}): boolean {
+  const expanded = expandHomePrefix(params.socketPath);
+  return (
+    path.resolve(expanded) ===
+    path.join(path.dirname(params.sourcePath), EXEC_APPROVALS_SOCKET_FILENAME)
+  );
+}
+
+function prepareMigratedExecApprovalsFile(params: {
+  raw: string;
+  sourcePath: string;
+  targetPath: string;
+}): { raw: string; warning?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(params.raw) as unknown;
+  } catch {
+    return {
+      raw: "",
+      warning: `Legacy exec approvals file unreadable; left in place at ${params.sourcePath}`,
+    };
+  }
+  if (!isPlainJsonObject(parsed) || parsed.version !== 1) {
+    return {
+      raw: "",
+      warning: `Legacy exec approvals file has unsupported shape; left in place at ${params.sourcePath}`,
+    };
+  }
+
+  const next: Record<string, unknown> = { ...parsed };
+  const socket = isPlainJsonObject(next.socket) ? { ...next.socket } : {};
+  const rawSocketPath = typeof socket.path === "string" ? socket.path.trim() : "";
+  if (
+    !rawSocketPath ||
+    isDefaultLegacyExecApprovalsSocketPath({
+      socketPath: rawSocketPath,
+      sourcePath: params.sourcePath,
+    })
+  ) {
+    socket.path = resolveExecApprovalsSocketPathForStateDir(path.dirname(params.targetPath));
+  }
+  next.socket = socket;
+  return { raw: `${JSON.stringify(next, null, 2)}\n` };
+}
+
+function assertSafeExecApprovalsMigrationTarget(targetPath: string): void {
+  const targetDir = path.dirname(targetPath);
+  assertNoSymlinkParentsSync({
+    rootDir: resolveRequiredHomeDir(),
+    targetPath: targetDir,
+    allowOutsideRoot: true,
+    messagePrefix: "Refusing to traverse symlink in exec approvals migration path",
+  });
+  try {
+    const targetStat = fs.lstatSync(targetPath);
+    if (targetStat.isSymbolicLink()) {
+      throw new Error(`Refusing to migrate exec approvals via symlink: ${targetPath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+}
+
+function writeMigratedExecApprovalsFile(targetPath: string, raw: string): boolean {
+  const targetDir = path.dirname(targetPath);
+  assertSafeExecApprovalsMigrationTarget(targetPath);
+  fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+  assertSafeExecApprovalsMigrationTarget(targetPath);
+  const dirStat = fs.lstatSync(targetDir);
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+    throw new Error(`Refusing to migrate exec approvals into unsafe directory: ${targetDir}`);
+  }
+  try {
+    fs.chmodSync(targetDir, 0o700);
+  } catch {
+    // best-effort on platforms without chmod
+  }
+  const tempPath = path.join(targetDir, `.exec-approvals.migration.${process.pid}.tmp`);
+  fs.writeFileSync(tempPath, raw, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  try {
+    try {
+      fs.copyFileSync(tempPath, targetPath, fs.constants.COPYFILE_EXCL);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        return false;
+      }
+      try {
+        fs.rmSync(targetPath, { force: true });
+      } catch {
+        // best-effort cleanup for an incomplete exclusive copy target
+      }
+      throw err;
+    }
+    try {
+      fs.chmodSync(targetPath, 0o600);
+    } catch {
+      // best-effort on platforms without chmod
+    }
+    return true;
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
+}
+
+function archiveMigratedExecApprovalsSource(sourcePath: string): string {
+  let archivePath = `${sourcePath}.migrated`;
+  if (fileExists(archivePath)) {
+    archivePath = `${archivePath}-${Date.now()}`;
+  }
+  fs.renameSync(sourcePath, archivePath);
+  return archivePath;
+}
+
+function migrateLegacyExecApprovals(detected: LegacyExecApprovalsMigrationDetection): {
+  changes: string[];
+  warnings: string[];
+} {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  if (!detected.hasLegacy) {
+    return { changes, warnings };
+  }
+  if (fileExists(detected.targetPath)) {
+    return { changes, warnings };
+  }
+  try {
+    const sourceStat = fs.lstatSync(detected.sourcePath);
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+      warnings.push(
+        `Legacy exec approvals file is not a regular file; left in place at ${detected.sourcePath}`,
+      );
+      return { changes, warnings };
+    }
+    try {
+      const targetStat = fs.lstatSync(detected.targetPath);
+      if (targetStat.isSymbolicLink()) {
+        warnings.push(
+          `Target exec approvals path is a symlink; skipped migration at ${detected.targetPath}`,
+        );
+        return { changes, warnings };
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+    const prepared = prepareMigratedExecApprovalsFile({
+      raw: fs.readFileSync(detected.sourcePath, "utf8"),
+      sourcePath: detected.sourcePath,
+      targetPath: detected.targetPath,
+    });
+    if (prepared.warning) {
+      warnings.push(prepared.warning);
+      return { changes, warnings };
+    }
+    if (!writeMigratedExecApprovalsFile(detected.targetPath, prepared.raw)) {
+      return { changes, warnings };
+    }
+    changes.push(`Migrated exec approvals → ${detected.targetPath}`);
+    try {
+      const archivePath = archiveMigratedExecApprovalsSource(detected.sourcePath);
+      changes.push(`Archived legacy exec approvals → ${archivePath}`);
+    } catch (err) {
+      warnings.push(
+        `Failed archiving legacy exec approvals at ${detected.sourcePath}: ${String(err)}`,
+      );
+    }
+  } catch (err) {
+    warnings.push(
+      `Failed migrating exec approvals (${detected.sourcePath} → ${detected.targetPath}): ${String(
+        err,
+      )}`,
+    );
+  }
+  return { changes, warnings };
+}
+
+function migrateLegacyStateSchema(detected: LegacyStateDetection): {
+  changes: string[];
+  warnings: string[];
+} {
+  return repairOpenClawStateDatabaseSchema({
+    env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
+  });
+}
+
 export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
+  config?: OpenClawConfig;
   now?: () => number;
+  recoverCorruptTargetStore?: boolean;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
+  const stateSchema = migrateLegacyStateSchema(detected);
+  if (detected.stateSchema.hasLegacy && stateSchema.warnings.length > 0) {
+    return stateSchema;
+  }
   const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
+    stateDir: detected.stateDir,
+  });
+  const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
     stateDir: detected.stateDir,
   });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
     stateDir: detected.stateDir,
   });
+  const deliveryQueues = await migrateLegacyDeliveryQueues({
+    stateDir: detected.stateDir,
+  });
+  const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
-  const sessions = await migrateLegacySessions(detected, now);
+  const pluginPlans = detected.stateSchema.hasLegacy
+    ? { changes: [], warnings: [] }
+    : await runPluginDoctorStateMigrationPlans({
+        detected,
+        config: params.config ?? ({} as OpenClawConfig),
+      });
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+  });
+  const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.config ?? ({} as OpenClawConfig),
+    env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
+    now,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
   );
   return {
     changes: [
+      ...stateSchema.changes,
       ...pluginStateSidecar.changes,
+      ...pluginInstallIndex.changes,
       ...taskStateSidecars.changes,
+      ...deliveryQueues.changes,
+      ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
+      ...pluginPlans.changes,
       ...sessions.changes,
+      ...acpSessionMetadata.changes,
       ...agentDir.changes,
       ...channelPlans.changes,
     ],
     warnings: [
+      ...stateSchema.warnings,
       ...pluginStateSidecar.warnings,
+      ...pluginInstallIndex.warnings,
       ...taskStateSidecars.warnings,
+      ...deliveryQueues.warnings,
+      ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
+      ...pluginPlans.warnings,
       ...sessions.warnings,
+      ...acpSessionMetadata.warnings,
       ...agentDir.warnings,
       ...channelPlans.warnings,
     ],
@@ -2351,6 +3653,80 @@ export async function migrateOrphanedSessionKeys(params: {
   return { changes, warnings };
 }
 
+async function migrateLegacyAcpSessionMetadata(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const env = params.env ?? process.env;
+  const now = params.now ?? (() => Date.now());
+  const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  const scope = params.cfg.session?.scope as SessionScope | undefined;
+  const seenStorePaths = new Set<string>();
+
+  for (const target of targets) {
+    const storePath = target.storePath;
+    if (seenStorePaths.has(storePath) || !fileExists(storePath)) {
+      continue;
+    }
+    seenStorePaths.add(storePath);
+    let parsed: ReturnType<typeof readSessionStoreJson5>;
+    try {
+      parsed = readSessionStoreJson5(storePath);
+    } catch (err) {
+      warnings.push(`Could not read ${storePath}: ${String(err)}`);
+      continue;
+    }
+    if (!parsed.ok) {
+      continue;
+    }
+
+    const normalized: Record<string, SessionEntry> = {};
+    let migrated = 0;
+    for (const [sessionKey, entry] of Object.entries(parsed.store)) {
+      const normalizedEntry = normalizeSessionEntry(entry);
+      if (!normalizedEntry) {
+        continue;
+      }
+      if (normalizedEntry.acp) {
+        const canonicalSessionKey = canonicalizeSessionKeyForAgent({
+          key: sessionKey,
+          agentId: target.agentId,
+          mainKey,
+          scope,
+          skipCrossAgentRemap: true,
+        });
+        writeAcpSessionMetaForMigration({
+          sessionKey: canonicalSessionKey,
+          sessionId: normalizedEntry.sessionId,
+          meta: normalizedEntry.acp,
+          env,
+          now,
+        });
+        delete normalizedEntry.acp;
+        migrated++;
+      }
+      normalized[sessionKey] = normalizedEntry;
+    }
+    if (migrated === 0) {
+      continue;
+    }
+    try {
+      await saveSessionStore(storePath, normalized, { skipMaintenance: true });
+      changes.push(
+        `Migrated ${migrated} ACP session metadata ${migrated === 1 ? "row" : "rows"} → shared SQLite state`,
+      );
+    } catch (err) {
+      warnings.push(`Failed to write ACP metadata migration source ${storePath}: ${String(err)}`);
+    }
+  }
+
+  return { changes, warnings };
+}
+
 function resolveStorePathFromTemplate(
   template: string,
   agentId: string,
@@ -2370,6 +3746,7 @@ export async function autoMigrateLegacyState(params: {
   homedir?: () => string;
   log?: MigrationLogger;
   now?: () => number;
+  recoverCorruptTargetStore?: boolean;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -2387,6 +3764,10 @@ export async function autoMigrateLegacyState(params: {
     homedir: params.homedir,
     log: params.log,
   });
+  const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
+  const stateSchema = repairOpenClawStateDatabaseSchema({
+    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+  });
 
   // Canonicalize orphaned session keys regardless of whether legacy migration
   // is needed — the orphan-key bug (#29683) affects all installs with
@@ -2394,6 +3775,11 @@ export async function autoMigrateLegacyState(params: {
   const orphanKeys = await migrateOrphanedSessionKeys({
     cfg: params.cfg,
     env,
+  });
+  const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.cfg,
+    env,
+    now: params.now,
   });
 
   const logMigrationResults = (changes: string[], warnings: string[]) => {
@@ -2420,34 +3806,63 @@ export async function autoMigrateLegacyState(params: {
     const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
       stateDir: detected.stateDir,
     });
+    const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
+      stateDir: detected.stateDir,
+    });
     const taskStateSidecars = await migrateLegacyTaskStateSidecars({
       stateDir: detected.stateDir,
     });
+    const deliveryQueues = await migrateLegacyDeliveryQueues({
+      stateDir: detected.stateDir,
+    });
+    const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
     const preSessionChannelPlans = await runLegacyMigrationPlans(
       detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
     );
+    const pluginPlans = await runPluginDoctorStateMigrationPlans({
+      detected,
+      config: params.cfg,
+    });
     const changes = [
       ...stateDirResult.changes,
+      ...stateSchema.changes,
       ...orphanKeys.changes,
+      ...acpSessionMetadata.changes,
       ...pluginStateSidecar.changes,
+      ...pluginInstallIndex.changes,
       ...taskStateSidecars.changes,
+      ...deliveryQueues.changes,
+      ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
+      ...pluginPlans.changes,
     ];
     const warnings = [
       ...stateDirResult.warnings,
+      ...stateSchema.warnings,
       ...orphanKeys.warnings,
+      ...acpSessionMetadata.warnings,
       ...pluginStateSidecar.warnings,
+      ...pluginInstallIndex.warnings,
       ...taskStateSidecars.warnings,
+      ...deliveryQueues.warnings,
+      ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
+      ...pluginPlans.warnings,
     ];
     logMigrationResults(changes, warnings);
     return {
       migrated:
         stateDirResult.migrated ||
+        stateSchema.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
+        acpSessionMetadata.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
+        pluginInstallIndex.changes.length > 0 ||
         taskStateSidecars.changes.length > 0 ||
-        preSessionChannelPlans.changes.length > 0,
+        deliveryQueues.changes.length > 0 ||
+        execApprovals.changes.length > 0 ||
+        preSessionChannelPlans.changes.length > 0 ||
+        pluginPlans.changes.length > 0,
       skipped: true,
       changes,
       warnings,
@@ -2457,14 +3872,33 @@ export async function autoMigrateLegacyState(params: {
     !detected.sessions.hasLegacy &&
     !detected.agentDir.hasLegacy &&
     !detected.channelPlans.hasLegacy &&
+    !detected.pluginPlans?.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
-    !detected.taskStateSidecars.hasLegacy
+    !detected.pluginInstallIndex.hasLegacy &&
+    !detected.stateSchema.hasLegacy &&
+    !detected.taskStateSidecars.hasLegacy &&
+    !detected.deliveryQueues.hasLegacy &&
+    !detected.execApprovals.hasLegacy
   ) {
-    const changes = [...stateDirResult.changes, ...orphanKeys.changes];
-    const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
+    const changes = [
+      ...stateDirResult.changes,
+      ...stateSchema.changes,
+      ...orphanKeys.changes,
+      ...acpSessionMetadata.changes,
+    ];
+    const warnings = [
+      ...stateDirResult.warnings,
+      ...stateSchema.warnings,
+      ...orphanKeys.warnings,
+      ...acpSessionMetadata.warnings,
+    ];
     logMigrationResults(changes, warnings);
     return {
-      migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
+      migrated:
+        stateDirResult.migrated ||
+        stateSchema.changes.length > 0 ||
+        orphanKeys.changes.length > 0 ||
+        acpSessionMetadata.changes.length > 0,
       skipped: false,
       changes,
       warnings,
@@ -2475,34 +3909,66 @@ export async function autoMigrateLegacyState(params: {
   const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
     stateDir: detected.stateDir,
   });
+  const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
+    stateDir: detected.stateDir,
+  });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
     stateDir: detected.stateDir,
   });
+  const deliveryQueues = await migrateLegacyDeliveryQueues({
+    stateDir: detected.stateDir,
+  });
+  const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
-  const sessions = await migrateLegacySessions(detected, now);
+  const pluginPlans = await runPluginDoctorStateMigrationPlans({
+    detected,
+    config: params.cfg,
+  });
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+  });
+  const postSessionAcpMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.cfg,
+    env,
+    now,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
   );
   const changes = [
     ...stateDirResult.changes,
+    ...stateSchema.changes,
     ...orphanKeys.changes,
+    ...acpSessionMetadata.changes,
     ...pluginStateSidecar.changes,
+    ...pluginInstallIndex.changes,
     ...taskStateSidecars.changes,
+    ...deliveryQueues.changes,
+    ...execApprovals.changes,
     ...preSessionChannelPlans.changes,
+    ...pluginPlans.changes,
     ...sessions.changes,
+    ...postSessionAcpMetadata.changes,
     ...agentDir.changes,
     ...channelPlans.changes,
   ];
   const warnings = [
     ...stateDirResult.warnings,
+    ...stateSchema.warnings,
     ...orphanKeys.warnings,
+    ...acpSessionMetadata.warnings,
     ...pluginStateSidecar.warnings,
+    ...pluginInstallIndex.warnings,
     ...taskStateSidecars.warnings,
+    ...deliveryQueues.warnings,
+    ...execApprovals.warnings,
     ...preSessionChannelPlans.warnings,
+    ...pluginPlans.warnings,
     ...sessions.warnings,
+    ...postSessionAcpMetadata.warnings,
     ...agentDir.warnings,
     ...channelPlans.warnings,
   ];

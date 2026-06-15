@@ -61,12 +61,17 @@ class ChatController(
 
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
+
+  // Preserve sent messages locally until chat.history includes the gateway-confirmed copy.
   private val optimisticMessagesByRunId = LinkedHashMap<String, ChatMessage>()
   private val pendingRunTimeoutMs = 120_000L
+
+  // Drops stale history responses after session switches or refresh races.
   private val historyLoadGeneration = AtomicLong(0)
 
   private var lastHealthPollAtMs: Long? = null
 
+  /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
     _healthOk.value = false
     _errorText.value = null
@@ -78,6 +83,7 @@ class ChatController(
     _sessionId.value = null
   }
 
+  /** Loads a chat session, normalizing "main" to the current gateway-provided main session key. */
   fun load(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     val generation = beginHistoryLoad(key, clearMessages = key != _sessionKey.value)
@@ -86,6 +92,7 @@ class ChatController(
     }
   }
 
+  /** Rebinds chat to a new canonical main session key after gateway hello/agent changes. */
   fun applyMainSessionKey(mainSessionKey: String) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
@@ -108,6 +115,7 @@ class ChatController(
     }
   }
 
+  /** Refreshes current chat history and session list without clearing optimistic messages first. */
   fun refresh() {
     val key = normalizeRequestedSessionKey(_sessionKey.value)
     val generation = beginHistoryLoad(key, clearMessages = false)
@@ -120,12 +128,14 @@ class ChatController(
     scope.launch { fetchSessions(limit = limit) }
   }
 
+  /** Persists the normalized thinking level used for subsequent chat sends. */
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
     if (normalized == _thinkingLevel.value) return
     _thinkingLevel.value = normalized
   }
 
+  /** Switches to another gateway chat session and starts a fresh history load. */
   fun switchSession(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     if (key.isEmpty()) return
@@ -163,6 +173,7 @@ class ChatController(
     return key
   }
 
+  /** Queues a chat send without waiting for gateway acceptance. */
   fun sendMessage(
     message: String,
     thinkingLevel: String,
@@ -177,6 +188,7 @@ class ChatController(
     }
   }
 
+  /** Sends a chat message and returns once the gateway accepts or rejects the request. */
   suspend fun sendMessageAwaitAcceptance(
     message: String,
     thinkingLevel: String,
@@ -194,7 +206,7 @@ class ChatController(
     val sessionKey = _sessionKey.value
     val thinking = normalizeThinking(thinkingLevel)
 
-    // Optimistic user message.
+    // Optimistic user message keeps the composer responsive while chat.send and history refresh complete.
     val userContent =
       buildList {
         add(ChatMessageContent(type = "text", text = text))
@@ -215,6 +227,7 @@ class ChatController(
         role = "user",
         content = userContent,
         timestampMs = System.currentTimeMillis(),
+        idempotencyKey = "$runId:user",
       )
     optimisticMessagesByRunId[runId] = optimisticMessage
     _messages.value = _messages.value + optimisticMessage
@@ -257,6 +270,7 @@ class ChatController(
       val res = session.request("chat.send", params.toString())
       val actualRunId = parseRunId(res) ?: runId
       if (actualRunId != runId) {
+        // Gateway may return a canonical run id; move all pending bookkeeping to that id.
         optimisticMessagesByRunId[actualRunId] = optimisticMessagesByRunId.remove(runId) ?: optimisticMessage
         clearPendingRun(runId)
         armPendingRunTimeout(actualRunId)
@@ -274,6 +288,7 @@ class ChatController(
     }
   }
 
+  /** Sends best-effort abort requests for every currently pending gateway run. */
   fun abort() {
     val runIds =
       synchronized(pendingRuns) {
@@ -305,7 +320,6 @@ class ChatController(
         scope.launch { pollHealthIfNeeded(force = false) }
       }
       "health" -> {
-        // If we receive a health snapshot, the gateway is reachable.
         _healthOk.value = true
       }
       "seqGap" -> {
@@ -315,6 +329,17 @@ class ChatController(
       "chat" -> {
         if (payloadJson.isNullOrBlank()) return
         handleChatEvent(payloadJson)
+      }
+      "sessions.changed" -> {
+        if (payloadJson.isNullOrBlank()) {
+          refreshSessionsForCurrentWindow()
+        } else {
+          handleSessionsChangedEvent(payloadJson)
+        }
+      }
+      "session.message" -> {
+        if (payloadJson.isNullOrBlank()) return
+        handleSessionMessageEvent(payloadJson)
       }
       "agent" -> {
         if (payloadJson.isNullOrBlank()) return
@@ -337,6 +362,8 @@ class ChatController(
         )
       if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
       val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
+      updateSessionFromHistory(history)
+      prunePersistedOptimisticMessages(history.messages)
       _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
       _sessionId.value = history.sessionId
       _historyLoading.value = false
@@ -371,6 +398,10 @@ class ChatController(
     }
   }
 
+  private fun refreshSessionsForCurrentWindow() {
+    scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
+  }
+
   private suspend fun pollHealthIfNeeded(force: Boolean) {
     val now = System.currentTimeMillis()
     val last = lastHealthPollAtMs
@@ -396,7 +427,7 @@ class ChatController(
     val state = payload["state"].asStringOrNull()
     when (state) {
       "delta" -> {
-        // Only show streaming text for runs we initiated
+        // Only show streaming text for runs we initiated in this controller.
         if (!isPending) return
         val text = parseAssistantDeltaText(payload)
         if (!text.isNullOrEmpty()) {
@@ -409,10 +440,8 @@ class ChatController(
         }
         if (runId != null) {
           clearPendingRun(runId)
-          optimisticMessagesByRunId.remove(runId)
         } else {
-          clearPendingRuns()
-          optimisticMessagesByRunId.clear()
+          clearPendingRuns(clearOptimisticMessages = false)
         }
         pendingToolCallsById.clear()
         publishPendingToolCalls()
@@ -442,6 +471,8 @@ class ChatController(
                 sessionKey = currentSessionKey,
                 previousMessages = _messages.value,
               )
+            updateSessionFromHistory(history)
+            prunePersistedOptimisticMessages(history.messages)
             _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
             _sessionId.value = history.sessionId
             history.thinkingLevel
@@ -455,6 +486,31 @@ class ChatController(
       }
     }
   }
+
+  private fun handleSessionsChangedEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    if (payload["reason"].asStringOrNull() == "delete") {
+      removeSessionEntry(payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull())
+      return
+    }
+    val entry = parseEventSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
+    } else {
+      refreshSessionsForCurrentWindow()
+    }
+  }
+
+  private fun handleSessionMessageEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    val entry = parseEventSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
+    }
+  }
+
+  private fun parseEventSessionEntry(payload: JsonObject): ChatSessionEntry? =
+    payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
 
   private fun handleAgentEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
@@ -548,12 +604,14 @@ class ChatController(
     }
   }
 
-  private fun clearPendingRuns() {
+  private fun clearPendingRuns(clearOptimisticMessages: Boolean = true) {
     for ((_, job) in pendingRunTimeoutJobs) {
       job.cancel()
     }
     pendingRunTimeoutJobs.clear()
-    optimisticMessagesByRunId.clear()
+    if (clearOptimisticMessages) {
+      optimisticMessagesByRunId.clear()
+    }
     synchronized(pendingRuns) {
       pendingRuns.clear()
       _pendingRunCount.value = 0
@@ -565,6 +623,15 @@ class ChatController(
     _messages.value = _messages.value.filterNot { it.id == message.id }
   }
 
+  private fun prunePersistedOptimisticMessages(incoming: List<ChatMessage>) {
+    val retained =
+      retainUnmatchedOptimisticMessages(
+        incoming = incoming,
+        optimistic = optimisticMessagesByRunId.values,
+      ).toSet()
+    optimisticMessagesByRunId.entries.removeAll { entry -> entry.value !in retained }
+  }
+
   private fun parseHistory(
     historyJson: String,
     sessionKey: String,
@@ -573,19 +640,21 @@ class ChatController(
     val root = json.parseToJsonElement(historyJson).asObjectOrNull() ?: return ChatHistory(sessionKey, null, null, emptyList())
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
+    val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
     val messages =
       array.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
-        val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseChatMessageContent) ?: emptyList()
+        val content = parseChatMessageContents(obj)
         val ts = obj["timestamp"].asLongOrNull()
         ChatMessage(
           id = UUID.randomUUID().toString(),
           role = role,
           content = content,
           timestampMs = ts,
+          idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
         )
       }
 
@@ -594,20 +663,69 @@ class ChatController(
       sessionId = sid,
       thinkingLevel = thinkingLevel,
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
+      sessionInfo = sessionInfo,
     )
   }
 
   private fun parseSessions(jsonString: String): List<ChatSessionEntry> {
     val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return emptyList()
     val sessions = root["sessions"].asArrayOrNull() ?: return emptyList()
-    return sessions.mapNotNull { item ->
-      val obj = item.asObjectOrNull() ?: return@mapNotNull null
-      val key = obj["key"].asStringOrNull()?.trim().orEmpty()
-      if (key.isEmpty()) return@mapNotNull null
-      val updatedAt = obj["updatedAt"].asLongOrNull()
-      val displayName = obj["displayName"].asStringOrNull()?.trim()
-      ChatSessionEntry(key = key, updatedAtMs = updatedAt, displayName = displayName)
-    }
+    return sessions.mapNotNull { item -> parseSessionEntry(item.asObjectOrNull()) }
+  }
+
+  private fun parseSessionEntry(
+    obj: JsonObject?,
+    fallbackKey: String? = null,
+  ): ChatSessionEntry? {
+    if (obj == null) return null
+    val key =
+      obj["key"].asStringOrNull()?.trim().orEmpty()
+        .ifEmpty { obj["sessionKey"].asStringOrNull()?.trim().orEmpty() }
+        .ifEmpty { fallbackKey?.trim().orEmpty() }
+    if (key.isEmpty()) return null
+    return ChatSessionEntry(
+      key = key,
+      updatedAtMs = obj["updatedAt"].asLongOrNull(),
+      displayName = obj["displayName"].asStringOrNull()?.trim(),
+      totalTokens = obj["totalTokens"].asLongOrNull(),
+      totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
+      contextTokens = obj["contextTokens"].asLongOrNull(),
+      hasContextUsageMetadata =
+        "totalTokens" in obj ||
+          "totalTokensFresh" in obj ||
+          "contextTokens" in obj,
+    )
+  }
+
+  private fun updateSessionFromHistory(history: ChatHistory) {
+    val info = history.sessionInfo ?: return
+    upsertSessionEntry(info, preserveExistingContextUsageWithoutTotal = true)
+  }
+
+  private fun upsertSessionEntry(
+    entry: ChatSessionEntry,
+    preserveExistingContextUsageWithoutTotal: Boolean = false,
+  ) {
+    val current = _sessions.value
+    val index = current.indexOfFirst { it.key == entry.key }
+    _sessions.value =
+      if (index >= 0) {
+        current.toMutableList().also {
+          it[index] =
+            mergeChatSessionEntry(
+              existing = it[index],
+              next = entry,
+              preserveExistingContextUsageWithoutTotal = preserveExistingContextUsageWithoutTotal,
+            )
+        }
+      } else {
+        listOf(entry) + current
+      }
+  }
+
+  private fun removeSessionEntry(sessionKey: String?) {
+    val key = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: return
+    _sessions.value = _sessions.value.filterNot { it.key == key }
   }
 
   private fun parseRunId(resJson: String): String? =
@@ -637,6 +755,9 @@ internal fun isCurrentHistoryLoad(
   activeGeneration: Long,
 ): Boolean = requestedSessionKey == currentSessionKey && requestGeneration == activeGeneration
 
+/**
+ * Convert gateway chat content parts into Android UI content parts.
+ */
 internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
   val obj = el.asObjectOrNull() ?: return null
   return when (obj["type"].asStringOrNull() ?: "text") {
@@ -658,11 +779,27 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
   }
 }
 
+internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent> {
+  obj["content"].asArrayOrNull()?.let { content ->
+    return content.mapNotNull(::parseChatMessageContent)
+  }
+  obj["content"].asStringOrNull()?.let { text ->
+    return listOf(ChatMessageContent(type = "text", text = text))
+  }
+  obj["text"].asStringOrNull()?.let { text ->
+    return listOf(ChatMessageContent(type = "text", text = text))
+  }
+  return emptyList()
+}
+
 internal data class MainSessionState(
   val currentSessionKey: String,
   val appliedMainSessionKey: String,
 )
 
+/**
+ * Rewrite only the active "main" alias when the gateway publishes a new canonical main session key.
+ */
 internal fun applyMainSessionKey(
   currentSessionKey: String,
   appliedMainSessionKey: String,
@@ -680,6 +817,9 @@ internal fun applyMainSessionKey(
   )
 }
 
+/**
+ * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
+ */
 internal fun reconcileMessageIds(
   previous: List<ChatMessage>,
   incoming: List<ChatMessage>,
@@ -710,26 +850,41 @@ internal fun mergeOptimisticMessages(
 ): List<ChatMessage> {
   if (optimistic.isEmpty()) return incoming
 
-  val unmatchedIncoming = incoming.toMutableList()
-  val missingOptimistic =
-    optimistic.filter { message ->
-      val matchIndex =
-        unmatchedIncoming.indexOfFirst { incomingMessage ->
-          incomingMessageConsumesOptimistic(incomingMessage, message)
-        }
-      if (matchIndex >= 0) {
-        unmatchedIncoming.removeAt(matchIndex)
-        false
-      } else {
-        true
-      }
-    }
+  val missingOptimistic = retainUnmatchedOptimisticMessages(incoming = incoming, optimistic = optimistic)
   if (missingOptimistic.isEmpty()) return incoming
 
   return (incoming + missingOptimistic).sortedWith(compareBy<ChatMessage> { it.timestampMs ?: Long.MAX_VALUE }.thenBy { it.id })
 }
 
+internal fun retainUnmatchedOptimisticMessages(
+  incoming: List<ChatMessage>,
+  optimistic: Collection<ChatMessage>,
+): List<ChatMessage> {
+  if (optimistic.isEmpty()) return emptyList()
+
+  val unmatchedIncoming = incoming.toMutableList()
+  return optimistic.filter { message ->
+    val matchIndex =
+      unmatchedIncoming.indexOfFirst { incomingMessage ->
+        incomingMessageConsumesOptimistic(incomingMessage, message)
+      }
+    if (matchIndex >= 0) {
+      unmatchedIncoming.removeAt(matchIndex)
+      false
+    } else {
+      true
+    }
+  }
+}
+
+/**
+ * Message identity used only for refresh reconciliation; it avoids exposing gateway ids as UI keys.
+ */
 internal fun messageIdentityKey(message: ChatMessage): String? {
+  val idempotencyKey = message.idempotencyKey?.trim().orEmpty()
+  if (idempotencyKey.isNotEmpty()) {
+    return listOf(message.role.trim().lowercase(), idempotencyKey).joinToString(separator = "|")
+  }
   val contentKey = messageContentIdentityKey(message) ?: return null
   val timestamp = message.timestampMs?.toString().orEmpty()
   if (timestamp.isEmpty() && contentKey.isEmpty()) return null
@@ -742,6 +897,10 @@ private fun incomingMessageConsumesOptimistic(
   incoming: ChatMessage,
   optimistic: ChatMessage,
 ): Boolean {
+  val optimisticIdempotencyKey = optimistic.idempotencyKey?.trim().orEmpty()
+  if (optimisticIdempotencyKey.isNotEmpty()) {
+    return incoming.idempotencyKey?.trim() == optimisticIdempotencyKey
+  }
   if (optimisticMessageIdentityKey(incoming) != optimisticMessageIdentityKey(optimistic)) return false
   val incomingTimestamp = incoming.timestampMs ?: return false
   val optimisticTimestamp = optimistic.timestampMs ?: return true
@@ -788,3 +947,44 @@ private fun JsonElement?.asLongOrNull(): Long? =
     is JsonPrimitive -> content.toLongOrNull()
     else -> null
   }
+
+private fun JsonElement?.asBooleanOrNull(): Boolean? =
+  when (this) {
+    is JsonPrimitive -> content.toBooleanStrictOrNull()
+    else -> null
+  }
+
+internal fun mergeChatSessionEntry(
+  existing: ChatSessionEntry,
+  next: ChatSessionEntry,
+  preserveExistingContextUsageWithoutTotal: Boolean = false,
+): ChatSessionEntry {
+  val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
+  return existing.copy(
+    updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
+    displayName = next.displayName ?: existing.displayName,
+    totalTokens =
+      when {
+        preserveExistingContextUsage -> existing.totalTokens
+        next.hasContextUsageMetadata -> next.totalTokens
+        else -> null
+      },
+    totalTokensFresh =
+      when {
+        preserveExistingContextUsage -> existing.totalTokensFresh
+        next.hasContextUsageMetadata -> next.totalTokensFresh
+        else -> null
+      },
+    contextTokens =
+      when {
+        preserveExistingContextUsage -> next.contextTokens ?: existing.contextTokens
+        next.hasContextUsageMetadata -> next.contextTokens
+        else -> null
+      },
+    hasContextUsageMetadata =
+      when {
+        preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
+        else -> next.hasContextUsageMetadata
+      },
+  )
+}

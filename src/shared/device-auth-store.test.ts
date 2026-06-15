@@ -1,6 +1,8 @@
+// Device auth store tests cover persisted paired-device auth state.
 import { describe, expect, it, vi } from "vitest";
 import {
   clearDeviceAuthTokenFromStore,
+  coerceDeviceAuthStore,
   loadDeviceAuthTokenFromStore,
   storeDeviceAuthTokenInStore,
   type DeviceAuthStoreAdapter,
@@ -111,6 +113,43 @@ describe("device-auth-store", () => {
       scopes: ["operator.read", "operator.write"],
       updatedAtMs: 0,
     });
+  });
+
+  it("coerces raw persisted stores into canonical token maps", () => {
+    expect(
+      coerceDeviceAuthStore({
+        version: 1,
+        deviceId: "device-1",
+        tokens: {
+          " operator ": {
+            token: "operator-token",
+            role: { nested: "bad" },
+            scopes: ["operator.write", "operator.read", 42],
+            updatedAtMs: "bad-time",
+          },
+          broken: {
+            token: 123,
+            role: "broken",
+            scopes: [],
+            updatedAtMs: 1,
+          },
+        },
+      }),
+    ).toEqual({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        operator: {
+          token: "operator-token",
+          role: "operator",
+          scopes: ["operator.read", "operator.write"],
+          updatedAtMs: 0,
+        },
+      },
+    });
+
+    expect(coerceDeviceAuthStore({ version: 2, deviceId: "device-1", tokens: {} })).toBeNull();
+    expect(coerceDeviceAuthStore({ version: 1, deviceId: "device-1", tokens: [] })).toBeNull();
   });
 
   it("stores normalized roles and deduped sorted scopes while preserving same-device tokens", () => {

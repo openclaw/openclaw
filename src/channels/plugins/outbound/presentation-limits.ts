@@ -1,10 +1,16 @@
+/**
+ * Presentation limit adapters for channel outbound payloads.
+ *
+ * Truncates and reshapes portable presentation blocks to match per-channel limits.
+ */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveMessagePresentationActionValue } from "../../../interactive/payload.js";
 import type {
   MessagePresentation,
   MessagePresentationBlock,
   MessagePresentationButton,
   MessagePresentationOption,
 } from "../../../interactive/payload.js";
-import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 
 type ActionLimits = NonNullable<NonNullable<ChannelPresentationCapabilities["limits"]>["actions"]>;
@@ -201,9 +207,14 @@ function adaptButton(
   limits: ActionLimits | undefined,
 ): MessagePresentationButton | undefined {
   const hasLinkTarget = Boolean(button.url || button.webApp || button.web_app);
-  const valueFits = fitsByteLimit(button.value, limits?.maxValueBytes);
+  const actionValue = resolveMessagePresentationActionValue(button.action);
+  const valueFits =
+    button.value === undefined || fitsByteLimit(button.value, limits?.maxValueBytes);
+  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
+  const hasRenderableControl =
+    (button.value !== undefined && valueFits) || (actionValue !== undefined && actionFits);
   if (
-    (!valueFits && !hasLinkTarget) ||
+    (!hasRenderableControl && !hasLinkTarget) ||
     (button.disabled === true && limits?.supportsDisabled !== true)
   ) {
     return undefined;
@@ -214,6 +225,9 @@ function adaptButton(
   };
   if (!valueFits) {
     delete adapted.value;
+  }
+  if (!actionFits) {
+    delete adapted.action;
   }
   if (limits?.supportsStyles === false) {
     delete adapted.style;
@@ -293,13 +307,24 @@ function adaptOption(
   option: MessagePresentationOption,
   limits: SelectLimits | undefined,
 ): MessagePresentationOption | undefined {
-  if (!fitsByteLimit(option.value, limits?.maxValueBytes)) {
+  const actionValue = resolveMessagePresentationActionValue(option.action);
+  const valueFits =
+    option.value === undefined || fitsByteLimit(option.value, limits?.maxValueBytes);
+  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
+  if (!(option.value !== undefined && valueFits) && !(actionValue !== undefined && actionFits)) {
     return undefined;
   }
-  return {
+  const adapted: MessagePresentationOption = {
     ...option,
     label: truncateText(option.label, limits?.maxLabelLength),
   };
+  if (!valueFits) {
+    delete adapted.value;
+  }
+  if (!actionFits) {
+    delete adapted.action;
+  }
+  return adapted;
 }
 
 function adaptSelectBlock(

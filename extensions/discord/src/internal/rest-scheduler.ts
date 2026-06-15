@@ -1,4 +1,5 @@
-import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+// Discord plugin module implements rest scheduler behavior.
+import { resolveIntegerOption, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { RateLimitError, readRetryAfter } from "./rest-errors.js";
 import {
   createBucketKey,
@@ -390,7 +391,7 @@ export class RestScheduler<TData> {
         this.drainTimer = undefined;
         this.drainQueues();
       },
-      Math.max(0, delayMs),
+      resolveTimerTimeoutMs(delayMs, 0, 0),
     );
     this.drainTimer.unref?.();
   }

@@ -1,3 +1,5 @@
+/** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
@@ -9,6 +11,7 @@ import {
   resolveSupportedThinkingLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -16,9 +19,12 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
+  captureAgentRunLifecycleGeneration,
   clearAgentRunContext,
   emitAgentEvent,
   registerAgentRunContext,
+  withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -29,6 +35,7 @@ import { resolveMessageChannelSelection } from "../infra/outbound/channel-select
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
   classifySessionKeyShape,
@@ -46,7 +53,6 @@ import {
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
@@ -65,6 +71,7 @@ import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
+  hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
   listAgentIds,
   markAutoFallbackPrimaryProbe,
@@ -79,7 +86,10 @@ import {
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
-import { createAgentAttemptLifecycleCallbacks } from "./command/attempt-callbacks.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "./command/attempt-callbacks.js";
 import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
@@ -90,7 +100,10 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
+import {
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+} from "./embedded-agent-runner/result-fallback-classifier.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
@@ -99,33 +112,152 @@ import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
   buildConfiguredModelCatalog,
+  buildModelAliasIndex,
   modelKey,
   normalizeModelRef,
-  parseModelRef,
+  normalizeProviderId,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolveThinkingDefault,
 } from "./model-selection.js";
 import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import {
+  isAgentRunRestartAbortReason,
+  resolveAgentRunAbortLifecycleFields,
+} from "./run-termination.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+function hasExactConfiguredProviderModel(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): boolean {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const model = params.model.trim();
+  if (!normalizedProvider || !model) {
+    return false;
+  }
+  for (const [providerId, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
+    if (normalizeProviderId(providerId) !== normalizedProvider) {
+      continue;
+    }
+    return (providerConfig.models ?? []).some((entry) => entry.id.trim() === model);
+  }
+  return false;
+}
+
+function hasConfiguredProvider(params: { cfg: OpenClawConfig; provider: string }): boolean {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (!normalizedProvider) {
+    return false;
+  }
+  return Object.keys(params.cfg.models?.providers ?? {}).some(
+    (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+  );
+}
+
+function allowPluginModelNormalizationForRef(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): boolean {
+  if (!normalizePluginsConfig(params.cfg.plugins).enabled && hasConfiguredProvider(params)) {
+    return false;
+  }
+  return !hasExactConfiguredProviderModel(params);
+}
+
+function normalizeAgentCommandModelRef(
+  cfg: OpenClawConfig,
+  provider: string,
+  model: string,
+  modelManifestContext: ModelManifestNormalizationContext,
+) {
+  return normalizeModelRef(provider, model, {
+    ...modelManifestContext,
+    allowPluginNormalization: allowPluginModelNormalizationForRef({ cfg, provider, model }),
+  });
+}
+
+function normalizeAgentCommandDefaultModelRef(
+  cfg: OpenClawConfig,
+  provider: string,
+  model: string,
+  modelManifestContext: ModelManifestNormalizationContext,
+) {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (hasConfiguredProvider({ cfg, provider: normalizedProvider })) {
+    return {
+      provider: normalizedProvider,
+      model: normalizeConfiguredProviderCatalogModelId(normalizedProvider, model, {
+        manifestPlugins: modelManifestContext.manifestPlugins,
+      }),
+    };
+  }
+  return normalizeAgentCommandModelRef(cfg, provider, model, modelManifestContext);
+}
+
+function parseAgentCommandModelRef(
+  cfg: OpenClawConfig,
+  raw: string,
+  defaultProvider: string,
+  modelManifestContext: ModelManifestNormalizationContext,
+) {
+  const parsed = resolveModelRefFromString({
+    cfg,
+    raw,
+    defaultProvider,
+    aliasIndex: buildModelAliasIndex({
+      cfg,
+      defaultProvider,
+      ...modelManifestContext,
+      allowPluginNormalization: false,
+    }),
+    ...modelManifestContext,
+    allowPluginNormalization: false,
+  })?.ref;
+  return parsed
+    ? normalizeAgentCommandModelRef(cfg, parsed.provider, parsed.model, modelManifestContext)
+    : null;
+}
+
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
 type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
+
+function applyAgentRunAbortMetadata<T extends { meta: object }>(
+  result: T,
+  signal: AbortSignal | undefined,
+): T {
+  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
+  if (abortFields.aborted !== true) {
+    return result;
+  }
+  return {
+    ...result,
+    meta: {
+      ...result.meta,
+      ...abortFields,
+    },
+  };
+}
 type AcpManagerRuntime = typeof import("../acp/control-plane/manager.js");
 type AcpPolicyRuntime = typeof import("../acp/policy.js");
 type AcpRuntimeErrorsRuntime = typeof import("../acp/runtime/errors.js");
-type AcpSessionIdentifiersRuntime = typeof import("../acp/runtime/session-identifiers.js");
+type AcpSessionIdentifiersRuntime = typeof import("@openclaw/acp-core/runtime/session-identifiers");
 type DeliveryRuntime = typeof import("./command/delivery.runtime.js");
 type SessionStoreRuntime = typeof import("./command/session-store.runtime.js");
 type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
@@ -150,7 +282,7 @@ const acpRuntimeErrorsRuntimeLoader = createLazyImportLoader<AcpRuntimeErrorsRun
   () => import("../acp/runtime/errors.js"),
 );
 const acpSessionIdentifiersRuntimeLoader = createLazyImportLoader<AcpSessionIdentifiersRuntime>(
-  () => import("../acp/runtime/session-identifiers.js"),
+  () => import("@openclaw/acp-core/runtime/session-identifiers"),
 );
 const deliveryRuntimeLoader = createLazyImportLoader<DeliveryRuntime>(
   () => import("./command/delivery.runtime.js"),
@@ -468,6 +600,7 @@ function resolveExplicitAgentCommandSessionKey(params: {
 }): string | undefined {
   if (
     isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
+    !params.agentIdOverride &&
     !params.shouldScopeDefaultAgentKey
   ) {
     return params.rawExplicitSessionKey;
@@ -488,7 +621,13 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     throw new Error("Message (--message) is required");
   }
   const rawExplicitSessionKey = opts.sessionKey?.trim();
-  if (!opts.to && !opts.sessionId && !rawExplicitSessionKey && !opts.agentId) {
+  const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const rawTo = opts.to?.trim();
+  const toSessionKey =
+    !rawExplicitSessionKey && !requestedSessionId && classifySessionKeyShape(rawTo) === "agent"
+      ? rawTo
+      : undefined;
+  if (!opts.to && !requestedSessionId && !rawExplicitSessionKey && !opts.agentId) {
     throw new Error(
       "Pass --to <E.164>, --session-key, --session-id, or --agent to choose a session",
     );
@@ -520,12 +659,14 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
     !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
   );
-  const explicitSessionKey = resolveExplicitAgentCommandSessionKey({
-    rawExplicitSessionKey,
-    agentIdOverride,
-    shouldScopeDefaultAgentKey,
-    cfg,
-  });
+  const explicitSessionKey =
+    toSessionKey ??
+    resolveExplicitAgentCommandSessionKey({
+      rawExplicitSessionKey,
+      agentIdOverride,
+      shouldScopeDefaultAgentKey,
+      cfg,
+    });
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
       `Invalid --session-key "${explicitSessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
@@ -553,12 +694,12 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const laneRaw = normalizeOptionalString(opts.lane) ?? "";
   const subagentLane: string = AGENT_LANE_SUBAGENT;
   const isSubagentLane = laneRaw === subagentLane;
-  const timeoutSecondsRaw =
-    opts.timeout !== undefined
-      ? (parseStrictNonNegativeInteger(opts.timeout) ?? Number.NaN)
-      : isSubagentLane
-        ? 0
-        : undefined;
+  const hasExplicitTimeoutOption = opts.timeout !== undefined;
+  const timeoutSecondsRaw = hasExplicitTimeoutOption
+    ? (parseStrictNonNegativeInteger(opts.timeout) ?? Number.NaN)
+    : isSubagentLane
+      ? 0
+      : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -569,11 +710,15 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     cfg,
     overrideSeconds: timeoutSecondsRaw,
   });
+  const runTimeoutOverrideMs = hasExplicitTimeoutOption ? timeoutMs : undefined;
 
+  const commandOpts = toSessionKey
+    ? { ...opts, to: undefined, sessionKey: explicitSessionKey }
+    : opts;
   const sessionResolution = resolveSession({
     cfg,
-    to: opts.to,
-    sessionId: opts.sessionId,
+    to: commandOpts.to,
+    sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
     clone: false,
@@ -604,18 +749,22 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const cwd =
     normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
-    config: cfg,
-    workspaceDir,
-    env: process.env,
-  });
+  const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
+  const manifestMetadataSnapshot = pluginsEnabled
+    ? loadManifestMetadataSnapshot({
+        config: cfg,
+        workspaceDir,
+        env: process.env,
+      })
+    : undefined;
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot.plugins,
+    manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
   } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: pluginsEnabled,
     ...modelManifestContext,
   });
   const configuredThinkingCatalog = buildConfiguredModelCatalog({
@@ -659,6 +808,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
   return {
+    opts: commandOpts,
     body,
     transcriptBody,
     cfg,
@@ -669,6 +819,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     thinkOnce,
     verboseOverride,
     timeoutMs,
+    runTimeoutOverrideMs,
     sessionId,
     sessionKey,
     sessionEntry: sessionEntryRaw,
@@ -682,23 +833,28 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     workspaceDir,
     cwd: cwd ? resolveUserPath(cwd) : undefined,
     agentDir,
+    pluginsEnabled,
+    manifestMetadataSnapshot,
     modelManifestContext,
     runId,
+    isSubagentLane,
     acpManager,
     acpResolution,
   };
 }
 
 async function agentCommandInternal(
-  opts: AgentCommandOpts,
+  initialOpts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
-  const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
-  const suppressVisibleSessionEffects = opts.sessionEffects === "internal";
-  const preserveUserFacingSessionModelState = opts.preserveUserFacingSessionModelState === true;
-  const prepared = await prepareAgentCommandExecution(opts, runtime);
+  const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
+  const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
+  const preserveUserFacingSessionModelState =
+    initialOpts.preserveUserFacingSessionModelState === true;
+  const prepared = await prepareAgentCommandExecution(initialOpts, runtime);
+  const opts = prepared.opts;
   const {
     body,
     transcriptBody,
@@ -710,6 +866,7 @@ async function agentCommandInternal(
     thinkOnce,
     verboseOverride,
     timeoutMs,
+    runTimeoutOverrideMs,
     sessionId,
     sessionKey,
     sessionStore,
@@ -723,10 +880,15 @@ async function agentCommandInternal(
     cwd,
     agentDir,
     runId,
+    isSubagentLane,
     acpManager,
     acpResolution,
+    pluginsEnabled,
+    manifestMetadataSnapshot,
     modelManifestContext,
   } = prepared;
+  let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
+  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
   let trackedRestartRecoveryDeliveryContext = false;
@@ -767,6 +929,7 @@ async function agentCommandInternal(
         opts,
         sessionEntry: entry,
       });
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       const next: SessionEntry = {
         ...entry,
         sessionId,
@@ -794,17 +957,20 @@ async function agentCommandInternal(
     }
 
     if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
       const startedAt = Date.now();
       registerAgentRunContext(
         runId,
         suppressVisibleSessionEffects
-          ? { isControlUiVisible: false }
+          ? { isControlUiVisible: false, lifecycleGeneration }
           : {
               sessionKey,
+              sessionId,
+              lifecycleGeneration,
             },
       );
-      attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt });
+      attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt, lifecycleGeneration });
 
       const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
@@ -830,6 +996,7 @@ async function agentCommandInternal(
         }
 
         const acpImageAttachments = resolveInlineAgentImageAttachments(opts.images);
+        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         await acpManager.runTurn({
           cfg,
           sessionKey,
@@ -879,6 +1046,9 @@ async function agentCommandInternal(
             });
           },
         });
+        if (isAgentRunRestartAbortReason(opts.abortSignal?.reason)) {
+          throw opts.abortSignal?.reason;
+        }
       } catch (error) {
         const { toAcpRuntimeError } = await loadAcpRuntimeErrorsRuntime();
         const acpError = toAcpRuntimeError({
@@ -890,11 +1060,11 @@ async function agentCommandInternal(
           runId,
           error: acpError,
           sessionKey,
+          lifecycleGeneration,
+          abortSignal: opts.abortSignal,
         });
         throw acpError;
       }
-
-      attemptExecutionRuntime.emitAcpLifecycleEnd({ runId });
 
       const finalTextRaw = visibleTextAccumulator.finalizeRaw();
       const finalText = visibleTextAccumulator.finalize();
@@ -951,13 +1121,32 @@ async function agentCommandInternal(
           `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
         );
       }
-
-      const result = attemptExecutionRuntime.buildAcpResult({
-        payloadText: finalText,
-        startedAt,
-        stopReason,
+      const restartAbortReason = opts.abortSignal?.reason;
+      if (isAgentRunRestartAbortReason(restartAbortReason)) {
+        attemptExecutionRuntime.emitAcpLifecycleError({
+          runId,
+          error: restartAbortReason,
+          sessionKey,
+          lifecycleGeneration,
+          abortSignal: opts.abortSignal,
+        });
+        throw restartAbortReason;
+      }
+      attemptExecutionRuntime.emitAcpLifecycleEnd({
+        runId,
+        lifecycleGeneration,
         abortSignal: opts.abortSignal,
       });
+
+      const result = applyAgentRunAbortMetadata(
+        attemptExecutionRuntime.buildAcpResult({
+          payloadText: finalText,
+          startedAt,
+          stopReason,
+          abortSignal: opts.abortSignal,
+        }),
+        opts.abortSignal,
+      );
       const payloads = result.payloads;
       const { deliverAgentCommandResult } = await loadDeliveryRuntime();
 
@@ -970,6 +1159,7 @@ async function agentCommandInternal(
         sessionEntry,
         result,
         payloads,
+        assertDeliveryCurrent: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
       });
     }
 
@@ -977,9 +1167,11 @@ async function agentCommandInternal(
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
 
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     if (sessionKey || suppressVisibleSessionEffects) {
       registerAgentRunContext(runId, {
-        ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey } : {}),
+        ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey, sessionId } : {}),
+        lifecycleGeneration,
         verboseLevel: resolvedVerboseLevel,
         isControlUiVisible: !suppressVisibleSessionEffects,
       });
@@ -1078,9 +1270,12 @@ async function agentCommandInternal(
     const configuredDefaultRef = resolveDefaultModelForAgent({
       cfg,
       agentId: sessionAgentId,
+      allowPluginNormalization: pluginsEnabled,
       ...modelManifestContext,
     });
-    const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
+    const runContext = resolveAgentRunContext(opts);
+    const { provider: defaultProvider, model: defaultModel } = normalizeAgentCommandDefaultModelRef(
+      cfg,
       configuredDefaultRef.provider,
       configuredDefaultRef.model,
       modelManifestContext,
@@ -1096,6 +1291,8 @@ async function agentCommandInternal(
       : undefined;
     const hasStoredAutoFallbackProvenance =
       hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
+    const hasLegacyAutoFallbackOverrideWithoutOrigin =
+      hasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
     const explicitProviderOverride =
       typeof opts.provider === "string"
         ? normalizeExplicitOverrideInput(opts.provider, "provider")
@@ -1117,12 +1314,12 @@ async function agentCommandInternal(
       defaultProvider,
       defaultModel,
       allowManifestNormalization: true,
-      allowPluginNormalization: true,
+      allowPluginNormalization: pluginsEnabled,
       ...modelManifestContext,
     });
 
     if (needsModelCatalog) {
-      modelCatalog = loadManifestModelCatalog({ config: cfg, workspaceDir });
+      modelCatalog = pluginsEnabled ? loadManifestModelCatalog({ config: cfg, workspaceDir }) : [];
       visibilityPolicy = createModelVisibilityPolicy({
         cfg,
         catalog: modelCatalog,
@@ -1130,7 +1327,7 @@ async function agentCommandInternal(
         defaultModel,
         agentId: sessionAgentId,
         allowManifestNormalization: true,
-        allowPluginNormalization: true,
+        allowPluginNormalization: pluginsEnabled,
         ...modelManifestContext,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;
@@ -1144,6 +1341,21 @@ async function agentCommandInternal(
       !suppressVisibleSessionEffects
     ) {
       const entry = sessionEntry;
+      if (hasLegacyAutoFallbackOverrideWithoutOrigin) {
+        const { updated } = applyModelOverrideToSessionEntry({
+          entry,
+          selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        });
+        if (updated) {
+          storedModelOverrideSource = undefined;
+          await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry,
+          });
+        }
+      }
       const repaired = repairProviderWrappedModelOverride({
         entry,
         defaultProvider,
@@ -1160,7 +1372,8 @@ async function agentCommandInternal(
       const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
       const overrideModel = sessionEntry.modelOverride?.trim();
       if (overrideModel) {
-        const normalizedOverride = normalizeModelRef(
+        const normalizedOverride = normalizeAgentCommandModelRef(
+          cfg,
           overrideProvider,
           overrideModel,
           modelManifestContext,
@@ -1183,11 +1396,57 @@ async function agentCommandInternal(
       }
     }
 
-    const storedProviderOverride = sessionEntry?.providerOverride?.trim();
-    let storedModelOverride = sessionEntry?.modelOverride?.trim();
+    const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+      ? undefined
+      : sessionEntry?.providerOverride?.trim();
+    let storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+      ? undefined
+      : sessionEntry?.modelOverride?.trim();
+    const currentRunModelChannel = [
+      runContext.messageChannel,
+      opts.replyChannel,
+      opts.channel,
+    ].find((channel): channel is string =>
+      Boolean(channel && isDeliverableMessageChannel(channel)),
+    );
+    const channelOverrideGroupId = currentRunModelChannel
+      ? (runContext.groupId ?? sessionEntry?.groupId ?? runContext.currentChannelId)
+      : (sessionEntry?.groupId ?? runContext.groupId ?? runContext.currentChannelId);
+    const channelModelOverride =
+      cfg.channels?.modelByChannel && !hasExplicitRunOverride
+        ? resolveChannelModelOverride({
+            cfg,
+            channel:
+              currentRunModelChannel ??
+              sessionEntry?.channel ??
+              sessionEntry?.lastChannel ??
+              sessionEntry?.origin?.provider,
+            groupId: channelOverrideGroupId,
+            groupChatType: sessionEntry?.chatType ?? sessionEntry?.origin?.chatType,
+            groupChannel: runContext.groupChannel ?? sessionEntry?.groupChannel,
+            groupSubject: sessionEntry?.subject,
+            parentSessionKey: sessionEntry?.parentSessionKey ?? sessionKey,
+          })
+        : null;
+    const normalizedChannelOverride = channelModelOverride
+      ? parseAgentCommandModelRef(
+          cfg,
+          channelModelOverride.model,
+          defaultProvider,
+          modelManifestContext,
+        )
+      : null;
+    const primaryProvider = normalizedChannelOverride?.provider ?? defaultProvider;
+    const primaryModel = normalizedChannelOverride?.model ?? defaultModel;
+    const hasEffectiveStoredOverride = Boolean(storedProviderOverride || storedModelOverride);
+    if (normalizedChannelOverride && !hasEffectiveStoredOverride) {
+      provider = normalizedChannelOverride.provider;
+      model = normalizedChannelOverride.model;
+    }
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
-      const normalizedStored = normalizeModelRef(
+      const normalizedStored = normalizeAgentCommandModelRef(
+        cfg,
         candidateProvider,
         storedModelOverride,
         modelManifestContext,
@@ -1202,8 +1461,8 @@ async function agentCommandInternal(
       ? resolveAutoFallbackPrimaryProbe({
           entry: sessionEntry,
           sessionKey,
-          primaryProvider: defaultProvider,
-          primaryModel: defaultModel,
+          primaryProvider,
+          primaryModel,
         })
       : undefined;
     let autoFallbackPrimaryProbeSessionEntry: SessionEntry | undefined;
@@ -1217,10 +1476,20 @@ async function agentCommandInternal(
     if (hasExplicitRunOverride) {
       const explicitRef = explicitModelOverride
         ? explicitProviderOverride
-          ? normalizeModelRef(explicitProviderOverride, explicitModelOverride, modelManifestContext)
-          : parseModelRef(explicitModelOverride, provider, modelManifestContext)
+          ? normalizeAgentCommandModelRef(
+              cfg,
+              explicitProviderOverride,
+              explicitModelOverride,
+              modelManifestContext,
+            )
+          : parseAgentCommandModelRef(cfg, explicitModelOverride, provider, modelManifestContext)
         : explicitProviderOverride
-          ? normalizeModelRef(explicitProviderOverride, model, modelManifestContext)
+          ? normalizeAgentCommandModelRef(
+              cfg,
+              explicitProviderOverride,
+              model,
+              modelManifestContext,
+            )
           : null;
       if (!explicitRef) {
         throw new Error("Invalid model override.");
@@ -1275,13 +1544,31 @@ async function agentCommandInternal(
           harnessRuntime: validationHarnessPolicy.runtime,
           config: cfg,
         }).map((candidateProvider) =>
-          resolveProviderIdForAuth(candidateProvider, { config: cfg, workspaceDir }),
+          pluginsEnabled
+            ? resolveProviderIdForAuth(candidateProvider, {
+                config: cfg,
+                workspaceDir,
+                ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
+              })
+            : candidateProvider,
         );
+        const authAliasLookupParams = pluginsEnabled
+          ? {
+              config: cfg,
+              workspaceDir,
+              ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
+            }
+          : {
+              config: cfg,
+              workspaceDir,
+              metadataSnapshot: { plugins: [] },
+            };
         const profileMatchesRuntime =
           profile &&
           acceptedAuthProviders.some((candidateProvider) =>
             isStoredCredentialCompatibleWithAuthProvider({
               cfg,
+              authAliasLookupParams,
               provider: candidateProvider,
               credential: profile,
             }),
@@ -1332,7 +1619,11 @@ async function agentCommandInternal(
       })
     ) {
       const explicitThink = Boolean(thinkOnce || thinkOverride);
-      if (explicitThink) {
+      const isSubagentSpawnRun = isSubagentLane && isSubagentSessionKey(sessionKey);
+      // Spawn-lane subagents are fire-and-forget; the orchestrator already got
+      // an "accepted" ack, so throwing here strands the run and half-fails fan-outs.
+      // Clamp like the embedded runner; interactive --thinking keeps the throw.
+      if (explicitThink && !isSubagentSpawnRun) {
         throw new Error(
           `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
         );
@@ -1344,25 +1635,9 @@ async function agentCommandInternal(
         catalog: thinkingCatalog,
       });
       if (fallbackThinkLevel !== resolvedThinkLevel) {
-        const previousThinkLevel = resolvedThinkLevel;
+        // Execution fallbacks are turn-local; directive/model persistence owns
+        // durable thinking remaps so explicit session overrides survive runs.
         resolvedThinkLevel = fallbackThinkLevel;
-        if (
-          sessionEntry &&
-          sessionStore &&
-          sessionKey &&
-          sessionEntry.thinkingLevel === previousThinkLevel &&
-          !suppressVisibleSessionEffects
-        ) {
-          const entry = sessionEntry;
-          entry.thinkingLevel = fallbackThinkLevel;
-          entry.updatedAt = Date.now();
-          await persistSessionEntry({
-            sessionStore,
-            sessionKey,
-            storePath,
-            entry,
-          });
-        }
       }
     }
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
@@ -1397,7 +1672,7 @@ async function agentCommandInternal(
       : sessionFile;
 
     const startedAt = Date.now();
-    const attemptLifecycleState = {
+    const attemptLifecycleState: AgentAttemptLifecycleState = {
       currentTurnUserMessagePersisted: false,
       lifecycleFinishing: false,
       lifecycleEnded: false,
@@ -1416,6 +1691,7 @@ async function agentCommandInternal(
       attemptLifecycleState.lifecycleFinishing = true;
       emitAgentEvent({
         runId,
+        lifecycleGeneration,
         stream: "lifecycle",
         data: {
           phase: "finishing",
@@ -1423,6 +1699,7 @@ async function agentCommandInternal(
           endedAt: Date.now(),
           aborted: runResult.meta.aborted ?? false,
           stopReason: runResult.meta.stopReason,
+          ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
         },
       });
     };
@@ -1437,6 +1714,7 @@ async function agentCommandInternal(
       }
       emitAgentEvent({
         runId,
+        lifecycleGeneration,
         stream: "lifecycle",
         data: {
           phase: "end",
@@ -1444,6 +1722,53 @@ async function agentCommandInternal(
           endedAt: Date.now(),
           aborted: runResult.meta.aborted ?? false,
           stopReason,
+          ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
+        },
+      });
+    };
+    const resolveLifecycleResultError = (
+      runResult: AgentAttemptResult,
+      includeErrorPayload: boolean,
+    ) =>
+      attemptLifecycleState.lifecycleError ??
+      (includeErrorPayload
+        ? runResult.payloads?.find(
+            (payload) => payload.isError === true && typeof payload.text === "string",
+          )?.text
+        : undefined) ??
+      (runResult.meta.error ? "Agent run failed" : undefined);
+    const emitLifecycleResultError = (
+      runResult: AgentAttemptResult,
+      fallbackExhausted: boolean,
+    ) => {
+      if (attemptLifecycleState.lifecycleEnded) {
+        return;
+      }
+      attemptLifecycleState.lifecycleEnded = true;
+      const error =
+        resolveLifecycleResultError(runResult, fallbackExhausted) ??
+        (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
+      emitAgentEvent({
+        runId,
+        lifecycleGeneration,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt,
+          endedAt: Date.now(),
+          error,
+          ...(runResult.meta.stopReason ? { stopReason: runResult.meta.stopReason } : {}),
+          ...(runResult.meta.livenessState ? { livenessState: runResult.meta.livenessState } : {}),
+          ...(runResult.meta.timeoutPhase ? { timeoutPhase: runResult.meta.timeoutPhase } : {}),
+          ...(typeof runResult.meta.providerStarted === "boolean"
+            ? { providerStarted: runResult.meta.providerStarted }
+            : {}),
+          ...(typeof runResult.meta.aborted === "boolean"
+            ? { aborted: runResult.meta.aborted }
+            : {}),
+          ...(runResult.meta.replayInvalid === true ? { replayInvalid: true } : {}),
+          ...(runResult.meta.yielded === true ? { yielded: true } : {}),
+          ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
         },
       });
     };
@@ -1454,17 +1779,18 @@ async function agentCommandInternal(
       attemptLifecycleState.lifecycleEnded = true;
       emitAgentEvent({
         runId,
+        lifecycleGeneration,
         stream: "lifecycle",
         data: {
           phase: "error",
           startedAt,
           endedAt: Date.now(),
           error: error instanceof Error ? error.message : "Agent run failed",
+          ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
         },
       });
     };
     const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
-    const runContext = resolveAgentRunContext(opts);
     const messageChannel = resolveMessageChannel(
       runContext.messageChannel,
       opts.replyChannel ?? opts.channel,
@@ -1473,6 +1799,7 @@ async function agentCommandInternal(
     let result: AgentAttemptResult;
     let fallbackProvider = provider;
     let fallbackModel = model;
+    let fallbackExhausted = false;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
@@ -1511,12 +1838,17 @@ async function agentCommandInternal(
           runId,
           agentDir,
           agentId: sessionAgentId,
+          sessionId,
           sessionKey: sessionKey ?? sessionId,
-          prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+          prepareAgentHarnessRuntime: async ({
+            provider: providerValue,
+            model: modelValue,
+            agentHarnessRuntimeOverride,
+          }) => {
             await ensureSelectedAgentHarnessPlugin({
               config: cfg,
-              provider,
-              modelId: model,
+              provider: providerValue,
+              modelId: modelValue,
               agentId: sessionAgentId,
               sessionKey,
               agentHarnessRuntimeOverride,
@@ -1527,14 +1859,18 @@ async function agentCommandInternal(
           onFallbackStep: (step) => {
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
           },
-          classifyResult: ({ provider, model, result }) =>
+          classifyResult: ({ provider: providerLocal, model: modelLocal, result: resultLocal }) =>
             classifyEmbeddedAgentRunResultForModelFallback({
-              provider,
-              model,
-              result,
+              provider: providerLocal,
+              model: modelLocal,
+              result: resultLocal,
             }),
+          mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
+            attemptLifecycleState.lifecycleError = undefined;
+            attemptLifecycleState.lifecycleFinishing = false;
+            attemptLifecycleState.lifecycleEnded = false;
             const isAutoFallbackPrimaryProbeCandidate =
               autoFallbackPrimaryProbe &&
               providerOverride === autoFallbackPrimaryProbe.provider &&
@@ -1581,7 +1917,9 @@ async function agentCommandInternal(
                 sessionEntry,
               }).enabled,
               timeoutMs,
+              runTimeoutOverrideMs,
               runId,
+              lifecycleGeneration,
               opts,
               runContext,
               spawnedBy,
@@ -1592,6 +1930,8 @@ async function agentCommandInternal(
               authProfileProvider: providerForAuthProfileValidation,
               sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
               storePath: suppressVisibleSessionEffects ? undefined : storePath,
+              pluginsEnabled,
+              ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
                 !isNewSession ||
@@ -1600,15 +1940,23 @@ async function agentCommandInternal(
                 opts.suppressPromptPersistence === true ||
                 (isFallbackRetry && attemptLifecycleState.currentTurnUserMessagePersisted),
               onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
+              onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
+                lifecycleGeneration = nextLifecycleGeneration;
+              },
               onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
-              deferTerminalLifecycleEnd: true,
+              deferTerminalLifecycle: true,
             });
           },
         });
-        result = fallbackResult.result;
+        result = applyAgentRunAbortMetadata(fallbackResult.result, opts.abortSignal);
+        if (isAgentRunRestartAbortReason(opts.abortSignal?.reason)) {
+          throw opts.abortSignal?.reason;
+        }
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        fallbackExhausted = fallbackResult.outcome === "exhausted";
         if (
+          !fallbackExhausted &&
           autoFallbackPrimaryProbe &&
           !autoFallbackPrimaryProbeInterruptedByLiveSwitch &&
           sessionEntry &&
@@ -1665,7 +2013,9 @@ async function agentCommandInternal(
             },
           };
         }
-        emitLifecycleFinishing(result);
+        if (!fallbackExhausted) {
+          emitLifecycleFinishing(result);
+        }
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
@@ -1677,6 +2027,7 @@ async function agentCommandInternal(
             if (!attemptLifecycleState.lifecycleEnded) {
               emitAgentEvent({
                 runId,
+                lifecycleGeneration,
                 stream: "lifecycle",
                 data: {
                   phase: "error",
@@ -1692,7 +2043,12 @@ async function agentCommandInternal(
               { cause: err },
             );
           }
-          const switchRef = normalizeModelRef(err.provider, err.model, modelManifestContext);
+          const switchRef = normalizeAgentCommandModelRef(
+            cfg,
+            err.provider,
+            err.model,
+            modelManifestContext,
+          );
           const switchKey = modelKey(switchRef.provider, switchRef.model);
           if (!visibilityPolicy.allowsKey(switchKey)) {
             log.info(
@@ -1702,6 +2058,7 @@ async function agentCommandInternal(
             if (!attemptLifecycleState.lifecycleEnded) {
               emitAgentEvent({
                 runId,
+                lifecycleGeneration,
                 stream: "lifecycle",
                 data: {
                   phase: "error",
@@ -1752,12 +2109,14 @@ async function agentCommandInternal(
         if (!attemptLifecycleState.lifecycleEnded) {
           emitAgentEvent({
             runId,
+            lifecycleGeneration,
             stream: "lifecycle",
             data: {
               phase: "error",
               startedAt,
               endedAt: Date.now(),
               error: err instanceof Error ? err.message : "Agent run failed",
+              ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
             },
           });
         }
@@ -1794,7 +2153,9 @@ async function agentCommandInternal(
             opts.bootstrapContextRunKind !== "heartbeat" &&
             !opts.internalEvents?.length,
           preserveRuntimeModel:
-            opts.bootstrapContextRunKind === "heartbeat" || preserveUserFacingSessionModelState,
+            fallbackExhausted ||
+            opts.bootstrapContextRunKind === "heartbeat" ||
+            preserveUserFacingSessionModelState,
           preserveUserFacingSessionModelState,
         });
         sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
@@ -1938,6 +2299,7 @@ async function agentCommandInternal(
         sessionEntry,
         result,
         payloads,
+        assertDeliveryCurrent: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
       };
       const deliveryResult = await deliverAgentCommandResult(
         resolveFreshSessionEntryForDelivery
@@ -1975,7 +2337,11 @@ async function agentCommandInternal(
         }
       }
 
-      emitLifecycleEnd(result);
+      if (fallbackExhausted || resolveLifecycleResultError(result, false)) {
+        emitLifecycleResultError(result, fallbackExhausted);
+      } else {
+        emitLifecycleEnd(result);
+      }
       return deliveryResult;
     } catch (error) {
       emitLifecyclePostTurnError(error);
@@ -2010,38 +2376,45 @@ async function agentCommandInternal(
         );
       }
     }
-    clearAgentRunContext(runId);
+    clearAgentRunContext(runId, lifecycleGeneration);
   }
 }
 
+/** Runs an agent turn from CLI/runtime options against the resolved session and model policy. */
 export async function agentCommand(
   opts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
-  return await withLocalGatewayRequestScope(
-    {
-      deps: resolvedDeps,
-      getRuntimeConfig,
-    },
-    async () =>
-      await agentCommandInternal(
-        {
-          ...opts,
-          // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
-          // Ingress callers must opt into owner identity explicitly via
-          // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
-          senderIsOwner: opts.senderIsOwner ?? true,
-          // Local/CLI callers are trusted by default for per-run model overrides.
-          allowModelOverride: opts.allowModelOverride ?? true,
-        },
-        runtime,
-        resolvedDeps,
-      ),
+  const lifecycleGeneration =
+    opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+    withLocalGatewayRequestScope(
+      {
+        deps: resolvedDeps,
+        getRuntimeConfig,
+      },
+      async () =>
+        await agentCommandInternal(
+          {
+            ...opts,
+            lifecycleGeneration,
+            // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
+            // Ingress callers must opt into owner identity explicitly via
+            // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
+            senderIsOwner: opts.senderIsOwner ?? true,
+            // Local/CLI callers are trusted by default for per-run model overrides.
+            allowModelOverride: opts.allowModelOverride ?? true,
+          },
+          runtime,
+          resolvedDeps,
+        ),
+    ),
   );
 }
 
+/** Runs an agent turn from an inbound channel/gateway ingress context. */
 export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,
@@ -2050,10 +2423,18 @@ export async function agentCommandFromIngress(
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
-  return await agentCommandInternal(
-    { ...opts, senderIsOwner: opts.senderIsOwner === true },
-    runtime,
-    deps,
+  const lifecycleGeneration =
+    opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+    agentCommandInternal(
+      {
+        ...opts,
+        lifecycleGeneration,
+        senderIsOwner: opts.senderIsOwner === true,
+      },
+      runtime,
+      deps,
+    ),
   );
 }
 

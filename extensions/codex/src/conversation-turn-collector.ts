@@ -1,3 +1,5 @@
+// Codex plugin module implements conversation turn collector behavior.
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readCodexNotificationThreadId,
@@ -143,7 +145,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
             reject(new Error("codex app-server bound turn timed out"));
             clearWaitState();
           },
-          Math.max(100, params.timeoutMs),
+          resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
         );
         timeout.unref?.();
       });

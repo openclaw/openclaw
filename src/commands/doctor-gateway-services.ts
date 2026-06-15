@@ -1,8 +1,13 @@
+/** Doctor repairs for installed gateway service config and duplicate legacy services. */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
@@ -29,10 +34,6 @@ import {
   type SystemdUnitScope,
 } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
@@ -349,6 +350,12 @@ async function cleanupLegacyLinuxUserServices(
   return { removed, failed };
 }
 
+/**
+ * Audits and optionally rewrites the installed local gateway service configuration.
+ *
+ * The repair preserves managed env sources, avoids Nix/remote installs, and can stage service
+ * updates during updater repair mode instead of immediately installing them.
+ */
 export async function maybeRepairGatewayServiceConfig(
   cfg: OpenClawConfig,
   mode: "local" | "remote",
@@ -367,7 +374,7 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const service = resolveGatewayService();
-  let command: Awaited<ReturnType<typeof service.readCommand>> | null = null;
+  let command: Awaited<ReturnType<typeof service.readCommand>> | null;
   try {
     command = await service.readCommand(process.env);
   } catch {
@@ -430,6 +437,7 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
+  // Bun-hosted services cannot run some repair paths; migrate through a concrete Node binary.
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
@@ -642,6 +650,9 @@ export async function maybeRepairGatewayServiceConfig(
   }
 }
 
+/**
+ * Reports duplicate gateway-like services and removes legacy user services after confirmation.
+ */
 export async function maybeScanExtraGatewayServices(
   options: DoctorOptions,
   runtime: RuntimeEnv,

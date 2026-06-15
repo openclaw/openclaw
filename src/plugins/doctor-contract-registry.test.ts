@@ -1,3 +1,4 @@
+// Covers plugin doctor contract registry discovery and validation.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -280,7 +281,7 @@ describe("doctor-contract-registry module loader", () => {
         entries: {
           "load-path-doctor": {
             config: {
-              summaryModel: "openai-codex/gpt-5.4-mini",
+              summaryModel: "openai/gpt-5.4-mini",
             },
           },
         },

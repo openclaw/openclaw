@@ -1,9 +1,11 @@
+// Maintenance command registration: doctor, dashboard, reset, and uninstall.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
+/** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(program: Command) {
   program
     .command("doctor")
@@ -27,7 +29,12 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option("--deep", "Scan system services for extra gateway installs", false)
     .option("--lint", "Run read-only health checks and report findings", false)
-    .option("--json", "With --lint: emit JSON findings instead of human output", false)
+    .option(
+      "--post-upgrade",
+      "Emit plugin-compat findings only (machine-readable with --json)",
+      false,
+    )
+    .option("--json", "With --lint or --post-upgrade: emit machine-readable JSON output", false)
     .option(
       "--severity-min <level>",
       "With --lint: drop findings below this severity (info|warning|error)",
@@ -84,6 +91,8 @@ export function registerMaintenanceCommands(program: Command) {
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           allowExec: Boolean(opts.allowExec),
           deep: Boolean(opts.deep),
+          postUpgrade: Boolean(opts.postUpgrade),
+          json: Boolean(opts.json),
         });
         defaultRuntime.exit(0);
       });
@@ -168,12 +177,13 @@ export function registerMaintenanceCommands(program: Command) {
 
 function hasLintOnlyDoctorOptions(opts: {
   readonly json?: boolean;
+  readonly postUpgrade?: boolean;
   readonly severityMin?: unknown;
   readonly skip?: unknown;
   readonly only?: unknown;
 }): boolean {
   return (
-    opts.json === true ||
+    (opts.json === true && opts.postUpgrade !== true) ||
     typeof opts.severityMin === "string" ||
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||
     (Array.isArray(opts.only) && opts.only.length > 0)

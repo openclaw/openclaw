@@ -1,3 +1,5 @@
+// Covers command-session store updates after agent runs, CLI compaction, and
+// runtime metadata persistence.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -71,18 +73,18 @@ vi.mock("../../utils/usage-format.js", () => ({
 
 vi.mock("../../config/sessions.js", async () => {
   const fsSync = await import("node:fs");
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs/promises");
+  const pathLocal = await import("node:path");
   const readStore = async (storePath: string): Promise<Record<string, SessionEntry>> => {
     try {
-      return JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, SessionEntry>;
+      return JSON.parse(await fsLocal.readFile(storePath, "utf8")) as Record<string, SessionEntry>;
     } catch {
       return {};
     }
   };
   const writeStore = async (storePath: string, store: Record<string, SessionEntry>) => {
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
+    await fsLocal.mkdir(pathLocal.dirname(storePath), { recursive: true });
+    await fsLocal.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
   };
   sessionStoreMocks.updateSessionStore.mockImplementation(
     async <T>(
@@ -99,6 +101,8 @@ vi.mock("../../config/sessions.js", async () => {
           .map(([key, entry]) => [key, entry.acp]),
       );
       const result = await mutator(store);
+      // The mocked store keeps ACP metadata sticky to preserve the production
+      // merge behavior that protects persistent ACP session handles.
       for (const [key, acp] of previousAcpByKey) {
         const next = store[key];
         if (next && !next.acp) {
@@ -129,7 +133,7 @@ vi.mock("../../config/sessions.js", async () => {
         return {};
       }
     },
-    canonicalizeAbsoluteSessionFilePath: (filePath: string) => path.resolve(filePath),
+    canonicalizeAbsoluteSessionFilePath: (filePath: string) => pathLocal.resolve(filePath),
     rewriteSessionFileForNewSessionId: (params: {
       sessionFile?: string;
       previousSessionId: string;
@@ -137,7 +141,7 @@ vi.mock("../../config/sessions.js", async () => {
     }) => params.sessionFile?.replace(params.previousSessionId, params.nextSessionId),
     resolveSessionFilePathOptions: (params: unknown) => params,
     resolveSessionFilePath: (sessionId: string, entry?: SessionEntry) =>
-      entry?.sessionFile ?? path.join("/tmp", `${sessionId}.jsonl`),
+      entry?.sessionFile ?? pathLocal.join("/tmp", `${sessionId}.jsonl`),
   };
 });
 
@@ -155,6 +159,8 @@ function acpMeta() {
 async function withTempSessionStore<T>(
   run: (params: { dir: string; storePath: string }) => Promise<T>,
 ): Promise<T> {
+  // Session-store tests exercise real JSON persistence, but each case gets an
+  // isolated file so mutation order remains deterministic.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
   try {
     return await run({ dir, storePath: path.join(dir, "sessions.json") });
@@ -206,6 +212,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result,
       });
 
+      // The gateway write takes cache ownership and supplies single-entry
+      // persistence so large stores are not rewritten unnecessarily.
       const updateOptions = sessionStoreMocks.updateSessionStore.mock.calls.at(-1)?.[2];
       expect(updateOptions).toMatchObject({
         takeCacheOwnership: true,
@@ -337,7 +345,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           durationMs: 1,
           agentMeta: {
             sessionId,
-            provider: "openai-codex",
+            provider: "openai",
             model: "gpt-5.5",
             contextTokens: 400_000,
           },
@@ -350,13 +358,62 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        defaultProvider: "openai-codex",
+        defaultProvider: "openai",
         defaultModel: "gpt-5.5",
         result,
       });
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
       expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(400_000);
+    });
+  });
+
+  it("caps configured context override by the resolved runtime model window", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.5", contextWindow: 272_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-capped-context-override";
+      const sessionId = "test-capped-context-override-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
+      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(272_000);
     });
   });
 
@@ -1585,7 +1642,15 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
           modelProvider: "anthropic",
           model: "claude-opus-4-6",
+          agentHarnessId: "openclaw",
           contextTokens: 1_000_000,
+          cliSessionBindings: {
+            "claude-cli": { sessionId: "existing-cli-session" },
+          },
+          cliSessionIds: {
+            "claude-cli": "existing-cli-session",
+          },
+          claudeCliSessionId: "existing-cli-session",
           contextBudgetStatus: {
             schemaVersion: 1,
             source: "pre-prompt-estimate",
@@ -1615,9 +1680,11 @@ describe("updateSessionStoreAfterAgentRun", () => {
           durationMs: 500,
           agentMeta: {
             sessionId,
-            provider: "ollama",
-            model: "llama3.2:1b",
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            agentHarnessId: "codex",
             contextTokens: 128_000,
+            cliSessionBinding: { sessionId: "heartbeat-cli-session" },
             contextBudgetStatus: {
               schemaVersion: 1,
               source: "pre-prompt-estimate",
@@ -1656,16 +1723,24 @@ describe("updateSessionStoreAfterAgentRun", () => {
       // Runtime model and contextTokens should be preserved from the original entry
       expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
+      expect(sessionStore[sessionKey]?.agentHarnessId).toBe("openclaw");
       expect(sessionStore[sessionKey]?.contextTokens).toBe(1_000_000);
       expect(sessionStore[sessionKey]?.contextBudgetStatus?.provider).toBe("anthropic");
       expect(sessionStore[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(640_000);
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "existing-cli-session",
+      });
 
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(persisted[sessionKey]?.modelProvider).toBe("anthropic");
+      expect(persisted[sessionKey]?.agentHarnessId).toBe("openclaw");
       expect(persisted[sessionKey]?.contextTokens).toBe(1_000_000);
       expect(persisted[sessionKey]?.contextBudgetStatus?.provider).toBe("anthropic");
       expect(persisted[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(640_000);
+      expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "existing-cli-session",
+      });
     });
   });
 

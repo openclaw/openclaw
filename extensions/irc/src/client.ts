@@ -1,3 +1,4 @@
+// Irc plugin module implements client behavior.
 import net from "node:net";
 import tls from "node:tls";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
@@ -376,7 +377,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
               text,
               rawLine,
             }),
-          ).catch((error) => {
+          ).catch((error: unknown) => {
             fail(error);
           });
         }
