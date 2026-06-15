@@ -331,6 +331,31 @@ describe("buildChatItems", () => {
     expect(groups[0].messages[1].duplicateCount).toBeUndefined();
   });
 
+  it("keeps same-id user relay copies separate so sender identity is preserved", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "user-1" },
+          role: "user",
+          content: [{ type: "text", text: "Alice hello" }],
+          senderLabel: "Alice",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "user-1" },
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.senderLabel)).toEqual(["Alice", null]);
+    expect(groups[0].messages).toHaveLength(1);
+    expect(groups[1].messages).toHaveLength(1);
+  });
+
   it("suppresses assistant HEARTBEAT_OK acknowledgements before rendering history", () => {
     const groups = messageGroups({
       messages: [

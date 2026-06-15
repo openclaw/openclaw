@@ -262,7 +262,7 @@ function collapseDuplicateSourceKey(message: unknown): string | null {
     return null;
   }
   const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  if (role !== "user" && role !== "assistant") {
+  if (role !== "assistant") {
     return null;
   }
   const id = sourceMessageId(message);
@@ -307,7 +307,7 @@ function sourceDuplicateDisplayParts(message: unknown): {
     return null;
   }
   const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  if (role !== "user" && role !== "assistant") {
+  if (role !== "assistant") {
     return null;
   }
   const textParts: string[] = [];
