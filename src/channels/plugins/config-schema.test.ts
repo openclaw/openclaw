@@ -20,8 +20,47 @@ describe("buildChannelConfigSchema", () => {
           default: true,
         },
       },
-      required: ["enabled"],
       additionalProperties: false,
+    });
+  });
+
+  it("does not mark fields with defaults as required (Feishu #77116 regression)", () => {
+    // Reported issue: Zod v4's toJSONSchema marks `.optional().default(...)` /
+    // `.default(...)` fields as required because the runtime always has a
+    // value. The resulting bundled JSON Schema rejects user configs that omit
+    // those keys (e.g. reporter's Feishu config without explicit `domain`,
+    // `connectionMode`, `webhookPath`, `reactionNotifications`,
+    // `typingIndicator`, `resolveSenderNames`), even though every omitted
+    // field has a documented default.
+    //
+    // BuildChannelConfigSchema must drop defaulted fields from `required` so
+    // the generated bundled channel config metadata accepts the same shapes
+    // that the runtime Zod parser accepts.
+    const schema = z.object({
+      alwaysRequired: z.string(),
+      withDefault: z.string().default("pairing"),
+      optionalWithDefault: z.string().optional().default("feishu"),
+      justOptional: z.string().optional(),
+    });
+    const result = buildChannelConfigSchema(schema);
+    const required = (result.schema as { required?: string[] }).required ?? [];
+    expect(required).toEqual(["alwaysRequired"]);
+    expect(required).not.toContain("withDefault");
+    expect(required).not.toContain("optionalWithDefault");
+    expect(required).not.toContain("justOptional");
+  });
+
+  it("keeps defaulted fields reachable as properties and as runtime defaults", () => {
+    const schema = z.object({
+      withDefault: z.string().default("pairing"),
+    });
+    const result = buildChannelConfigSchema(schema);
+    expect(
+      (result.schema as { properties?: Record<string, unknown> }).properties?.withDefault,
+    ).toEqual({ type: "string", default: "pairing" });
+    expect(result.runtime?.safeParse({})).toEqual({
+      success: true,
+      data: { withDefault: "pairing" },
     });
   });
 
