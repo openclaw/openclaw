@@ -1,0 +1,188 @@
+[
+  {
+    "name": "blank key",
+    "sessionKey": "   ",
+    "expected": {
+      "kind": "unknown",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNKNOWN"
+    },
+    "browserExpected": {
+      "kind": "unknown",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "UNKNOWN"
+    }
+  },
+  {
+    "name": "global key",
+    "sessionKey": "global",
+    "expected": {
+      "kind": "global",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "GLOBAL"
+    }
+  },
+  {
+    "name": "agent two segment key",
+    "sessionKey": "agent:main",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "main",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "agent:main:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "main",
+      "affectedSession": "agent:main:REDACTED"
+    }
+  },
+  {
+    "name": "agent main session",
+    "sessionKey": "agent:main:main",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "main",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "agent:main:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "main",
+      "affectedSession": "agent:main:REDACTED"
+    }
+  },
+  {
+    "name": "agent direct peer session",
+    "sessionKey": "agent:ops:direct:person-123",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "ops",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "agent:ops:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "ops",
+      "affectedSession": "agent:ops:REDACTED"
+    },
+    "rawMustNotContain": ["person-123"]
+  },
+  {
+    "name": "mixed case agent ids",
+    "sessionKey": "Agent:Ops:Direct:PERSON-123",
+    "requestedAgentId": "OPS",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "ops",
+      "requestedAgentId": "ops",
+      "agentRelation": "same_agent",
+      "affectedSession": "agent:ops:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "ops",
+      "affectedSession": "agent:ops:REDACTED"
+    },
+    "rawMustNotContain": ["PERSON-123"]
+  },
+  {
+    "name": "empty agent owner",
+    "sessionKey": "agent::main",
+    "expected": {
+      "kind": "malformed",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNKNOWN"
+    }
+  },
+  {
+    "name": "empty agent tail",
+    "sessionKey": "agent:main:",
+    "expected": {
+      "kind": "malformed",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNKNOWN"
+    }
+  },
+  {
+    "name": "unscoped hook key",
+    "sessionKey": "hook:gmail:abc",
+    "expected": {
+      "kind": "unscoped",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNSCOPED"
+    },
+    "browserExpected": {
+      "kind": "unscoped",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "UNSCOPED"
+    },
+    "rawMustNotContain": ["gmail", "abc"]
+  },
+  {
+    "name": "same agent relation",
+    "sessionKey": "agent:main:direct:user-1",
+    "requestedAgentId": "main",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "main",
+      "requestedAgentId": "main",
+      "agentRelation": "same_agent",
+      "affectedSession": "agent:main:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "main",
+      "affectedSession": "agent:main:REDACTED"
+    },
+    "rawMustNotContain": ["user-1"]
+  },
+  {
+    "name": "cross agent relation",
+    "sessionKey": "agent:main:direct:user-1",
+    "requestedAgentId": "worker",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "main",
+      "requestedAgentId": "worker",
+      "agentRelation": "cross_agent",
+      "affectedSession": "agent:main:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "main",
+      "affectedSession": "agent:main:REDACTED"
+    },
+    "rawMustNotContain": ["user-1"]
+  },
+  {
+    "name": "browser steward owner",
+    "sessionKey": "agent:browser-session-credential-steward:runtime-check",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "browser-session-credential-steward",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "agent:browser-session-credential-steward:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "browser_steward",
+      "ownerAgentId": "browser-session-credential-steward",
+      "affectedSession": "agent:browser-session-credential-steward:REDACTED"
+    },
+    "rawMustNotContain": ["runtime-check"]
+  }
+]

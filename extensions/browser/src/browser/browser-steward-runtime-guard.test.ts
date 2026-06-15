@@ -7,6 +7,28 @@ import {
   resolveBrowserStewardProxyAction,
 } from "./browser-steward-runtime-guard.js";
 
+type BrowserStewardBoundaryFixture = {
+  name: string;
+  sessionKey?: string | null;
+  browserExpected?: {
+    kind: "browser_steward" | "other_agent" | "unscoped" | "unknown";
+    ownerAgentId: string;
+    affectedSession: string;
+  };
+  rawMustNotContain?: string[];
+};
+
+const boundaryFixtures = JSON.parse(
+  readFileSync("test/fixtures/session-steward-boundary-cases.json", "utf8"),
+) as BrowserStewardBoundaryFixture[];
+const browserBoundaryFixtures = boundaryFixtures.filter(
+  (
+    fixture,
+  ): fixture is BrowserStewardBoundaryFixture & {
+    browserExpected: NonNullable<BrowserStewardBoundaryFixture["browserExpected"]>;
+  } => fixture.browserExpected !== undefined,
+);
+
 describe("Browser Steward runtime guard", () => {
   it("recognizes only exact Browser Steward agent session keys", () => {
     expect(isBrowserStewardSession("agent:browser-session-credential-steward:abc")).toBe(true);
@@ -22,25 +44,12 @@ describe("Browser Steward runtime guard", () => {
     expect(isBrowserStewardSession("browser-session-credential-steward")).toBe(false);
   });
 
-  it("redacts affected session boundaries without leaking peer ids", () => {
-    expect(resolveBrowserStewardSessionBoundary("agent:main:direct:person-123")).toEqual({
-      kind: "other_agent",
-      ownerAgentId: "main",
-      affectedSession: "agent:main:REDACTED",
-    });
-    expect(resolveBrowserStewardSessionBoundary("agent:main")).toEqual({
-      kind: "other_agent",
-      ownerAgentId: "main",
-      affectedSession: "agent:main:REDACTED",
-    });
-    expect(
-      JSON.stringify(resolveBrowserStewardSessionBoundary("agent:main:direct:person-123")),
-    ).not.toContain("person-123");
-    expect(resolveBrowserStewardSessionBoundary("browser-session-credential-steward")).toEqual({
-      kind: "unscoped",
-      ownerAgentId: "UNKNOWN",
-      affectedSession: "UNSCOPED",
-    });
+  it.each(browserBoundaryFixtures)("matches shared boundary fixture: $name", (fixture) => {
+    const boundary = resolveBrowserStewardSessionBoundary(fixture.sessionKey ?? undefined);
+    expect(boundary).toEqual(fixture.browserExpected);
+    for (const rawValue of fixture.rawMustNotContain ?? []) {
+      expect(JSON.stringify(boundary)).not.toContain(rawValue);
+    }
   });
 
   it("defaults sensitive mutation to approval_required", () => {
