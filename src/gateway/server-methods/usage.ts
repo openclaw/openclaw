@@ -985,6 +985,8 @@ export const usageHandlers: GatewayRequestHandlers = {
       const boundaryCheck = assertGatewaySessionStewardBoundary({
         sessionKey: specificKey,
         requestedAgentId,
+        surface: "sessions.usage",
+        action: "read",
       });
       if (!boundaryCheck.ok) {
         respond(false, undefined, boundaryCheck.error);

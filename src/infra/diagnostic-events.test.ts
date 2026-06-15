@@ -68,6 +68,50 @@ describe("diagnostic-events", () => {
     ]);
   });
 
+  it("emits redacted Session Steward boundary diagnostics", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event));
+
+    emitTrustedDiagnosticEvent({
+      type: "session_steward.boundary_decision",
+      surface: "tools.invoke",
+      action: "invoke",
+      outcome: "reject",
+      boundaryKind: "agent",
+      agentRelation: "cross_agent",
+      affectedSession: "agent:main:REDACTED",
+      ownerAgentId: "main",
+      requestedAgentId: "worker",
+      reason: "session key agent does not match agentId",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "session_steward.boundary_rejected",
+      surface: "tools.invoke",
+      action: "invoke",
+      outcome: "reject",
+      boundaryKind: "agent",
+      agentRelation: "cross_agent",
+      affectedSession: "agent:main:REDACTED",
+      ownerAgentId: "main",
+      requestedAgentId: "worker",
+      reason: "session key agent does not match agentId",
+    });
+    stop();
+
+    expect(events.map((event) => event.type)).toEqual([
+      "session_steward.boundary_decision",
+      "session_steward.boundary_rejected",
+    ]);
+    expect(events[0]).toMatchObject({
+      surface: "tools.invoke",
+      outcome: "reject",
+      affectedSession: "agent:main:REDACTED",
+    });
+    expect(JSON.stringify(events)).not.toContain("user-1");
+    expect(JSON.stringify(events)).not.toContain("person-123");
+    expect(JSON.stringify(events)).not.toContain("thread-123");
+  });
+
   it("isolates listener failures and logs them", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const seen: string[] = [];

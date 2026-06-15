@@ -604,6 +604,38 @@ export type DiagnosticPayloadLargeEvent = DiagnosticBaseEvent & {
   reason?: string;
 };
 
+export type DiagnosticSessionStewardBoundaryKind =
+  | "agent"
+  | "global"
+  | "unscoped"
+  | "unknown"
+  | "malformed";
+export type DiagnosticSessionStewardAgentRelation = "same_agent" | "cross_agent" | "unbound";
+export type DiagnosticSessionStewardBoundaryOutcome = "allow" | "reject";
+
+type DiagnosticSessionStewardBoundaryBaseEvent = DiagnosticBaseEvent & {
+  surface: string;
+  action?: string;
+  outcome: DiagnosticSessionStewardBoundaryOutcome;
+  boundaryKind: DiagnosticSessionStewardBoundaryKind;
+  agentRelation: DiagnosticSessionStewardAgentRelation;
+  affectedSession: string;
+  ownerAgentId: string;
+  requestedAgentId: string;
+  reason?: string;
+};
+
+export type DiagnosticSessionStewardBoundaryDecisionEvent =
+  DiagnosticSessionStewardBoundaryBaseEvent & {
+    type: "session_steward.boundary_decision";
+  };
+
+export type DiagnosticSessionStewardBoundaryRejectedEvent =
+  DiagnosticSessionStewardBoundaryBaseEvent & {
+    type: "session_steward.boundary_rejected";
+    outcome: "reject";
+  };
+
 export type DiagnosticLogRecordEvent = DiagnosticBaseEvent & {
   type: "log.record";
   level: string;
@@ -691,6 +723,8 @@ export type DiagnosticEventPayload =
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent
+  | DiagnosticSessionStewardBoundaryDecisionEvent
+  | DiagnosticSessionStewardBoundaryRejectedEvent
   | DiagnosticLogRecordEvent
   | DiagnosticTelemetryExporterEvent
   | DiagnosticAsyncQueueDroppedEvent

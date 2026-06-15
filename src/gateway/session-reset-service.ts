@@ -868,6 +868,8 @@ export async function performGatewaySessionReset(params: {
     const boundaryCheck = assertGatewaySessionStewardBoundary({
       sessionKey: params.key,
       requestedAgentId: explicitAgentId,
+      surface: "sessions.reset",
+      action: params.reason,
     });
     if (!boundaryCheck.ok) {
       return {

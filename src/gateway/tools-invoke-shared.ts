@@ -201,6 +201,8 @@ export async function invokeGatewayTool(params: {
   const boundaryCheck = assertGatewaySessionStewardBoundary({
     sessionKey,
     requestedAgentId,
+    surface: "tools.invoke",
+    action: "invoke",
   });
   if (!boundaryCheck.ok) {
     return {

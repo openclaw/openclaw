@@ -461,6 +461,8 @@ function resolveTrustedToolsEffectiveContext(params: {
   const requestBoundary = assertGatewaySessionStewardBoundary({
     sessionKey: params.sessionKey,
     requestedAgentId: params.requestedAgentId,
+    surface: "tools.effective",
+    action: "read",
   });
   if (!requestBoundary.ok) {
     params.respond(false, undefined, requestBoundary.error);
@@ -483,6 +485,8 @@ function resolveTrustedToolsEffectiveContext(params: {
   const loadedBoundary = assertGatewaySessionStewardBoundary({
     sessionKey: loaded.canonicalKey ?? params.sessionKey,
     requestedAgentId: params.requestedAgentId,
+    surface: "tools.effective",
+    action: "read",
   });
   if (!loadedBoundary.ok) {
     params.respond(false, undefined, loadedBoundary.error);

@@ -714,6 +714,8 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     const boundaryCheck = assertGatewaySessionStewardBoundary({
       sessionKey: params.sessionKey,
       requestedAgentId: params.agentId,
+      surface: "sessions.files.list",
+      action: "list",
     });
     if (!boundaryCheck.ok) {
       respond(false, undefined, boundaryCheck.error);
@@ -732,6 +734,8 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     const boundaryCheck = assertGatewaySessionStewardBoundary({
       sessionKey: params.sessionKey,
       requestedAgentId: params.agentId,
+      surface: "sessions.files.get",
+      action: "get",
     });
     if (!boundaryCheck.ok) {
       respond(false, undefined, boundaryCheck.error);

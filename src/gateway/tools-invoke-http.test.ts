@@ -4,6 +4,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
@@ -272,6 +277,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  resetDiagnosticEventsForTest();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   pluginHttpHandlers = [];
@@ -408,6 +414,16 @@ const firstHookCallArg = () => {
   }
   return call[0];
 };
+
+function captureSessionStewardEvents() {
+  const events: DiagnosticEventPayload[] = [];
+  const stop = onTrustedInternalDiagnosticEvent((event) => {
+    if (event.type.startsWith("session_steward.")) {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
 
 const invokeToolsRpc = async (params: Record<string, unknown>, scopes = ["operator.write"]) => {
   const respond = vi.fn();
@@ -1169,6 +1185,7 @@ describe("tools.invoke Gateway RPC", () => {
         ],
       },
     };
+    const diagnostics = captureSessionStewardEvents();
 
     const call = await invokeToolsRpc({
       name: "tools_invoke_test",
@@ -1176,6 +1193,7 @@ describe("tools.invoke Gateway RPC", () => {
       sessionKey: "agent:main:direct:user-1",
       agentId: "worker",
     });
+    diagnostics.stop();
 
     expect(call?.[0]).toBe(true);
     expect(call?.[1]?.ok).toBe(false);
@@ -1184,6 +1202,25 @@ describe("tools.invoke Gateway RPC", () => {
     expect(error?.code).toBe("validation_error");
     expect(error?.message).toBe("session key agent does not match agentId");
     expect(JSON.stringify(call)).not.toContain("user-1");
+    expect(diagnostics.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "session_steward.boundary_decision",
+          surface: "tools.invoke",
+          action: "invoke",
+          outcome: "reject",
+          affectedSession: "agent:main:REDACTED",
+        }),
+        expect.objectContaining({
+          type: "session_steward.boundary_rejected",
+          surface: "tools.invoke",
+          action: "invoke",
+          outcome: "reject",
+          affectedSession: "agent:main:REDACTED",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(diagnostics.events)).not.toContain("user-1");
     expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
     expect(lastCreateOpenClawToolsContext).toBeUndefined();
   });

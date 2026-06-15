@@ -643,7 +643,11 @@ function resolveRequestedGlobalAgentId(
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
   const parsed = parseAgentSessionKey(key);
   const requestedAgentId = normalizeOptionalString(explicitAgentId);
-  const baseBoundary = assertGatewaySessionStewardBoundary({ sessionKey: key });
+  const baseBoundary = assertGatewaySessionStewardBoundary({
+    sessionKey: key,
+    surface: "sessions.create",
+    action: "resolve-global-agent",
+  });
   if (!baseBoundary.ok) {
     return { ok: false, error: baseBoundary.error };
   }
@@ -658,6 +662,8 @@ function resolveRequestedGlobalAgentId(
     const requestedBoundary = assertGatewaySessionStewardBoundary({
       sessionKey: key,
       requestedAgentId: agentId,
+      surface: "sessions.create",
+      action: "resolve-global-agent",
     });
     if (!requestedBoundary.ok) {
       return { ok: false, error: requestedBoundary.error };
@@ -670,6 +676,8 @@ function resolveRequestedGlobalAgentId(
         const canonicalBoundary = assertGatewaySessionStewardBoundary({
           sessionKey: canonicalKey,
           requestedAgentId: agentId,
+          surface: "sessions.create",
+          action: "resolve-global-agent",
         });
         return {
           ok: false,
@@ -1371,6 +1379,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const boundaryCheck = assertGatewaySessionStewardBoundary({
         sessionKey: requestedKey,
         requestedAgentId: normalizeOptionalString(p.agentId),
+        surface: "sessions.create",
+        action: "create",
       });
       if (!boundaryCheck.ok) {
         respond(false, undefined, boundaryCheck.error);
@@ -1384,6 +1394,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (parentSessionKey) {
       const parentBoundaryCheck = assertGatewaySessionStewardBoundary({
         sessionKey: parentSessionKey,
+        surface: "sessions.create",
+        action: "parent",
       });
       if (!parentBoundaryCheck.ok) {
         respond(false, undefined, parentBoundaryCheck.error);
@@ -1947,6 +1959,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const boundaryCheck = assertGatewaySessionStewardBoundary({
         sessionKey: requestedKey,
         requestedAgentId: requestedParamAgentId,
+        surface: "sessions.abort",
+        action: "abort",
       });
       if (!boundaryCheck.ok) {
         respond(false, undefined, boundaryCheck.error);
