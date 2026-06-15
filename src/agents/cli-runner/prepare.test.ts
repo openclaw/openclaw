@@ -749,6 +749,68 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("cleans generated Gemini MCP settings when auth preparation fails", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    let generatedSystemSettingsPath: string | undefined;
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const prepareExecution = vi.fn(async (ctx: { env?: Record<string, string> }) => {
+      generatedSystemSettingsPath = ctx.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+      throw new Error("Gemini auth profile was selected but no credential material was found");
+    });
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          pluginId: "google",
+          bundleMcp: true,
+          bundleMcpMode: "gemini-system-settings",
+          prepareExecution,
+          config: {
+            command: "gemini",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+    });
+
+    try {
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "agent:main:main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          timeoutMs: 1_000,
+          runId: "run-test-gemini-mcp-cleanup-on-auth-failure",
+          config: {},
+        }),
+      ).rejects.toThrow(/no credential material/);
+
+      expect(generatedSystemSettingsPath).toBeTruthy();
+      expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {
     const { dir, sessionFile } = createSessionFile();
     appendTranscriptEntry(sessionFile, {

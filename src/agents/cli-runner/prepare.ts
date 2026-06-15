@@ -476,19 +476,30 @@ export async function prepareCliRunContext(
     executionMode,
     env: preparedBackend.env,
   } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
-  const preparedExecution = await backendResolved.prepareExecution?.(
-    (backendResolved.id === "google-gemini-cli"
-      ? {
-          ...prepareExecutionContext,
-          // Private bridge for bundled Gemini CLI. This is intentionally not
-          // part of the public Plugin SDK until a credential-forwarding
-          // contract exists.
-          authCredential,
-        }
-      : prepareExecutionContext) as typeof prepareExecutionContext & {
-      authCredential?: AuthProfileCredential;
-    },
-  );
+  let preparedExecution: Awaited<ReturnType<NonNullable<typeof backendResolved.prepareExecution>>> =
+    undefined;
+  try {
+    preparedExecution = await backendResolved.prepareExecution?.(
+      (backendResolved.id === "google-gemini-cli"
+        ? {
+            ...prepareExecutionContext,
+            // Private bridge for bundled Gemini CLI. This is intentionally not
+            // part of the public Plugin SDK until a credential-forwarding
+            // contract exists.
+            authCredential,
+          }
+        : prepareExecutionContext) as typeof prepareExecutionContext & {
+        authCredential?: AuthProfileCredential;
+      },
+    );
+  } catch (err) {
+    try {
+      await preparedBackend.cleanup?.();
+    } catch (cleanupErr) {
+      cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupErr)}`);
+    }
+    throw err;
+  }
   const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
     authEpochMode: backendResolved.authEpochMode,
     authProfileId: effectiveAuthProfileId,
