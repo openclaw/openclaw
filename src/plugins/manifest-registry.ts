@@ -806,6 +806,25 @@ function npmSpecMatchesPackage(value: string | undefined, packageName: string): 
   return normalized.startsWith(`${packageName}@`);
 }
 
+function npmInstallRecordMatchesPackage(params: {
+  installRecord: PluginInstallRecord;
+  candidatePackageName?: string;
+  packageName: string;
+}): boolean {
+  const recordPackageRefs = [
+    params.installRecord.resolvedName,
+    params.installRecord.spec,
+    params.installRecord.resolvedSpec,
+  ];
+  if (recordPackageRefs.some((value) => npmSpecMatchesPackage(value, params.packageName))) {
+    return true;
+  }
+  const hasRecordPackageRef = recordPackageRefs.some((value) => value?.trim());
+  return (
+    !hasRecordPackageRef && npmSpecMatchesPackage(params.candidatePackageName, params.packageName)
+  );
+}
+
 function isTrustedOfficialPluginInstall(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -839,12 +858,11 @@ function isTrustedOfficialPluginInstall(params: {
   if (
     installRecord.source === "npm" &&
     officialInstall?.npmSpec === packageName &&
-    [
-      installRecord.resolvedName,
-      installRecord.spec,
-      installRecord.resolvedSpec,
-      params.candidate.packageName,
-    ].some((value) => npmSpecMatchesPackage(value, packageName))
+    npmInstallRecordMatchesPackage({
+      installRecord,
+      candidatePackageName: params.candidate.packageName,
+      packageName,
+    })
   ) {
     return true;
   }
@@ -958,6 +976,7 @@ export function loadPluginManifestRegistry(
     candidates?: PluginCandidate[];
     diagnostics?: PluginDiagnostic[];
     installRecords?: Record<string, PluginInstallRecord>;
+    trustedInstallRecords?: Record<string, PluginInstallRecord>;
     bundledChannelConfigCollector?: BundledChannelConfigCollector;
     discovery?: PluginDiscoveryResult;
   } = {},
@@ -974,6 +993,8 @@ export function loadPluginManifestRegistry(
     }
     return installRecords ?? {};
   };
+  const getTrustedInstallRecords = (): Record<string, PluginInstallRecord> =>
+    params.trustedInstallRecords ?? getInstallRecords();
 
   const discovery = params.candidates
     ? {
@@ -1115,7 +1136,7 @@ export function loadPluginManifestRegistry(
             pluginId: manifest.id,
             candidate,
             env,
-            installRecords: getInstallRecords(),
+            installRecords: getTrustedInstallRecords(),
           }),
           ...(params.bundledChannelConfigCollector
             ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }

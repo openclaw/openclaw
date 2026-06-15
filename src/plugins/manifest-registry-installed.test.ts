@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -73,6 +74,55 @@ function createIndex(rootDir: string): InstalledPluginIndex {
       },
     ],
     diagnostics: [],
+  };
+}
+
+type TestInstalledPluginOrigin = InstalledPluginIndex["plugins"][number]["origin"];
+
+function createIndexForPlugin(params: {
+  rootDir: string;
+  pluginId: string;
+  origin?: TestInstalledPluginOrigin;
+  packageName?: string;
+  packageVersion?: string;
+  installRecord?: PluginInstallRecord;
+}): InstalledPluginIndex {
+  const index = createIndex(params.rootDir);
+  const record = index.plugins[0];
+  if (!record) {
+    throw new Error("expected index record");
+  }
+  return {
+    ...index,
+    installRecords: params.installRecord
+      ? { ...index.installRecords, [params.pluginId]: params.installRecord }
+      : index.installRecords,
+    plugins: [
+      {
+        ...record,
+        pluginId: params.pluginId,
+        origin: params.origin ?? "config",
+        ...(params.packageName ? { packageName: params.packageName } : {}),
+        ...(params.packageVersion ? { packageVersion: params.packageVersion } : {}),
+      },
+    ],
+  };
+}
+
+type DiagnosticsInstallRecordOverrides = Partial<PluginInstallRecord>;
+
+function createDiagnosticsOtelInstallRecord(
+  rootDir: string,
+  installRecordOverrides: DiagnosticsInstallRecordOverrides = {},
+): PluginInstallRecord {
+  return {
+    source: "npm",
+    spec: "@openclaw/diagnostics-otel",
+    installPath: rootDir,
+    resolvedName: "@openclaw/diagnostics-otel",
+    resolvedVersion: "2026.5.28",
+    resolvedSpec: "@openclaw/diagnostics-otel@2026.5.28",
+    ...installRecordOverrides,
   };
 }
 
@@ -338,6 +388,164 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.modelSupport).toEqual({
       modelPrefixes: ["installed-"],
     });
+  });
+
+  it("marks persisted diagnostics-otel install records trusted on the installed-index path", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "diagnostics-otel", "diagnostics-otel-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndexForPlugin({
+        rootDir,
+        pluginId: "diagnostics-otel",
+        origin: "config",
+        packageName: "@openclaw/diagnostics-otel",
+        packageVersion: "2026.5.28",
+        installRecord: createDiagnosticsOtelInstallRecord(rootDir),
+      }),
+      env: {
+        OPENCLAW_VERSION: "2026.5.28",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("config");
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+  });
+
+  it("keeps package-name spoofed diagnostics-otel install records untrusted", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "diagnostics-otel", "diagnostics-otel-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndexForPlugin({
+        rootDir,
+        pluginId: "diagnostics-otel",
+        origin: "config",
+        packageName: "@spoof/diagnostics-otel",
+        packageVersion: "2026.5.28",
+        installRecord: createDiagnosticsOtelInstallRecord(rootDir),
+      }),
+      env: {
+        OPENCLAW_VERSION: "2026.5.28",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeFalsy();
+  });
+
+  it("keeps mismatched-spec diagnostics-otel install records untrusted", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "diagnostics-otel", "diagnostics-otel-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndexForPlugin({
+        rootDir,
+        pluginId: "diagnostics-otel",
+        origin: "config",
+        packageName: "@openclaw/diagnostics-otel",
+        packageVersion: "2026.5.28",
+        installRecord: createDiagnosticsOtelInstallRecord(rootDir, {
+          spec: "@spoof/diagnostics-otel",
+          resolvedName: "@spoof/diagnostics-otel",
+          resolvedSpec: "@spoof/diagnostics-otel@2026.5.28",
+        }),
+      }),
+      env: {
+        OPENCLAW_VERSION: "2026.5.28",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeFalsy();
+  });
+
+  it("keeps wrong-path diagnostics-otel install records untrusted", () => {
+    const rootDir = makeTempDir();
+    const otherRoot = makeTempDir();
+    writePlugin(rootDir, "diagnostics-otel", "diagnostics-otel-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndexForPlugin({
+        rootDir,
+        pluginId: "diagnostics-otel",
+        origin: "config",
+        packageName: "@openclaw/diagnostics-otel",
+        packageVersion: "2026.5.28",
+        installRecord: createDiagnosticsOtelInstallRecord(rootDir, { installPath: otherRoot }),
+      }),
+      env: {
+        OPENCLAW_VERSION: "2026.5.28",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeFalsy();
+  });
+
+  it("keeps non-official install records untrusted", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "not-official-diagnostics", "not-official-diagnostics-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndexForPlugin({
+        rootDir,
+        pluginId: "not-official-diagnostics",
+        origin: "config",
+        packageName: "@openclaw/not-official-diagnostics",
+        packageVersion: "2026.5.28",
+        installRecord: {
+          source: "npm",
+          spec: "@openclaw/not-official-diagnostics",
+          installPath: rootDir,
+          resolvedName: "@openclaw/not-official-diagnostics",
+          resolvedVersion: "2026.5.28",
+          resolvedSpec: "@openclaw/not-official-diagnostics@2026.5.28",
+        },
+      }),
+      env: {
+        OPENCLAW_VERSION: "2026.5.28",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeFalsy();
+  });
+
+  it("keeps non-npm diagnostics-otel install records untrusted", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "diagnostics-otel", "diagnostics-otel-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndexForPlugin({
+        rootDir,
+        pluginId: "diagnostics-otel",
+        origin: "config",
+        packageName: "@openclaw/diagnostics-otel",
+        packageVersion: "2026.5.28",
+        installRecord: createDiagnosticsOtelInstallRecord(rootDir, { source: "marketplace" }),
+      }),
+      env: {
+        OPENCLAW_VERSION: "2026.5.28",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeFalsy();
   });
 
   it("reconstructs bundle candidates with their bundle manifest format", () => {

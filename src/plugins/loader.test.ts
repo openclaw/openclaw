@@ -1364,6 +1364,48 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.rootDir).toBe(fs.realpathSync.native(plugin.dir));
   });
 
+  it("keeps user-authored diagnostics-otel config install records untrusted during plugin load", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "diagnostics-otel",
+      filename: "index.cjs",
+      body: `module.exports = { id: "diagnostics-otel", register() {} };`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify({ name: "@openclaw/diagnostics-otel", version: "2026.5.28" }),
+      "utf-8",
+    );
+
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            load: { paths: [plugin.dir] },
+            entries: { "diagnostics-otel": { enabled: true } },
+            installs: {
+              "diagnostics-otel": {
+                source: "npm",
+                spec: "@openclaw/diagnostics-otel",
+                installPath: plugin.dir,
+                resolvedName: "@openclaw/diagnostics-otel",
+                resolvedVersion: "2026.5.28",
+                resolvedSpec: "@openclaw/diagnostics-otel@2026.5.28",
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const record = registry.plugins.find((entry) => entry.id === "diagnostics-otel");
+    expect(record?.status).toBe("loaded");
+    expect(record?.origin).toBe("config");
+    expect(record?.trustedOfficialInstall).toBeFalsy();
+  });
+
   it("refreshes bundled plugin-sdk aliases without deleting the shared alias directory", () => {
     const distRoot = makeTempDir();
     const pluginSdkDir = path.join(distRoot, "plugin-sdk");

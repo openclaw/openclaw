@@ -1307,9 +1307,13 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
+  const trustedInstallRecords =
+    options.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env });
   const installRecords = {
-    ...(options.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env })),
+    // Legacy config records may point discovery at a managed plugin path, but only
+    // the persisted/index records are trusted to grant official-plugin privileges.
     ...cfg.plugins?.installs,
+    ...trustedInstallRecords,
   };
   const devSourceRoot = resolveOpenClawDevSourceRoot(env);
   const cacheKey = buildCacheKey({
@@ -1357,6 +1361,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
     installRecords,
+    trustedInstallRecords,
     devSourceRoot,
     cacheKey,
   };
@@ -1754,6 +1759,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     cacheKey,
     runtimeSubagentMode,
     installRecords,
+    trustedInstallRecords,
     devSourceRoot,
   } = resolvePluginLoadCacheContext(options);
   const logger = options.logger ?? defaultLogger();
@@ -1937,6 +1943,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         candidates: discovery.candidates,
         diagnostics: discovery.diagnostics,
         installRecords: Object.keys(installRecords).length > 0 ? installRecords : undefined,
+        trustedInstallRecords,
       });
     pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
     warnWhenAllowlistIsOpen({
@@ -2875,6 +2882,7 @@ export async function loadOpenClawPluginCliRegistry(
     onlyPluginIds,
     cacheKey,
     installRecords,
+    trustedInstallRecords,
     devSourceRoot,
   } = resolvePluginLoadCacheContext({
     ...options,
@@ -2911,6 +2919,7 @@ export async function loadOpenClawPluginCliRegistry(
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,
     installRecords: Object.keys(installRecords).length > 0 ? installRecords : undefined,
+    trustedInstallRecords,
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({

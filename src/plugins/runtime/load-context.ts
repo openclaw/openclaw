@@ -73,6 +73,7 @@ export function resolvePluginRuntimeLoadContext(
   const rawConfig = options?.config ?? getRuntimeConfig();
   const rawWorkspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
+  const runtimeInstallRecords = rawConfig.plugins?.installs;
   const metadataSnapshot = options?.manifestRegistry
     ? undefined
     : resolvePluginMetadataSnapshot({
@@ -80,6 +81,9 @@ export function resolvePluginRuntimeLoadContext(
         env,
         workspaceDir: rawWorkspaceDir,
         allowWorkspaceScopedCurrent: true,
+        ...(runtimeInstallRecords && Object.keys(runtimeInstallRecords).length > 0
+          ? { installRecords: runtimeInstallRecords }
+          : {}),
       });
   const manifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const installRecords = metadataSnapshot

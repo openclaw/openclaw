@@ -731,6 +731,47 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("keeps user-authored diagnostics-otel config installs untrusted", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
+    writeTextFile(
+      dir,
+      "package.json",
+      JSON.stringify({ name: "@openclaw/diagnostics-otel", version: "2026.5.28" }),
+    );
+    writeTextFile(dir, "index.ts", "export {};\n");
+
+    const registry = loadPluginManifestRegistry({
+      config: {
+        plugins: {
+          load: { paths: [dir] },
+          entries: { "diagnostics-otel": { enabled: true } },
+          installs: {
+            "diagnostics-otel": {
+              source: "npm",
+              spec: "@openclaw/diagnostics-otel",
+              installPath: dir,
+              resolvedName: "@openclaw/diagnostics-otel",
+              resolvedVersion: "2026.5.28",
+              resolvedSpec: "@openclaw/diagnostics-otel@2026.5.28",
+            },
+          },
+        },
+      },
+      env: hermeticEnv({
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "true",
+        OPENCLAW_HOME: makeTempDir(),
+        OPENCLAW_VERSION: "2026.5.28",
+      }),
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expectRecordFields(registry.plugins[0], "plugin", {
+      origin: "config",
+    });
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeFalsy();
+  });
+
   it("preserves trusted official installs when a config path selects the installed package", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-prometheus", configSchema: { type: "object" } });

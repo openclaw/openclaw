@@ -212,6 +212,51 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
   });
 
+  it("passes runtime config install records into the metadata snapshot", () => {
+    const installRecords = {
+      "diagnostics-otel": {
+        source: "npm" as const,
+        spec: "@openclaw/diagnostics-otel",
+        installPath: "/usr/lib/node_modules/@openclaw/diagnostics-otel",
+        resolvedName: "@openclaw/diagnostics-otel",
+        resolvedVersion: "2026.5.28",
+        resolvedSpec: "@openclaw/diagnostics-otel@2026.5.28",
+      },
+    };
+    const rawConfig = {
+      plugins: {
+        load: { paths: ["/usr/lib/node_modules/@openclaw/diagnostics-otel"] },
+        entries: { "diagnostics-otel": { enabled: true } },
+        installs: installRecords,
+      },
+    };
+    const snapshotWithRecords = {
+      ...metadataSnapshot,
+      index: {
+        installRecords,
+        plugins: [],
+        policyHash: "policy",
+      },
+    };
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(snapshotWithRecords);
+    const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: rawConfig,
+      env,
+    });
+
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      allowWorkspaceScopedCurrent: true,
+      config: rawConfig,
+      env,
+      installRecords,
+      workspaceDir: "/resolved-workspace",
+    });
+    expect(context.installRecords).toEqual(installRecords);
+    expect(buildPluginRuntimeLoadOptions(context).installRecords).toEqual(installRecords);
+  });
+
   it("builds plugin load options from the shared runtime context", () => {
     const context = resolvePluginRuntimeLoadContext({
       config: { plugins: {} },
