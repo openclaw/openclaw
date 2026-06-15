@@ -17,6 +17,7 @@ import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
@@ -258,9 +259,25 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     },
   });
 
+  let sessionStreamingMode: unknown;
+  const streamSessionKey = prepared.ctxPayload.SessionKey ?? route.sessionKey;
+  if (streamSessionKey) {
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+      sessionStreamingMode = getSessionEntry({
+        agentId: route.agentId,
+        readConsistency: "latest",
+        storePath,
+        sessionKey: streamSessionKey,
+      })?.streamingMode;
+    } catch (err) {
+      logVerbose(`slack stream mode session lookup failed: ${String(err)}`);
+    }
+  }
   const slackStreaming = resolveSlackStreamingConfig({
     streaming: account.config.streaming,
     nativeStreaming: resolveChannelStreamingNativeTransport(account.config),
+    sessionStreamingMode,
   });
   const streamThreadHint =
     forcedReplyThreadTs ??

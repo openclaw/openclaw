@@ -170,6 +170,7 @@ export function createChannelProgressDraftCompositor(params: {
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.entry, {
       draftStreamActive: true,
       previewToolProgressEnabled,
+      mode: params.mode,
     });
   let progressSuppressed = false;
   let lines: ChannelProgressDraftCompositorLine[] = [];

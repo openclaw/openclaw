@@ -57,6 +57,7 @@ export function createSlackPluginBase(params: {
       threads: true,
       media: true,
       nativeCommands: true,
+      previewStreamingSessionOverride: true,
     },
     commands: {
       nativeCommandsAutoEnabled: false,
