@@ -257,6 +257,12 @@ function copyDirIfExists(sourcePath: string, targetPath: string): void {
   fs.cpSync(sourcePath, targetPath, {
     recursive: true,
     force: true,
+    filter: (src) => {
+      // Skip large browser cache / recording directories that can
+      // fill /tmp with several GB per live test run (issue #91893).
+      const base = path.basename(src);
+      return base !== "Cache_Data" && base !== "browser_recordings";
+    },
   });
 }
 
