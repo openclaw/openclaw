@@ -2381,6 +2381,45 @@ describe("systemd service control", () => {
     }
   });
 
+  it("keeps a conflicting user unit when non-root restart needs sudo for the system unit", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-control-"));
+    const home = path.join(tempHomeRoot, "home");
+    const userUnitPath = path.join(home, ".config", "systemd", "user", GATEWAY_SERVICE);
+    try {
+      await fs.mkdir(path.dirname(userUnitPath), { recursive: true });
+      await fs.writeFile(userUnitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
+      const realAccess = fs.access.bind(fs);
+      vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+        const pathValue = pathLikeToString(pathname);
+        if (pathValue === "/etc/systemd/system/openclaw-gateway.service") {
+          return undefined;
+        }
+        return await realAccess(pathname, mode);
+      });
+      mockEffectiveUid(1000);
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", GATEWAY_SERVICE);
+          cb(null, "", "");
+        });
+
+      const { stdout } = createWritableStreamMock();
+      await expect(restartSystemdService({ stdout, env: { HOME: home } })).rejects.toThrow(
+        /openclaw-gateway\.service is a system-scope unit .*sudo systemctl restart openclaw-gateway\.service/,
+      );
+
+      await expect(fs.access(userUnitPath)).resolves.toBeUndefined();
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces stop failures with systemctl detail", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))

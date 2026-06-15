@@ -1324,6 +1324,11 @@ async function runSystemdServiceAction(params: {
   const installed = await findInstalledSystemdGatewayScope(env);
   const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
   if (installed?.scope === "system") {
+    if (!isRunningAsRoot()) {
+      throw new Error(
+        `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
+      );
+    }
     const retiredUserUnit = await retireConflictingUserScopeUnitForSystemUnit(
       env,
       installed.conflictingUnit,
@@ -1331,11 +1336,6 @@ async function runSystemdServiceAction(params: {
     if (retiredUserUnit) {
       params.stdout.write(
         `${formatLine("Retired conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath})`)}\n`,
-      );
-    }
-    if (!isRunningAsRoot()) {
-      throw new Error(
-        `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
       );
     }
     const res = await execSystemctl([params.action, unitName], env);
