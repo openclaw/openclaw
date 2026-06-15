@@ -8431,6 +8431,18 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([]);
   });
 
+  it("flags extension runtime writes under migration-like directories", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        await fs.writeFile("sessions.json", "{}\\n", "utf8");
+      `,
+      "extensions/example/src/migrations/runtime.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
+  });
+
   it("allows exact QA fixture owners to materialize legacy files", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

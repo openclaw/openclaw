@@ -169,8 +169,7 @@ function isAllowedLegacyOwnerPath(relativePath) {
     allowedRuntimeMigrationPaths.some((allowed) => relativePath.startsWith(allowed)) ||
     /^extensions\/[^/]+\/(?:doctor-contract-api|legacy-state-migrations-api)\.ts$/u.test(
       relativePath,
-    ) ||
-    /^extensions\/[^/]+\/.*migrations?(?:[./-][^/]*)?\.ts$/u.test(relativePath)
+    )
   );
 }
 
