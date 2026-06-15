@@ -94,21 +94,33 @@ import {
 
 /**
  * Untrusted by construction — force `trusted: false` so a plugin importing this
- * deprecated barrel cannot set `trusted: true` to bypass the anti-spoof sanitizer.
+ * deprecated barrel cannot set `trusted: true` to bypass the anti-spoof sanitizer,
+ * and strip `sessionDeliveryAckId` / `sessionDeliveryAckStateDir` so a plugin cannot
+ * forge session-delivery ack ids to reach `deleteDeliveryQueueEntry` (Finding-B ack-axis).
  * Trusted-internal producers use the direct `infra/system-events` import.
  */
 export function enqueueSystemEvent(
   text: string,
   options: Parameters<typeof enqueueSystemEventInternal>[1],
 ): boolean {
-  return enqueueSystemEventInternal(text, { ...options, trusted: false });
+  return enqueueSystemEventInternal(text, {
+    ...options,
+    trusted: false,
+    sessionDeliveryAckId: undefined,
+    sessionDeliveryAckStateDir: undefined,
+  });
 }
 
 export function enqueueSystemEventEntry(
   text: string,
   options: Parameters<typeof enqueueSystemEventEntryInternal>[1],
 ): ReturnType<typeof enqueueSystemEventEntryInternal> {
-  return enqueueSystemEventEntryInternal(text, { ...options, trusted: false });
+  return enqueueSystemEventEntryInternal(text, {
+    ...options,
+    trusted: false,
+    sessionDeliveryAckId: undefined,
+    sessionDeliveryAckStateDir: undefined,
+  });
 }
 export * from "../infra/system-message.ts";
 export * from "../infra/tmp-openclaw-dir.js";
