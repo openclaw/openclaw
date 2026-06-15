@@ -1318,6 +1318,32 @@ describe("Tool Search", () => {
     expect(writeTool.execute).not.toHaveBeenCalled();
   });
 
+  it("preserves code-mode bridge recovery guidance for guessed tool ids", async () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const writeTool = fakeTool("write", "Write a file to the workspace");
+    applyToolSearchCatalog({
+      tools: [codeTool, writeTool],
+      config: { tools: { toolSearch: true } } as never,
+      sessionId: "session-code-guessed-file-write",
+      sessionKey: "agent:main:main",
+    });
+
+    const [runtimeCodeTool] = createToolSearchTools({
+      sessionId: "session-code-guessed-file-write",
+      sessionKey: "agent:main:main",
+      config: {},
+    });
+
+    await expect(
+      runtimeCodeTool.execute("call-code-guessed-file-write", {
+        code: `return await openclaw.tools.call("file_write", { path: "memory/2026-05-22.md" });`,
+      }),
+    ).rejects.toThrow(
+      "Unknown tool id: file_write. Did you mean: write? Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
+    );
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
   it("preserves code-mode bridge errors from the child process", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     applyToolSearchCatalog({

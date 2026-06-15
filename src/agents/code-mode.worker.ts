@@ -727,10 +727,15 @@ async function main(): Promise<CodeModeWorkerResult> {
       output: [],
     };
   } catch (error) {
+    const timedOut = isQuickJsInterruptedError(error);
     return {
       status: "failed",
-      error: errorMessage(error),
-      code: error instanceof CodeModeWorkerFailure ? error.code : "internal_error",
+      error: timedOut ? "code mode timeout exceeded" : errorMessage(error),
+      code: timedOut
+        ? "timeout"
+        : error instanceof CodeModeWorkerFailure
+          ? error.code
+          : "internal_error",
       output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
     };
   }
