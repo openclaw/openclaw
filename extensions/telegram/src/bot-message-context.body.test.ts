@@ -73,6 +73,21 @@ function transcribeCallContext(index = 0): Record<string, unknown> {
 }
 
 describe("resolveTelegramInboundBody", () => {
+  it("delivers rich-message-only updates as a sanitized placeholder", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("[unsupported Telegram rich_message received]");
+    expect(result?.bodyText).toBe("[unsupported Telegram rich_message received]");
+  });
+
   it("renders Telegram text entities before building the agent body", async () => {
     const result = await resolveTelegramBody({
       msg: {

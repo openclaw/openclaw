@@ -619,8 +619,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
       : replyLike && typeof replyLike.caption === "string"
         ? replyLike.caption
         : undefined;
-  const safeReplyText = resolveTelegramTextContent(rawReplyText);
-  const replyTextParts = replyLike && safeReplyText ? getTelegramTextParts(replyLike) : undefined;
+  const replyTextParts = replyLike ? getTelegramTextParts(replyLike) : undefined;
+  const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
     const replyBody = safeReplyText.trim();
