@@ -37,11 +37,11 @@ local workers as text-only helpers by default.
 
 ## How the pieces fit
 
-| Role             | Who does it                                                           | Surface                                                       |
-| ---------------- | --------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Orchestrator     | Cloud model with tools                                                | `agents.defaults.model.primary`                               |
-| Delegated worker | Local model (restricted sub-agent, or no-tool `llm-task`/CLI backend) | sub-agent model override, `llm-task`, or a CLI backend        |
-| Safety net       | Cloud fallback when the local box is down                             | `agents.defaults.model.fallbacks` with `models.mode: "merge"` |
+| Role             | Who does it                                                                      | Surface                                                       |
+| ---------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Orchestrator     | Cloud model with tools                                                           | `agents.defaults.model.primary`                               |
+| Delegated worker | Local model (restricted sub-agent, no-tool `llm-task`, or text-only CLI backend) | sub-agent model override, `llm-task`, or a CLI backend        |
+| Safety net       | Cloud fallback when the local box is down                                        | `agents.defaults.model.fallbacks` with `models.mode: "merge"` |
 
 ## Step 1: cloud orchestrator, local provider registered
 
@@ -137,9 +137,10 @@ a tool removed by `tools.profile`):
 ```
 
 If you want a guaranteed no-tool text worker, prefer
-[LLM task](#llm-task-for-schema-validated-text-steps) or a
-[CLI backend](#cli-backend-as-a-text-only-fallback) below — those surfaces expose
-no OpenClaw tools to the model at all.
+[LLM task](#llm-task-for-schema-validated-text-steps) below — it is JSON-only and
+exposes no tools to the model. A [CLI backend](#cli-backend-as-a-text-only-fallback)
+also gets no direct OpenClaw tool injection, but only stays no-tool while
+`bundleMcp` is off (see below).
 
 Brief the child fully in the task text, because isolated sub-agents start with a
 clean transcript. See [Sub-agents](/tools/subagents) for context modes,
@@ -180,9 +181,11 @@ approvals before any side-effecting step.
 ### CLI backend as a text-only fallback
 
 If you already run a local AI CLI, a [CLI backend](/gateway/cli-backends) is a
-**text-only fallback**: OpenClaw tools are not injected directly. This is the
-most conservative worker surface and a good always-works path for plain text
-responses.
+**text-only fallback**: OpenClaw tools are not injected into the CLI protocol
+directly. One exception — a backend with `bundleMcp: true` opts into a loopback
+MCP bridge that does expose gateway tools to the CLI process (see
+[Bundle MCP overlays](/gateway/cli-backends#bundle-mcp-overlays)). Leave
+`bundleMcp` off to keep this surface a plain text path.
 
 ## Step 3: keep local tool expectations honest
 
