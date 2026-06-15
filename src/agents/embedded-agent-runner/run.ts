@@ -11,11 +11,13 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -819,6 +821,7 @@ async function runEmbeddedAgentInternal(
         provider: params.provider,
         model: params.model,
       });
+      const requestedModelId = modelId;
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
@@ -1237,6 +1240,30 @@ async function runEmbeddedAgentInternal(
       const traceAttempts: TraceAttempt[] = [];
       const traceAttemptUsesFallback = (attempt: TraceAttempt): boolean =>
         attempt.result === "rotate_profile" || attempt.result === "fallback_model";
+      const resolveRuntimeFallbackReason = (): string | null => {
+        const fallbackAttempt = traceAttempts.findLast(
+          (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
+        );
+        return fallbackAttempt?.reason ?? lastRetryFailoverReason ?? null;
+      };
+      const buildEmbeddedContextEngineRuntimeSettings = (settingsParams: {
+        tokenBudget?: number | null;
+        maxOutputTokens?: number | null;
+        degradedReason?: string | null;
+      }) => {
+        const fallbackReason = resolveRuntimeFallbackReason();
+        return buildContextEngineRuntimeSettings({
+          contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+          provider,
+          requestedModel: requestedModelId,
+          resolvedModel: modelId,
+          tokenBudget: settingsParams.tokenBudget,
+          maxOutputTokens: settingsParams.maxOutputTokens,
+          fallbackActive: modelId !== requestedModelId || Boolean(fallbackReason),
+          fallbackReason,
+          degradedReason: settingsParams.degradedReason,
+        });
+      };
 
       const initialThinkLevel = resolveInitialThinkLevel({
         requested: params.thinkLevel,
@@ -1859,6 +1886,9 @@ async function runEmbeddedAgentInternal(
             disableTools: params.disableTools,
             provider,
             modelId,
+            requestedModelId,
+            fallbackActive: modelId !== requestedModelId || Boolean(resolveRuntimeFallbackReason()),
+            fallbackReason: resolveRuntimeFallbackReason(),
             // Use the harness selected before model/auth setup for the actual
             // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
             // bootstrap but drift back to OpenClaw when the attempt is created.
@@ -2246,6 +2276,9 @@ async function runEmbeddedAgentInternal(
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: timeoutCompactionRuntimeContext,
+                    runtimeSettings: buildEmbeddedContextEngineRuntimeSettings({
+                      tokenBudget: ctxInfo.tokens,
+                    }),
                   },
                   resolveCompactionTimeoutMs(params.config),
                   params.abortSignal,
@@ -2444,6 +2477,10 @@ async function runEmbeddedAgentInternal(
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    runtimeSettings: buildEmbeddedContextEngineRuntimeSettings({
+                      tokenBudget: ctxInfo.tokens,
+                      degradedReason: "context_overflow",
+                    }),
                   },
                   resolveCompactionTimeoutMs(params.config),
                   params.abortSignal,
