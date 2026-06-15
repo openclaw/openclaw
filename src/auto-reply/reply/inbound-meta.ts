@@ -62,12 +62,12 @@ function normalizePromptMediaPath(value: unknown): string | undefined {
       return undefined;
     }
   };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\\0]+)$/i.exec(mediaPath);
+  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
   if (canonicalMatch?.[1]) {
     const id = decodeInboundMediaId(canonicalMatch[1]);
     return id ? toInboundMediaPath(id) : undefined;
   }
-  const relativeMatch = /^media\/inbound\/([^/\\\0]+)$/i.exec(mediaPath);
+  const relativeMatch = /^media\/inbound\/([^/\\]+)$/i.exec(mediaPath);
   if (relativeMatch?.[1]) {
     const id = decodeInboundMediaId(relativeMatch[1]);
     return id ? toInboundMediaPath(id) : undefined;

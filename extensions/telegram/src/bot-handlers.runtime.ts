@@ -182,7 +182,7 @@ function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
       return undefined;
     }
   };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\\0]+)$/i.exec(mediaPath);
+  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
   if (canonicalMatch?.[1]) {
     const id = decodeInboundMediaId(canonicalMatch[1]);
     return id ? toInboundMediaPath(id) : undefined;

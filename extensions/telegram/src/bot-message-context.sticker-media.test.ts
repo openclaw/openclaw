@@ -1,8 +1,11 @@
 // Telegram tests cover bot message context.sticker media plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { TelegramInboundBodyResult } from "./bot-message-context.body.js";
+
+type InboundBodyMock = (arg: unknown) => Promise<TelegramInboundBodyResult>;
 
 const inboundBodyMock = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn<InboundBodyMock>(async () => ({
     bodyText: "[Sticker] Cached description",
     rawBody: "[Sticker] Cached description",
     historyKey: undefined,
@@ -17,7 +20,7 @@ const inboundBodyMock = vi.hoisted(() =>
 );
 
 vi.mock("./bot-message-context.body.js", () => ({
-  resolveTelegramInboundBody: (...args: unknown[]) => inboundBodyMock(...args),
+  resolveTelegramInboundBody: (arg: unknown) => inboundBodyMock(arg),
 }));
 
 const { buildTelegramMessageContextForTest } =
