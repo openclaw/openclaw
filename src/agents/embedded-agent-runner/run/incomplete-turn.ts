@@ -166,7 +166,6 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
   "tool_search",
   "tool_describe",
   "image",
-  "process.poll",
 ]);
 const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
   "google",
@@ -730,7 +729,7 @@ function isEmptyResponseAssistantTurn(params: {
       hasAssistantVisibleText: false,
       lastAssistant: assistant,
     }) ||
-    isReasoningOnlyAssistantTurn(assistant)
+    (isReasoningOnlyAssistantTurn(assistant) && !emptyPostToolFinalAssistant)
   ) {
     return false;
   }

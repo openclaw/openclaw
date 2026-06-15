@@ -2106,6 +2106,37 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     },
   );
 
+  it("retries post-tool reasoning-only final turns after earlier narration", () => {
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.4",
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning",
+          thinkingSignature: JSON.stringify({ id: "rs_post_tool", type: "reasoning" }),
+        },
+      ],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Checking the scheduler now."],
+        toolMetas: [{ toolName: "search" }],
+        currentAttemptAssistant: finalAssistant,
+        lastAssistant: finalAssistant,
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
   it("does not retry post-tool empty final turns after unclassified tools", () => {
     const finalAssistant = {
       role: "assistant",
@@ -3195,7 +3226,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("treats post-tool exact NO_REPLY assistant turns as intentional silence", () => {
     const attempt = makeAttemptResult({
       assistantTexts: ["NO_REPLY"],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+      toolMetas: [{ toolName: "search", meta: "query=scheduler" }],
       lastAssistant: {
         role: "assistant",
         stopReason: "stop",
@@ -3251,7 +3282,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
     const postToolEmptyAttempt = makeAttemptResult({
       assistantTexts: [],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+      toolMetas: [{ toolName: "search", meta: "query=scheduler" }],
       lastAssistant: {
         role: "assistant",
         api: "openai-completions",
@@ -3503,7 +3534,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["NO_REPLY"],
-        toolMetas: [{ toolName: "process.poll", meta: "pid=123" }],
+        toolMetas: [{ toolName: "search", meta: "query=scheduler" }],
         lastAssistant: {
           role: "assistant",
           api: "openai-completions",
