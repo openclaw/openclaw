@@ -48,6 +48,7 @@ import { runPreparedReply } from "./get-reply-run.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
+import { applyLightweightReplyLane } from "./lightweight-lane.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -168,6 +169,19 @@ function hasLinkCandidate(ctx: MsgContext): boolean {
     return false;
   }
   return /\bhttps?:\/\/\S+/i.test(message);
+}
+
+// A reply pointing at a target whose body/quote we could not resolve makes the
+// answer depend on hidden context, so such turns must keep the full agent path.
+function hasUnresolvedReplyTarget(ctx: MsgContext): boolean {
+  const repliesToTarget =
+    normalizeOptionalString(ctx.ReplyToId) || normalizeOptionalString(ctx.ReplyToIdFull);
+  if (!repliesToTarget) {
+    return false;
+  }
+  return (
+    !normalizeOptionalString(ctx.ReplyToBody) && !normalizeOptionalString(ctx.ReplyToQuoteText)
+  );
 }
 
 async function applyMediaUnderstandingIfNeeded(params: {
@@ -323,8 +337,19 @@ export async function getReplyFromConfig(
   const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () =>
     mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)),
   );
+  const lightweightOpts = resolverTiming.measureSync("reply.resolve_lightweight_lane", () =>
+    applyLightweightReplyLane(opts, {
+      text:
+        finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? finalized.Body,
+      hasMedia: hasInboundMedia(finalized),
+      hasLink: hasLinkCandidate(finalized),
+      isNativeCommand: finalized.CommandSource === "native",
+      hasUnresolvedReplyTarget: hasUnresolvedReplyTarget(finalized),
+    }),
+  );
+  const baseOpts = lightweightOpts ?? opts;
   const resolvedOpts =
-    mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
+    mergedSkillFilter !== undefined ? { ...baseOpts, skillFilter: mergedSkillFilter } : baseOpts;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(

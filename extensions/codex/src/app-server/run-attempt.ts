@@ -96,6 +96,7 @@ import {
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
 import {
+  CODEX_TURN_INITIAL_PROGRESS_IDLE_TIMEOUT_MS,
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
   resolveCodexStartupTimeoutMs,
   resolveCodexTurnAssistantCompletionIdleTimeoutMs,
@@ -1315,6 +1316,12 @@ export async function runCodexAppServerAttempt(
     options.turnTerminalIdleTimeoutMs,
   );
   const turnAttemptIdleTimeoutMs = Math.max(100, Math.floor(params.timeoutMs));
+  // Tighter pre-progress window for an accepted-but-silent turn, never longer
+  // than the configured attempt timeout.
+  const turnInitialProgressIdleTimeoutMs = Math.max(
+    100,
+    Math.min(turnAttemptIdleTimeoutMs, CODEX_TURN_INITIAL_PROGRESS_IDLE_TIMEOUT_MS),
+  );
   let nativeHookRelayLastRenewedAt = 0;
   let activeAppServerTurnRequests = 0;
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
@@ -1572,6 +1579,7 @@ export async function runCodexAppServerAttempt(
       pendingOpenClawDynamicToolCompletionIds,
       turnCrossedToolHandoff,
       postToolRawAssistantCompletionIdleTimeoutMs,
+      turnInitialProgressIdleTimeoutMs,
       onScheduleTerminalDynamicToolReleaseCheck: scheduleTerminalDynamicToolReleaseCheck,
       onReportExecutionNotification: reportExecutionNotification,
     });
@@ -2412,7 +2420,10 @@ export async function runCodexAppServerAttempt(
   turnWatches.armTerminalIdleWatch();
   turnWatches.touchActivity("turn:start", { arm: true });
   turnWatches.armAttemptIdleWatch();
-  turnWatches.touchActivity("turn:start", { attemptProgress: true });
+  turnWatches.touchActivity("turn:start", {
+    attemptProgress: true,
+    attemptTimeoutMs: turnInitialProgressIdleTimeoutMs,
+  });
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
   }
