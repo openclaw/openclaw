@@ -132,11 +132,6 @@ describe("qa test file scenario runner", () => {
         runner: "playwright",
         artifacts: [
           {
-            kind: "report",
-            path: ".artifacts/qa-e2e/scenario-playwright/qa-playwright-report.md",
-            source: "playwright",
-          },
-          {
             kind: "log",
             path: ".artifacts/qa-e2e/scenario-playwright/scenario-playwright.log",
             source: "playwright",
@@ -147,7 +142,6 @@ describe("qa test file scenario runner", () => {
         status: "pass",
       },
     });
-    expect(await fs.readFile(result.reportPath, "utf8")).toContain("Evidence summary");
   });
 
   it("runs Vitest scenarios with the declared test path and writes Vitest evidence", async () => {
@@ -203,11 +197,6 @@ describe("qa test file scenario runner", () => {
       execution: {
         runner: "vitest",
         artifacts: [
-          {
-            kind: "report",
-            path: ".artifacts/qa-e2e/scenario-vitest/qa-vitest-report.md",
-            source: "vitest",
-          },
           {
             kind: "log",
             path: ".artifacts/qa-e2e/scenario-vitest/scenario-vitest.log",

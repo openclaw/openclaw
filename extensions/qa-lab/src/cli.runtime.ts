@@ -68,7 +68,12 @@ import {
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
+import {
+  readQaScorecardTaxonomyReport,
+  type QaScorecardCategoryMappingReport,
+} from "./scorecard-taxonomy.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
+import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -93,6 +98,49 @@ const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
+};
+
+export type QaLabSelfCheckCommandOptions = {
+  repoRoot?: string;
+  output?: string;
+};
+
+type QaScenarioProviderCommandOptions = {
+  transportId?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+};
+
+type QaScenarioRunCommandOptions = QaScenarioProviderCommandOptions & {
+  repoRoot?: string;
+  outputDir?: string;
+  concurrency?: number;
+  allowFailures?: boolean;
+};
+
+export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
+  profile: string;
+  surface?: string;
+  category?: string;
+};
+
+export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
+  runner?: string;
+  thinking?: string;
+  cliAuthMode?: string;
+  parityPack?: string;
+  pack?: string;
+  scenarioIds?: string[];
+  enabledPluginIds?: string[];
+  image?: string;
+  cpus?: number;
+  memory?: string;
+  disk?: string;
+  preflight?: boolean;
+  runtimePair?: string;
+  runtimeParityTier?: string[];
 };
 
 function resolveQaManualLaneModels(opts: {
@@ -557,7 +605,7 @@ function printQaCredentialDoctorTable(
   }
 }
 
-export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output?: string }) {
+export async function runQaLabSelfCheckCommand(opts: QaLabSelfCheckCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const server = await startQaLabServer({
     repoRoot,
@@ -571,31 +619,126 @@ export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output
   }
 }
 
-export async function runQaSuiteCommand(opts: {
-  repoRoot?: string;
-  outputDir?: string;
-  transportId?: string;
-  runner?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  thinking?: string;
-  cliAuthMode?: string;
-  parityPack?: string;
-  pack?: string;
-  scenarioIds?: string[];
-  concurrency?: number;
-  allowFailures?: boolean;
-  enabledPluginIds?: string[];
-  image?: string;
-  cpus?: number;
-  memory?: string;
-  disk?: string;
-  preflight?: boolean;
-  runtimePair?: string;
-  runtimeParityTier?: string[];
-}) {
+export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const scenarioPack = readQaScenarioPack();
+  const scorecardReport = readQaScorecardTaxonomyReport(scenarioPack.scenarios);
+  const profile = normalizeQaRunProfile(
+    opts.profile,
+    scorecardReport.profiles.map((entry) => entry.id),
+  );
+  const categories = scorecardReport.categories.filter((category) =>
+    qaScorecardCategoryMatchesRunProfile(category, {
+      profile,
+      surface: opts.surface,
+      category: opts.category,
+    }),
+  );
+  if (categories.length === 0) {
+    throw new Error(formatQaRunProfileNoMatchMessage(opts));
+  }
+
+  const scenarioBySourcePath = new Map(
+    scenarioPack.scenarios.map((scenario) => [scenario.sourcePath, scenario] as const),
+  );
+  const taxonomyScenarios = uniqueStrings(categories.flatMap((category) => category.scenarioRefs))
+    .map((scenarioRef) => scenarioBySourcePath.get(scenarioRef))
+    .filter((scenario): scenario is NonNullable<typeof scenario> => scenario !== undefined);
+  const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
+  const normalizedProviderMode = normalizeQaProviderMode(providerMode);
+  const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(normalizedProviderMode);
+  const scenarios = taxonomyScenarios.filter((scenario) =>
+    scenarioMatchesQaProviderLane({
+      scenario,
+      providerMode: normalizedProviderMode,
+      primaryModel,
+    }),
+  );
+  if (scenarios.length === 0) {
+    throw new Error(
+      `qa run --qa-profile ${profile} did not resolve any executable QA scenarios for provider mode ${normalizedProviderMode}.`,
+    );
+  }
+
+  process.stdout.write(
+    `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
+  );
+  await withTemporaryQaProfileEnv(profile, async () => {
+    await runQaSuiteCommand({
+      repoRoot,
+      outputDir: opts.outputDir,
+      transportId: opts.transportId,
+      providerMode,
+      primaryModel: opts.primaryModel,
+      alternateModel: opts.alternateModel,
+      fastMode: opts.fastMode,
+      scenarioIds: scenarios.map((scenario) => scenario.id),
+      concurrency: opts.concurrency,
+      allowFailures: opts.allowFailures,
+    });
+  });
+}
+
+function normalizeQaRunProfile(value: string, profileIds: readonly string[]) {
+  if (profileIds.length === 0) {
+    throw new Error("taxonomy.yaml does not define QA run profiles.");
+  }
+  const normalized = value.trim();
+  if (profileIds.includes(normalized)) {
+    return normalized;
+  }
+  throw new Error(`--qa-profile must be one of ${profileIds.join(", ")}, got "${value}".`);
+}
+
+function defaultQaRunProfileProviderMode(profile: string): QaProviderModeInput {
+  return profile === "smoke-ci" ? "mock-openai" : DEFAULT_QA_LIVE_PROVIDER_MODE;
+}
+
+function qaScorecardCategoryMatchesRunProfile(
+  category: QaScorecardCategoryMappingReport,
+  opts: { profile: string; surface?: string; category?: string },
+): boolean {
+  if (!category.profiles.includes(opts.profile)) {
+    return false;
+  }
+  if (opts.surface?.trim()) {
+    const surface = opts.surface.trim();
+    if (category.taxonomySurfaceId !== surface && !category.id.startsWith(`${surface}.`)) {
+      return false;
+    }
+  }
+  if (opts.category?.trim() && category.id !== opts.category.trim()) {
+    return false;
+  }
+  return true;
+}
+
+function formatQaRunProfileNoMatchMessage(
+  opts: Pick<QaProfileCommandOptions, "profile" | "surface" | "category">,
+) {
+  const filters = [
+    `--qa-profile ${opts.profile}`,
+    opts.surface?.trim() ? `--surface ${opts.surface.trim()}` : null,
+    opts.category?.trim() ? `--category ${opts.category.trim()}` : null,
+  ].filter((filter): filter is string => filter !== null);
+  return `qa run did not find taxonomy categories for ${filters.join(" ")}.`;
+}
+
+async function withTemporaryQaProfileEnv<T>(profile: string, run: () => Promise<T>): Promise<T> {
+  const previousProfile = process.env.OPENCLAW_QA_PROFILE;
+  process.env.OPENCLAW_QA_PROFILE = profile;
+  try {
+    return await run();
+  } finally {
+    if (previousProfile === undefined) {
+      delete process.env.OPENCLAW_QA_PROFILE;
+    } else {
+      process.env.OPENCLAW_QA_PROFILE = previousProfile;
+    }
+  }
+}
+
+export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
@@ -705,12 +848,12 @@ export async function runQaSuiteCommand(opts: {
     }),
   );
   switch (runtimeResult.executionKind) {
-    case "vitest":
-    case "playwright": {
+    case "suite": {
       const result = runtimeResult.result;
       process.stdout.write(`QA suite report: ${result.reportPath}\n`);
       process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-      if (!allowFailures && result.results.some((scenario) => scenario.status !== "pass")) {
+      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+      if (!allowFailures && result.scenarios.some((scenario) => scenario.status !== "pass")) {
         process.exitCode = 1;
       }
       return;

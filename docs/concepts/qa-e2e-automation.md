@@ -31,7 +31,7 @@ script aliases; both forms are supported.
 
 | Command                                             | Purpose                                                                                                                                                                                                                                                                 |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                                                                                                        |
+| `qa run`                                            | Bundled QA self-check without `--qa-profile`; taxonomy-backed maturity profile runner with `--qa-profile smoke-ci` or `--qa-profile release`.                                                                                                                           |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
 | `qa coverage`                                       | Print the YAML scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                               |
 | `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report, or use `--runtime-axis --token-efficiency` to write Codex-vs-OpenClaw runtime parity and token-efficiency reports from one runtime-pair summary.                                         |
@@ -50,6 +50,26 @@ script aliases; both forms are supported.
 | `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                               |
 | `qa whatsapp`                                       | Live transport lane against real WhatsApp Web accounts.                                                                                                                                                                                                                 |
 | `qa mantis`                                         | Before and after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis) and [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook). |
+
+Profile-backed `qa run` reads membership from `taxonomy.yaml`, then dispatches
+the resolved scenarios through `qa suite`. `--surface` and
+`--category` filter the selected profile instead of defining separate lanes:
+
+```bash
+pnpm openclaw qa run \
+  --qa-profile smoke-ci \
+  --category agent-runtime-and-provider-execution.agent-turn-execution \
+  --provider-mode mock-openai \
+  --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
+```
+
+Use `smoke-ci` for deterministic no-live-service proof and `release` for the
+Stable/LTS proof lane. When a command also needs an OpenClaw root profile, put
+the root profile before the QA command:
+
+```bash
+pnpm openclaw --profile work qa run --qa-profile smoke-ci
+```
 
 ## Operator flow
 
@@ -913,7 +933,11 @@ The report should answer:
 For the inventory of available scenarios - useful when sizing follow-up work or wiring a new transport - run `pnpm openclaw qa coverage` (add `--json` for machine-readable output).
 When choosing focused proof for a touched behavior or file path, run `pnpm openclaw qa coverage --match <query>`.
 The match report searches scenario metadata, docs refs, code refs, coverage IDs, plugins, and provider requirements, then prints matching `qa suite --scenario ...` targets.
-Every `qa suite` scenario execution writes a `qa-evidence.json` artifact. Flow scenarios also write `qa-suite-summary.json` for existing suite/report tooling; scenarios that declare `execution.kind: vitest` or `execution.kind: playwright` run the matching test path and write `qa-vitest-report.md` or `qa-playwright-report.md` plus per-scenario logs.
+Every `qa suite` run writes top-level `qa-evidence.json`,
+`qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected
+scenario set. Scenarios that declare `execution.kind: vitest` or
+`execution.kind: playwright` run the matching test path and also write
+per-scenario logs.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model
