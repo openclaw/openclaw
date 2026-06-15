@@ -1236,7 +1236,10 @@ function validateConfigObjectWithPluginsBase(
       const originRank: Record<string, number> = { config: 0, workspace: 1, global: 2, bundled: 3 };
       for (const record of info.registry.plugins) {
         const rank = originRank[record.origin] ?? Number.MAX_SAFE_INTEGER;
-        for (const channelId of Object.keys(record.channelConfigs ?? {})) {
+        for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
+          if (channelConfig.schema === undefined) {
+            continue;
+          }
           const current = ownerByChannelId.get(channelId);
           if (!current || rank <= current.originRank) {
             ownerByChannelId.set(channelId, {
