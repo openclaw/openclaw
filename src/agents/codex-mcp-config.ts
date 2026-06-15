@@ -14,7 +14,7 @@ import { isRecord } from "../utils.js";
 import {
   applyCommonServerConfig,
   decodeHeaderEnvPlaceholder,
-  normalizeStringRecord,
+  normalizeHeaderRecord,
 } from "./cli-runner/bundle-mcp-adapter-shared.js";
 import type {
   CodexBundleMcpThreadConfig,
@@ -81,14 +81,18 @@ export function normalizeCodexMcpServerConfig(
     // unless plugin metadata explicitly selected another approval mode.
     next.default_tools_approval_mode = "approve";
   }
-  const httpHeaders = normalizeStringRecord(server.headers);
+  const httpHeaders = normalizeHeaderRecord(server.headers);
   if (httpHeaders) {
     const staticHeaders: Record<string, string> = {};
     const envHeaders: Record<string, string> = {};
-    for (const [nameLocal, value] of Object.entries(httpHeaders)) {
-      const decoded = decodeHeaderEnvPlaceholder(value);
+    for (const [nameLocal, entry] of Object.entries(httpHeaders)) {
+      if (entry.kind === "env") {
+        envHeaders[nameLocal] = entry.envVar;
+        continue;
+      }
+      const decoded = decodeHeaderEnvPlaceholder(entry.value);
       if (!decoded) {
-        staticHeaders[nameLocal] = value;
+        staticHeaders[nameLocal] = entry.value;
         continue;
       }
       if (decoded.bearer && normalizeOptionalLowercaseString(nameLocal) === "authorization") {

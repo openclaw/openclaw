@@ -47,6 +47,17 @@ export function isMcpConfigRecord(value: unknown): value is Record<string, unkno
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function readEnvSecretRefValue(value: unknown): string | undefined {
+  if (!isMcpConfigRecord(value)) {
+    return undefined;
+  }
+  if (value.source !== "env" || typeof value.id !== "string") {
+    return undefined;
+  }
+  const resolved = process.env[value.id];
+  return typeof resolved === "string" && resolved.length > 0 ? resolved : undefined;
+}
+
 function toMcpFilteredStringRecord(
   value: unknown,
   options?: {
@@ -72,6 +83,10 @@ function toMcpFilteredStringRecord(
       }
       if (typeof entry === "number" || typeof entry === "boolean") {
         return [key, String(entry)] as const;
+      }
+      const secretValue = readEnvSecretRefValue(entry);
+      if (secretValue !== undefined) {
+        return [key, secretValue] as const;
       }
       options?.onDroppedEntry?.(key, entry);
       return null;

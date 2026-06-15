@@ -19,12 +19,24 @@ type SenderToolPolicyParams = {
   senderE164?: string | null;
 };
 
+function hasSenderPolicyContext(params: SenderToolPolicyParams): boolean {
+  return Boolean(
+    params.senderId?.trim() ||
+    params.senderName?.trim() ||
+    params.senderUsername?.trim() ||
+    params.senderE164?.trim(),
+  );
+}
+
 /** Resolves sender-scoped sandbox tool policy, preferring agent config over global config. */
 export function resolveSenderToolPolicy(
   params: SenderToolPolicyParams,
 ): SandboxToolPolicy | undefined {
   const cfg = params.config;
   if (!cfg) {
+    return undefined;
+  }
+  if (!hasSenderPolicyContext(params)) {
     return undefined;
   }
   const sender = {

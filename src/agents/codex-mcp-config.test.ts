@@ -77,6 +77,33 @@ describe("buildCodexMcpServersConfig", () => {
       },
     });
   });
+
+  it("projects env SecretRef MCP headers to Codex env_http_headers without resolving them", () => {
+    expect(
+      buildCodexMcpServersConfig({
+        mcpServers: {
+          beeper: {
+            type: "http",
+            url: "http://localhost:23373/v0/mcp",
+            headers: {
+              Authorization: {
+                source: "env",
+                provider: "default",
+                id: "BEEPER_MCP_AUTHORIZATION",
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      beeper: {
+        url: "http://localhost:23373/v0/mcp",
+        env_http_headers: {
+          Authorization: "BEEPER_MCP_AUTHORIZATION",
+        },
+      },
+    });
+  });
 });
 
 describe("loadCodexBundleMcpThreadConfig", () => {

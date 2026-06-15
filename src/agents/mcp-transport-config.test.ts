@@ -187,6 +187,35 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
+  it("resolves env SecretRef values in HTTP headers without logging the value", () => {
+    vi.stubEnv("MCP_HEADER_VALUE", "Bearer resolved-value");
+
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/sse",
+      headers: {
+        Authorization: {
+          source: "env",
+          provider: "default",
+          id: "MCP_HEADER_VALUE",
+        },
+      },
+    });
+
+    expect(resolved).toEqual({
+      kind: "http",
+      transportType: "sse",
+      url: "https://mcp.example.com/sse",
+      headers: {
+        Authorization: "Bearer resolved-value",
+      },
+      description: "https://mcp.example.com/sse",
+      connectionTimeoutMs: 30_000,
+      requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: false,
+    });
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
   it("resolves explicit streamable HTTP config", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       url: "https://mcp.example.com/http",

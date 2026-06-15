@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  addSandboxNativeDynamicToolsIfAllowed,
   addSandboxShellDynamicToolsIfAvailable,
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
@@ -978,6 +979,58 @@ describe("Codex app-server dynamic tool build", () => {
         sandboxExecServerEnabled: true,
       }),
     ).toBe(false);
+  });
+
+  it("re-adds sandbox-backed native dynamic tools when sandbox policy allows the full surface", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const allTools = ["exec", "process", "read", "write", "edit", "apply_patch", "message"].map(
+      createRuntimeDynamicTool,
+    );
+    const filteredTools = filterCodexDynamicTools(allTools, {});
+    const input = {
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: params.sessionKey,
+      sandbox: {
+        enabled: true,
+        backendId: "docker",
+        tools: {
+          allow: ["exec", "process", "read", "write", "edit", "apply_patch"],
+          deny: [],
+        },
+      },
+      nativeToolSurfaceEnabled: true,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    } as Parameters<typeof addSandboxNativeDynamicToolsIfAllowed>[2];
+
+    expect(filteredTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(
+      addSandboxNativeDynamicToolsIfAllowed(filteredTools, allTools, input).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["message", "exec", "process", "read", "write", "edit", "apply_patch"]);
+
+    expect(
+      addSandboxNativeDynamicToolsIfAllowed(filteredTools, allTools, {
+        ...input,
+        sandbox: {
+          ...input.sandbox,
+          tools: { allow: ["exec"], deny: [] },
+        },
+      }).map((tool) => tool.name),
+    ).toEqual(["message"]);
+
+    expect(
+      addSandboxNativeDynamicToolsIfAllowed(filteredTools, allTools, {
+        ...input,
+        pluginConfig: { codexDynamicToolsExclude: ["apply_patch"] },
+      }).map((tool) => tool.name),
+    ).toEqual(["message", "exec", "process", "read", "write", "edit"]);
   });
 
   it("forces the message dynamic tool for message-tool-only source replies", () => {

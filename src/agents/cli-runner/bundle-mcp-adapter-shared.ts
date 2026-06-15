@@ -13,6 +13,10 @@ function normalizeStringArray(value: unknown): string[] | undefined {
 }
 
 /** Normalize a string-valued record, dropping non-string entries. */
+export type NormalizedHeaderEntry =
+  | { kind: "value"; value: string }
+  | { kind: "env"; envVar: string };
+
 export function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -20,6 +24,42 @@ export function normalizeStringRecord(value: unknown): Record<string, string> | 
   const entries = Object.entries(value).filter((entry): entry is [string, string] => {
     return typeof entry[1] === "string";
   });
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+/** Decode supported `${ENV}` and `Bearer ${ENV}` header placeholders. */
+function readEnvSecretRef(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.source !== "env" || typeof value.id !== "string") {
+    return undefined;
+  }
+  const envVar = value.id.trim();
+  return envVar ? envVar : undefined;
+}
+
+export function normalizeHeaderRecord(
+  value: unknown,
+): Record<string, NormalizedHeaderEntry> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const entries: [string, NormalizedHeaderEntry][] = [];
+  for (const [name, entry] of Object.entries(value)) {
+    if (typeof entry === "string") {
+      entries.push([name, { kind: "value", value: entry }]);
+      continue;
+    }
+    if (typeof entry === "number" || typeof entry === "boolean") {
+      entries.push([name, { kind: "value", value: String(entry) }]);
+      continue;
+    }
+    const envVar = readEnvSecretRef(entry);
+    if (envVar) {
+      entries.push([name, { kind: "env", envVar }]);
+    }
+  }
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 

@@ -298,14 +298,16 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const readableAllToolProjection = filterProviderNormalizableTools(allTools);
   preNormalizationDiagnostics.push(...readableAllToolProjection.diagnostics);
   const readableAllTools = [...readableAllToolProjection.tools];
+  const baseCodexTools = isCodexMemoryFlushRun(params)
+    ? filterCodexMemoryFlushDynamicTools(readableAllTools)
+    : filterCodexDynamicTools(readableAllTools, input.pluginConfig);
+  const sandboxNativeTools = addSandboxNativeDynamicToolsIfAllowed(
+    baseCodexTools,
+    readableAllTools,
+    input,
+  );
   const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
-    addSandboxShellDynamicToolsIfAvailable(
-      isCodexMemoryFlushRun(params)
-        ? filterCodexMemoryFlushDynamicTools(readableAllTools)
-        : filterCodexDynamicTools(readableAllTools, input.pluginConfig),
-      readableAllTools,
-      input,
-    ),
+    addSandboxShellDynamicToolsIfAvailable(sandboxNativeTools, readableAllTools, input),
     readableAllTools,
     input,
   );
@@ -612,6 +614,43 @@ export function addSandboxShellDynamicToolsIfAvailable(
       "Manage sandbox_exec sessions that were started through OpenClaw's configured sandbox backend for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for sandbox_exec follow-up; use Codex's native shell session handling only when no OpenClaw sandbox is active and native Code Mode is available.",
   };
   return [...filteredTools, sandboxExecTool, sandboxProcessTool];
+}
+
+export function addSandboxNativeDynamicToolsIfAllowed(
+  filteredTools: OpenClawDynamicTool[],
+  allTools: OpenClawDynamicTool[],
+  input: DynamicToolBuildParams,
+): OpenClawDynamicTool[] {
+  if (
+    isCodexMemoryFlushRun(input.params) ||
+    !input.nativeToolSurfaceEnabled ||
+    !input.sandbox?.enabled ||
+    !input.sandbox.tools ||
+    isSandboxShellDynamicToolExcluded(input.pluginConfig) ||
+    !canSandboxToolPolicyExposeCodexNativeToolSurface(input.sandbox)
+  ) {
+    return filteredTools;
+  }
+
+  let next = filteredTools;
+  const present = new Set(next.map((tool) => normalizeCodexDynamicToolName(tool.name)));
+  for (const toolName of CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS) {
+    if (present.has(toolName) || isCodexDynamicToolExcluded(input.pluginConfig, [toolName])) {
+      continue;
+    }
+    const tool = allTools.find(
+      (candidate) => normalizeCodexDynamicToolName(candidate.name) === toolName,
+    );
+    if (!tool) {
+      continue;
+    }
+    if (next === filteredTools) {
+      next = [...filteredTools];
+    }
+    next.push(tool);
+    present.add(toolName);
+  }
+  return next;
 }
 
 function shouldExposeSandboxExecDynamicTool(input: DynamicToolBuildParams): boolean {
