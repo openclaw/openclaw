@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const fetchClawHubSkillDetailMock = vi.fn();
 const fetchClawHubSkillInstallResolutionMock = vi.fn();
@@ -21,6 +22,7 @@ const withExtractedArchiveRootMock = vi.fn();
 const installPackageDirMock = vi.fn();
 const evaluateSkillInstallPolicyMock = vi.fn();
 const pathExistsMock = vi.fn();
+const tempDirs = createTrackedTempDirs();
 
 vi.mock("../../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
@@ -165,6 +167,10 @@ async function writeClawHubOriginFixture(params: {
 }
 
 describe("skills-clawhub", () => {
+  afterEach(async () => {
+    await tempDirs.cleanup();
+  });
+
   beforeEach(() => {
     fetchClawHubSkillDetailMock.mockReset();
     fetchClawHubSkillInstallResolutionMock.mockReset();
@@ -302,7 +308,7 @@ describe("skills-clawhub", () => {
   });
 
   it("persists install artifact and verification provenance in the ClawHub lockfile", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-lock-"));
+    const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
     const skillContent = "---\nname: agentreceipt\ndescription: Receipt helper\n---\n";
     const skillSha256 = createHash("sha256").update(skillContent).digest("hex");
     installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
@@ -377,7 +383,7 @@ describe("skills-clawhub", () => {
   });
 
   it("keeps installing when the ClawHub verification snapshot is unavailable", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-lock-"));
+    const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
     fetchClawHubSkillVerificationMock.mockRejectedValueOnce(new Error("verification down"));
     installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
       await fs.mkdir(params.targetDir, { recursive: true });
