@@ -56,8 +56,13 @@ the resolved scenarios through `qa suite`. `--surface` and
 `--category` filter the selected profile instead of defining separate lanes.
 The resulting `qa-evidence.json` includes a profile scorecard summary with
 selected-category counts and missing coverage IDs; the individual evidence
-entries remain the source of truth for the tests, coverage roles, artifacts,
-and results:
+entries remain the source of truth for the tests, coverage roles, and results.
+Full evidence entries include `execution` metadata with provider, package, and
+artifact details; transport-backed entries also include channel details when the
+runner reports them. The `smoke-ci` profile uses compact evidence by default
+and intentionally omits that per-entry `execution` block to keep PR and merge
+artifacts small. Use `--exclude-test-execution-evidence` on any profile run to
+request the same compact evidence shape for that run:
 
 ```bash
 pnpm openclaw qa run \
@@ -68,8 +73,11 @@ pnpm openclaw qa run \
 ```
 
 Use `smoke-ci` for deterministic no-live-service proof and `release` for the
-Stable/LTS proof lane. When a command also needs an OpenClaw root profile, put
-the root profile before the QA command:
+Stable/LTS proof lane. Use `release` or any profile run without
+`--exclude-test-execution-evidence` when operators or downstream consumers need
+per-entry provider, package, artifact, or available channel metadata. When a
+command also needs an OpenClaw root profile, put the root profile before the QA
+command:
 
 ```bash
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
@@ -943,7 +951,10 @@ scenario set. Scenarios that declare `execution.kind: vitest` or
 `execution.kind: playwright` run the matching test path and also write
 per-scenario logs. When `qa suite` is reached through
 `qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
-scorecard summary for the selected taxonomy categories.
+scorecard summary for the selected taxonomy categories. Full entries carry
+provider, package, artifact, and optional channel metadata under `execution`;
+compact profile evidence, including the default `smoke-ci` profile and runs
+with `--exclude-test-execution-evidence`, intentionally omits that block.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model
