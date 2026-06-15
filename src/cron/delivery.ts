@@ -1,4 +1,5 @@
 /** Sends cron announce payloads and best-effort failure notifications. */
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
@@ -31,6 +32,23 @@ export {
 
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
 const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
+
+function createCronNotificationPayload(params: { text: string; channel: string }): ReplyPayload {
+  const payload: ReplyPayload = { text: params.text };
+  if (params.channel !== "discord") {
+    return payload;
+  }
+  return {
+    ...payload,
+    channelData: {
+      openclaw: {
+        replyContext: {
+          preserveSelfQuoteBody: true,
+        },
+      },
+    },
+  };
+}
 
 /** Channel target metadata used for cron announcements and failure notifications. */
 export type CronAnnounceTarget = {
@@ -106,7 +124,12 @@ async function deliverCronAnnouncePayload(params: {
     to: params.delivery.resolvedTarget.to,
     accountId: params.delivery.resolvedTarget.accountId,
     threadId: params.delivery.resolvedTarget.threadId,
-    payloads: [{ text: params.message }],
+    payloads: [
+      createCronNotificationPayload({
+        text: params.message,
+        channel: params.delivery.resolvedTarget.channel,
+      }),
+    ],
     session: params.delivery.session,
     identity: params.delivery.identity,
     bestEffort: false,

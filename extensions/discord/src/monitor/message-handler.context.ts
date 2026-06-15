@@ -17,6 +17,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/sess
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { ChannelType } from "../internal/discord.js";
+import { shouldPreserveDiscordSelfReplyBody } from "../self-reply-context.js";
 import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import {
@@ -44,21 +45,6 @@ function normalizeDiscordDmOwnerEntry(entry: string): string | undefined {
 
 function isContextAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
-}
-
-function shouldPreserveDiscordSelfReplyBody(body: string | undefined): boolean {
-  const normalized = body?.replace(/\r\n?/g, "\n").trim();
-  if (!normalized) {
-    return false;
-  }
-  return (
-    /^Cron job "[^"\n]+" (?:failed|skipped) \d+ times\n(?:Last error|Skip reason): [\s\S]+$/.test(
-      normalized,
-    ) ||
-    /^[^\n]*Cron job "[^"\n]+" has been auto-disabled after \d+ consecutive schedule errors\. Last error: [\s\S]+$/.test(
-      normalized,
-    )
-  );
 }
 
 export async function buildDiscordMessageProcessContext(params: {
@@ -333,7 +319,9 @@ export async function buildDiscordMessageProcessContext(params: {
           storePath,
           sessionKey: effectiveSessionKey,
         });
-  const preserveSelfReplyBody = shouldPreserveDiscordSelfReplyBody(replyContext?.body);
+  const preserveSelfReplyBody =
+    Boolean(botUserId && replyContext?.senderId === botUserId) &&
+    shouldPreserveDiscordSelfReplyBody(replyContext?.id);
 
   const ctxPayload = await buildChannelInboundEventContext({
     channel: "discord",

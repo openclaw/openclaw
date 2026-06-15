@@ -8,6 +8,10 @@ import {
   mockDiscordBoundThreadManager,
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
+import {
+  resetDiscordSelfReplyContextPolicyForTest,
+  shouldPreserveDiscordSelfReplyBody,
+} from "./self-reply-context.js";
 
 const hoisted = createDiscordOutboundHoisted();
 await installDiscordOutboundModuleSpies(hoisted);
@@ -37,6 +41,19 @@ function mockObjectArg(
     throw new Error(`expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function createSelfQuotePreservablePayload(text: string) {
+  return {
+    text,
+    channelData: {
+      openclaw: {
+        replyContext: {
+          preserveSelfQuoteBody: true,
+        },
+      },
+    },
+  };
 }
 
 beforeAll(async () => {
@@ -88,6 +105,7 @@ describe("normalizeDiscordOutboundTarget", () => {
 describe("discordOutbound", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
+    resetDiscordSelfReplyContextPolicyForTest();
   });
 
   it("routes text sends to thread target when threadId is provided", async () => {
@@ -502,6 +520,46 @@ describe("discordOutbound", () => {
     }
 
     expect(markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("records self-reply body context only for marked outbound payloads", async () => {
+    await discordOutbound.afterDeliverPayload?.({
+      cfg: {},
+      target: {
+        channel: "discord",
+        to: "channel:parent-1",
+        accountId: "default",
+      },
+      payload: { text: "ordinary assistant reply" },
+      results: [{ channel: "discord", messageId: "msg-ordinary" }],
+    });
+
+    expect(shouldPreserveDiscordSelfReplyBody("msg-ordinary")).toBe(false);
+
+    await discordOutbound.afterDeliverPayload?.({
+      cfg: {},
+      target: {
+        channel: "discord",
+        to: "channel:parent-1",
+        accountId: "default",
+      },
+      payload: createSelfQuotePreservablePayload("System notification: deployment failed"),
+      results: [
+        {
+          channel: "discord",
+          messageId: "msg-marked",
+          receipt: {
+            primaryPlatformMessageId: "msg-marked",
+            platformMessageIds: ["msg-marked", "msg-marked-followup"],
+            parts: [],
+            sentAt: 123,
+          },
+        },
+      ],
+    });
+
+    expect(shouldPreserveDiscordSelfReplyBody("msg-marked")).toBe(true);
+    expect(shouldPreserveDiscordSelfReplyBody("msg-marked-followup")).toBe(true);
   });
 
   it("sends component payload media sequences with the component message first", async () => {

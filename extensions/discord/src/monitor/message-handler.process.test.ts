@@ -9,6 +9,10 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  recordDiscordSelfReplyContextPolicy,
+  resetDiscordSelfReplyContextPolicyForTest,
+} from "../self-reply-context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
 const sendMocks = vi.hoisted(() => ({
@@ -64,6 +68,19 @@ function createNonTerminalToolWarningPayload(): ReplyPayload {
     },
     { nonTerminalToolErrorWarning: true },
   );
+}
+
+function createSelfQuotePreservablePayload(text: string): ReplyPayload {
+  return {
+    text,
+    channelData: {
+      openclaw: {
+        replyContext: {
+          preserveSelfQuoteBody: true,
+        },
+      },
+    },
+  };
 }
 
 vi.mock("../send.js", () => ({
@@ -524,6 +541,7 @@ beforeEach(() => {
   }));
   resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
   threadBindingTesting.resetThreadBindingsForTests();
+  resetDiscordSelfReplyContextPolicyForTest();
 });
 
 function getLastRouteUpdate():
@@ -1409,13 +1427,15 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
-  it("injects bot-authored cron failure alert body when users reply to it", async () => {
+  it("injects marked bot-authored notification body when users reply to it", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("self-reply media should not be fetched");
     });
-    const alertBody =
-      'Cron job "WhatsApp Incremental Archive" failed 1 times\n' +
-      "Last error: check git status (agent) failed";
+    const alertBody = "System notification: build failed\nReview the deployment dashboard.";
+    recordDiscordSelfReplyContextPolicy({
+      payload: createSelfQuotePreservablePayload(alertBody),
+      results: [{ channel: "discord", messageId: "m-alert" }],
+    });
     const ctx = await createBaseContext({
       botUserId: "bot-1",
       cfg: {
@@ -1432,17 +1452,17 @@ describe("processDiscordMessage session routing", () => {
         attachments: [],
         messageReference: {
           type: 0,
-          message_id: "m-cron-alert",
+          message_id: "m-alert",
           channel_id: "c1",
         },
         referencedMessage: {
-          id: "m-cron-alert",
+          id: "m-alert",
           channelId: "c1",
           content: alertBody,
           timestamp: new Date().toISOString(),
           attachments: [
             {
-              id: "att-cron-alert",
+              id: "att-alert",
               url: "https://cdn.discordapp.com/attachments/alert.png",
               content_type: "image/png",
               filename: "alert.png",
@@ -1464,7 +1484,7 @@ describe("processDiscordMessage session routing", () => {
 
     const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(dispatchCtx.ReplyToId).toBe("m-cron-alert");
+    expect(dispatchCtx.ReplyToId).toBe("m-alert");
     expect(dispatchCtx.ReplyToSender).toBe("SnabbelClaw");
     expect(dispatchCtx.ReplyToBody).toBe(alertBody);
     expect(dispatchCtx.MediaPath).toBeUndefined();
