@@ -184,7 +184,7 @@ export function buildChannelConfigSchema(
  * configs, group policies, and similar per-channel shapes.
  */
 function relaxDefaultedRequired(schema: JsonSchemaObject): JsonSchemaObject {
-  const clone = structuredClone(schema) as JsonSchemaObject;
+  const clone = structuredClone(schema);
   relaxDefaultedRequiredInPlace(clone);
   return clone;
 }
@@ -203,7 +203,7 @@ function relaxDefaultedRequiredInPlace(schema: unknown): void {
   }
   const node = schema as Record<string, unknown>;
   if (Array.isArray(node.required) && node.required.length > 0 && isRecord(node.properties)) {
-    const properties = node.properties as Record<string, unknown>;
+    const properties = node.properties;
     const relaxedRequired = (node.required as string[]).filter((name) => {
       const propertySchema = properties[name];
       if (!propertySchema || typeof propertySchema !== "object") {
@@ -269,7 +269,6 @@ function relaxDefaultedRequiredInPlace(schema: unknown): void {
       }
     }
   }
-  return;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,7 +1,7 @@
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 // Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
-import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.js";
 import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
 
 function expectSchemaIssue(
