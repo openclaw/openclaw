@@ -188,11 +188,13 @@ describe("resolvePnpmRunner", () => {
   });
 
   it("wraps an explicit pnpm.cmd path via cmd.exe on Windows", () => {
+    const tabbedPattern = "path\twith\ttabs";
+
     expect(
       resolvePnpmRunner({
         comSpec: "C:\\Windows\\System32\\cmd.exe",
         npmExecPath: "C:\\Program Files\\pnpm\\pnpm.cmd",
-        pnpmArgs: ["exec", "vitest", "run", "-t", "path with spaces"],
+        pnpmArgs: ["exec", "vitest", "run", "-t", "path with spaces", tabbedPattern],
         platform: "win32",
       }),
     ).toEqual({
@@ -201,7 +203,7 @@ describe("resolvePnpmRunner", () => {
         "/d",
         "/s",
         "/c",
-        '""C:\\Program Files\\pnpm\\pnpm.cmd" exec vitest run -t "path with spaces""',
+        `""C:\\Program Files\\pnpm\\pnpm.cmd" exec vitest run -t "path with spaces" "${tabbedPattern}""`,
       ],
       shell: false,
       windowsVerbatimArguments: true,

@@ -295,6 +295,27 @@ describe("windows command wrapper behavior", () => {
     });
   });
 
+  it("quotes tabbed Windows shim arguments before cmd.exe tokenization", async () => {
+    const expectedComSpec = expectedTrustedCmdExe();
+    const tabbedFilter = "path\twith\ttabs";
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    await withMockedWindowsPlatform(async () => {
+      const result = await runCommandWithTimeout(["pnpm", "test", "-t", tabbedFilter], {
+        timeoutMs: 1000,
+      });
+      expect(result.code).toBe(0);
+      const captured = requireSpawnCall(0);
+      expect(captured[0]).toBe(expectedComSpec);
+      expect(captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(captured[1][3]).toContain(`"${tabbedFilter}"`);
+      expect(captured[2].windowsVerbatimArguments).toBe(true);
+    });
+  });
+
   it("keeps child exitCode when close reports null on Windows npm shims", async () => {
     const child = createMockChild({ closeCode: null, exitCode: 0 });
 

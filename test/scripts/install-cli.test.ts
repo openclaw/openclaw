@@ -183,13 +183,43 @@ describe("install-cli.sh", () => {
     expect(script).toContain(
       'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
     );
-    expect(script).toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+    expect(script).toContain('git -C "$repo_dir" pull --rebase --no-tags || return 1');
+    expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
 
     const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
     const tagFetchIndex = script.indexOf("fetch --tags origin");
     expect(branchCheckIndex).toBeGreaterThan(-1);
     expect(tagFetchIndex).toBeGreaterThan(-1);
     expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
+  });
+
+  it("fails moving git ref checkouts when repository update fails", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      git() {
+        if [[ "$1" == "-C" && "$3" == "fetch" ]]; then
+          return 0
+        fi
+        if [[ "$1" == "-C" && "$3" == "checkout" ]]; then
+          return 0
+        fi
+        if [[ "$1" == "-C" && "$3" == "pull" ]]; then
+          return 42
+        fi
+        printf 'unexpected git: %s\\n' "$*" >&2
+        return 99
+      }
+      if checkout_git_openclaw_ref /repo main; then
+        echo "unexpected success"
+        exit 98
+      fi
+      echo "update failed"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("update failed");
+    expect(result.stdout).not.toContain("unexpected success");
   });
 
   it("uses non-frozen lockfile installs only for moving git refs", () => {
@@ -214,6 +244,55 @@ describe("install-cli.sh", () => {
     expect(script).toContain(
       'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
     );
+  });
+
+  it("fails git installs when the UI build fails", () => {
+    const home = mkdtempSync(join(tmpdir(), "openclaw-install-cli-home-"));
+    try {
+      const result = runInstallCliShell(
+        `
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          repo_dir="$HOME/repo"
+          mkdir -p "$repo_dir/.git"
+          ensure_git() { :; }
+          ensure_pnpm() { :; }
+          ensure_pnpm_binary_for_scripts() { :; }
+          cleanup_legacy_submodules() { :; }
+          ensure_pnpm_git_prepare_allowlist() { :; }
+          activate_repo_pnpm_version() { :; }
+          resolve_git_openclaw_ref() { printf 'main\\n'; }
+          checkout_git_openclaw_ref() { :; }
+          git_install_lockfile_flag() { printf '%s\\n' '--no-frozen-lockfile'; }
+          git() {
+            if [[ "$1" == "-C" && "$3" == "status" ]]; then
+              return 0
+            fi
+            printf 'unexpected git: %s\\n' "$*" >&2
+            return 1
+          }
+          run_pnpm() {
+            if [[ "$*" == *" ui:build" ]]; then
+              return 23
+            fi
+            return 0
+          }
+          install_openclaw_from_git "$repo_dir"
+        `,
+        {
+          HOME: home,
+          OPENCLAW_PREFIX: join(home, "prefix"),
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("ERROR: UI build failed");
+      expect(lstatSync(join(home, "prefix", "bin", "openclaw"), { throwIfNoEntry: false })).toBe(
+        undefined,
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("aligns pnpm to the checked-out repo packageManager before installing", () => {

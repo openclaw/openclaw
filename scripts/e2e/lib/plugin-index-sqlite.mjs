@@ -29,7 +29,7 @@ function legacyIndexPath(root = stateDir()) {
   return path.join(root, "plugins", "installs.json");
 }
 
-function readSqlitePluginIndex(root = stateDir()) {
+export function readSqlitePluginIndex(root = stateDir()) {
   const dbPath = sqlitePath(root);
   if (!fs.existsSync(dbPath)) {
     return {};

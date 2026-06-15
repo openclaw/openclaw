@@ -166,6 +166,9 @@ openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 echo "Configuring $CHANNEL..."
 openclaw channels add --channel "$CHANNEL" "${CHANNEL_ADD_ARGS[@]}" >/tmp/openclaw-channel-add.log 2>&1
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-config "$CHANNEL" "${CHANNEL_CONFIG_TOKENS[@]}"
+if [ "$CHANNEL_PACKAGE_MODE" = "external" ]; then
+  node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-external-channel-install-record "$CHANNEL"
+fi
 
 echo "Checking status surfaces for $CHANNEL..."
 openclaw channels status --json >/tmp/openclaw-channels-status.json 2>/tmp/openclaw-channels-status.err
@@ -176,6 +179,7 @@ echo "Running doctor after channel activation..."
 openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
 if [ "$CHANNEL_PACKAGE_MODE" = "external" ]; then
   openclaw_e2e_assert_dep_present "$DEP_SENTINEL" "$HOME/.openclaw"
+  node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-external-channel-install-record "$CHANNEL"
 else
   openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 fi

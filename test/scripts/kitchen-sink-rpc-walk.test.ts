@@ -872,11 +872,39 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     ).toThrow("tools.effective plugin tools plugin provenance mismatch");
   });
 
-  it("requires the exact Kitchen Sink channel account", () => {
+  it("requires the exact Kitchen Sink channel account and default account", () => {
+    expect(
+      assertChannelAccountRunning({
+        channelAccounts: {
+          "kitchen-sink-channel": [
+            { accountId: "other", configured: true, running: true },
+            { accountId: "local", configured: true, running: true },
+          ],
+        },
+        channelDefaultAccountId: {
+          "kitchen-sink-channel": "local",
+        },
+      }),
+    ).toMatchObject({ accountId: "local" });
+
+    expect(() =>
+      assertChannelAccountRunning({
+        channelAccounts: {
+          "kitchen-sink-channel": [{ accountId: "local", configured: true, running: true }],
+        },
+        channelDefaultAccountId: {
+          "kitchen-sink-channel": "other",
+        },
+      }),
+    ).toThrow("Kitchen Sink channel default account mismatch");
+
     expect(() =>
       assertChannelAccountRunning({
         channelAccounts: {
           "kitchen-sink-channel": [{ accountId: "other", configured: true, running: true }],
+        },
+        channelDefaultAccountId: {
+          "kitchen-sink-channel": "local",
         },
       }),
     ).toThrow("Kitchen Sink channel account local was not reported");

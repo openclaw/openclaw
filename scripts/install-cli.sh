@@ -661,7 +661,7 @@ checkout_git_openclaw_ref() {
     git -C "$repo_dir" fetch --no-tags origin main
     git -C "$repo_dir" checkout main
     if [[ "$GIT_UPDATE" == "1" ]]; then
-      git -C "$repo_dir" pull --rebase --no-tags || true
+      git -C "$repo_dir" pull --rebase --no-tags || return 1
     fi
     return 0
   fi
@@ -670,7 +670,7 @@ checkout_git_openclaw_ref() {
     git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
     git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
     if [[ "$GIT_UPDATE" == "1" ]]; then
-      git -C "$repo_dir" pull --rebase --no-tags || true
+      git -C "$repo_dir" pull --rebase --no-tags || return 1
     fi
     return 0
   fi
@@ -1085,9 +1085,7 @@ install_openclaw_from_git() {
   install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
   CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
-  if ! run_pnpm -C "$repo_dir" ui:build; then
-    log "UI build failed; continuing (CLI may still work)"
-  fi
+  run_pnpm -C "$repo_dir" ui:build || fail "UI build failed"
   run_pnpm -C "$repo_dir" build
 
   mkdir -p "${PREFIX}/bin"

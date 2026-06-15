@@ -1,5 +1,6 @@
 // Windows cmd.exe quoting helpers for npm/pnpm command shims.
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
+const WINDOWS_CMD_QUOTE_CHARS_RE = /[\s"]/u;
 
 /**
  * Resolves the correctly cased PATH key in a Windows-style env object.
@@ -13,7 +14,7 @@ function escapeForCmdExe(arg) {
     throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
   }
   const escaped = arg.replace(/\^/g, "^^");
-  if (!escaped.includes(" ") && !escaped.includes('"')) {
+  if (!WINDOWS_CMD_QUOTE_CHARS_RE.test(escaped)) {
     return escaped;
   }
   return `"${escaped.replace(/"/g, '""')}"`;

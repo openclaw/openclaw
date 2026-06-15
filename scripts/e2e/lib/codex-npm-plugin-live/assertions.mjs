@@ -38,6 +38,10 @@ const MAX_TRANSCRIPT_SCAN_BYTES = readPositiveIntEnv(
   2 * 1024 * 1024,
 );
 
+function fileFromEnv(name, fallback) {
+  return process.env[name] || fallback;
+}
+
 function readPositiveIntEnv(name, fallback) {
   const text = String(process.env[name] ?? fallback).trim();
   if (!/^\d+$/u.test(text)) {
@@ -347,6 +351,39 @@ function listFilesRecursive(root) {
   return files;
 }
 
+function scanFileForAnyNeedle(filePath, needles, maxBytes) {
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile() || stat.size <= 0 || needles.length === 0) {
+    return { matched: false, scannedBytes: 0 };
+  }
+  const limit = Math.min(stat.size, maxBytes);
+  const startOffset = Math.max(0, stat.size - limit);
+  const buffer = Buffer.alloc(Math.min(64 * 1024, limit));
+  const maxNeedleLength = Math.max(...needles.map((needle) => needle.length));
+  const carryChars = Math.max(256, maxNeedleLength - 1);
+  const fd = fs.openSync(filePath, "r");
+  let scannedBytes = 0;
+  try {
+    let carry = "";
+    while (scannedBytes < limit) {
+      const bytesToRead = Math.min(buffer.length, limit - scannedBytes);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, startOffset + scannedBytes);
+      if (bytesRead <= 0) {
+        break;
+      }
+      scannedBytes += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      if (needles.some((needle) => text.includes(needle))) {
+        return { matched: true, scannedBytes };
+      }
+      carry = text.slice(-carryChars);
+    }
+    return { matched: false, scannedBytes };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function assertNativeCodexSessionEvidence(params) {
   const roots = params.roots.filter((root) => fs.existsSync(root));
   const files = roots
@@ -365,9 +402,9 @@ function assertNativeCodexSessionEvidence(params) {
     if (scannedBytes + readableBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
       return false;
     }
-    scannedBytes += readableBytes;
-    const content = readTextFileTail(filePath, "native Codex session transcript", readableBytes);
-    return content.includes(params.marker) || content.includes(params.threadId);
+    const scan = scanFileForAnyNeedle(filePath, [params.marker, params.threadId], readableBytes);
+    scannedBytes += scan.scannedBytes;
+    return scan.matched;
   })?.filePath;
   if (!matchingFile) {
     throw new Error(
@@ -381,13 +418,22 @@ function assertAgentTurn() {
   const marker = process.argv[3];
   const sessionId = process.argv[4];
   const modelRef = process.argv[5];
-  const stdout = readTextFileBounded("/tmp/openclaw-codex-agent.json", "OpenClaw agent JSON");
-  const stderr = readTextFileTail("/tmp/openclaw-codex-agent.err", "OpenClaw agent stderr");
+  const outputPath = fileFromEnv(
+    "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_OUTPUT_PATH",
+    "/tmp/openclaw-codex-agent.json",
+  );
+  const errorPath = fileFromEnv(
+    "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_ERROR_PATH",
+    "/tmp/openclaw-codex-agent.err",
+  );
+  const stdout = readTextFileBounded(outputPath, "OpenClaw agent JSON");
+  const stderr = readTextFileTail(errorPath, "OpenClaw agent stderr");
   const response = JSON.parse(stdout);
   const text = extractAgentReplyTexts(JSON.stringify(response)).join("\n");
   if (!text.includes(marker)) {
+    const stdoutTail = readTextFileTail(outputPath, "OpenClaw agent stdout");
     throw new Error(
-      `OpenClaw agent reply did not contain ${marker}:\nstdout=${stdout}\nstderr=${stderr}`,
+      `OpenClaw agent reply did not contain ${marker}:\nstdout tail=${stdoutTail}\nstderr tail=${stderr}`,
     );
   }
   const expectedProvider = modelRef.split("/")[0] || "codex";
@@ -475,24 +521,24 @@ function assertAgentError() {
       `expected OpenClaw agent to fail after Codex uninstall, got status ${process.argv[3]}`,
     );
   }
-  const stdout = fs.existsSync("/tmp/openclaw-codex-agent-after-uninstall.json")
-    ? readTextFileTail(
-        "/tmp/openclaw-codex-agent-after-uninstall.json",
-        "post-uninstall agent stdout",
-      )
-    : "";
-  const stderr = fs.existsSync("/tmp/openclaw-codex-agent-after-uninstall.err")
-    ? readTextFileTail(
-        "/tmp/openclaw-codex-agent-after-uninstall.err",
-        "post-uninstall agent stderr",
-      )
-    : "";
+  const outputPath = fileFromEnv(
+    "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_AFTER_UNINSTALL_OUTPUT_PATH",
+    "/tmp/openclaw-codex-agent-after-uninstall.json",
+  );
+  const errorPath = fileFromEnv(
+    "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_AFTER_UNINSTALL_ERROR_PATH",
+    "/tmp/openclaw-codex-agent-after-uninstall.err",
+  );
+  const stdout = readTextFileTail(outputPath, "post-uninstall agent stdout");
+  const stderr = readTextFileTail(errorPath, "post-uninstall agent stderr");
   const combined = `${stdout}\n${stderr}`;
   if (
     !combined.includes('Requested agent harness "codex" is not registered') &&
     !combined.includes("Unknown model: codex/")
   ) {
-    throw new Error(`unexpected post-uninstall agent error:\nstdout=${stdout}\nstderr=${stderr}`);
+    throw new Error(
+      `unexpected post-uninstall agent error:\nstdout tail=${stdout}\nstderr tail=${stderr}`,
+    );
   }
 }
 

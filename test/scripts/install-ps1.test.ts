@@ -233,6 +233,125 @@ describe("install.ps1 failure handling", () => {
     expect(resolveNodeBody).toContain("node-$($release.version)-win-$architecture.zip");
   });
 
+  runIfPowerShell("keeps Chocolatey install failures on the Node bootstrap path", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "function Get-Command {",
+        "  [CmdletBinding()]",
+        "  param([string]$Name)",
+        "  if ($Name -eq 'choco') { return [pscustomobject]@{ Name = 'choco' } }",
+        "  return $null",
+        "}",
+        "function choco { $global:LASTEXITCODE = 17 }",
+        "function Check-Node { return $false }",
+        "function Install-PortableNode { throw 'portable disabled' }",
+        "$result = Install-Node",
+        'if ($result -ne $false) { throw "expected false result: $result" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Chocolatey did not make Node.js available");
+    expect(result.stdout).not.toContain("Node.js installed via Chocolatey");
+    expect(result.stderr).toBe("");
+  });
+
+  runIfPowerShell("accepts Chocolatey reboot-required success when Node is available", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "function Get-Command {",
+        "  [CmdletBinding()]",
+        "  param([string]$Name)",
+        "  if ($Name -eq 'choco') { return [pscustomobject]@{ Name = 'choco' } }",
+        "  return $null",
+        "}",
+        "function choco { $global:LASTEXITCODE = 3010 }",
+        "function Check-Node { return $true }",
+        "function Install-PortableNode { throw 'portable should not run' }",
+        "$result = Install-Node",
+        'if ($result -ne $true) { throw "expected true result: $result" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Node.js installed via Chocolatey");
+    expect(result.stderr).toBe("");
+  });
+
+  runIfPowerShell("keeps Scoop install failures on the Node bootstrap path", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "function Get-Command {",
+        "  [CmdletBinding()]",
+        "  param([string]$Name)",
+        "  if ($Name -eq 'scoop') { return [pscustomobject]@{ Name = 'scoop' } }",
+        "  return $null",
+        "}",
+        "function scoop { $global:LASTEXITCODE = 0 }",
+        "function Check-Node { return $false }",
+        "function Install-PortableNode { throw 'portable disabled' }",
+        "$result = Install-Node",
+        'if ($result -ne $false) { throw "expected false result: $result" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Scoop did not make Node.js available");
+    expect(result.stdout).not.toContain("Node.js installed via Scoop");
+    expect(result.stderr).toBe("");
+  });
+
   it("persists user-local portable Git for future git-backed updates", () => {
     const portableGitRootBody = extractFunctionBody(source, "Get-PortableGitRoot");
     const portableGitBody = extractFunctionBody(source, "Install-PortableGit");
@@ -285,9 +404,13 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody.indexOf("git clone $repoUrl $RepoDir")).toBeLessThan(
       gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
     );
-    expect(gitInstallBody.indexOf("git -C $RepoDir pull --rebase")).toBeLessThan(
-      gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
-    );
+    expect(
+      gitInstallBody.indexOf(
+        'Invoke-GitQuietForInstall -Arguments @("-C", $RepoDir, "pull", "--rebase")',
+      ),
+    ).toBeLessThan(gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"));
+    expect(gitInstallBody).toContain('Write-Host "[!] Git clone failed for the checkout"');
+    expect(gitInstallBody).toContain('Write-Host "[!] Git pull failed for the checkout"');
     expect(mainBody).toContain("$gitInstallResults = @(Install-OpenClawFromGit");
     expect(mainBody).toContain("Test-BooleanSuccessResult -Results $gitInstallResults");
     expect(mainBody).toContain("$npmInstallResults = @(Install-OpenClaw)");
@@ -326,6 +449,9 @@ describe("install.ps1 failure handling", () => {
     expect(nodeOptionsBody).toContain("--max-old-space-size=$MinOldSpaceMb");
     expect(nodeOptionsBody).toContain("[Math]::Max");
     expect(gitInstallBody).toContain("& $pnpmCommand build");
+    expect(gitInstallBody).toContain("& $pnpmCommand ui:build");
+    expect(gitInstallBody).toContain("$LASTEXITCODE -ne 0");
+    expect(gitInstallBody).not.toContain("if (-not (& $pnpmCommand ui:build))");
     expect(gitInstallBody).toContain("$env:NODE_OPTIONS = $prevNodeOptions");
     expect(gitInstallBody).toContain(
       "$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = $prevPnpmVerifyDepsBeforeRun",
@@ -486,6 +612,203 @@ describe("install.ps1 failure handling", () => {
     ]);
 
     expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  runIfPowerShell("treats empty git command output as an empty result array", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "function git {",
+        "  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)",
+        "  $global:LASTEXITCODE = 0",
+        "  return",
+        "}",
+        '$result = Invoke-GitQuietForInstall -Arguments @("-C", "repo", "status", "--porcelain")',
+        'if ($result.ExitCode -ne 0) { throw "exit=$($result.ExitCode)" }',
+        'if ($result.Output.Count -ne 0) { throw "output count=$($result.Output.Count)" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  runIfPowerShell("fails git installs when cloning the checkout fails", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const repoDir = join(tempDir, "repo");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        `$RepoDir = ${toPowerShellSingleQuotedLiteral(repoDir)}`,
+        "function Ensure-Git { return $true }",
+        "function Ensure-Pnpm { param([string]$RepoDir) throw 'should not install dependencies after clone failure' }",
+        "function git {",
+        "  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)",
+        "  if ($Arguments[0] -eq 'clone') {",
+        "    $global:LASTEXITCODE = 42",
+        "    return",
+        "  }",
+        "  throw \"unexpected git command: $($Arguments -join ' ')\"",
+        "}",
+        "$result = Install-OpenClawFromGit -RepoDir $RepoDir",
+        'if ($result -ne $false) { throw "expected false result: $result" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Git clone failed for the checkout");
+    expect(result.stderr).toBe("");
+  });
+
+  runIfPowerShell("fails git installs when updating the checkout fails", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const repoDir = join(tempDir, "repo");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        `$RepoDir = ${toPowerShellSingleQuotedLiteral(repoDir)}`,
+        "New-Item -ItemType Directory -Force -Path $RepoDir | Out-Null",
+        "function Ensure-Git { return $true }",
+        "function Ensure-Pnpm { param([string]$RepoDir) throw 'should not install dependencies after pull failure' }",
+        "function git {",
+        "  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)",
+        "  if ($Arguments[0] -eq '-C' -and $Arguments[2] -eq 'status') {",
+        "    $global:LASTEXITCODE = 0",
+        "    return",
+        "  }",
+        "  if ($Arguments[0] -eq '-C' -and $Arguments[2] -eq 'pull') {",
+        "    $global:LASTEXITCODE = 43",
+        "    return",
+        "  }",
+        "  throw \"unexpected git command: $($Arguments -join ' ')\"",
+        "}",
+        "$result = Install-OpenClawFromGit -RepoDir $RepoDir",
+        'if ($result -ne $false) { throw "expected false result: $result" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Git pull failed for the checkout");
+    expect(result.stderr).toBe("");
+  });
+
+  runIfPowerShell("fails on noisy ui build failures during git installs", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const repoDir = join(tempDir, "repo");
+    const userProfileDir = join(tempDir, "profile");
+    const pnpmPath = join(tempDir, "fake-pnpm.ps1");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      pnpmPath,
+      [
+        "param(",
+        "  [Parameter(ValueFromRemainingArguments = $true)]",
+        "  [string[]]$Arguments",
+        ")",
+        "switch ($Arguments[0]) {",
+        '  "install" {',
+        "    Write-Output 'install ok'",
+        "    exit 0",
+        "  }",
+        '  "ui:build" {',
+        "    Write-Output 'ui failed with output'",
+        "    exit 13",
+        "  }",
+        '  "build" {',
+        '    New-Item -ItemType Directory -Force -Path "dist" | Out-Null',
+        '    Set-Content -Path "dist/entry.js" -Value "entry" -NoNewline',
+        "    exit 0",
+        "  }",
+        "}",
+        "Write-Error \"unexpected pnpm command: $($Arguments -join ' ')\"",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(pnpmPath, 0o755);
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        `$RepoDir = ${toPowerShellSingleQuotedLiteral(repoDir)}`,
+        `$env:USERPROFILE = ${toPowerShellSingleQuotedLiteral(userProfileDir)}`,
+        `$PnpmPath = ${toPowerShellSingleQuotedLiteral(pnpmPath)}`,
+        "New-Item -ItemType Directory -Force -Path $RepoDir | Out-Null",
+        "New-Item -ItemType Directory -Force -Path $env:USERPROFILE | Out-Null",
+        "function Ensure-Git { return $true }",
+        "function Ensure-Pnpm { param([string]$RepoDir) return }",
+        "function Remove-LegacySubmodule { param([string]$RepoDir) return }",
+        "function Get-PnpmCommandPath { return $PnpmPath }",
+        "function Add-ToUserPath { param([string]$Path) return $true }",
+        "$results = @(Install-OpenClawFromGit -RepoDir $RepoDir -SkipUpdate)",
+        'if (Test-BooleanSuccessResult -Results $results) { throw "git install unexpectedly succeeded: $results" }',
+        'if (-not ($results -contains "ui failed with output")) { throw "missing noisy ui build output: $results" }',
+        'if (Test-Path (Join-Path $RepoDir "dist/entry.js")) { throw "pnpm build ran after ui build failure" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("UI build failed for the Git checkout");
     expect(result.stderr).toBe("");
   });
 
