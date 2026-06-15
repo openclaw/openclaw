@@ -167,7 +167,7 @@ import {
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
   resolveReportedModelRef,
-  MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
+  resolveMaxSameModelRateLimitRetries,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
@@ -1507,7 +1507,9 @@ async function runEmbeddedAgentInternal(
       const maybeRetrySameModelRateLimit = async (retry?: {
         retryAfterSeconds?: number;
       }): Promise<boolean> => {
-        if (consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES) {
+        if (
+          consecutiveSameModelRateLimitRetries >= resolveMaxSameModelRateLimitRetries(params.config)
+        ) {
           return false;
         }
         const delayMs = resolveSameModelRateLimitRetryDelayMs({
@@ -1515,7 +1517,7 @@ async function runEmbeddedAgentInternal(
           retryAfterSeconds: retry?.retryAfterSeconds,
         });
         log.warn(
-          `rate-limit same-model retry ${consecutiveSameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
+          `rate-limit same-model retry ${consecutiveSameModelRateLimitRetries + 1}/${resolveMaxSameModelRateLimitRetries(params.config)} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
         );
         try {
           await sleepWithAbort(delayMs, params.abortSignal);

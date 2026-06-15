@@ -41,6 +41,14 @@ const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 // minute scale, so wait out the current provider/model window before spending
 // a profile rotation or model failover.
 export const MAX_SAME_MODEL_RATE_LIMIT_RETRIES = 3;
+
+export function resolveMaxSameModelRateLimitRetries(cfg?: OpenClawConfig): number {
+  const configured = cfg?.auth?.cooldowns?.maxSameModelRateLimitRetries;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
+    return Math.floor(configured);
+  }
+  return MAX_SAME_MODEL_RATE_LIMIT_RETRIES;
+}
 // Linear step: retriesSoFar=0 -> 10s, 1 -> 20s, 2 -> 30s. Total wait across the
 // 3-retry budget is 60s, roughly one RPM window.
 const SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS = 10_000;

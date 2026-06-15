@@ -58,5 +58,12 @@ export type AuthConfig = {
      * errors before escalating to cross-provider model fallback. Default: 1.
      */
     rateLimitedProfileRotations?: number;
+    /**
+     * Maximum same-model rate-limit retries before escalating to model fallback.
+     * Each retry uses a linear progressive backoff (10s, 20s, 30s, …).
+     * Increase for providers with strict RPM windows (e.g. Google Gemini).
+     * Default: 3.
+     */
+    maxSameModelRateLimitRetries?: number;
   };
 };
