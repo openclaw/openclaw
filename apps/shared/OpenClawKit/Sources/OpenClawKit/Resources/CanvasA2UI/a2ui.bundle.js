@@ -3373,7 +3373,7 @@ const ZodEffects = class extends ZodType {
 			path: ctx.path,
 			parent: ctx
 		}).then((base) => {
-			if (!isValid(base)) return INVALID;
+			if (!isValid(base)) {return INVALID;}
 			return Promise.resolve(effect.transform(base.value, checkCtx)).then((result) => ({
 				status: status.value,
 				value: result
@@ -6198,12 +6198,12 @@ const S = class S {
 						index: l,
 						name: e[2],
 						strings: s,
-						ctor: "." === e[1] ? I : "?" === e[1] ? L : "@" === e[1] ? z : H
+						ctor: e[1] === "." ? I : e[1] === "?" ? L : e[1] === "@" ? z : H
 					}), r.removeAttribute(t);
-				} else t.startsWith(o$12) && (d.push({
+				} else {t.startsWith(o$12) && (d.push({
 					type: 6,
 					index: l
-				}), r.removeAttribute(t));}}
+				}), r.removeAttribute(t));}}}
 				if (y.test(r.tagName)) {
 					const t = r.textContent.split(o$12), i = t.length - 1;
 					if (i > 0) {
@@ -6735,8 +6735,8 @@ function h$3(i) {
 }
 function n$5(i, t = !1, e = 0) {
 	const r = this._$AH, h = this._$AN;
-	if (void 0 !== h && h.size !== 0) {if (t) {if (Array.isArray(r)) {for (let i = e; i < r.length; i++) s$4(r[i], !1), o$6(r[i]);}
-	else r != null && (s$4(r, !1), o$6(r));}
+	if (void 0 !== h && h.size !== 0) {if (t) {if (Array.isArray(r)) {for (let i = e; i < r.length; i++) {s$4(r[i], !1), o$6(r[i]);}}
+	else {r != null && (s$4(r, !1), o$6(r));}}
 	else {s$4(this, i);}}
 }
 const c$3 = (i) => {
