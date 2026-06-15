@@ -469,6 +469,15 @@ export async function applyFinalGatewayRunConfigEnv(params: {
   const preparedSnapshot = preparedGatewayRunBootstrapSnapshot;
   preparedGatewayRunBootstrapSnapshot = undefined;
   if (!params.snapshot.valid) {
+    restoreAppliedGatewayRunConfigEnvironment(false);
+    if (preparedSnapshot) {
+      params.runtime.error(
+        "Refusing to start the gateway because the final config read became invalid. Retry startup after fixing the config.",
+      );
+      params.runtime.exit(1);
+      return false;
+    }
+    await pinGatewayRunRuntimePaths();
     return true;
   }
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();

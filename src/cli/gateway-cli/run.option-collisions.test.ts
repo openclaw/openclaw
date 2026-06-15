@@ -2,6 +2,7 @@
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -665,6 +666,48 @@ describe("gateway run option collisions", () => {
         expect(startGatewayServer).toHaveBeenCalledOnce();
       },
     );
+  });
+
+  it("rejects an invalid final config after a prepared config selected runtime paths", async () => {
+    const selectedStateDir = "/tmp/openclaw-prepared-selected-state";
+    await withEnvAsync({ OPENCLAW_STATE_DIR: undefined }, async () => {
+      const selectedConfig = {
+        env: { vars: { OPENCLAW_STATE_DIR: selectedStateDir } },
+        gateway: { mode: "local" },
+      };
+      configState.snapshot = {
+        config: selectedConfig,
+        exists: true,
+        parsed: selectedConfig,
+        path: "/tmp/openclaw.json",
+        sourceConfig: selectedConfig,
+        valid: true,
+      };
+      const {
+        applyFinalGatewayRunConfigEnv,
+        prepareGatewayRunBootstrap,
+        selectGatewayRunEnvironment,
+      } = await import("./pre-bootstrap.js");
+
+      expect(await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime })).toBe(true);
+      expect(await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime })).toBe(true);
+      expect(process.env.OPENCLAW_STATE_DIR).toBe(selectedStateDir);
+
+      const invalidSnapshot = {
+        ...configState.snapshot,
+        issues: [{ message: "invalid", path: "gateway" }],
+        valid: false,
+      };
+      await expect(
+        applyFinalGatewayRunConfigEnv({
+          runtime: defaultRuntime,
+          snapshot: invalidSnapshot as ConfigFileSnapshot,
+        }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.join("\n")).toContain("final config read became invalid");
+      expect(startGatewayServer).not.toHaveBeenCalled();
+    });
   });
 
   it("replaces config-derived env when the final startup snapshot changes in place", async () => {
