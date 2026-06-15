@@ -28,6 +28,28 @@ const runAgentAttempt = (
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
+const providerAuthAliasMocks = vi.hoisted(() => ({
+  resolveProviderAuthAliasMap: vi.fn(() => ({})),
+  resolveProviderIdForAuth: vi.fn(
+    (
+      provider: string,
+      params?: {
+        metadataSnapshot?: {
+          plugins?: readonly { providerAuthAliases?: Record<string, string> }[];
+        };
+      },
+    ) => {
+      const normalized = provider.trim().toLowerCase();
+      for (const plugin of params?.metadataSnapshot?.plugins ?? []) {
+        const alias = plugin.providerAuthAliases?.[normalized]?.trim();
+        if (alias) {
+          return alias.toLowerCase();
+        }
+      }
+      return ["codex-cli", "openai"].includes(normalized) ? "openai" : normalized;
+    },
+  ),
+}));
 const ORIGINAL_HOME = process.env.HOME;
 
 vi.mock("../cli-runner.js", () => ({
@@ -43,11 +65,8 @@ vi.mock("../model-selection.js", () => ({
 }));
 
 vi.mock("../provider-auth-aliases.js", () => ({
-  resolveProviderAuthAliasMap: () => ({}),
-  resolveProviderIdForAuth: (provider: string) =>
-    ["codex-cli", "openai"].includes(provider.trim().toLowerCase())
-      ? "openai"
-      : provider.trim().toLowerCase(),
+  resolveProviderAuthAliasMap: providerAuthAliasMocks.resolveProviderAuthAliasMap,
+  resolveProviderIdForAuth: providerAuthAliasMocks.resolveProviderIdForAuth,
 }));
 
 vi.mock("../model-runtime-aliases.js", async () => {
@@ -187,6 +206,8 @@ describe("CLI attempt execution", () => {
     storePath = path.join(tmpDir, "sessions.json");
     runCliAgentMock.mockReset();
     runEmbeddedAgentMock.mockReset();
+    providerAuthAliasMocks.resolveProviderAuthAliasMap.mockClear();
+    providerAuthAliasMocks.resolveProviderIdForAuth.mockClear();
   });
 
   afterEach(async () => {
@@ -1562,6 +1583,84 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
+    });
+  });
+
+  it("forwards selected auth profiles through metadata-scoped provider aliases", async () => {
+    const sessionKey = "agent:main:direct:metadata-auth-alias";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-metadata-auth-alias",
+      updatedAt: Date.now(),
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:work": {
+            type: "oauth",
+            provider: "openai",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      tmpDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "fixture",
+      originalProvider: "fixture",
+      modelOverride: "fixture-model",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "use selected auth",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-metadata-auth-alias",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "fixture",
+      sessionStore,
+      storePath,
+      pluginsEnabled: true,
+      metadataSnapshot: {
+        plugins: [
+          {
+            id: "alias-owner",
+            origin: "global",
+            providerAuthAliases: { fixture: "openai" },
+          },
+        ],
+      } as never,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runEmbeddedAgentMock, {
+      provider: "fixture",
+      model: "fixture-model",
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
     });
   });
 
