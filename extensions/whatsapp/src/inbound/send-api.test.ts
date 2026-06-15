@@ -5,11 +5,6 @@ import path from "node:path";
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_WHATSAPP_SOCKET_TIMING,
-  createWhatsAppSocketOperationTimeoutAdapter,
-  type WhatsAppSocketOperationAdapter,
-} from "../socket-timing.js";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WhatsAppSendResult } from "./send-result.js";
@@ -62,13 +57,6 @@ function requireMockArg(mock: MockCallSource, callIndex: number, argIndex: numbe
   return call[argIndex];
 }
 
-function createBoundedTestSocket(sock: WhatsAppSocketOperationAdapter) {
-  return createWhatsAppSocketOperationTimeoutAdapter(
-    sock,
-    DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
-  );
-}
-
 describe("createWebSendApi", () => {
   const sendMessage = vi.fn(
     async (
@@ -85,7 +73,7 @@ describe("createWebSendApi", () => {
     imageOps.getImageMetadata.mockResolvedValue(null);
     imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
     });
   });
@@ -307,7 +295,7 @@ describe("createWebSendApi", () => {
 
   it("adds native mention metadata to group text sends", async () => {
     api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       resolveOutboundMentions: ({ jid, text }) =>
         resolveWhatsAppOutboundMentions({
@@ -367,7 +355,7 @@ describe("createWebSendApi", () => {
 
   it("adds native mention metadata to group media captions", async () => {
     api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       resolveOutboundMentions: ({ jid, text }) =>
         resolveWhatsAppOutboundMentions({
@@ -391,7 +379,7 @@ describe("createWebSendApi", () => {
 
   it("uses resolved mention caption text for forced-document media", async () => {
     api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       resolveOutboundMentions: ({ jid, text }) =>
         resolveWhatsAppOutboundMentions({
@@ -642,7 +630,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
 
   it("resolves PN to LID for sendMessage when authDir is provided", async () => {
     const api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       authDir,
     });
@@ -652,7 +640,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
 
   it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
     const api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       authDir,
     });
@@ -662,7 +650,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
 
   it("resolves PN to LID for sendPoll", async () => {
     const api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       authDir,
     });
@@ -677,7 +665,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
 
   it("resolves PN to LID for sendReaction", async () => {
     const api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       authDir,
     });
@@ -699,7 +687,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
 
   it("resolves PN to LID for sendComposingTo presence", async () => {
     const api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       authDir,
     });
@@ -709,7 +697,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
 
   it("skips newsletter composing presence when authDir is provided", async () => {
     const api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       authDir,
     });
@@ -719,7 +707,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
 
   it("preserves legacy behavior (no authDir → PN-only routing)", async () => {
     const api = createWebSendApi({
-      sock: createBoundedTestSocket({ sendMessage, sendPresenceUpdate }),
+      sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       // authDir intentionally omitted
     });

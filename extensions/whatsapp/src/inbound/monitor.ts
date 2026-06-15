@@ -33,7 +33,7 @@ import {
   isWhatsAppSocketOperationTimeoutError,
   resolveWhatsAppSocketOperationTimeoutMs,
   resolveWhatsAppSocketTiming,
-  type WhatsAppBoundedSocketOperationAdapter,
+  type WhatsAppSocketOperationAdapter,
   type WhatsAppSocketTimingOptions,
 } from "../socket-timing.js";
 import { resolveJidToE164 } from "../text-runtime.js";
@@ -557,8 +557,7 @@ export async function attachWebInboxToSocket(
       }
     }
   };
-  const sendApiSocketOperations: WhatsAppBoundedSocketOperationAdapter = {
-    operationTimeoutMs: sendOperationTimeoutMs,
+  const sendApiSocketOperations: WhatsAppSocketOperationAdapter = {
     sendMessage: (jid, content, sendOptions) => sendTrackedMessage(jid, content, sendOptions),
     sendPresenceUpdate: async (presenceLocal, jid) => {
       const currentSock = getCurrentSock();

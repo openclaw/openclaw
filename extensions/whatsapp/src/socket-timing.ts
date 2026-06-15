@@ -23,10 +23,6 @@ export type WhatsAppSocketOperationAdapter = {
   sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
 };
 
-export type WhatsAppBoundedSocketOperationAdapter = WhatsAppSocketOperationAdapter & {
-  readonly operationTimeoutMs: number;
-};
-
 type WhatsAppSocketOperationTimeoutHooks = {
   onSendMessageTimeout?: (params: { jid: string; promise: Promise<WAMessage | undefined> }) => void;
 };
@@ -114,10 +110,9 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
   sock: WhatsAppSocketOperationAdapter,
   timeoutMs: number,
   hooks?: WhatsAppSocketOperationTimeoutHooks,
-): WhatsAppBoundedSocketOperationAdapter {
+): WhatsAppSocketOperationAdapter {
   const operationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
   return {
-    operationTimeoutMs,
     sendMessage: (jid, content, options) => {
       const send = options
         ? sock.sendMessage(jid, content, options)
