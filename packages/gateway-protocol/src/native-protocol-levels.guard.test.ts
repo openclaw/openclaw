@@ -185,13 +185,16 @@ describe("native Gateway protocol levels", () => {
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
     const swiftGenerated = await readRepoFile(swiftGeneratedPath);
 
-    for (const [name, schema] of Object.entries(ProtocolSchemas)) {
+    for (const [name, schema] of Object.entries(ProtocolSchemas) as [
+      string,
+      { anyOf?: unknown[]; oneOf?: unknown[] },
+    ][]) {
       const branches = schema.anyOf ?? schema.oneOf;
       if (!branches || branches.length < 2) {
         continue;
       }
-      const values = branches.map((branch) => branch.const);
-      if (values.some((value) => typeof value !== "string")) {
+      const values = branches.map((branch: { const?: unknown }) => branch.const);
+      if (values.some((value: unknown) => typeof value !== "string")) {
         continue;
       }
 
