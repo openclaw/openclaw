@@ -2236,6 +2236,261 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("wires the widened candidate window to --candidate-limit on the direct query CLI", async () => {
+    const baseDefaults = (cfg as { agents?: { defaults?: Record<string, unknown> } }).agents
+      ?.defaults;
+    cfg = {
+      ...cfg,
+      agents: {
+        ...(cfg as { agents?: Record<string, unknown> }).agents,
+        defaults: {
+          ...baseDefaults,
+          memorySearch: {
+            ...(baseDefaults?.memorySearch as Record<string, unknown>),
+            query: { hybrid: { temporalDecay: { enabled: true, halfLifeDays: 30 } } },
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          limits: { maxResults: 20 },
+        },
+      },
+    } as OpenClawConfig;
+
+    let queryArgs: string[] | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        queryArgs = args;
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stdout.emit("data", JSON.stringify([]));
+          child.closeWith(0);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    await manager.search("router glacier backup", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+
+    const seenArgs = requireValue<string[]>(queryArgs, "expected a direct qmd query invocation");
+    // The result window (-n) is widened to the candidate cap...
+    const limitIndex = seenArgs.indexOf("-n");
+    expect(limitIndex).toBeGreaterThanOrEqual(0);
+    expect(seenArgs[limitIndex + 1]).toBe("50");
+    // ...and the rerank candidate window must be widened to the same value so
+    // fresh hits beyond qmd's default candidate window survive to decay.
+    const candidateIndex = seenArgs.indexOf("--candidate-limit");
+    expect(candidateIndex).toBeGreaterThanOrEqual(0);
+    expect(seenArgs[candidateIndex + 1]).toBe("50");
+    await manager.close();
+  });
+
+  it("omits --candidate-limit on the direct query CLI when temporal decay is disabled", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          limits: { maxResults: 20 },
+        },
+      },
+    } as OpenClawConfig;
+
+    let queryArgs: string[] | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        queryArgs = args;
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stdout.emit("data", JSON.stringify([]));
+          child.closeWith(0);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    await manager.search("router glacier backup", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+
+    const seenArgs = requireValue<string[]>(queryArgs, "expected a direct qmd query invocation");
+    const limitIndex = seenArgs.indexOf("-n");
+    expect(seenArgs[limitIndex + 1]).toBe("20");
+    expect(seenArgs).not.toContain("--candidate-limit");
+    await manager.close();
+  });
+
+  it("retries the direct query without --candidate-limit when qmd rejects the flag", async () => {
+    const baseDefaults = (cfg as { agents?: { defaults?: Record<string, unknown> } }).agents
+      ?.defaults;
+    cfg = {
+      ...cfg,
+      agents: {
+        ...(cfg as { agents?: Record<string, unknown> }).agents,
+        defaults: {
+          ...baseDefaults,
+          memorySearch: {
+            ...(baseDefaults?.memorySearch as Record<string, unknown>),
+            query: { hybrid: { temporalDecay: { enabled: true, halfLifeDays: 30 } } },
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          limits: { maxResults: 20 },
+        },
+      },
+    } as OpenClawConfig;
+
+    const queryInvocations: string[][] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        queryInvocations.push(args);
+        const child = createMockChild({ autoClose: false });
+        if (args.includes("--candidate-limit")) {
+          emitAndClose(child, "stderr", "unknown flag: --candidate-limit", 1);
+          return child;
+        }
+        queueMicrotask(() => {
+          child.stdout.emit("data", JSON.stringify([]));
+          child.closeWith(0);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    await expect(
+      manager.search("router glacier backup", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toStrictEqual([]);
+
+    expect(queryInvocations).toHaveLength(2);
+    expect(queryInvocations[0]).toContain("--candidate-limit");
+    expect(queryInvocations[1]).not.toContain("--candidate-limit");
+    // The result window survives so decay still re-ranks the widened -n pool.
+    expect(queryInvocations[1][queryInvocations[1].indexOf("-n") + 1]).toBe("50");
+    expectMockMessageContains(logWarnMock, "does not support --candidate-limit");
+    await manager.close();
+  });
+
+  it("passes candidateLimit to the mcporter unified query call when decay is enabled", async () => {
+    const baseDefaults = (cfg as { agents?: { defaults?: Record<string, unknown> } }).agents
+      ?.defaults;
+    cfg = {
+      ...cfg,
+      agents: {
+        ...(cfg as { agents?: Record<string, unknown> }).agents,
+        defaults: {
+          ...baseDefaults,
+          memorySearch: {
+            ...(baseDefaults?.memorySearch as Record<string, unknown>),
+            query: { hybrid: { temporalDecay: { enabled: true, halfLifeDays: 30 } } },
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          limits: { maxResults: 20 },
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    let callArgs: Record<string, unknown> | null = null;
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(args[1]).toBe("qmd.query");
+        callArgs = JSON.parse(args[args.indexOf("--args") + 1]) as Record<string, unknown>;
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("router glacier backup", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const seenCallArgs = requireValue<Record<string, unknown>>(
+      callArgs,
+      "expected a mcporter unified query call",
+    );
+    // The unified query tool receives both the widened result limit and the
+    // widened rerank candidate window so the two windows stay consistent.
+    expect(seenCallArgs.limit).toBe(50);
+    expect(seenCallArgs.candidateLimit).toBe(50);
+    expect(seenCallArgs.collections).toEqual(["workspace-main"]);
+    await manager.close();
+  });
+
+  it("omits candidateLimit on the mcporter unified query call when decay is disabled", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          limits: { maxResults: 20 },
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    let callArgs: Record<string, unknown> | null = null;
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        callArgs = JSON.parse(args[args.indexOf("--args") + 1]) as Record<string, unknown>;
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("router glacier backup", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const seenCallArgs = requireValue<Record<string, unknown>>(
+      callArgs,
+      "expected a mcporter unified query call",
+    );
+    expect(seenCallArgs.limit).toBe(20);
+    expect(seenCallArgs).not.toHaveProperty("candidateLimit");
+    await manager.close();
+  });
+
   it("keeps invalid qmd query stdout failed after a non-zero exit", async () => {
     cfg = {
       ...cfg,
