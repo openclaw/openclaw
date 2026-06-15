@@ -10,6 +10,7 @@ type ConfigSnapshotStub = {
   exists: boolean;
   valid: boolean;
   sourceConfig: Record<string, unknown>;
+  config?: Record<string, unknown>;
 };
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
@@ -56,6 +57,8 @@ const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runCrestodianMock = vi.hoisted(() =>
   vi.fn<(options?: unknown) => Promise<void>>(async () => {}),
 );
+const launchTuiCliMock = vi.hoisted(() => vi.fn(async () => {}));
+const hasRunnableLocalAgentMock = vi.hoisted(() => vi.fn(async () => true));
 const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
@@ -257,6 +260,14 @@ vi.mock("../crestodian/crestodian.js", () => ({
   runCrestodian: runCrestodianMock,
 }));
 
+vi.mock("../tui/tui-launch.js", () => ({
+  launchTuiCli: launchTuiCliMock,
+}));
+
+vi.mock("../wizard/setup.assisted.js", () => ({
+  hasRunnableLocalAgent: hasRunnableLocalAgentMock,
+}));
+
 vi.mock("./progress.js", () => ({
   createCliProgress: createCliProgressMock,
 }));
@@ -306,7 +317,9 @@ describe("runCli exit behavior", () => {
       exists: true,
       valid: true,
       sourceConfig: { gateway: { mode: "local" } },
+      config: { gateway: { mode: "local" } },
     });
+    hasRunnableLocalAgentMock.mockResolvedValue(true);
     hasMemoryRuntimeMock.mockReturnValue(false);
     listAgentHarnessIdsMock.mockReturnValue([]);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
@@ -329,6 +342,7 @@ describe("runCli exit behavior", () => {
     resolveManifestToolOwnerMock.mockReturnValue(undefined);
     resolveManifestCliCommandSurfaceOwnerMock.mockReturnValue(undefined);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
+    delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_HIDE_BANNER;
     loggingState.forceConsoleToStderr = false;
   });
@@ -1093,20 +1107,222 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("keeps bare root invocations on Crestodian when config already exists", async () => {
+  it("opens the local agent for bare root invocations when config already exists", async () => {
     await withInteractiveTty(async () => {
       await runCli(["node", "openclaw"]);
     });
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(hasRunnableLocalAgentMock).toHaveBeenCalledWith(
+      { gateway: { mode: "local" } },
+      { agentId: "main" },
+    );
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(runCrestodianMock).toHaveBeenCalledOnce();
-    const crestodianOptions = requireRunCrestodianOptions();
-    expect(crestodianOptions).toEqual({ onReady: crestodianOptions.onReady });
-    expect(crestodianOptions.onReady).toBeTypeOf("function");
+    expect(runCrestodianMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({
+      local: true,
+      deliver: false,
+    });
   });
 
-  it("bootstraps env proxy before bare Crestodian startup", async () => {
+  it("checks the cwd-selected agent before opening the bare local TUI", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/tmp/main-workspace" },
+            { id: "ops", workspace: process.cwd() },
+          ],
+        },
+      },
+      config: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/tmp/main-workspace" },
+            { id: "ops", workspace: process.cwd() },
+          ],
+        },
+      },
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(hasRunnableLocalAgentMock).toHaveBeenCalledWith(expect.any(Object), { agentId: "ops" });
+    expect(launchTuiCliMock).toHaveBeenCalledWith({
+      local: true,
+      deliver: false,
+    });
+  });
+
+  it("continues onboarding for the cwd-selected agent when it cannot run locally", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/tmp/main-workspace" },
+            { id: "ops", workspace: process.cwd() },
+          ],
+        },
+      },
+      config: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/tmp/main-workspace" },
+            { id: "ops", workspace: process.cwd() },
+          ],
+        },
+      },
+    });
+    hasRunnableLocalAgentMock.mockResolvedValueOnce(false);
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({ agentId: "ops" });
+    expect(runCrestodianMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("opens an existing remote Gateway profile without checking local agent readiness", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://remote.example.com:18789" },
+        },
+      },
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://remote.example.com:18789" },
+        },
+      },
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(hasRunnableLocalAgentMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false });
+  });
+
+  it("routes an incomplete remote Gateway profile to Crestodian", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: { token: "remote-token" },
+        },
+      },
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: { token: "remote-token" },
+        },
+      },
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(hasRunnableLocalAgentMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(runCrestodianMock).toHaveBeenCalledOnce();
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("points noninteractive remote bare root invocations to remote agent dispatch", async () => {
+    const previousExitCode = process.exitCode;
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.exitCode = undefined;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://remote.example.com:18789" },
+        },
+      },
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://remote.example.com:18789" },
+        },
+      },
+    });
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+
+    try {
+      await runCli(["node", "openclaw"]);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        "OpenClaw chat needs an interactive TTY. Use `openclaw agent --message <text>` for one command.",
+      );
+    } finally {
+      errorSpy.mockRestore();
+      process.exitCode = previousExitCode;
+      if (stdinDescriptor) {
+        Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      }
+      if (stdoutDescriptor) {
+        Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
+  });
+
+  it("opens an env-configured remote Gateway without reading local config", async () => {
+    process.env.OPENCLAW_GATEWAY_URL = "wss://remote.example.com:18789";
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(hasRunnableLocalAgentMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false });
+  });
+
+  it("opens Crestodian when the authored config is invalid", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: false,
+      sourceConfig: { gateway: { mode: "local" } },
+      config: {},
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(runCrestodianMock).toHaveBeenCalledOnce();
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps env proxy before bare local-agent startup", async () => {
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
     const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
     const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -1129,12 +1345,13 @@ describe("runCli exit behavior", () => {
     }
 
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
-    expect(runCrestodianMock).toHaveBeenCalledOnce();
-    const crestodianOptions = requireRunCrestodianOptions();
-    expect(crestodianOptions).toEqual({ onReady: crestodianOptions.onReady });
-    expect(crestodianOptions.onReady).toBeTypeOf("function");
+    expect(runCrestodianMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({
+      local: true,
+      deliver: false,
+    });
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
-      runCrestodianMock.mock.invocationCallOrder[0],
+      launchTuiCliMock.mock.invocationCallOrder[0],
     );
   });
 

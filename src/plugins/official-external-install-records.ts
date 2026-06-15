@@ -79,7 +79,7 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   pluginId: string;
   record: PluginInstallRecord;
 }): { clawhubSpec?: string; npmSpec?: string } | undefined {
-  if (params.record.source !== "clawhub") {
+  if (!isOfficialClawHubInstallRecord(params.record)) {
     return undefined;
   }
   const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
@@ -102,11 +102,8 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   if (!matchesOfficialPackage) {
     return undefined;
   }
-  if (officialClawHubSpec || isOfficialClawHubInstallRecord(params.record)) {
-    return {
-      ...(officialClawHubSpec ? { clawhubSpec: officialClawHubSpec } : {}),
-      ...(officialNpmSpec ? { npmSpec: officialNpmSpec } : {}),
-    };
-  }
-  return undefined;
+  return {
+    ...(officialClawHubSpec ? { clawhubSpec: officialClawHubSpec } : {}),
+    ...(officialNpmSpec ? { npmSpec: officialNpmSpec } : {}),
+  };
 }

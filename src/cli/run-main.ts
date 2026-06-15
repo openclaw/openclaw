@@ -33,7 +33,7 @@ import {
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
-  shouldStartCrestodianForBareRoot,
+  shouldHandleBareRoot,
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
@@ -48,7 +48,7 @@ export {
   resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
-  shouldStartCrestodianForBareRoot,
+  shouldHandleBareRoot,
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
@@ -77,6 +77,7 @@ const loadManifestCommandAliasesRuntimeModule = async () =>
   await import("../plugins/manifest-command-aliases.runtime.js");
 const loadProxyLifecycleModule = async () => await import("../infra/net/proxy/proxy-lifecycle.js");
 const loadCrestodianModule = async () => await import("../crestodian/crestodian.js");
+const loadTuiLaunchModule = async () => await import("../tui/tui-launch.js");
 const loadProgressModule = async () => await import("./progress.js");
 
 function createGatewayCliMainStartupTrace(argv: string[]) {
@@ -262,13 +263,79 @@ function isUnconfiguredConfigSnapshot(
   );
 }
 
-export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
-  if (!shouldStartCrestodianForBareRoot(argv)) {
-    return false;
+type BareRootDestination =
+  | { kind: "local-agent" }
+  | { kind: "remote-agent" }
+  | { kind: "crestodian" }
+  | { kind: "onboard"; agentId?: string };
+
+async function resolveBareRootDestination(argv: string[]): Promise<BareRootDestination | null> {
+  if (!shouldHandleBareRoot(argv)) {
+    return null;
+  }
+  if (normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL)) {
+    return { kind: "remote-agent" };
   }
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
-  return isUnconfiguredConfigSnapshot(snapshot);
+  if (isUnconfiguredConfigSnapshot(snapshot)) {
+    return { kind: "onboard" };
+  }
+  if (!snapshot.valid) {
+    return { kind: "crestodian" };
+  }
+  if (snapshot.config.gateway?.mode === "remote") {
+    if (!normalizeOptionalString(snapshot.config.gateway.remote?.url)) {
+      return { kind: "crestodian" };
+    }
+    // Remote profiles use the configured Gateway and do not require local model
+    // readiness before opening the normal TUI connection path.
+    return { kind: "remote-agent" };
+  }
+  try {
+    const { resolveAgentIdFromSessionOrWorkspace, resolveDefaultAgentId } =
+      await import("../agents/agent-scope.js");
+    const defaultAgentId = resolveDefaultAgentId(snapshot.config);
+    const agentId = resolveAgentIdFromSessionOrWorkspace({
+      cfg: snapshot.config,
+      fallbackAgentId: defaultAgentId,
+      workspacePath: process.cwd(),
+    });
+    const { hasRunnableLocalAgent } = await import("../wizard/setup.assisted.js");
+    if (await hasRunnableLocalAgent(snapshot.config, { agentId })) {
+      return { kind: "local-agent" };
+    }
+    return {
+      kind: "onboard",
+      ...(agentId !== defaultAgentId ? { agentId } : {}),
+    };
+  } catch {
+    return { kind: "crestodian" };
+  }
+}
+
+async function runBareRootCrestodian(): Promise<void> {
+  const { runCrestodian } = await loadCrestodianModule();
+  const { createCliProgress } = await loadProgressModule();
+  const progress = createCliProgress({
+    label: "Starting Crestodian…",
+    indeterminate: true,
+    delayMs: 0,
+    fallback: "none",
+  });
+  let progressStopped = false;
+  const stopProgress = () => {
+    if (progressStopped) {
+      return;
+    }
+    progressStopped = true;
+    progress.done();
+  };
+  try {
+    await runCrestodian({ onReady: stopProgress });
+  } finally {
+    stopProgress();
+  }
 }
 
 function pauseNonTtyStdinForCliExit(): void {
@@ -662,14 +729,15 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
-    const shouldRunBareRootCrestodian = shouldStartCrestodianForBareRoot(normalizedArgv);
+    const shouldRunBareRoot = shouldHandleBareRoot(normalizedArgv);
     const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
-    if (shouldRunBareRootCrestodian || shouldRunModernOnboardCrestodian) {
+    if (shouldRunBareRoot || shouldRunModernOnboardCrestodian) {
       await ensureCliEnvProxyDispatcher();
     }
 
-    if (shouldRunBareRootCrestodian) {
-      if (await shouldStartOnboardingForFreshInstall(normalizedArgv)) {
+    if (shouldRunBareRoot) {
+      const destination = await resolveBareRootDestination(normalizedArgv);
+      if (destination?.kind === "onboard") {
         if (!process.stdin.isTTY || !process.stdout.isTTY) {
           console.error(
             "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
@@ -678,37 +746,35 @@ export async function runCli(argv: string[] = process.argv) {
           return;
         }
         const { setupWizardCommand } = await import("../commands/onboard.js");
-        await setupWizardCommand({});
+        await setupWizardCommand(destination.agentId ? { agentId: destination.agentId } : {});
+        return;
+      }
+      if (destination?.kind === "crestodian") {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          console.error(
+            'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
+          );
+          process.exitCode = 1;
+          return;
+        }
+        await runBareRootCrestodian();
         return;
       }
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        const agentCommand =
+          destination?.kind === "remote-agent"
+            ? "openclaw agent --message <text>"
+            : "openclaw agent --local --message <text>";
         console.error(
-          'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
+          `OpenClaw chat needs an interactive TTY. Use \`${agentCommand}\` for one command.`,
         );
         process.exitCode = 1;
         return;
       }
-      const { runCrestodian } = await loadCrestodianModule();
-      const { createCliProgress } = await loadProgressModule();
-      const progress = createCliProgress({
-        label: "Starting Crestodian…",
-        indeterminate: true,
-        delayMs: 0,
-        fallback: "none",
-      });
-      let progressStopped = false;
-      const stopProgress = () => {
-        if (progressStopped) {
-          return;
-        }
-        progressStopped = true;
-        progress.done();
-      };
-      try {
-        await runCrestodian({ onReady: stopProgress });
-      } finally {
-        stopProgress();
-      }
+      const { launchTuiCli } = await loadTuiLaunchModule();
+      await launchTuiCli(
+        destination?.kind === "local-agent" ? { local: true, deliver: false } : { deliver: false },
+      );
       return;
     }
 

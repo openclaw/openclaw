@@ -52,6 +52,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const opts = {
       mode: params.mode,
       workspace: readStringValue(params.workspace),
+      // The remote wizard client owns presentation; never open a TUI in the
+      // Gateway server process after the protocol session completes.
+      skipUi: true,
     };
     const session = new WizardSession((prompter) =>
       context.wizardRunner(opts, defaultRuntime, prompter),

@@ -3,6 +3,7 @@ import { setConfigValueAtPath } from "../config/config-paths.js";
 import type { DmScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolProfileId } from "../config/types.tools.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 
 /** Default DM scoping selected during local onboarding. */
 export const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
@@ -13,16 +14,30 @@ export const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
 export function applyLocalSetupWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
+  options: { agentId?: string } = {},
 ): OpenClawConfig {
+  const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
+  const targetAgentIndex = agentId
+    ? (baseConfig.agents?.list?.findIndex((entry) => normalizeAgentId(entry.id) === agentId) ?? -1)
+    : -1;
+  const agents =
+    targetAgentIndex >= 0
+      ? {
+          ...baseConfig.agents,
+          list: baseConfig.agents?.list?.map((entry, index) =>
+            index === targetAgentIndex ? { ...entry, workspace: workspaceDir } : entry,
+          ),
+        }
+      : {
+          ...baseConfig.agents,
+          defaults: {
+            ...baseConfig.agents?.defaults,
+            workspace: workspaceDir,
+          },
+        };
   return {
     ...baseConfig,
-    agents: {
-      ...baseConfig.agents,
-      defaults: {
-        ...baseConfig.agents?.defaults,
-        workspace: workspaceDir,
-      },
-    },
+    agents,
     gateway: {
       ...baseConfig.gateway,
       mode: "local",

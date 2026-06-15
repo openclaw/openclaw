@@ -159,6 +159,15 @@ format:
 - Return a string when the model should see that exact text.
 - Return a JSON-compatible value when you want the model to see formatted JSON
   and OpenClaw to keep the original value in `details`.
+- Return an OpenClaw tool result when the tool needs advanced fields such as a
+  public `terminalSummary`. Terminal summaries may be delivered to the user if
+  the model fails to write a final answer after tool work, so only include text
+  that is safe to show in the channel.
+- Set `terminalResultFallback` on the tool definition only when raw tool output
+  has a known safe presentation. Most tools can omit it and rely on the generic
+  terminal reply, which redacts and truncates the last captured tool result.
+- Use `terminalResultFallback: { mode: "none" }` for tools whose raw output
+  should not be shown by the generic fallback.
 
 ```typescript
 tool({

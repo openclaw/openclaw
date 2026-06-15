@@ -1,5 +1,12 @@
 // Setup wizard orchestrates onboarding prompts and generated OpenClaw config.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  resolveAgentDir,
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
+import { modelKey } from "../agents/model-selection.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
@@ -7,16 +14,18 @@ import {
   stripPendingPluginInstallRecords,
   unchangedPendingPluginInstallRecordIds,
 } from "../cli/plugins-install-record-commit.js";
+import { applyAgentConfig } from "../commands/agents.config.js";
 import type {
   AuthChoice,
-  GatewayAuthChoice,
   OnboardMode,
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
 import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
+import { defaultGatewayBindMode } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
@@ -27,7 +36,17 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
-import { detectSetupMigrationSources, runSetupMigrationImport } from "./setup.migration-import.js";
+import {
+  finishAgentAssistedSetup,
+  hasExplicitFullWizardIntent,
+  hasRunnableLocalAgent,
+} from "./setup.assisted.js";
+import {
+  detectSetupMigrationSources,
+  isSetupMigrationTargetFresh,
+  listSetupMigrationOptions,
+  runSetupMigrationImport,
+} from "./setup.migration-import.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   getSecurityConfirmMessage,
@@ -37,6 +56,7 @@ import {
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
 
 type SetupFlowChoice = WizardFlow | "import";
+const SETUP_MODEL_SEPARATELY = "__setup_model_separately__";
 
 type AuthChoiceModule = typeof import("../commands/auth-choice.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
@@ -47,6 +67,27 @@ let authChoiceModulePromise: Promise<AuthChoiceModule> | undefined;
 let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
 let modelPickerModulePromise: Promise<ModelPickerModule> | undefined;
 let onboardConfigModulePromise: Promise<OnboardConfigModule> | undefined;
+
+function restoreSetupAgentDefaultModel(
+  config: OpenClawConfig,
+  previousConfig: OpenClawConfig,
+): OpenClawConfig {
+  const { model: _configuredModel, ...defaultsWithoutModel } = config.agents?.defaults ?? {};
+  const previousModel = previousConfig.agents?.defaults?.model;
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults:
+        previousModel === undefined
+          ? defaultsWithoutModel
+          : {
+              ...defaultsWithoutModel,
+              model: previousModel,
+            },
+    },
+  };
+}
 
 function loadAuthChoiceModule(): Promise<AuthChoiceModule> {
   authChoiceModulePromise ??= import("../commands/auth-choice.js");
@@ -299,19 +340,7 @@ export async function runSetupWizard(
     );
   }
 
-  const quickstartHint = t("wizard.setup.flowQuickstartHint", {
-    command: formatCliCommand("openclaw configure"),
-  });
-  const manualHint = t("wizard.setup.flowAdvancedHint");
   const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
-  const firstMigrationDetection = migrationDetections[0];
-  const importOption = firstMigrationDetection
-    ? {
-        value: "import" as const,
-        label: `Import from ${firstMigrationDetection.label}`,
-        ...(firstMigrationDetection.source ? { hint: firstMigrationDetection.source } : {}),
-      }
-    : undefined;
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
   if (
@@ -333,23 +362,18 @@ export async function runSetupWizard(
       ? normalizedExplicitFlow
       : undefined;
   let flow: SetupFlowChoice =
-    explicitFlow ??
-    (await prompter.select({
-      message: t("wizard.setup.setupMode"),
-      options: [
-        { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
-        { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
-        ...(importOption ? [importOption] : []),
-      ],
-      initialValue: "quickstart",
-    }));
+    explicitFlow ?? (hasExplicitFullWizardIntent(opts) ? "advanced" : "quickstart");
 
   if (opts.mode === "remote" && flow === "quickstart") {
     await prompter.note(t("wizard.setup.quickstartOnlyLocal"), t("wizard.setup.quickstartTitle"));
     flow = "advanced";
   }
+  const useAgentAssistedSetup =
+    flow === "quickstart" &&
+    baseConfig.gateway?.mode !== "remote" &&
+    !hasExplicitFullWizardIntent(opts);
 
-  if (snapshot.exists) {
+  if (snapshot.exists && !useAgentAssistedSetup) {
     await prompter.note(
       onboardHelpers.summarizeExistingConfig(baseConfig),
       t("wizard.setup.existingConfigTitle"),
@@ -411,6 +435,21 @@ export async function runSetupWizard(
       baseConfig.gateway?.customBindHost !== undefined ||
       baseConfig.gateway?.tailscale?.mode !== undefined;
 
+    const tailscaleRaw = baseConfig.gateway?.tailscale?.mode;
+    const tailscaleMode =
+      tailscaleRaw === "off" || tailscaleRaw === "serve" || tailscaleRaw === "funnel"
+        ? tailscaleRaw
+        : "off";
+
+    let authMode: GatewayAuthMode = "token";
+    if (baseConfig.gateway?.auth?.mode) {
+      authMode = baseConfig.gateway.auth.mode;
+    } else if (baseConfig.gateway?.auth?.token) {
+      authMode = "token";
+    } else if (baseConfig.gateway?.auth?.password) {
+      authMode = "password";
+    }
+
     const bindRaw = baseConfig.gateway?.bind;
     const bind =
       bindRaw === "loopback" ||
@@ -419,25 +458,9 @@ export async function runSetupWizard(
       bindRaw === "custom" ||
       bindRaw === "tailnet"
         ? bindRaw
-        : "loopback";
-
-    let authMode: GatewayAuthChoice = "token";
-    if (
-      baseConfig.gateway?.auth?.mode === "token" ||
-      baseConfig.gateway?.auth?.mode === "password"
-    ) {
-      authMode = baseConfig.gateway.auth.mode;
-    } else if (baseConfig.gateway?.auth?.token) {
-      authMode = "token";
-    } else if (baseConfig.gateway?.auth?.password) {
-      authMode = "password";
-    }
-
-    const tailscaleRaw = baseConfig.gateway?.tailscale?.mode;
-    const tailscaleMode =
-      tailscaleRaw === "off" || tailscaleRaw === "serve" || tailscaleRaw === "funnel"
-        ? tailscaleRaw
-        : "off";
+        : authMode === "none"
+          ? "loopback"
+          : defaultGatewayBindMode(tailscaleMode);
 
     return {
       hasExisting,
@@ -452,7 +475,7 @@ export async function runSetupWizard(
     };
   })();
 
-  if (flow === "quickstart") {
+  if (flow === "quickstart" && !useAgentAssistedSetup) {
     const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
       if (value === "loopback") {
         return t("wizard.gateway.bindLoopback");
@@ -468,11 +491,17 @@ export async function runSetupWizard(
       }
       return t("wizard.gateway.bindAuto");
     };
-    const formatAuth = (value: GatewayAuthChoice) => {
+    const formatAuth = (value: GatewayAuthMode) => {
       if (value === "token") {
         return t("wizard.setup.quickstartAuthTokenDefault");
       }
-      return t("common.password");
+      if (value === "password") {
+        return t("common.password");
+      }
+      if (value === "none") {
+        return t("common.noAuth");
+      }
+      return "Trusted proxy";
     };
     const formatTailscale = (value: "off" | "serve" | "funnel") => {
       return t(`wizard.gatewayTailscale.${value}`);
@@ -590,7 +619,9 @@ export async function runSetupWizard(
   const mode =
     opts.mode ??
     (flow === "quickstart"
-      ? "local"
+      ? baseConfig.gateway?.mode === "remote"
+        ? "remote"
+        : "local"
       : ((await prompter.select({
           message: t("wizard.setup.whatSetup"),
           options: [
@@ -635,22 +666,130 @@ export async function runSetupWizard(
   const workspaceInput =
     opts.workspace ??
     (flow === "quickstart"
-      ? (baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
+      ? opts.agentId
+        ? resolveAgentWorkspaceDir(baseConfig, opts.agentId)
+        : (baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
       : await prompter.text({
           message: t("wizard.setup.workspaceDirectory"),
-          initialValue: baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
+          initialValue: opts.agentId
+            ? resolveAgentWorkspaceDir(baseConfig, opts.agentId)
+            : (baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE),
         }));
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
-  if (opts.skipBootstrap) {
-    nextConfig = applySkipBootstrapConfig(nextConfig);
-  }
+  const buildLocalSetupConfig = (config: OpenClawConfig): OpenClawConfig => {
+    let localConfig = applyLocalSetupWorkspaceConfig(config, workspaceDir, {
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    });
+    if (opts.skipBootstrap) {
+      localConfig = applySkipBootstrapConfig(localConfig);
+    }
+    if (opts.nodeManager) {
+      localConfig = {
+        ...localConfig,
+        skills: {
+          ...localConfig.skills,
+          install: {
+            ...localConfig.skills?.install,
+            nodeManager: opts.nodeManager,
+          },
+        },
+      };
+    }
+    return localConfig;
+  };
+  let nextConfig = buildLocalSetupConfig(baseConfig);
+  const hasRunnableSetupAgent = async (config: OpenClawConfig): Promise<boolean> =>
+    opts.agentId
+      ? await hasRunnableLocalAgent(config, { agentId: opts.agentId })
+      : await hasRunnableLocalAgent(config);
+  const applySetupAgentModel = (
+    config: OpenClawConfig,
+    model: string,
+    applyDefaultModel: (config: OpenClawConfig, model: string) => OpenClawConfig,
+  ): OpenClawConfig => {
+    if (!opts.agentId) {
+      return applyDefaultModel(config, model);
+    }
+    const existingModel = resolveAgentConfig(config, opts.agentId)?.model;
+    return applyAgentConfig(config, {
+      agentId: opts.agentId,
+      model:
+        existingModel && typeof existingModel === "object"
+          ? { ...existingModel, primary: model }
+          : model,
+    });
+  };
+  const createSetupAgentPickerConfig = (
+    config: OpenClawConfig,
+    applyDefaultModel: (config: OpenClawConfig, model: string) => OpenClawConfig,
+  ): OpenClawConfig => {
+    const selectedModel = opts.agentId
+      ? resolveAgentEffectiveModelPrimary(config, opts.agentId)
+      : undefined;
+    return selectedModel ? applyDefaultModel(config, selectedModel) : config;
+  };
+  const applySetupAgentPickerConfig = (
+    previousConfig: OpenClawConfig,
+    pickerConfig: OpenClawConfig,
+  ): OpenClawConfig =>
+    opts.agentId ? restoreSetupAgentDefaultModel(pickerConfig, previousConfig) : pickerConfig;
 
   const authChoiceFromPrompt = opts.authChoice === undefined;
+  let hasRunnableAgent =
+    useAgentAssistedSetup && authChoiceFromPrompt && (await hasRunnableSetupAgent(nextConfig));
+  const canOfferMigration =
+    useAgentAssistedSetup &&
+    authChoiceFromPrompt &&
+    !opts.agentId &&
+    !hasRunnableAgent &&
+    (await isSetupMigrationTargetFresh({ baseConfig, workspaceDir }));
+  if (canOfferMigration) {
+    const migrationOptions = await listSetupMigrationOptions({
+      baseConfig,
+      detections: migrationDetections,
+    });
+    if (migrationOptions.length > 0) {
+      const setupSource = await prompter.select({
+        message: t("wizard.migration.setupSource"),
+        options: [
+          ...migrationOptions.map((option) => ({
+            value: option.providerId,
+            label: t("wizard.migration.importFrom", { source: option.label }),
+            hint: option.hint,
+          })),
+          {
+            value: SETUP_MODEL_SEPARATELY,
+            label: t("wizard.migration.setupModelSeparately"),
+            hint: t("wizard.migration.setupModelSeparatelyHint"),
+          },
+        ],
+        initialValue: SETUP_MODEL_SEPARATELY,
+      });
+      if (setupSource !== SETUP_MODEL_SEPARATELY) {
+        await runSetupMigrationImport({
+          opts: { ...opts, importFrom: setupSource, workspace: workspaceDir },
+          baseConfig,
+          detections: migrationDetections,
+          prompter,
+          runtime,
+          commitConfigFile: (cfg) => writeWizardConfigFile(cfg, { allowConfigSizeDrop: true }),
+          continueOnboarding: true,
+        });
+        const migratedSnapshot = await readSetupConfigFileSnapshot();
+        if (!migratedSnapshot.valid) {
+          throw new Error("Migration produced an invalid OpenClaw config. Run `openclaw doctor`.");
+        }
+        baseConfig = migratedSnapshot.sourceConfig ?? migratedSnapshot.config;
+        pendingPluginInstallMigrationBaseConfig = baseConfig;
+        nextConfig = buildLocalSetupConfig(baseConfig);
+        hasRunnableAgent = await hasRunnableSetupAgent(nextConfig);
+      }
+    }
+  }
   let authChoice: AuthChoice | undefined = opts.authChoice;
   let authStore:
     | ReturnType<(typeof import("../agents/auth-profiles.runtime.js"))["ensureAuthProfileStore"]>
@@ -661,16 +800,29 @@ export async function runSetupWizard(
   if (authChoiceFromPrompt) {
     const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
     ({ promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js"));
-    authStore = ensureAuthProfileStore(undefined, {
-      allowKeychainPrompt: false,
-    });
+    authStore = ensureAuthProfileStore(
+      opts.agentId ? resolveAgentDir(nextConfig, opts.agentId) : undefined,
+      {
+        allowKeychainPrompt: false,
+      },
+    );
   }
-  while (true) {
+  const canFinishModelSetup = async (): Promise<boolean> => {
+    if (!useAgentAssistedSetup) {
+      return true;
+    }
+    hasRunnableAgent = await hasRunnableSetupAgent(nextConfig);
+    if (!hasRunnableAgent && !authChoiceFromPrompt) {
+      throw new Error(t("wizard.setup.agentNotRunnable"));
+    }
+    return hasRunnableAgent;
+  };
+  while (!hasRunnableAgent) {
     if (authChoiceFromPrompt) {
       authChoice = await promptAuthChoiceGrouped!({
         prompter,
         store: authStore!,
-        includeSkip: true,
+        includeSkip: !useAgentAssistedSetup,
         config: nextConfig,
         workspaceDir,
       });
@@ -681,6 +833,7 @@ export async function runSetupWizard(
 
     if (authChoice === "custom-api-key") {
       const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
+      const configBeforeCustomProvider = nextConfig;
       const customResult = await promptCustomApiConfig({
         prompter,
         runtime,
@@ -688,32 +841,50 @@ export async function runSetupWizard(
         secretInputMode: opts.secretInputMode,
       });
       nextConfig = customResult.config;
+      if (opts.agentId) {
+        nextConfig = restoreSetupAgentDefaultModel(nextConfig, configBeforeCustomProvider);
+        if (customResult.providerId && customResult.modelId) {
+          nextConfig = applySetupAgentModel(
+            nextConfig,
+            modelKey(customResult.providerId, customResult.modelId),
+            applyPrimaryModel,
+          );
+        }
+      }
+      if (!(await canFinishModelSetup()) && authChoiceFromPrompt) {
+        continue;
+      }
       break;
     }
     if (authChoice === "skip") {
       // Explicit skip should stay cold: do not bootstrap auth/profile machinery
       // or run model/auth checks when the caller already chose to skip setup.
-      if (authChoiceFromPrompt) {
+      if (authChoiceFromPrompt && !useAgentAssistedSetup) {
         const { applyPrimaryModel, promptDefaultModel } = await loadModelPickerModule();
+        const pickerConfig = createSetupAgentPickerConfig(nextConfig, applyPrimaryModel);
         const modelSelection = await promptDefaultModel({
-          config: nextConfig,
+          config: pickerConfig,
           prompter,
           allowKeep: true,
           ignoreAllowlist: true,
           includeProviderPluginSetups: false,
           loadCatalog: false,
           workspaceDir,
+          ...(opts.agentId ? { agentDir: resolveAgentDir(nextConfig, opts.agentId) } : {}),
           runtime,
         });
         if (modelSelection.config) {
-          nextConfig = modelSelection.config;
+          nextConfig = applySetupAgentPickerConfig(nextConfig, modelSelection.config);
         }
         if (modelSelection.model) {
-          nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+          nextConfig = applySetupAgentModel(nextConfig, modelSelection.model, applyPrimaryModel);
         }
 
         const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
-        await warnIfModelConfigLooksOff(nextConfig, prompter, { validateCatalog: false });
+        await warnIfModelConfigLooksOff(nextConfig, prompter, {
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          validateCatalog: false,
+        });
       }
       break;
     }
@@ -727,7 +898,8 @@ export async function runSetupWizard(
       config: nextConfig,
       prompter,
       runtime,
-      setDefaultModel: true,
+      setDefaultModel: !opts.agentId,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
       opts: {
         ...opts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
@@ -738,10 +910,15 @@ export async function runSetupWizard(
       if (authChoiceFromPrompt) {
         continue;
       }
+      await canFinishModelSetup();
       break;
     }
     if (authResult.agentModelOverride) {
-      nextConfig = applyPrimaryModel(nextConfig, authResult.agentModelOverride);
+      nextConfig = applySetupAgentModel(
+        nextConfig,
+        authResult.agentModelOverride,
+        applyPrimaryModel,
+      );
     }
 
     const authChoiceModelSelectionPolicy = await resolveAuthChoiceModelSelectionPolicy({
@@ -751,10 +928,12 @@ export async function runSetupWizard(
       resolvePreferredProviderForAuthChoice,
     });
     const shouldPromptModelSelection =
-      authChoiceFromPrompt || authChoiceModelSelectionPolicy?.promptWhenAuthChoiceProvided;
+      authChoiceModelSelectionPolicy?.promptWhenAuthChoiceProvided ||
+      (authChoiceFromPrompt && !useAgentAssistedSetup);
     if (shouldPromptModelSelection) {
+      const pickerConfig = createSetupAgentPickerConfig(nextConfig, applyPrimaryModel);
       const modelSelection = await promptDefaultModel({
-        config: nextConfig,
+        config: pickerConfig,
         prompter,
         allowKeep: authChoiceModelSelectionPolicy?.allowKeepCurrent ?? true,
         ignoreAllowlist: true,
@@ -762,18 +941,62 @@ export async function runSetupWizard(
         preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
         browseCatalogOnDemand: true,
         workspaceDir,
+        ...(opts.agentId ? { agentDir: resolveAgentDir(nextConfig, opts.agentId) } : {}),
         runtime,
       });
       if (modelSelection.config) {
-        nextConfig = modelSelection.config;
+        nextConfig = applySetupAgentPickerConfig(nextConfig, modelSelection.config);
       }
       if (modelSelection.model) {
-        nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+        nextConfig = applySetupAgentModel(nextConfig, modelSelection.model, applyPrimaryModel);
       }
     }
 
-    await warnIfModelConfigLooksOff(nextConfig, prompter, { validateCatalog: false });
+    await warnIfModelConfigLooksOff(nextConfig, prompter, {
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      validateCatalog: false,
+    });
+    if (!(await canFinishModelSetup()) && authChoiceFromPrompt) {
+      continue;
+    }
     break;
+  }
+
+  if (useAgentAssistedSetup) {
+    const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
+    const gateway = await configureGatewayForSetup({
+      flow: wizardFlow,
+      baseConfig,
+      nextConfig,
+      localPort,
+      quickstartGateway,
+      secretInputMode: opts.secretInputMode,
+      prompter,
+      runtime,
+    });
+    nextConfig = gateway.nextConfig;
+    const assistedMode = nextConfig.gateway?.mode === "remote" ? "remote" : mode;
+    nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, {
+      command: "onboard",
+      mode: assistedMode,
+    });
+    nextConfig = await writeSetupConfigFile(nextConfig, {
+      allowConfigSizeDrop: configResetPerformed,
+    });
+    const { logConfigUpdated } = await loadConfigLoggingModule();
+    logConfigUpdated(runtime);
+    await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+      skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    });
+    await finishAgentAssistedSetup({
+      config: nextConfig,
+      settings: gateway.settings,
+      opts,
+      prompter,
+    });
+    return;
   }
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
@@ -820,6 +1043,7 @@ export async function runSetupWizard(
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
   });
 
   if (opts.skipSearch) {

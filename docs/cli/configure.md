@@ -9,7 +9,8 @@ title: "Configure"
 
 Interactive prompt for targeted changes to an existing setup: credentials, devices, agent defaults, gateway, channels, plugins, skills, and health checks.
 
-Use `openclaw onboard` for the full guided first-run journey, `openclaw setup` for the baseline config/workspace only, and `openclaw channels add` when you only need channel account setup.
+Use `openclaw onboard` or its `openclaw setup` alias for first-run setup, and
+`openclaw channels add` when you only need channel account setup.
 
 <Note>
 The **Model** section includes a multi-select for the `agents.defaults.models` allowlist (what shows up in `/model` and the model picker). Provider-scoped setup choices merge their selected models into the existing allowlist instead of replacing unrelated providers already in the config.

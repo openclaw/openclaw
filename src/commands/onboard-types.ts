@@ -39,6 +39,8 @@ type OnboardDynamicProviderOptions = {
 
 /** Parsed options accepted by `openclaw onboard`. */
 export type OnboardOptions = OnboardDynamicProviderOptions & {
+  /** Internal bare-root handoff target; not exposed as a CLI flag. */
+  agentId?: string;
   mode?: OnboardMode;
   /** "manual" is an alias for "advanced". */
   flow?: "quickstart" | "advanced" | "manual" | "import";

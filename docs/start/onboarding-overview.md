@@ -7,8 +7,9 @@ title: "Onboarding overview"
 sidebarTitle: "Onboarding Overview"
 ---
 
-OpenClaw has two onboarding paths. Both configure auth, the Gateway, and
-optional chat channels — they just differ in how you interact with the setup.
+OpenClaw has two onboarding paths. The CLI path gets you to a working local
+agent first, then lets that agent help configure optional features. The macOS
+app provides a guided visual flow.
 
 ## Which path should I use?
 
@@ -18,22 +19,22 @@ optional chat channels — they just differ in how you interact with the setup.
 | **Interface**  | Terminal wizard                        | Guided UI in the app      |
 | **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup |
 | **Automation** | `--non-interactive` for scripts        | Manual only               |
-| **Command**    | `openclaw onboard`                     | Launch the app            |
+| **Command**    | `openclaw` or `openclaw onboard`       | Launch the app            |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
 you the most control.
 
 ## What onboarding configures
 
-Regardless of which path you choose, onboarding sets up:
+Default CLI onboarding sets up:
 
 1. **Model provider and auth** — API key, OAuth, or setup token for your chosen provider
 2. **Workspace** — directory for agent files, bootstrap templates, and memory
-3. **Gateway** — port, bind address, auth mode
-4. **Channels** (optional) — built-in and bundled chat channels such as
-   iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams,
-   Telegram, WhatsApp, and more
-5. **Daemon** (optional) — background service so the Gateway starts automatically
+
+It securely configures and starts a temporary local Gateway, then opens the local
+agent to help configure optional channel, Gateway network access, Tailscale,
+search, skill, and plugin setup. The temporary Gateway stops when the assisted
+TUI exits. Use `--flow advanced` when you want the full wizard instead.
 
 ## CLI onboarding
 

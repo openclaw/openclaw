@@ -238,7 +238,7 @@ cd openclaw
 pnpm install
 
 # First run only (or after resetting local OpenClaw config/workspace)
-pnpm openclaw setup
+pnpm openclaw onboard --skip-ui
 
 # Optional: prebuild Control UI before first startup
 pnpm ui:build
@@ -254,7 +254,7 @@ pnpm build
 pnpm ui:build
 ```
 
-`pnpm openclaw setup` writes the local config/workspace needed for `pnpm gateway:watch`. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. If you want this checkout to run onboarding directly, use `pnpm openclaw onboard --install-daemon`.
+`pnpm openclaw onboard --skip-ui` writes the local config/workspace needed for `pnpm gateway:watch` without opening the local agent afterward. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. For the full Gateway and channel wizard, use `pnpm openclaw onboard --flow advanced --install-daemon`.
 
 Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary, while `pnpm gateway:watch` rebuilds the runtime on demand during the dev loop.
 

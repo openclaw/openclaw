@@ -51,7 +51,7 @@ describe("configureGatewayForSetup", () => {
     };
   }
 
-  function createQuickstartGateway(authMode: "token" | "password") {
+  function createQuickstartGateway(authMode: "token" | "password" | "none" | "trusted-proxy") {
     return {
       hasExisting: false,
       port: 18789,
@@ -181,6 +181,63 @@ describe("configureGatewayForSetup", () => {
     });
 
     expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
+  });
+
+  it("persists the container-reachable auto bind selected by quickstart", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+    const prompter = createPrompter({
+      selectQueue: [],
+      textQueue: [],
+    });
+
+    const result = await configureGatewayForSetup({
+      flow: "quickstart",
+      baseConfig: {},
+      nextConfig: {},
+      localPort: 18789,
+      quickstartGateway: {
+        ...createQuickstartGateway("token"),
+        bind: "auto",
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(result.nextConfig.gateway?.bind).toBe("auto");
+  });
+
+  it("preserves existing trusted-proxy auth during quickstart", async () => {
+    mocks.randomToken.mockClear();
+    const trustedProxy = {
+      userHeader: "x-forwarded-user",
+      requiredHeaders: ["x-forwarded-proto"],
+    };
+    const result = await configureGatewayForSetup({
+      flow: "quickstart",
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy,
+          },
+        },
+      },
+      localPort: 18789,
+      quickstartGateway: {
+        ...createQuickstartGateway("trusted-proxy"),
+        hasExisting: true,
+      },
+      prompter: createPrompter({ selectQueue: [], textQueue: [] }),
+      runtime: createRuntime(),
+    });
+
+    expect(result.settings.authMode).toBe("trusted-proxy");
+    expect(result.nextConfig.gateway?.auth).toEqual({
+      mode: "trusted-proxy",
+      trustedProxy,
+    });
+    expect(mocks.randomToken).not.toHaveBeenCalled();
   });
 
   it("preserves explicit control ui auth policy in quickstart", async () => {

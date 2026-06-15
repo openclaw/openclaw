@@ -6,9 +6,9 @@ read_when:
 title: "Getting started"
 ---
 
-Install OpenClaw, run onboarding, and chat with your AI assistant — all in
-about 5 minutes. By the end you will have a running Gateway, configured auth,
-and a working chat session.
+Install OpenClaw and start chatting with your AI assistant in minutes. Gateway,
+channels, search, skills, and other integrations can be configured afterward
+with help from the agent.
 
 ## What you need
 
@@ -49,39 +49,21 @@ Need to install Node? See [Node setup](/install/node).
     </Note>
 
   </Step>
-  <Step title="Run onboarding">
+  <Step title="Start OpenClaw">
     ```bash
-    openclaw onboard --install-daemon
+    openclaw
     ```
 
-    The wizard walks you through choosing a model provider, setting an API key,
-    and configuring the Gateway. It takes about 2 minutes.
+    On first run, OpenClaw asks only for the required model/auth setup and
+    workspace, then opens the local agent.
 
     See [Onboarding (CLI)](/start/wizard) for the full reference.
 
   </Step>
-  <Step title="Verify the Gateway is running">
-    ```bash
-    openclaw gateway status
-    ```
-
-    You should see the Gateway listening on port 18789.
-
-  </Step>
-  <Step title="Open the dashboard">
-    ```bash
-    openclaw dashboard
-    ```
-
-    This opens the Control UI in your browser. If it loads, everything is working.
-
-  </Step>
   <Step title="Send your first message">
-    Type a message in the Control UI chat and you should get an AI reply.
-
-    Want to chat from your phone instead? The fastest channel to set up is
-    [Telegram](/channels/telegram) (just a bot token). See [Channels](/channels)
-    for all options.
+    Chat immediately in the local agent. Ask it to help configure only the
+    optional features you need, such as a Gateway service, Telegram, Discord,
+    web search, or skills.
 
   </Step>
 </Steps>

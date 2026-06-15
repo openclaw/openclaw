@@ -1,5 +1,5 @@
 ---
-summary: "CLI onboarding: guided setup for gateway, workspace, channels, and skills"
+summary: "CLI onboarding: minimal first-run setup with an optional advanced infrastructure wizard"
 read_when:
   - Running or configuring CLI onboarding
   - Setting up a new machine
@@ -10,8 +10,8 @@ sidebarTitle: "Onboarding: CLI"
 CLI onboarding is the **recommended** terminal setup path for OpenClaw on
 macOS, Linux, or Windows. Windows desktop users can also start with
 [Windows Hub](/platforms/windows).
-It configures a local Gateway or a remote Gateway connection, plus channels, skills,
-and workspace defaults in one guided flow.
+It gets a local agent running with the fewest required prompts, then opens that
+agent to help configure optional features.
 
 ```bash
 openclaw onboard
@@ -32,8 +32,8 @@ commands, config keys, URLs, provider IDs, model IDs, and plugin/channel labels
 are not translated.
 
 <Info>
-Fastest first chat: open the Control UI (no channel setup needed). Run
-`openclaw dashboard` and chat in the browser. Docs: [Dashboard](/web/dashboard).
+Fastest first chat: run `openclaw`. After minimal setup, the normal local agent
+opens directly.
 </Info>
 
 To reconfigure later:
@@ -48,40 +48,40 @@ openclaw agents add <name>
 </Note>
 
 <Tip>
-CLI onboarding includes a web search step where you can pick a provider
+Advanced CLI onboarding includes a web search step where you can pick a provider
 such as Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search,
 Ollama Web Search, Perplexity, SearXNG, or Tavily. Some providers require an
 API key, while others are key-free. You can also configure this later with
 `openclaw configure --section web`. Docs: [Web tools](/tools/web).
 </Tip>
 
-## QuickStart vs Advanced
+## Default vs Advanced
 
-Onboarding starts with **QuickStart** (defaults) vs **Advanced** (full control).
+Default onboarding runs the minimal QuickStart path. Use
+`openclaw onboard --flow advanced` for full infrastructure control.
 
 <Tabs>
-  <Tab title="QuickStart (defaults)">
-    - Local gateway (loopback)
+  <Tab title="QuickStart (default)">
+    - Offers to import supported auth, skills, instructions, and settings from another agent environment
+    - Model/auth only when no runnable local agent exists
     - Workspace default (or existing workspace)
-    - Gateway port **18789**
-    - Gateway auth **Token** (auto-generated, even on loopback)
+    - Local mode
     - Tool policy default for new local setups: `tools.profile: "coding"` (existing explicit profile is preserved)
     - DM isolation default: local onboarding writes `session.dmScope: "per-channel-peer"` when unset. Details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals)
-    - Tailscale exposure **Off**
-    - Telegram + WhatsApp DMs default to **allowlist** (you'll be prompted for your phone number)
+    - Opens the normal local agent for assisted optional setup
 
   </Tab>
   <Tab title="Advanced (full control)">
-    - Exposes every step (mode, workspace, gateway, channels, daemon, skills).
+    - Exposes mode, workspace, Gateway, channels, daemon, search, skills, hooks, and health.
 
   </Tab>
 </Tabs>
 
 ## What onboarding configures
 
-**Local mode (default)** walks you through these steps:
+**Default local mode** performs only the required steps:
 
-1. **Model/Auth** — choose any supported provider/auth flow (API key, OAuth, or provider-specific manual auth), including Custom Provider
+1. **Import or Model/Auth** — choose a registered migration source such as Codex, Claude, or Hermes, or set up a model separately. Detected migration sources appear first. Migration previews supported skills, instructions, settings, and other artifacts, and asks separately before importing supported auth credentials. If you skip import, choose any supported provider/auth flow (API key, OAuth, or provider-specific manual auth), including Custom Provider
    (OpenAI-compatible, Anthropic-compatible, or Unknown auto-detect). Pick a default model.
    Security note: if this agent will run tools or process webhook/hooks content, prefer the strongest latest-generation model available and keep tool policy strict. Weaker/older tiers are easier to prompt-inject.
    For non-interactive runs, `--secret-input-mode ref` stores env-backed refs in auth profiles instead of plaintext API key values.
@@ -89,16 +89,20 @@ Onboarding starts with **QuickStart** (defaults) vs **Advanced** (full control).
    In interactive runs, choosing secret reference mode lets you point at either an environment variable or a configured provider ref (`file` or `exec`), with a fast preflight validation before saving.
    For Anthropic, interactive onboarding/configure offers **Anthropic Claude CLI** as the preferred local path and **Anthropic API key** as the recommended production path. Anthropic setup-token also remains available as a supported token-auth path.
 2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
-3. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
+3. **Agent handoff** — Opens the normal local agent with a short request to help finish only the optional setup you need. Runtime-only setup guidance tells the agent to read the current channel inventory, follow the selected channel's official `docsPath`, use guided setup unless the installed CLI exposes every required non-interactive option, and verify the result with a channel probe instead of improvising provider-specific instructions.
+
+**Advanced local mode** additionally walks through:
+
+1. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
    In interactive token mode, choose default plaintext token storage or opt into SecretRef.
    Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
-4. **Channels** — built-in and official plugin chat channels such as iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
-5. **Daemon** — Installs a LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task with per-user Startup-folder fallback.
+2. **Channels** — built-in and official plugin chat channels such as iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
+3. **Daemon** — Installs a LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task with per-user Startup-folder fallback.
    If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist the resolved token into supervisor service environment metadata.
    If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.
    If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, daemon install is blocked until mode is set explicitly.
-6. **Health check** — Starts the Gateway and verifies it's running.
-7. **Skills** — Installs recommended skills and optional dependencies.
+4. **Health check** — Starts the Gateway and verifies it's running.
+5. **Search, skills, and hooks** — Configures optional capabilities and dependencies.
 
 <Note>
 Re-running onboarding does **not** wipe anything unless you explicitly choose **Reset** (or pass `--reset`).

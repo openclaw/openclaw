@@ -37,7 +37,7 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 
 ## Fast path (recommended)
 
-- After onboarding, the CLI auto-opens the dashboard and prints a clean (non-tokenized) link.
+- Run `openclaw dashboard` after onboarding when you are ready to open the Control UI.
 - Re-open anytime: `openclaw dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
 - If clipboard and browser delivery fail, `openclaw dashboard` still prints the
   clean URL and tells you to use the token from `OPENCLAW_GATEWAY_TOKEN` or

@@ -21,6 +21,9 @@ type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
+type ListSetupMigrationOptions =
+  typeof import("./setup.migration-import.js").listSetupMigrationOptions;
+type DefaultGatewayBindMode = typeof import("../gateway/net.js").defaultGatewayBindMode;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
@@ -44,6 +47,7 @@ const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
+const promptRemoteGatewayConfig = vi.hoisted(() => vi.fn(async (config) => config));
 const configureGatewayForSetup = vi.hoisted(() =>
   vi.fn(async (args) => ({
     nextConfig: args.nextConfig,
@@ -91,7 +95,14 @@ const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
 const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
+const listSetupMigrationOptions = vi.hoisted(() =>
+  vi.fn<ListSetupMigrationOptions>(async () => []),
+);
+const isSetupMigrationTargetFresh = vi.hoisted(() => vi.fn(async () => true));
 const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
+const hasRunnableLocalAgent = vi.hoisted(() => vi.fn(async () => false));
+const finishAgentAssistedSetup = vi.hoisted(() => vi.fn(async () => {}));
+const defaultGatewayBindMode = vi.hoisted(() => vi.fn<DefaultGatewayBindMode>(() => "loopback"));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
@@ -245,6 +256,10 @@ vi.mock("../commands/onboard-custom.js", () => ({
   promptCustomApiConfig,
 }));
 
+vi.mock("../commands/onboard-remote.js", () => ({
+  promptRemoteGatewayConfig,
+}));
+
 vi.mock("../commands/health.js", () => ({
   healthCommand,
 }));
@@ -255,7 +270,21 @@ vi.mock("../commands/onboard-hooks.js", () => ({
 
 vi.mock("./setup.migration-import.js", () => ({
   detectSetupMigrationSources,
+  isSetupMigrationTargetFresh,
+  listSetupMigrationOptions,
   runSetupMigrationImport,
+}));
+
+vi.mock("./setup.assisted.js", () => ({
+  finishAgentAssistedSetup,
+  hasExplicitFullWizardIntent: vi.fn(
+    (opts: { authChoice?: string; gatewayPort?: number; installDaemon?: boolean; mode?: string }) =>
+      opts.authChoice === "skip" ||
+      opts.gatewayPort !== undefined ||
+      opts.installDaemon !== undefined ||
+      opts.mode !== undefined,
+  ),
+  hasRunnableLocalAgent,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -263,6 +292,10 @@ vi.mock("../config/config.js", () => ({
   createConfigIO,
   resolveGatewayPort,
   replaceConfigFile,
+}));
+
+vi.mock("../gateway/net.js", () => ({
+  defaultGatewayBindMode,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -368,6 +401,771 @@ describe("runSetupWizard", () => {
     await fs.mkdir(dir, { recursive: true });
     return dir;
   }
+
+  it("defaults to minimal setup and hands optional configuration to the local agent", async () => {
+    hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-api-key");
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+        },
+      },
+    });
+    configureGatewayForSetup.mockClear();
+    setupChannels.mockClear();
+    setupSkills.mockClear();
+    setupInternalHooks.mockClear();
+    finalizeSetupWizard.mockClear();
+    finishAgentAssistedSetup.mockClear();
+    promptDefaultModel.mockClear();
+    listSetupMigrationOptions.mockResolvedValueOnce([
+      {
+        providerId: "codex",
+        label: "Codex",
+        hint: "/tmp/codex-home",
+      },
+      {
+        providerId: "claude",
+        label: "Claude",
+        hint: "Import Claude setup",
+      },
+    ]);
+
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "How do you want to set up this agent?"
+        ? "__setup_model_separately__"
+        : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard({ acceptRisk: true }, runtime, prompter);
+
+    expect(select).toHaveBeenCalledWith({
+      message: "How do you want to set up this agent?",
+      options: [
+        {
+          value: "codex",
+          label: "Import from Codex",
+          hint: "/tmp/codex-home",
+        },
+        {
+          value: "claude",
+          label: "Import from Claude",
+          hint: "Import Claude setup",
+        },
+        {
+          value: "__setup_model_separately__",
+          label: "Set up a model separately",
+          hint: "Configure model authentication without importing another agent",
+        },
+      ],
+      initialValue: "__setup_model_separately__",
+    });
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({ includeSkip: false }),
+    );
+    expect(promptDefaultModel).not.toHaveBeenCalled();
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flow: "quickstart",
+        localPort: 18789,
+      }),
+    );
+    expect(setupChannels).not.toHaveBeenCalled();
+    expect(setupSkills).not.toHaveBeenCalled();
+    expect(setupInternalHooks).not.toHaveBeenCalled();
+    expect(finalizeSetupWizard).not.toHaveBeenCalled();
+    expect(finishAgentAssistedSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: { acceptRisk: true },
+        settings: expect.objectContaining({
+          port: 18789,
+          authMode: "token",
+        }),
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("promotes implicit explicit Gateway intent to the advanced flow", async () => {
+    configureGatewayForSetup.mockClear();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        gatewayPort: 19001,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flow: "advanced",
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("uses the environment-aware Gateway bind default for fresh assisted setup", async () => {
+    defaultGatewayBindMode.mockReturnValueOnce("auto");
+    hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-api-key");
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+        },
+      },
+    });
+    configureGatewayForSetup.mockClear();
+
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "How do you want to set up this agent?"
+        ? "__setup_model_separately__"
+        : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({ select }));
+
+    expect(defaultGatewayBindMode).toHaveBeenCalledWith("off");
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quickstartGateway: expect.objectContaining({
+          bind: "auto",
+        }),
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("keeps implicit no-auth Gateway setups on loopback in containers", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "none",
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    defaultGatewayBindMode.mockReturnValueOnce("auto");
+    hasRunnableLocalAgent.mockResolvedValueOnce(true);
+    configureGatewayForSetup.mockClear();
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({}));
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quickstartGateway: expect.objectContaining({
+          authMode: "none",
+          bind: "loopback",
+        }),
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("preserves existing trusted-proxy auth for assisted setup", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent.mockResolvedValueOnce(true);
+    configureGatewayForSetup.mockClear();
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({}));
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quickstartGateway: expect.objectContaining({
+          authMode: "trusted-proxy",
+        }),
+      }),
+    );
+  });
+
+  it("hands off immediately when a selected migration produces a runnable agent", async () => {
+    listSetupMigrationOptions.mockResolvedValueOnce([
+      {
+        providerId: "codex",
+        label: "Codex",
+        hint: "/tmp/codex-home",
+      },
+      {
+        providerId: "hermes",
+        label: "Hermes",
+        hint: "Import Hermes setup",
+      },
+    ]);
+    hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    runSetupMigrationImport.mockClear();
+    promptAuthChoiceGrouped.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "How do you want to set up this agent?" ? "codex" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard({ acceptRisk: true }, runtime, prompter);
+
+    expect(runSetupMigrationImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({
+          acceptRisk: true,
+          importFrom: "codex",
+          workspace: "/tmp/openclaw-workspace",
+        }),
+        continueOnboarding: true,
+      }),
+    );
+    expect(promptAuthChoiceGrouped).not.toHaveBeenCalled();
+    expect(finishAgentAssistedSetup).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+  });
+
+  it("continues to standalone model setup when a selected migration is not runnable", async () => {
+    listSetupMigrationOptions.mockResolvedValueOnce([
+      {
+        providerId: "claude",
+        label: "Claude",
+        hint: "/tmp/claude-home",
+      },
+    ]);
+    hasRunnableLocalAgent
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-api-key");
+    runSetupMigrationImport.mockClear();
+    promptAuthChoiceGrouped.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "How do you want to set up this agent?" ? "claude" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard({ acceptRisk: true }, runtime, prompter);
+
+    expect(runSetupMigrationImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({
+          importFrom: "claude",
+        }),
+        continueOnboarding: true,
+      }),
+    );
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({ includeSkip: false }),
+    );
+    expect(finishAgentAssistedSetup).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+  });
+
+  it("skips migration choices when the target already contains OpenClaw state", async () => {
+    hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    isSetupMigrationTargetFresh.mockResolvedValueOnce(false);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-api-key");
+    listSetupMigrationOptions.mockClear();
+    promptAuthChoiceGrouped.mockClear();
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard({ acceptRisk: true }, runtime, prompter);
+
+    expect(listSetupMigrationOptions).not.toHaveBeenCalled();
+    expect(prompter.select).not.toHaveBeenCalled();
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({ includeSkip: false }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("re-prompts until the effective default agent is runnable", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+          list: [
+            {
+              id: "main",
+              model: "anthropic/claude-sonnet-4-6",
+            },
+          ],
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("openai-api-key")
+      .mockResolvedValueOnce("anthropic-api-key");
+    applyAuthChoice.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard({ acceptRisk: true }, runtime, prompter);
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
+    expect(finishAgentAssistedSetup).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+  });
+
+  it("recovers the selected secondary agent without moving setup to the default agent", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            workspace: "/tmp/main-workspace",
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "ops",
+              workspace: "/tmp/ops-workspace",
+              model: {
+                primary: "anthropic/old-model",
+                fallbacks: ["openai/ops-fallback"],
+              },
+            },
+          ],
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-api-key");
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            workspace: "/tmp/main-workspace",
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "ops",
+              workspace: "/tmp/ops-workspace",
+              model: {
+                primary: "anthropic/old-model",
+                fallbacks: ["openai/ops-fallback"],
+              },
+            },
+          ],
+        },
+      },
+      agentModelOverride: "anthropic/ops-model",
+    });
+    listSetupMigrationOptions.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    await runSetupWizard(
+      { acceptRisk: true, agentId: "ops" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(hasRunnableLocalAgent).toHaveBeenCalledWith(expect.any(Object), { agentId: "ops" });
+    expect(getMockCallArg(hasRunnableLocalAgent, 1, 0, "selected agent readiness")).toEqual(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          list: expect.arrayContaining([
+            expect.objectContaining({
+              id: "ops",
+              model: {
+                primary: "anthropic/ops-model",
+                fallbacks: ["openai/ops-fallback"],
+              },
+            }),
+          ]),
+        }),
+      }),
+    );
+    expect(listSetupMigrationOptions).not.toHaveBeenCalled();
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        setDefaultModel: false,
+      }),
+    );
+    expect(finishAgentAssistedSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: { acceptRisk: true, agentId: "ops" },
+      }),
+    );
+    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      "/tmp/ops-workspace",
+      expect.any(Object),
+      expect.objectContaining({ agentId: "ops" }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("applies a custom provider model only to the selected secondary agent", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/main-model",
+            workspace: "/tmp/main-workspace",
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "ops",
+              workspace: "/tmp/ops-workspace",
+              model: {
+                primary: "anthropic/old-model",
+                fallbacks: ["openai/ops-fallback"],
+              },
+            },
+          ],
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("custom-api-key");
+    promptCustomApiConfig.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: "custom/new-model",
+            workspace: "/tmp/main-workspace",
+          },
+          list: [
+            { id: "main", default: true },
+            { id: "ops", workspace: "/tmp/ops-workspace", model: "anthropic/old-model" },
+          ],
+        },
+      },
+      providerId: "custom",
+      modelId: "new-model",
+    });
+
+    await runSetupWizard(
+      { acceptRisk: true, agentId: "ops" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    const readinessConfig = getMockCallArg(hasRunnableLocalAgent, 1, 0, "selected agent readiness");
+    expect(readinessConfig).toEqual(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({ model: "openai/main-model" }),
+          list: expect.arrayContaining([
+            expect.objectContaining({
+              id: "ops",
+              model: {
+                primary: "custom/new-model",
+                fallbacks: ["openai/ops-fallback"],
+              },
+            }),
+          ]),
+        }),
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("scopes post-auth model selection to the selected secondary agent", async () => {
+    const selectedConfig = {
+      agents: {
+        defaults: {
+          model: "openai/main-model",
+          workspace: "/tmp/main-workspace",
+        },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", workspace: "/tmp/ops-workspace", model: "anthropic/ops-model" },
+        ],
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: selectedConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("demo-provider");
+    applyAuthChoice.mockResolvedValueOnce({ config: selectedConfig });
+    resolveProviderPluginChoice.mockReturnValueOnce({
+      provider: providerPluginStub({
+        id: "demo-provider",
+        wizard: {
+          setup: {
+            modelSelection: {
+              promptWhenAuthChoiceProvided: true,
+            },
+          },
+        },
+      }),
+      method: undefined as never,
+      wizard: {
+        modelSelection: {
+          promptWhenAuthChoiceProvided: true,
+        },
+      },
+    });
+    applyPrimaryModel.mockImplementationOnce((config, model) => ({
+      ...config,
+      agents: {
+        ...config.agents,
+        defaults: {
+          ...config.agents?.defaults,
+          model,
+        },
+      },
+    }));
+    promptDefaultModel.mockResolvedValueOnce({ model: "demo-provider/new-model" });
+
+    await runSetupWizard(
+      { acceptRisk: true, agentId: "ops" },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    const pickerOptions = requireRecord(
+      getMockCallArg(promptDefaultModel, 0, 0, "selected agent model picker"),
+      "selected agent model picker",
+    );
+    expect(pickerOptions.agentDir).toContain("/agents/ops/agent");
+    expect(pickerOptions.config).toEqual(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({ model: "anthropic/ops-model" }),
+        }),
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("does not hand off when an explicit auth choice leaves the default agent unrunnable", async () => {
+    hasRunnableLocalAgent.mockResolvedValueOnce(false);
+    applyAuthChoice.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await expect(
+      runSetupWizard({ acceptRisk: true, authChoice: "openai-api-key" }, runtime, prompter),
+    ).rejects.toThrow("The selected model authentication did not make the default agent runnable.");
+
+    expect(applyAuthChoice).toHaveBeenCalledOnce();
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
+  it("does not hand off when an explicit auth choice requests retry and remains unrunnable", async () => {
+    hasRunnableLocalAgent.mockResolvedValueOnce(false);
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {},
+      retrySelection: true,
+    });
+    finishAgentAssistedSetup.mockClear();
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await expect(
+      runSetupWizard({ acceptRisk: true, authChoice: "openai-api-key" }, runtime, prompter),
+    ).rejects.toThrow("The selected model authentication did not make the default agent runnable.");
+
+    expect(applyAuthChoice).toHaveBeenCalledOnce();
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
+  it("applies an explicit node manager without entering the infrastructure wizard", async () => {
+    hasRunnableLocalAgent.mockResolvedValueOnce(true);
+    replaceConfigFile.mockClear();
+    configureGatewayForSetup.mockClear();
+    setupSkills.mockClear();
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      { acceptRisk: true, nodeManager: "pnpm", skipUi: true },
+      runtime,
+      prompter,
+    );
+
+    expect(replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          skills: {
+            install: {
+              nodeManager: "pnpm",
+            },
+          },
+        }),
+      }),
+    );
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flow: "quickstart",
+      }),
+    );
+    expect(setupSkills).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
+  it("skips auth prompts when the existing local agent is runnable", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    hasRunnableLocalAgent.mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard({ acceptRisk: true }, runtime, prompter);
+
+    expect(prompter.select).not.toHaveBeenCalled();
+    expect(promptAuthChoiceGrouped).not.toHaveBeenCalled();
+    expect(finishAgentAssistedSetup).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+  });
+
+  it("keeps existing remote Gateway configs out of local agent-assisted setup", async () => {
+    const remoteConfig = {
+      gateway: {
+        mode: "remote" as const,
+        remote: {
+          url: "wss://remote.example.com:18789",
+        },
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: JSON.stringify(remoteConfig),
+      parsed: remoteConfig,
+      resolved: remoteConfig,
+      valid: true,
+      config: remoteConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    promptRemoteGatewayConfig.mockClear();
+    configureGatewayForSetup.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "Config handling" ? "keep" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard({ acceptRisk: true }, runtime, prompter);
+
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(remoteConfig, prompter, {
+      secretInputMode: undefined,
+    });
+    expect(configureGatewayForSetup).not.toHaveBeenCalled();
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
 
   it("skips provider entries without an id during preferred-provider lookup", async () => {
     setupChannels.mockClear();

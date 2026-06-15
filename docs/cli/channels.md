@@ -30,6 +30,8 @@ openclaw channels logs --channel all
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account. Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Auth providers (OAuth + API keys) and model-provider usage/quota snapshots are no longer printed here; use `openclaw models auth list` for provider auth profiles and `openclaw status` or `openclaw models list` for usage.
 
+With `--json`, every channel entry includes `label` alongside its accounts, install state, and origin. Entries also include `docsPath` when verified official channel metadata provides a validated root-relative docs path. Agent-assisted setup uses that path to read the selected channel's official guide before giving channel-specific instructions.
+
 ## Status / capabilities / resolve / logs
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>`, `--json`

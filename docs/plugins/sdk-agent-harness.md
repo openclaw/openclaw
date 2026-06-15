@@ -99,6 +99,14 @@ export default definePluginEntry({
 });
 ```
 
+Harnesses with runtime-owned authentication may also implement
+`checkReadiness(ctx)`. Setup surfaces call this non-interactive probe before
+handing the user into any selected plugin harness. `ctx.providerAuthAvailable`
+reports whether OpenClaw can forward effective provider credentials without
+passing secret values into the probe. The probe must not start an agent turn,
+mutate configuration, or trigger login; return `{ ready: false }` when the
+runtime executable or its effective authentication is unavailable.
+
 ## Selection policy
 
 OpenClaw chooses a harness after provider/model resolution:

@@ -90,14 +90,26 @@ function pickOnboardProviderAuthOptionValues(
   );
 }
 
-export function registerOnboardCommand(program: Command): void {
+export function registerOnboardCommand(
+  program: Command,
+  options: {
+    commandName?: "onboard" | "setup";
+    description?: string;
+    docsPath?: string;
+  } = {},
+): void {
+  const commandName = options.commandName ?? "onboard";
+  const docsPath = options.docsPath ?? "/cli/onboard";
   const command = program
-    .command("onboard")
-    .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
+    .command(commandName)
+    .description(
+      options.description ??
+        "Minimal setup for a working local agent, followed by agent-assisted configuration",
+    )
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink(docsPath, `docs.openclaw.ai${docsPath}`)}\n`,
     )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
     .option(
@@ -178,6 +190,10 @@ export function registerOnboardCommand(program: Command): void {
     .option("--import-secrets", "Import supported secrets during onboarding migration", false)
     .option("--json", "Output JSON summary", false);
 
+  if (commandName === "setup") {
+    command.option("--wizard", "Deprecated; setup now runs onboarding by default", false);
+  }
+
   command.action(async (opts, commandRuntime) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
@@ -195,6 +211,13 @@ export function registerOnboardCommand(program: Command): void {
         installDaemon: Boolean(opts.installDaemon),
       });
       const gatewayPort = parsePort(opts.gatewayPort);
+      const flow = (opts.flow ??
+        (commandName === "setup" && opts.wizard ? "advanced" : undefined)) as
+        | "quickstart"
+        | "advanced"
+        | "manual"
+        | "import"
+        | undefined;
       const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
         opts as Record<string, unknown>,
       );
@@ -204,7 +227,7 @@ export function registerOnboardCommand(program: Command): void {
           workspace: opts.workspace as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),
           acceptRisk: Boolean(opts.acceptRisk),
-          flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
+          flow,
           mode: opts.mode as "local" | "remote" | undefined,
           authChoice: opts.authChoice as AuthChoice | undefined,
           tokenProvider: opts.tokenProvider as string | undefined,

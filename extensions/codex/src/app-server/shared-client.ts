@@ -320,8 +320,10 @@ export async function createIsolatedCodexAppServerClient(
     });
     return client;
   } catch (error) {
-    client.close();
     void initialize.catch(() => undefined);
+    // Isolated startup has no later owner to finish process cleanup. Wait here
+    // so a failed one-shot probe cannot leave an app-server child behind.
+    await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
     throw error;
   }
 }

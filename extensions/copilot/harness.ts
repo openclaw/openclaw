@@ -247,6 +247,40 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   throw error;
 }
 
+async function awaitReadinessStep<T>(
+  work: Promise<T>,
+  signal: AbortSignal | undefined,
+  onLateResult?: (result: T) => Promise<void> | void,
+): Promise<T> {
+  if (!signal) {
+    return await work;
+  }
+  throwIfAborted(signal);
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      try {
+        throwIfAborted(signal);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([work, aborted]);
+  } catch (error) {
+    if (signal.aborted && onLateResult) {
+      void work.then(onLateResult).catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+}
+
 function isStaleSdkSessionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /\b(404|not found|no such session|unknown session|stale|deleted|does not exist)\b/i.test(
@@ -447,6 +481,69 @@ export function createCopilotAgentHarness(
         };
       }
       return { supported: true, priority: 100 };
+    },
+
+    async checkReadiness(ctx) {
+      if (disposed) {
+        return { ready: false, reason: "Copilot runtime is disposed" };
+      }
+      const auth = resolveCopilotAuth({
+        agentId: ctx.agentId,
+        agentDir: ctx.agentDir,
+        workspaceDir: ctx.workspaceDir,
+      });
+      let pool: CopilotClientPool | undefined;
+      let handle: PooledClient | undefined;
+      try {
+        pool = await awaitReadinessStep(getPool(), ctx.signal);
+        const acquirePromise = pool.acquire(
+          {
+            agentId: auth.agentId,
+            authMode: auth.authMode,
+            ...(auth.authMode === "gitHubToken"
+              ? {
+                  authProfileId: auth.authProfileId,
+                  authProfileVersion: auth.authProfileVersion,
+                }
+              : {}),
+            copilotHome: auth.copilotHome,
+          },
+          {
+            copilotHome: auth.copilotHome,
+            gitHubToken: auth.authMode === "gitHubToken" ? auth.gitHubToken : undefined,
+            useLoggedInUser: auth.authMode === "useLoggedInUser",
+          },
+        );
+        handle = await awaitReadinessStep(
+          acquirePromise,
+          ctx.signal,
+          async (lateHandle) => await pool?.release(lateHandle),
+        );
+        await awaitReadinessStep(handle.client.start(), ctx.signal);
+        if (ctx.providerAuthAvailable) {
+          return { ready: true };
+        }
+        const status = await awaitReadinessStep(handle.client.getAuthStatus(), ctx.signal);
+        return status.isAuthenticated
+          ? { ready: true }
+          : { ready: false, reason: status.statusMessage ?? "Copilot CLI is not authenticated" };
+      } catch {
+        if (ctx.signal?.aborted && handle && pool) {
+          // SDK start/auth calls have no cancellation contract. Evict and
+          // force-stop the connecting client before another run can acquire it.
+          await pool.invalidate(handle);
+          handle = undefined;
+        }
+        return { ready: false, reason: "Copilot runtime readiness check failed" };
+      } finally {
+        if (handle && pool) {
+          try {
+            await pool.release(handle);
+          } catch {
+            // Readiness already has an authoritative result; release is best-effort.
+          }
+        }
+      }
     },
 
     async runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult> {

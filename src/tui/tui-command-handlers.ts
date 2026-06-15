@@ -69,6 +69,10 @@ type CommandHandlerContext = {
     provider?: string;
   }) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
   requestExit: (result?: Partial<TuiResult>) => void;
+  sessionExtraSystemPrompt?: {
+    sessionKey: string;
+    text: string;
+  };
 };
 
 function isBtwCommand(text: string): boolean {
@@ -125,6 +129,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     runAuthFlow,
     requestExit,
   } = context;
+  let sessionExtraSystemPrompt = context.sessionExtraSystemPrompt;
 
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
@@ -677,11 +682,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.totalTokens = null;
           tui.requestRender();
 
+          const resetSessionKey = state.currentSessionKey;
           const result = await client.resetSession(
-            state.currentSessionKey,
+            resetSessionKey,
             name,
-            state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : undefined,
+            resetSessionKey === "global" ? { agentId: state.currentAgentId } : undefined,
           );
+          if (sessionExtraSystemPrompt?.sessionKey === resetSessionKey) {
+            sessionExtraSystemPrompt = undefined;
+          }
           if (applySessionMutationResult(result)) {
             await refreshSessionInfo();
           } else {
@@ -768,11 +777,16 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         noteLocalBtwRunId?.(runId);
       }
       tui.requestRender();
+      const extraSystemPrompt =
+        sessionExtraSystemPrompt?.sessionKey === state.currentSessionKey
+          ? sessionExtraSystemPrompt.text
+          : undefined;
       const sendResult = await client.sendChat({
         sessionKey: state.currentSessionKey,
         ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
         sessionId: state.currentSessionId,
         message: text,
+        ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
         thinking: opts.thinking,
         deliver: deliverDefault,
         timeoutMs: opts.timeoutMs,

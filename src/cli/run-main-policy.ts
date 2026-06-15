@@ -98,7 +98,7 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   if (
     invocation.hasHelpOrVersion ||
-    shouldStartCrestodianForBareRoot(argv) ||
+    shouldHandleBareRoot(argv) ||
     isBareParentDefaultHelpArgv(argv)
   ) {
     return false;
@@ -193,7 +193,7 @@ export function resolvePrecomputedSubcommandHelpFastPath(
   return resolveStrictPrecomputedSubcommandHelpCommand(argv);
 }
 
-export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {
+export function shouldHandleBareRoot(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return invocation.commandPath.length === 0 && !invocation.hasHelpOrVersion;
 }

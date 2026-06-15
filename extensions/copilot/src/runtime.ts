@@ -41,6 +41,7 @@ export interface CopilotClientPoolOptions {
 
 export interface CopilotClientPool {
   acquire(key: PoolKey, options: ClientCreateOptions): Promise<PooledClient>;
+  invalidate(handle: PooledClient): Promise<void>;
   release(handle: PooledClient): Promise<void>;
   dispose(): Promise<Error[]>;
   size(): number;
@@ -115,6 +116,35 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
     const stopPromise = (async () => {
       try {
         return await client.stop();
+      } catch (error: unknown) {
+        return [toError(error)];
+      } finally {
+        entry.state = { kind: "stopped" };
+        maybeDeleteEntry(entry);
+      }
+    })();
+
+    entry.state = { kind: "stopping", client, promise: stopPromise };
+    return stopPromise;
+  };
+
+  const forceStopReadyOrIdleEntry = (
+    entry: PoolEntry,
+    client: CopilotClient,
+    idleTimer?: ReturnType<typeof setTimeout>,
+  ) => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+    }
+    if (entry.state.kind === "stopping") {
+      return entry.state.promise;
+    }
+
+    entry.stopRan = true;
+    const stopPromise = (async () => {
+      try {
+        await client.forceStop();
+        return [];
       } catch (error: unknown) {
         return [toError(error)];
       } finally {
@@ -305,6 +335,42 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
     }
   };
 
+  const invalidate = async (handle: PooledClient): Promise<void> => {
+    releasedHandles.add(handle);
+    const entry = entries.get(JSON.stringify(handle.key));
+    if (!entry) {
+      return;
+    }
+    switch (entry.state.kind) {
+      case "creating":
+      case "stopping":
+      case "stopped":
+        return;
+      case "ready":
+        if (entry.state.client !== handle.client) {
+          return;
+        }
+        if (entry.refCount > 1) {
+          entry.refCount -= 1;
+          return;
+        }
+        entry.refCount = 0;
+        await forceStopReadyOrIdleEntry(entry, entry.state.client);
+        return;
+      case "idle":
+        if (entry.state.client !== handle.client) {
+          return;
+        }
+        if (entry.refCount > 1) {
+          entry.refCount -= 1;
+          return;
+        }
+        entry.refCount = 0;
+        await forceStopReadyOrIdleEntry(entry, entry.state.client, entry.state.idleTimer);
+        return;
+    }
+  };
+
   const dispose = async (): Promise<Error[]> => {
     if (disposeCompleted) {
       return [];
@@ -342,6 +408,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
 
   return {
     acquire,
+    invalidate,
     release,
     dispose,
     size: () => entries.size,

@@ -230,13 +230,15 @@ describe("shared Codex app-server client", () => {
     expect(harness.process.stdin.destroyed).toBe(false);
   });
 
-  it("does not wait for isolated initialize after a timeout closes the client", async () => {
+  it("waits for isolated app-server shutdown after an initialize timeout", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const closeAndWait = vi.spyOn(harness.client, "closeAndWait");
 
     await expect(createIsolatedCodexAppServerClient({ timeoutMs: 5 })).rejects.toThrow(
       "codex app-server initialize timed out",
     );
+    expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 

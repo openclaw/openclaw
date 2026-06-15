@@ -146,11 +146,6 @@ vi.mock("../commands/onboard.js", () => {
   return { setupWizardCommand: vi.fn(async () => {}) };
 });
 
-vi.mock("../commands/setup.js", () => {
-  loaded.mark("setup-command");
-  return { setupCommand: vi.fn(async () => {}) };
-});
-
 vi.mock("../commands/agent-via-gateway.js", () => {
   loaded.mark("agent-via-gateway-command");
   return { agentCliCommand: vi.fn(async () => {}) };
@@ -297,14 +292,13 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("default-runtime");
   });
 
-  it("keeps setup help out of setup and onboard action modules", async () => {
+  it("keeps setup help out of onboard action modules", async () => {
     const { registerSetupCommand } = await import("./program/register.setup.js");
     const program = makeProgram();
 
     registerSetupCommand(program);
     await expectHelpExit(program, ["setup", "--help"]);
 
-    expect(loaded.modules).not.toContain("setup-command");
     expect(loaded.modules).not.toContain("onboard-command");
     expect(loaded.modules).not.toContain("default-runtime");
   });

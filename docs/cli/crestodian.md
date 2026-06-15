@@ -1,7 +1,7 @@
 ---
 summary: "CLI reference and security model for Crestodian, the configless-safe setup and repair helper"
 read_when:
-  - You run openclaw with no command after setup and want to understand Crestodian
+  - You want to start Crestodian explicitly
   - You need a configless-safe way to inspect or repair OpenClaw
   - You are designing or enabling message-channel rescue mode
 title: "Crestodian"
@@ -12,11 +12,11 @@ title: "Crestodian"
 Crestodian is OpenClaw's local setup, repair, and configuration helper. It is
 designed to stay reachable when the normal agent path is broken.
 
-Running `openclaw` with no command starts classic onboarding first when the
+Running `openclaw` with no command starts onboarding first when the
 active config file is missing or has no authored settings (empty or
-metadata-only). After a config file has authored settings, running `openclaw`
-with no command starts Crestodian in an interactive terminal. Running
-`openclaw crestodian` starts the same helper explicitly.
+metadata-only). After a working setup exists, running `openclaw` with no
+command starts the normal local agent. Run `openclaw crestodian` explicitly
+when you need the bounded setup and repair helper.
 
 ## What Crestodian shows
 
@@ -97,7 +97,7 @@ Crestodian's startup path is deliberately small. It can run when:
 `openclaw --help` and `openclaw --version` still use the normal fast paths.
 Noninteractive bare `openclaw` exits with a short message instead of printing
 root help. On a fresh install, the message points to non-interactive onboarding;
-after setup, it points to one-shot Crestodian commands.
+after setup, it points to a one-shot local agent command.
 
 ## Operations and approval
 
@@ -138,8 +138,8 @@ Applied writes are recorded in:
 
 Discovery is not audited. Only applied operations and writes are logged.
 
-`openclaw onboard --modern` starts Crestodian as the modern onboarding preview.
-Plain `openclaw onboard` still runs classic onboarding.
+`openclaw onboard --modern` starts Crestodian explicitly. Plain
+`openclaw onboard` runs minimal-first onboarding.
 
 ## Setup bootstrap
 
