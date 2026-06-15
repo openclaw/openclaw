@@ -141,6 +141,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--thread-id <id>", "Telegram forum topic thread id")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
+      .option("--dry-run", "Preview cron.add params without creating the job", false)
       .option("--json", "Output JSON", false)
       .action(
         async (
@@ -385,6 +386,16 @@ export function registerCronAddCommand(cron: Command) {
                   }
                 : undefined,
             };
+
+            if (opts.dryRun) {
+              if (!opts.json) {
+                defaultRuntime.error(
+                  "cron.add dry-run: no job created; previewing cron.add params.",
+                );
+              }
+              printCronJson(params);
+              return;
+            }
 
             const res = await callGatewayFromCli("cron.add", opts, params);
             printCronJson(res);
