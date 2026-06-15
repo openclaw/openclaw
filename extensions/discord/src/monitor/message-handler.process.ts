@@ -999,9 +999,11 @@ async function processDiscordMessageInner(
           ? () => draftPreview.handleAssistantMessageBoundary()
           : undefined,
         onModelSelected,
-        suppressDefaultToolProgressMessages: draftPreview.suppressDefaultToolProgressMessages
-          ? true
-          : undefined,
+        suppressDefaultToolProgressMessages:
+          (sourceRepliesAreToolOnly && statusReactionsExplicitlyEnabled) ||
+          draftPreview.suppressDefaultToolProgressMessages
+            ? true
+            : undefined,
         commentaryProgressEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,

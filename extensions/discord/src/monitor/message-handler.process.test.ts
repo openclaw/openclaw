@@ -2187,6 +2187,7 @@ describe("processDiscordMessage draft streaming", () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       expect(params?.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
       expect(params?.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+      expect(params?.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       return createNoQueuedDispatchResult();
     });
