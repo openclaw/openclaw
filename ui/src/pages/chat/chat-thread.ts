@@ -674,9 +674,31 @@ function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number)
     : desiredTimestamp;
 }
 
-function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
+function sortChatItemsByVisibleTime(
+  items: ChatItem[],
+  toolStreamPredecessors: ReadonlyMap<string, string>,
+): ChatItem[] {
+  const timestampsByKey = new Map<string, number>();
+  for (const item of items) {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp != null) {
+      timestampsByKey.set(item.key, timestamp);
+    }
+  }
   return items
-    .map((item, index) => ({ item, index, timestamp: chatItemTimestamp(item) }))
+    .map((item, index) => {
+      const timestamp = chatItemTimestamp(item);
+      const predecessorKey = toolStreamPredecessors.get(item.key);
+      const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
+      return {
+        item,
+        index,
+        timestamp:
+          timestamp != null && predecessorTimestamp != null && timestamp <= predecessorTimestamp
+            ? predecessorTimestamp
+            : timestamp,
+      };
+    })
     .toSorted((a, b) => {
       if (a.timestamp == null && b.timestamp == null) {
         return a.index - b.index;
@@ -957,6 +979,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
   const maxLen = Math.max(indexedSegments.length, tools.length);
   let previousAccumulatedStreamText: string | null = null;
+  const toolStreamPredecessors = new Map<string, string>();
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
@@ -969,13 +992,29 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         previousAccumulatedStreamText = text;
       }
       if (visibleText.length > 0) {
+        const streamKey = `stream-seg:${props.sessionKey}:${i}`;
         items.push({
           kind: "stream",
-          key: `stream-seg:${props.sessionKey}:${i}`,
+          key: streamKey,
           text: visibleText,
           startedAt: segment.ts,
           isStreaming: false,
         });
+        const toolCallId = segment.toolCallId?.trim();
+        if (toolCallId) {
+          const matchingToolIndex = tools.findIndex((tool, toolIndex) => {
+            if (toolIndex < i) {
+              return false;
+            }
+            return asRecord(tool)?.toolCallId === toolCallId;
+          });
+          if (matchingToolIndex >= 0) {
+            toolStreamPredecessors.set(
+              messageKey(tools[matchingToolIndex], matchingToolIndex + history.length),
+              streamKey,
+            );
+          }
+        }
       }
     }
     if (i < tools.length && props.showToolCalls) {
@@ -1048,7 +1087,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   return annotateToolTurnOutcome(
     groupMessages(
       collapseSequentialDuplicateMessages(
-        coalesceToolActivityMessages(sortChatItemsByVisibleTime(items)),
+        coalesceToolActivityMessages(sortChatItemsByVisibleTime(items, toolStreamPredecessors)),
       ),
     ),
   );
