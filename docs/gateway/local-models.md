@@ -351,5 +351,6 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
 
 ## Related
 
+- [Local text workers](/gateway/local-text-workers)
 - [Configuration reference](/gateway/configuration-reference)
 - [Model failover](/concepts/model-failover)

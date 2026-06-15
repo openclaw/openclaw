@@ -1596,6 +1596,7 @@
                       "gateway/tools-invoke-http-api",
                       "gateway/cli-backends",
                       "gateway/local-models",
+                      "gateway/local-text-workers",
                       "gateway/local-model-services"
                     ]
                   },
