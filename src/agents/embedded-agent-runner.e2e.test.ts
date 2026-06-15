@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
@@ -321,6 +322,73 @@ function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
 }
 
 describe("runEmbeddedAgent", () => {
+  it("uses configured default model when provider and model are omitted", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            api: "anthropic-messages",
+            apiKey: "sk-ant-test",
+            baseUrl: "https://example.com/anthropic",
+            models: [
+              {
+                id: "claude-sonnet-4-6",
+                name: "Mock Claude Sonnet 4.6",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 16_000,
+                maxTokens: 2048,
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    };
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-sonnet-4-6",
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "configured-default-model",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("configured-default-model"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "anthropic",
+      "claude-sonnet-4-6",
+      agentDir,
+      cfg,
+      expect.any(Object),
+    );
+    expect(firstRunEmbeddedAttemptParams()).toMatchObject({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+  });
+
   it("skips models.json generation when dynamic model resolution succeeds", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);

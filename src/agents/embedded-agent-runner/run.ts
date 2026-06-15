@@ -98,6 +98,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -744,10 +745,20 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
-      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
+      const hasExplicitProvider = Boolean(params.provider?.trim());
+      const hasExplicitModel = Boolean(params.model?.trim());
+      const defaultModelRef =
+        hasExplicitProvider || hasExplicitModel
+          ? { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }
+          : resolveDefaultModelForAgent({
+              cfg: params.config ?? {},
+              agentId: workspaceResolution.agentId,
+              allowPluginNormalization: true,
+            });
+      let provider = (params.provider ?? defaultModelRef.provider).trim() || DEFAULT_PROVIDER;
+      let modelId = (params.model ?? defaultModelRef.model).trim() || DEFAULT_MODEL;
       const normalizedSessionKey = params.sessionKey?.trim();
       const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
         cfg: params.config,
