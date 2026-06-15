@@ -40,26 +40,18 @@ export async function getRecentSessionContent(
             role?: unknown;
             content?: unknown;
             provenance?: unknown;
-            provider?: unknown;
-            model?: unknown;
           };
           const role = msg.role;
           if ((role === "user" || role === "assistant") && "content" in msg && msg.content) {
-            // Delivery-mirror entries duplicate the visible text of the preceding
-            // assistant message and should not appear in session memory summaries.
-            if (
-              role === "assistant" &&
-              msg.provider === "openclaw" &&
-              msg.model === "delivery-mirror"
-            ) {
-              continue;
-            }
             if (role === "user" && hasInterSessionUserProvenance(msg)) {
               continue;
             }
             const text = extractTextMessageContent(msg.content);
             if (text && !text.startsWith("/")) {
               // Dedupe consecutive assistant messages with identical text.
+              // Thinking-enabled models produce raw (thinking + text) and
+              // cleaned (text-only) copies in the same turn; delivery mirrors
+              // can also repeat the visible text of the preceding assistant.
               if (role === "assistant" && text === lastAssistantText) {
                 continue;
               }

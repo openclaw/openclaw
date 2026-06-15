@@ -813,7 +813,38 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Only message 2");
   });
 
-  it("skips delivery-mirror assistant messages (#92563)", async () => {
+  it("preserves standalone delivery-mirror replies with different text (#92563)", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Hello" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "A reply" }],
+        },
+      }),
+      // Standalone delivery-mirror with different visible text — should be preserved
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "A different reply" }],
+          provider: "openclaw",
+          model: "delivery-mirror",
+        },
+      }),
+    ].join("\n");
+    const memoryContent = await readSessionTranscript({ sessionContent });
+
+    expect(memoryContent).toContain("assistant: A reply");
+    expect(memoryContent).toContain("assistant: A different reply");
+  });
+
+  it("dedupes delivery-mirror that duplicates preceding assistant text (#92563)", async () => {
+    // Same text as previous assistant → should be deduped.
     const sessionContent = [
       JSON.stringify({
         type: "message",
@@ -826,7 +857,7 @@ describe("session-memory hook", () => {
           content: [{ type: "text", text: "Hi there" }],
         },
       }),
-      // delivery-mirror duplicates the visible text and should be skipped
+      // delivery-mirror with the same visible text → deduped
       JSON.stringify({
         type: "message",
         message: {
@@ -841,7 +872,6 @@ describe("session-memory hook", () => {
 
     expect(memoryContent).toContain("user: Hello");
     expect(memoryContent).toContain("assistant: Hi there");
-    // Should appear exactly once
     const matches = (memoryContent?.match(/assistant: Hi there/g) ?? []).length;
     expect(matches).toBe(1);
   });
