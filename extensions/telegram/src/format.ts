@@ -96,12 +96,59 @@ function isTelegramBulletLine(line: string): boolean {
   return /^[ \t]*(?:[•*+-])[ \t]+\S/.test(line);
 }
 
+function isTelegramListLine(line: string): boolean {
+  return /^[ \t]*(?:[•*+-]|\d+[.)])[ \t]+\S/.test(line);
+}
+
 function isTelegramListBoundaryLine(line: string): boolean {
   return /^[ \t]*(?:\d+\.|#{1,6})[ \t]+\S/.test(line);
 }
 
 function isMarkdownIndentedCodeLine(line: string): boolean {
   return /^(?: {4}|\t)/.test(line);
+}
+
+function isMarkdownHeadingLine(line: string): boolean {
+  return /^[ \t]{0,3}#{1,6}[ \t]+\S/.test(line);
+}
+
+function isMarkdownStyledSectionHeadingLine(line: string): boolean {
+  const trimmed = line.trim();
+  return (
+    /^(?:\*\*[^*\n]{1,160}\*\*|__[^_\n]{1,160}__)\s*$/.test(trimmed) ||
+    /^(?:\*[^*\n]{1,160}\*|_[^_\n]{1,160}_)\s*$/.test(trimmed)
+  );
+}
+
+function isPlainTelegramSectionHeadingLine(line: string): boolean {
+  if (leadingWhitespaceLength(line) > 0) {
+    return false;
+  }
+  const trimmed = line.trim();
+  if (
+    trimmed.length < 4 ||
+    trimmed.length > 120 ||
+    trimmed.startsWith("<") ||
+    trimmed.startsWith(">") ||
+    trimmed.startsWith("#") ||
+    isTelegramListLine(line) ||
+    /[.!?]$/.test(trimmed)
+  ) {
+    return false;
+  }
+  const colonIndex = trimmed.indexOf(":");
+  if (colonIndex <= 0 || colonIndex > 80) {
+    return false;
+  }
+  return /^[A-Z0-9]/.test(trimmed);
+}
+
+function isTelegramSectionHeadingLine(line: string): boolean {
+  return (
+    isMarkdownHeadingLine(line) ||
+    isMarkdownStyledSectionHeadingLine(line) ||
+    isPlainTelegramSectionHeadingLine(line)
+  );
 }
 
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
@@ -136,14 +183,62 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
   return out.join("\n");
 }
 
+function stylePlainTelegramSectionHeading(line: string): string {
+  return isPlainTelegramSectionHeadingLine(line) ? `**${line.trim()}**` : line;
+}
+
+function improveTelegramSectionSpacing(markdown: string): string {
+  const lines = markdown.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const normalizedLine = line.replace(/\r$/, "");
+    const isFenceLine = /^[ \t]*(?:```|~~~)/.test(normalizedLine);
+
+    if (inFence) {
+      out.push(line);
+      if (isFenceLine) {
+        inFence = false;
+      }
+      continue;
+    }
+
+    if (isFenceLine) {
+      out.push(line);
+      inFence = true;
+      continue;
+    }
+
+    const headingLine = isTelegramSectionHeadingLine(normalizedLine);
+    if (headingLine && out.length > 0 && out[out.length - 1]?.trim()) {
+      out.push("");
+    }
+
+    out.push(stylePlainTelegramSectionHeading(line));
+
+    const nextLine = lines[index + 1];
+    if (headingLine && nextLine !== undefined && nextLine.trim()) {
+      out.push("");
+    }
+  }
+
+  return out.join("\n");
+}
+
+function prepareTelegramMarkdown(markdown: string): string {
+  return improveTelegramSectionSpacing(preserveTelegramListBoundarySpacing(markdown));
+}
+
 export function markdownToTelegramHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
 ): string {
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
+  const ir = markdownToIR(prepareTelegramMarkdown(markdown ?? ""), {
     linkify: true,
     enableSpoilers: true,
-    headingStyle: "none",
+    headingStyle: "bold",
     blockquotePrefix: "",
     tableMode: options.tableMode,
   });
@@ -780,10 +875,10 @@ export function markdownToTelegramChunks(
   limit: number,
   options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
+  const ir = markdownToIR(prepareTelegramMarkdown(markdown ?? ""), {
     linkify: true,
     enableSpoilers: true,
-    headingStyle: "none",
+    headingStyle: "bold",
     blockquotePrefix: "",
     tableMode: options.tableMode,
   });
