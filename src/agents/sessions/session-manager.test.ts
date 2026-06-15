@@ -431,7 +431,7 @@ describe("SessionManager.open", () => {
     if (hugeEntry.type !== "message") {
       throw new Error("expected message entry fixture");
     }
-    hugeEntry.message.content = "x".repeat(33 * 1024 * 1024);
+    (hugeEntry.message as { content: string }).content = "x".repeat(33 * 1024 * 1024);
     await fs.writeFile(
       sessionFile,
       `${JSON.stringify(buildSessionHeader(dir))}\n${JSON.stringify(hugeEntry)}\n`,
