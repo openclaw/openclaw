@@ -53,7 +53,8 @@ vi.mock("../../plugins/git-install.js", async () => {
   };
 });
 
-vi.mock("../../cli/plugins-install-persist.js", () => ({
+vi.mock("../../cli/plugins-install-persist.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cli/plugins-install-persist.js")>()),
   persistPluginInstall: persistPluginInstallMock,
 }));
 
@@ -70,6 +71,16 @@ function buildPluginsParams(commandBodyNormalized: string, workspaceDir: string)
 function expectPersistedInstall(pluginId: string, expectedInstall: Record<string, unknown>): void {
   const persisted = mockFirstObjectArg(persistPluginInstallMock);
   expect(persisted.pluginId).toBe(pluginId);
+  const snapshot = persisted.snapshot as Record<string, unknown>;
+  const writeOptions = snapshot.writeOptions as Record<string, unknown>;
+  expectObjectFields(persisted.snapshot, {
+    writeOptions: expect.objectContaining({
+      assertConfigPathForWrite: expect.any(Function),
+      expectedConfigPath: expect.stringContaining("openclaw.json"),
+      ownedConfigPathForWrite: expect.stringContaining("openclaw.json"),
+    }),
+  });
+  expect(writeOptions).not.toHaveProperty("basePluginMetadataSnapshot");
   expectObjectFields(persisted.install, expectedInstall);
 }
 

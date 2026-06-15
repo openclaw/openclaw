@@ -67,14 +67,33 @@ function removeInstalledPluginFromDenylist(cfg: OpenClawConfig, pluginId: string
 export type ConfigSnapshotForInstallPersist = {
   config: OpenClawConfig;
   baseHash: string | undefined;
-  writeOptions?: Pick<
+  writeOptions: Pick<
     ConfigWriteOptions,
+    | "assertConfigPathForWrite"
     | "expectedConfigPath"
+    | "ownedConfigPathForWrite"
     | "envSnapshotForRestore"
     | "includeFileHashesForWrite"
     | "includeFileTargetsForWrite"
   >;
 };
+
+export function selectInstallMutationWriteOptions(
+  writeOptions: ConfigWriteOptions,
+): ConfigSnapshotForInstallPersist["writeOptions"] {
+  // Install work may outlive its config read. Keep only mutation-start ownership
+  // and conflict facts; plugin metadata must come from the commit-time read.
+  return {
+    ...(writeOptions.assertConfigPathForWrite
+      ? { assertConfigPathForWrite: writeOptions.assertConfigPathForWrite }
+      : {}),
+    expectedConfigPath: writeOptions.expectedConfigPath,
+    ownedConfigPathForWrite: writeOptions.ownedConfigPathForWrite,
+    envSnapshotForRestore: writeOptions.envSnapshotForRestore,
+    includeFileHashesForWrite: writeOptions.includeFileHashesForWrite,
+    includeFileTargetsForWrite: writeOptions.includeFileTargetsForWrite,
+  };
+}
 
 function sourceMatchesInstalledPath(params: {
   activeSource: string;
@@ -311,7 +330,7 @@ export async function persistHookPackInstall(params: {
   await replaceConfigFile({
     nextConfig: next,
     baseHash: params.snapshot.baseHash,
-    ...(params.snapshot.writeOptions ? { writeOptions: params.snapshot.writeOptions } : {}),
+    writeOptions: params.snapshot.writeOptions,
   });
   runtime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
   logHookPackRestartHint(runtime);

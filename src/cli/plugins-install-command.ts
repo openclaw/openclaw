@@ -60,7 +60,11 @@ import {
   parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
 } from "./plugins-command-helpers.js";
-import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
+import {
+  persistHookPackInstall,
+  persistPluginInstall,
+  selectInstallMutationWriteOptions,
+} from "./plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "./plugins-install-persist.js";
 import { listPersistedBundledPluginRecoveryLocations } from "./plugins-location-bridges.js";
 
@@ -73,19 +77,6 @@ function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): Insta
     config: overrides.config,
     dangerouslyForceUnsafeInstall: overrides.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: overrides.trustedSourceLinkedOfficialInstall,
-  };
-}
-
-function selectInstallMutationWriteOptions(
-  writeOptions: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["writeOptions"],
-): NonNullable<ConfigSnapshotForInstallPersist["writeOptions"]> {
-  // Install work may outlive its config read. Keep only mutation-start ownership
-  // and conflict facts; plugin metadata must come from the commit-time read.
-  return {
-    expectedConfigPath: writeOptions.expectedConfigPath,
-    envSnapshotForRestore: writeOptions.envSnapshotForRestore,
-    includeFileHashesForWrite: writeOptions.includeFileHashesForWrite,
-    includeFileTargetsForWrite: writeOptions.includeFileTargetsForWrite,
   };
 }
 

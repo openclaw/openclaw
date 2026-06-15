@@ -11,12 +11,14 @@ import {
 import { loadConfigForInstall } from "./plugins-install-command.js";
 
 const hoisted = vi.hoisted(() => ({
+  assertConfigPathForWriteMock: vi.fn(),
   readConfigFileSnapshotMock: vi.fn<() => Promise<ConfigFileSnapshot>>(),
   loadInstalledPluginIndexInstallRecordsMock: vi.fn(),
   listPersistedBundledPluginRecoveryLocationsMock: vi.fn(),
 }));
 
 const readConfigFileSnapshotMock = hoisted.readConfigFileSnapshotMock;
+const assertConfigPathForWriteMock = hoisted.assertConfigPathForWriteMock;
 const loadInstalledPluginIndexInstallRecordsMock =
   hoisted.loadInstalledPluginIndexInstallRecordsMock;
 const listPersistedBundledPluginRecoveryLocationsMock =
@@ -26,8 +28,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshotForWrite: async () => ({
     snapshot: await readConfigFileSnapshotMock(),
     writeOptions: {
+      assertConfigPathForWrite: assertConfigPathForWriteMock,
       basePluginMetadataSnapshot: {} as never,
       expectedConfigPath: "/tmp/config.json5",
+      ownedConfigPathForWrite: "/tmp/config.json5",
       includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },
       includeFileTargetsForWrite: { "/tmp/plugins.json5": "/tmp/plugins.json5" },
     },
@@ -50,7 +54,9 @@ vi.mock("./plugins-location-bridges.js", () => ({
 
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 const installWriteOptions = {
+  assertConfigPathForWrite: assertConfigPathForWriteMock,
   expectedConfigPath: "/tmp/config.json5",
+  ownedConfigPathForWrite: "/tmp/config.json5",
   includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },
   includeFileTargetsForWrite: { "/tmp/plugins.json5": "/tmp/plugins.json5" },
 } satisfies ConfigWriteOptions;

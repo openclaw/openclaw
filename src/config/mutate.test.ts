@@ -1,4 +1,5 @@
 // Covers config mutation helpers and persisted write behavior.
+import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +12,7 @@ import {
   replaceConfigFile,
   transformConfigFileWithRetry,
 } from "./mutate.js";
+import { resolveConfigPath } from "./paths.js";
 import {
   registerRuntimeConfigWriteListener,
   resetConfigRuntimeState,
@@ -23,11 +25,15 @@ type MockValidationResult =
   | { ok: true; config: OpenClawConfig; warnings: MockValidationIssue[] }
   | { ok: false; issues: MockValidationIssue[]; warnings: MockValidationIssue[] };
 
-const ioMocks = vi.hoisted(() => ({
-  readConfigFileSnapshotForWrite: vi.fn(),
-  resolveConfigSnapshotHash: vi.fn(),
-  writeConfigFile: vi.fn(),
-}));
+const ioMocks = vi.hoisted(() => {
+  const readConfigFileSnapshotForWrite = vi.fn();
+  return {
+    createConfigIO: vi.fn(() => ({ readConfigFileSnapshotForWrite })),
+    readConfigFileSnapshotForWrite,
+    resolveConfigSnapshotHash: vi.fn(),
+    writeConfigFile: vi.fn(),
+  };
+});
 const validationMocks = vi.hoisted(() => ({
   validateConfigObjectWithPlugins: vi.fn(
     (config: OpenClawConfig): MockValidationResult => ({
@@ -86,6 +92,8 @@ function createSnapshot(params: {
 async function resolveIncludeTarget(filePath: string): Promise<string> {
   return path.join(await fs.realpath(path.dirname(filePath)), path.basename(filePath));
 }
+
+const allowConfigPathWrite = () => {};
 
 describe("config mutate helpers", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-mutate-" });
@@ -172,11 +180,17 @@ describe("config mutate helpers", () => {
     ioMocks.readConfigFileSnapshotForWrite
       .mockResolvedValueOnce({
         snapshot: initial,
-        writeOptions: { expectedConfigPath: initial.path },
+        writeOptions: {
+          expectedConfigPath: initial.path,
+          ownedConfigPathForWrite: initial.path,
+        },
       })
       .mockResolvedValueOnce({
         snapshot: fresh,
-        writeOptions: { expectedConfigPath: fresh.path },
+        writeOptions: {
+          expectedConfigPath: fresh.path,
+          ownedConfigPathForWrite: fresh.path,
+        },
       });
     ioMocks.writeConfigFile
       .mockRejectedValueOnce(new ConfigMutationConflictError("stale", { currentHash: "hash-2" }))
@@ -210,19 +224,138 @@ describe("config mutate helpers", () => {
       {
         baseSnapshot: fresh,
         expectedConfigPath: fresh.path,
+        ownedConfigPathForWrite: initial.path,
         afterWrite: { mode: "auto" },
         preCommitRuntimePreflight: expect.any(Function),
       },
     );
   });
 
-  it("serializes same-process transform mutations before reading snapshots", async () => {
+  it("preserves config path ownership across transform retries", async () => {
     const initial = createSnapshot({
       hash: "hash-1",
+      path: "/tmp/first-openclaw.json",
       sourceConfig: { agents: { list: [] } },
     });
     const fresh = createSnapshot({
       hash: "hash-2",
+      path: "/tmp/second-openclaw.json",
+      sourceConfig: { agents: { list: [] } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot: initial,
+        writeOptions: { expectedConfigPath: initial.path },
+      })
+      .mockResolvedValueOnce({
+        snapshot: fresh,
+        writeOptions: { expectedConfigPath: fresh.path },
+      });
+    ioMocks.writeConfigFile.mockRejectedValueOnce(
+      new ConfigMutationConflictError("stale", { currentHash: fresh.hash ?? null }),
+    );
+
+    const transform = vi.fn((config: OpenClawConfig) => ({ nextConfig: config }));
+
+    await expect(
+      transformConfigFileWithRetry({
+        io: ioMocks,
+        transform,
+      }),
+    ).rejects.toThrow("config path changed since last load");
+
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(transform).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures retry ownership before checking a caller base hash", async () => {
+    const initial = createSnapshot({
+      hash: "hash-1",
+      path: "/tmp/first-openclaw.json",
+      sourceConfig: { agents: { list: [] } },
+    });
+    const fresh = createSnapshot({
+      hash: "hash-2",
+      path: "/tmp/second-openclaw.json",
+      sourceConfig: { agents: { list: [] } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot: initial,
+        writeOptions: {
+          expectedConfigPath: initial.path,
+          ownedConfigPathForWrite: initial.path,
+        },
+      })
+      .mockResolvedValueOnce({
+        snapshot: fresh,
+        writeOptions: {
+          expectedConfigPath: fresh.path,
+          ownedConfigPathForWrite: fresh.path,
+        },
+      });
+    const transform = vi.fn((config: OpenClawConfig) => ({ nextConfig: config }));
+
+    await expect(
+      transformConfigFileWithRetry({
+        baseHash: fresh.hash,
+        io: ioMocks,
+        transform,
+      }),
+    ).rejects.toThrow("config path changed since last load");
+
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
+    expect(transform).not.toHaveBeenCalled();
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("does not retry transform mutations after config path ownership changes", async () => {
+    const initialConfigPath = resolveConfigPath();
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      path: initialConfigPath,
+      sourceConfig: { agents: { list: [] } },
+    });
+    let activeConfigPath = snapshot.path;
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: {
+        assertConfigPathForWrite: () => {
+          if (activeConfigPath !== snapshot.path) {
+            throw new ConfigMutationConflictError("config path changed since last load", {
+              currentHash: null,
+              retryable: false,
+            });
+          }
+        },
+        expectedConfigPath: snapshot.path,
+      },
+    });
+
+    await expect(
+      transformConfigFileWithRetry({
+        transform(config) {
+          activeConfigPath = "/tmp/second-openclaw.json";
+          return { nextConfig: config };
+        },
+      }),
+    ).rejects.toThrow("config path changed since last load");
+
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(1);
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("serializes same-process transform mutations before reading snapshots", async () => {
+    const configPath = resolveConfigPath();
+    const initial = createSnapshot({
+      hash: "hash-1",
+      path: configPath,
+      sourceConfig: { agents: { list: [] } },
+    });
+    const fresh = createSnapshot({
+      hash: "hash-2",
+      path: configPath,
       sourceConfig: { agents: { list: [{ id: "first" }] } },
     });
     ioMocks.readConfigFileSnapshotForWrite
@@ -298,6 +431,27 @@ describe("config mutate helpers", () => {
         nextConfig: { gateway: { port: 19002 } },
       }),
     ).rejects.toBeInstanceOf(ConfigMutationConflictError);
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects replace attempts when the active config path changed", async () => {
+    const snapshot = createSnapshot({
+      path: "/tmp/second-openclaw.json",
+      hash: "same-hash",
+      sourceConfig: { gateway: { port: 18789 } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        nextConfig: { gateway: { port: 19002 } },
+        writeOptions: { expectedConfigPath: "/tmp/first-openclaw.json" },
+      }),
+    ).rejects.toThrow("config path changed since last load");
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -520,6 +674,7 @@ describe("config mutate helpers", () => {
         writeOptions: {
           expectedConfigPath: configPath,
           envSnapshotForRestore: { OPENCLAW_TEST_PLUGIN_TOKEN: "plugin-token-runtime" },
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         },
       })
@@ -647,6 +802,7 @@ describe("config mutate helpers", () => {
         writeOptions: {
           expectedConfigPath: configPath,
           includeFileHashesForWrite: { [pluginsPath]: hashConfigIncludeRaw("{ malformed") },
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         },
       })
@@ -711,6 +867,7 @@ describe("config mutate helpers", () => {
         writeOptions: {
           expectedConfigPath: configPath,
           includeFileHashesForWrite: { [pluginsPath]: hashConfigIncludeRaw(null) },
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         },
       })
@@ -776,6 +933,7 @@ describe("config mutate helpers", () => {
         writeOptions: {
           expectedConfigPath: configPath,
           includeFileHashesForWrite: { [pluginsPath]: hashConfigIncludeRaw(null) },
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         },
       });
@@ -829,6 +987,7 @@ describe("config mutate helpers", () => {
       writeOptions: {
         expectedConfigPath: configPath,
         includeFileHashesForWrite: { [pluginsPath]: hashConfigIncludeRaw(snapshotRaw) },
+        assertConfigPathForWrite: allowConfigPathWrite,
         includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
       },
     });
@@ -877,6 +1036,7 @@ describe("config mutate helpers", () => {
       writeOptions: {
         expectedConfigPath: configPath,
         includeFileHashesForWrite: { [pluginsPath]: hashConfigIncludeRaw(concurrentRaw) },
+        assertConfigPathForWrite: allowConfigPathWrite,
         includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
       },
     });
@@ -887,6 +1047,7 @@ describe("config mutate helpers", () => {
         writeOptions: {
           expectedConfigPath: configPath,
           includeFileHashesForWrite: { [pluginsPath]: hashConfigIncludeRaw(initialRaw) },
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         },
         nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
@@ -988,6 +1149,7 @@ describe("config mutate helpers", () => {
       snapshot,
       writeOptions: {
         expectedConfigPath: snapshot.path,
+        assertConfigPathForWrite: allowConfigPathWrite,
         includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         skipPluginValidation: true,
       },
@@ -998,9 +1160,11 @@ describe("config mutate helpers", () => {
     expect(validationMocks.validateConfigObjectWithPlugins).toHaveBeenCalledWith(nextConfig, {
       pluginValidation: "skip",
     });
-    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledWith({
-      skipPluginValidation: true,
+    expect(ioMocks.createConfigIO).toHaveBeenCalledWith({
+      configPath,
+      pluginValidation: "skip",
     });
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledWith();
     await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
       '"$include": "./config/plugins.json5"',
     );
@@ -1048,6 +1212,7 @@ describe("config mutate helpers", () => {
         snapshot,
         writeOptions: {
           expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         },
         nextConfig,
@@ -1098,6 +1263,7 @@ describe("config mutate helpers", () => {
           snapshot,
           writeOptions: {
             expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
             includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           },
           nextConfig: {
@@ -1153,6 +1319,7 @@ describe("config mutate helpers", () => {
           snapshot,
           writeOptions: {
             expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
             includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           },
           nextConfig: {
@@ -1201,6 +1368,7 @@ describe("config mutate helpers", () => {
         snapshot,
         writeOptions: {
           expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         },
         nextConfig: {
@@ -1246,6 +1414,7 @@ describe("config mutate helpers", () => {
         snapshot,
         writeOptions: {
           expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         },
         nextConfig: {
@@ -1297,6 +1466,7 @@ describe("config mutate helpers", () => {
           snapshot,
           writeOptions: {
             expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
             includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           },
           nextConfig: {
@@ -1315,6 +1485,180 @@ describe("config mutate helpers", () => {
       setRuntimeConfigSnapshotRefreshHandler(null);
     }
   });
+
+  it("does not write an include after the active config path changes during preflight", async () => {
+    const home = await suiteRootTracker.make("include-active-path-preflight-concurrent");
+    const firstConfigPath = path.join(home, "first", "openclaw.json");
+    const secondConfigPath = path.join(home, "second", "openclaw.json");
+    const pluginsPath = path.join(home, "first", "plugins.json5");
+    const rootConfig = { plugins: { $include: "./plugins.json5" } };
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.mkdir(path.dirname(firstConfigPath), { recursive: true });
+    await fs.mkdir(path.dirname(secondConfigPath), { recursive: true });
+    await fs.writeFile(firstConfigPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
+    await fs.writeFile(secondConfigPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-include-active-path-preflight-concurrent",
+      path: firstConfigPath,
+      parsed: rootConfig,
+      sourceConfig: { plugins: { entries: {} } },
+    });
+    let activeConfigPath = firstConfigPath;
+    const assertConfigPathForWrite = () => {
+      if (activeConfigPath !== firstConfigPath) {
+        throw new ConfigMutationConflictError("config path changed since last load", {
+          currentHash: null,
+          retryable: false,
+        });
+      }
+    };
+
+    try {
+      setRuntimeConfigSnapshotRefreshHandler({
+        preflight: () => {
+          activeConfigPath = secondConfigPath;
+        },
+        refresh: () => true,
+      });
+
+      await expect(
+        replaceConfigFile({
+          baseHash: snapshot.hash,
+          snapshot,
+          writeOptions: {
+            expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite,
+            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+          },
+          nextConfig: {
+            plugins: {
+              entries: {
+                demo: { enabled: true },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow("config path changed since last load");
+
+      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+    } finally {
+      setRuntimeConfigSnapshotRefreshHandler(null);
+    }
+  });
+
+  it("rolls back an include write when config path ownership changes during commit", async () => {
+    const home = await suiteRootTracker.make("include-active-path-commit-concurrent");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "plugins.json5");
+    const rootConfig = { plugins: { $include: "./plugins.json5" } };
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-include-active-path-commit-concurrent",
+      path: configPath,
+      parsed: rootConfig,
+      sourceConfig: { plugins: { entries: {} } },
+    });
+    let activeConfigPath = configPath;
+    const assertConfigPathForWrite = () => {
+      if (fsNode.readFileSync(pluginsPath, "utf-8") !== initialPluginsRaw) {
+        activeConfigPath = "/tmp/other-openclaw.json";
+      }
+      if (activeConfigPath !== configPath) {
+        throw new ConfigMutationConflictError("config path changed since last load", {
+          currentHash: null,
+          retryable: false,
+        });
+      }
+    };
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig: {
+          plugins: {
+            entries: {
+              demo: { enabled: true },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("config path changed since last load");
+
+    await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+  });
+
+  it.each(["active path", "refreshed snapshot path"] as const)(
+    "rolls back an include write when the %s changes during the post-write read",
+    async (changeKind) => {
+      const home = await suiteRootTracker.make(
+        `include-post-write-${changeKind.replaceAll(" ", "-")}`,
+      );
+      const configPath = path.join(home, "first", "openclaw.json");
+      const otherConfigPath = path.join(home, "second", "openclaw.json");
+      const pluginsPath = path.join(home, "first", "plugins.json5");
+      const rootConfig = { plugins: { $include: "./plugins.json5" } };
+      const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+      const nextConfig = { plugins: { entries: { demo: { enabled: true } } } };
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
+      await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+      const snapshot = createSnapshot({
+        hash: "hash-include-post-write-path-change",
+        path: configPath,
+        parsed: rootConfig,
+        sourceConfig: { plugins: { entries: {} } },
+      });
+      let activeConfigPath = configPath;
+      const assertConfigPathForWrite = () => {
+        if (activeConfigPath !== configPath) {
+          throw new ConfigMutationConflictError("config path changed since last load", {
+            currentHash: null,
+            retryable: false,
+          });
+        }
+      };
+      ioMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
+        if (changeKind === "active path") {
+          activeConfigPath = otherConfigPath;
+        }
+        return {
+          snapshot: createSnapshot({
+            hash: "hash-include-post-write-refreshed",
+            path: changeKind === "refreshed snapshot path" ? otherConfigPath : configPath,
+            parsed: rootConfig,
+            sourceConfig: nextConfig,
+          }),
+          writeOptions: { expectedConfigPath: configPath },
+        };
+      });
+
+      await expect(
+        replaceConfigFile({
+          baseHash: snapshot.hash,
+          snapshot,
+          io: { ...ioMocks, env: {} },
+          writeOptions: {
+            expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite,
+            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+          },
+          nextConfig,
+        }),
+      ).rejects.toThrow("config path changed since last load");
+
+      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "does not create a missing include through a parent symlink swapped during preflight",
@@ -1373,6 +1717,7 @@ describe("config mutate helpers", () => {
             writeOptions: {
               expectedConfigPath: configPath,
               includeFileHashesForWrite: { [pluginsPath]: hashConfigIncludeRaw(null) },
+              assertConfigPathForWrite: allowConfigPathWrite,
               includeFileTargetsForWrite: {
                 [pluginsPath]: await resolveIncludeTarget(pluginsPath),
               },
@@ -1428,6 +1773,7 @@ describe("config mutate helpers", () => {
         snapshot,
         writeOptions: {
           expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         },
         nextConfig: {
@@ -1488,6 +1834,7 @@ describe("config mutate helpers", () => {
           writeOptions: {
             expectedConfigPath: snapshot.path,
             envSnapshotForRestore: { OPENCLAW_TEST_INCLUDE_TOKEN: "old-token" },
+            assertConfigPathForWrite: allowConfigPathWrite,
             includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           },
           nextConfig: {
@@ -1560,6 +1907,7 @@ describe("config mutate helpers", () => {
           snapshot,
           writeOptions: {
             expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
             includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           },
           nextConfig: {
@@ -1617,6 +1965,7 @@ describe("config mutate helpers", () => {
       writeOptions: {
         expectedConfigPath: snapshot.path,
         envSnapshotForRestore: {},
+        assertConfigPathForWrite: allowConfigPathWrite,
         includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
         skipRuntimeSnapshotRefresh: true,
       },
@@ -1698,6 +2047,7 @@ describe("config mutate helpers", () => {
           io: { ...ioMocks, env },
           writeOptions: {
             expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
             includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           },
           nextConfig,
@@ -1766,6 +2116,7 @@ describe("config mutate helpers", () => {
           snapshot,
           writeOptions: {
             expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
             includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           },
           nextConfig,
@@ -1823,6 +2174,7 @@ describe("config mutate helpers", () => {
         snapshot,
         writeOptions: {
           expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           skipPluginValidation: true,
         },

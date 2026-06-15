@@ -205,6 +205,13 @@ export type ConfigWriteOptions = {
    * same config file path that produced the snapshot.
    */
   expectedConfigPath?: string;
+  /** Internal write destination captured by readConfigFileSnapshotForWrite(). */
+  ownedConfigPathForWrite?: string;
+  /**
+   * Internal mutation-start ownership guard. Rechecks that the config path
+   * captured by readConfigFileSnapshotForWrite() is still active at commit.
+   */
+  assertConfigPathForWrite?: () => void;
   /**
    * Paths that must be explicitly removed from the persisted file payload,
    * even if schema/default normalization reintroduces them.
@@ -318,6 +325,7 @@ function assertBaseSnapshotStillCurrent(
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
       currentHash: null,
+      retryable: false,
     });
   }
   const expectedHash = resolveConfigSnapshotHash(snapshot);
@@ -386,10 +394,11 @@ async function rollbackConfigFileWriteIfUnchanged(params: {
   configPath: string;
   previousSnapshot: ConfigFileSnapshot;
   committedHash: string;
+  fsModule: typeof fs;
 }): Promise<boolean> {
   let currentRaw: string | null = null;
   try {
-    currentRaw = await fs.promises.readFile(params.configPath, "utf-8");
+    currentRaw = await params.fsModule.promises.readFile(params.configPath, "utf-8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
@@ -406,6 +415,7 @@ async function rollbackConfigFileWriteIfUnchanged(params: {
       mode: 0o600,
       tempPrefix: path.basename(params.configPath),
       copyFallbackOnPermissionError: true,
+      fileSystem: params.fsModule,
     });
     return true;
   }
@@ -413,7 +423,7 @@ async function rollbackConfigFileWriteIfUnchanged(params: {
     return false;
   }
   try {
-    await fs.promises.unlink(params.configPath);
+    await params.fsModule.promises.unlink(params.configPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
@@ -2250,13 +2260,26 @@ export function createConfigIO(
   }
 
   async function readConfigFileSnapshotForWriteLocal(): Promise<ReadConfigFileSnapshotForWriteResult> {
+    const assertConfigPathForWrite = () => {
+      const activeConfigPath = resolveConfigPathForDeps(deps);
+      if (activeConfigPath !== configPath) {
+        throw new ConfigMutationConflictError("config path changed since last load", {
+          currentHash: null,
+          retryable: false,
+        });
+      }
+    };
+    assertConfigPathForWrite();
     const result = await readConfigFileSnapshotInternal();
+    assertConfigPathForWrite();
     return {
       snapshot: result.snapshot,
       writeOptions: {
+        assertConfigPathForWrite,
         basePluginMetadataSnapshot: result.pluginMetadataSnapshot,
         envSnapshotForRestore: result.envSnapshotForRestore,
         expectedConfigPath: configPath,
+        ownedConfigPathForWrite: configPath,
         includeFileHashesForWrite: result.includeFileHashesForWrite,
         includeFileTargetsForWrite: result.includeFileTargetsForWrite,
         unsetPaths: resolveManagedUnsetPathsForWrite(undefined),
@@ -2318,6 +2341,7 @@ export function createConfigIO(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
   ): Promise<InternalConfigWriteResult> {
+    options.assertConfigPathForWrite?.();
     assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
     clearConfigCache();
     const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
@@ -2640,6 +2664,7 @@ export function createConfigIO(
         copyFallbackOnPermissionError: true,
         fileSystem: deps.fs,
         beforeRename: async () => {
+          options.assertConfigPathForWrite?.();
           if (options.baseSnapshot) {
             assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
           }
@@ -2649,9 +2674,31 @@ export function createConfigIO(
           if (options.baseSnapshot) {
             assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
           }
+          options.assertConfigPathForWrite?.();
         },
       });
       configCommitted = true;
+      try {
+        options.assertConfigPathForWrite?.();
+      } catch (error) {
+        try {
+          const rolledBack = await rollbackConfigFileWriteIfUnchanged({
+            configPath,
+            previousSnapshot: snapshot,
+            committedHash: nextHash,
+            fsModule: deps.fs,
+          });
+          if (rolledBack) {
+            rollbackShippedPluginInstallConfigWriteMigration(pluginInstallConfigMigration);
+          }
+        } catch (rollbackError) {
+          throw new ConfigRuntimeRefreshError(
+            `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
       logConfigOverwrite();
       logConfigWriteAnomalies();
       await appendWriteAudit(
@@ -2810,9 +2857,19 @@ export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
 export async function readConfigFileSnapshotForWrite(options?: {
   skipPluginValidation?: boolean;
 }): Promise<ReadConfigFileSnapshotForWriteResult> {
-  return await createConfigIO(
-    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
-  ).readConfigFileSnapshotForWrite();
+  const readOptions = options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {};
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const result = await createConfigIO(readOptions).readConfigFileSnapshotForWrite();
+      result.writeOptions.assertConfigPathForWrite?.();
+      return result;
+    } catch (error) {
+      if (!(error instanceof ConfigMutationConflictError) || error.retryable || attempt === 2) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("unreachable");
 }
 
 export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
@@ -2823,7 +2880,9 @@ export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
 ): Promise<ConfigWriteResult> {
+  options.assertConfigPathForWrite?.();
   const io = createConfigIO({
+    ...(options.ownedConfigPathForWrite ? { configPath: options.ownedConfigPathForWrite } : {}),
     ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
     ...(options.preservedLegacyRootKeys
       ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
@@ -2850,6 +2909,7 @@ export async function writeConfigFile(
   const writeResult = await io.writeConfigFile(nextCfg, {
     baseSnapshot,
     basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
+    assertConfigPathForWrite: options.assertConfigPathForWrite,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,
       expectedConfigPath: options.expectedConfigPath,
@@ -2932,6 +2992,7 @@ export async function writeConfigFile(
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
   try {
+    options.assertConfigPathForWrite?.();
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig: canonicalSourceConfig,
       refreshOptions: options.runtimeRefresh,
@@ -2953,6 +3014,7 @@ export async function writeConfigFile(
         configPath: io.configPath,
         previousSnapshot: baseSnapshot,
         committedHash: writeResult.persistedHash,
+        fsModule: fs,
       });
       if (rolledBackConfig) {
         restoreEnvChangesIfUnchanged({
