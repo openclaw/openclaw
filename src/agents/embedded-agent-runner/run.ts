@@ -879,6 +879,7 @@ async function runEmbeddedAgentInternal(
       });
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
+      const requestedModelId = modelId;
       const beforeAgentStartResult = hookSelection.beforeAgentStartResult;
       startupStages.mark("hooks");
       await ensureSelectedAgentHarnessPlugin({
