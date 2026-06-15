@@ -1,4 +1,6 @@
 /** Context passed to fatal-error hooks before the process exits. */
+import { spawn } from "node:child_process";
+
 type FatalErrorHookContext = {
   reason: string;
   error?: unknown;
@@ -14,15 +16,36 @@ function formatHookFailure(error: unknown): string {
   return `fatal-error hook failed: ${name}`;
 }
 
-/** Registers a fatal-error hook and returns an unsubscribe callback. */
 export function registerFatalErrorHook(hook: FatalErrorHook): () => void {
   hooks.add(hook);
-  return () => {
-    hooks.delete(hook);
-  };
+  return () => { hooks.delete(hook); };
 }
 
-/** Runs registered fatal-error hooks and returns non-empty diagnostic lines. */
+function runExternalErrorHandler(context: FatalErrorHookContext): void {
+  const handler = process.env.OPENCLAW_ERROR_HANDLER?.trim();
+  if (!handler) return;
+
+  try {
+    const payload: Record<string, unknown> = {
+      schemaVersion: 1,
+      reason: context.reason,
+      timestamp: new Date().toISOString(),
+      pid: process.pid,
+    };
+
+    const child = spawn(handler, [JSON.stringify(payload)], {
+      stdio: ["ignore", "inherit", "inherit"],
+      detached: true,
+      shell: false,
+    });
+
+    child.on("error", () => {});
+    child.unref();
+  } catch (err) {
+    console.error("[fatal-error-hooks] OPENCLAW_ERROR_HANDLER failed:", String(err));
+  }
+}
+
 export function runFatalErrorHooks(context: FatalErrorHookContext): string[] {
   const messages: string[] = [];
   for (const hook of hooks) {
@@ -32,14 +55,14 @@ export function runFatalErrorHooks(context: FatalErrorHookContext): string[] {
         messages.push(message);
       }
     } catch (err) {
-      // Fatal output must keep progressing even if a diagnostic hook itself throws.
       messages.push(formatHookFailure(err));
     }
   }
+  runExternalErrorHandler(context);
   return messages;
 }
 
-/** Clears registered fatal-error hooks; test-only helper. */
 export function resetFatalErrorHooksForTest(): void {
   hooks.clear();
 }
+
