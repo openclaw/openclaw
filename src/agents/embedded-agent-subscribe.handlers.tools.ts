@@ -15,6 +15,7 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
   AgentApprovalEventData,
   AgentCommandOutputEventData,
@@ -52,6 +53,7 @@ import {
   extractToolResultMediaArtifact,
   extractToolErrorCode,
   extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolErrorMessage,
   extractToolResultText,
   filterToolResultMediaUrls,
@@ -226,10 +228,16 @@ function isCronAddAction(args: unknown): boolean {
   return normalizeOptionalLowercaseString(action) === "add";
 }
 
-function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
+function buildToolCallSummary(
+  toolName: string,
+  args: unknown,
+  meta: string | undefined,
+  replaySafe: boolean,
+): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
     meta,
+    replaySafe: replaySafe && !mutation.mutatingAction,
     mutatingAction: mutation.mutatingAction,
     actionFingerprint: mutation.actionFingerprint,
     fileTarget: mutation.fileTarget,
@@ -289,6 +297,36 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
 
 function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
   return readRecordField(asOptionalObjectRecord(result)?.details);
+}
+
+function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  if (
+    toolName !== "message" ||
+    readStringValue(args.provider) ||
+    readStringValue(args.channel) ||
+    !currentProvider
+  ) {
+    return args;
+  }
+  return { ...args, provider: currentProvider };
+}
+
+function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
+  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+  if (toolSend === undefined) {
+    return result;
+  }
+  return {
+    ...readRecordField(result),
+    details: {
+      ...readToolResultDetailsRecord(result),
+      toolSend,
+    },
+  };
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
@@ -856,7 +894,12 @@ async function emitToolResultOutput(params: {
 /** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
-  evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
+  evt: AgentEvent & {
+    toolName: string;
+    toolCallId: string;
+    args: unknown;
+    replaySafe?: boolean;
+  },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
@@ -952,7 +995,11 @@ export function handleToolExecutionStart(
         detailMode: ctx.params.toolProgressDetail ?? "explain",
       }),
     );
-    ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
+    const replaySafe =
+      evt.replaySafe === true ||
+      ctx.params.replaySafeToolNames?.has(rawToolName) === true ||
+      ctx.params.replaySafeToolNames?.has(toolName) === true;
+    ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta, replaySafe));
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
@@ -1031,7 +1078,22 @@ export function handleToolExecutionStart(
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
       if (isMessagingSend) {
-        const sendTarget = extractMessagingToolSend(toolName, argsRecord);
+        const telemetryArgs = applyCurrentMessageProvider(
+          toolName,
+          argsRecord,
+          ctx.params.messageChannel,
+        );
+        const sendTarget = extractMessagingToolSend(toolName, telemetryArgs, {
+          config: ctx.params.config,
+          currentChannelId: ctx.params.currentChannelId,
+          currentMessagingTarget: ctx.params.currentMessagingTarget,
+          currentThreadId:
+            ctx.params.currentThreadId ??
+            parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+          currentMessageId: ctx.params.currentMessageId,
+          replyToMode: ctx.params.replyToMode,
+          hasRepliedRef: ctx.params.hasRepliedRef,
+        });
         if (sendTarget) {
           ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
         }
@@ -1166,6 +1228,7 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
+  const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
   const approvalUnavailable =
@@ -1189,13 +1252,14 @@ export async function handleToolExecutionEnd(
   toolStartData.delete(toolStartKey);
   ctx.state.execLiveUpdateStateById?.delete(toolCallId);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
-  const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
+  const completedReplayUnsafeAction = !isToolError && callSummary?.replaySafe !== true;
   const meta = callSummary?.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   ctx.state.toolMetas.push({
     toolName,
     meta,
+    replaySafe: callSummary?.replaySafe === true,
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -1241,7 +1305,7 @@ export async function handleToolExecutionEnd(
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
-  if (completedMutatingAction || acceptedSessionSpawn || asyncStarted) {
+  if (completedReplayUnsafeAction || acceptedSessionSpawn || asyncStarted) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -1275,8 +1339,10 @@ export async function handleToolExecutionEnd(
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
     if (!isToolError) {
+      const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
+      const confirmedTarget = extractMessagingToolSendResult(pendingTarget, extractionResult);
       ctx.state.messagingToolSentTargets.push({
-        ...pendingTarget,
+        ...confirmedTarget,
         ...(pendingText ? { text: pendingText } : {}),
         ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       });

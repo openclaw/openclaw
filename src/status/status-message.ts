@@ -873,7 +873,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Context: ${contextUsageLabel}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
-    .filter(Boolean)
+    .filter((line): line is string => Boolean(line))
     .join(" · ");
 
   const queueMode = args.queue?.mode ?? "unknown";
@@ -1049,6 +1049,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     voiceLine,
     activationLine,
   ]
-    .filter(Boolean)
+    .filter((line): line is string => Boolean(line))
     .join("\n");
 }

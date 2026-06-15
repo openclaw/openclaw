@@ -1,4 +1,6 @@
 // Telegram plugin module implements bot handlers behavior.
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -36,9 +38,9 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  updateSessionStore,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
@@ -158,6 +160,39 @@ import {
   isTelegramMessageHasNoTextError,
 } from "./network-errors.js";
 import { buildInlineKeyboard } from "./send.js";
+
+function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
+  const toInboundMediaPath = (id: string): string | undefined => {
+    if (
+      !id ||
+      id === "." ||
+      id === ".." ||
+      id.includes("/") ||
+      id.includes("\\") ||
+      id.includes("\0")
+    ) {
+      return undefined;
+    }
+    return `media://inbound/${encodeURIComponent(id)}`;
+  };
+  const decodeInboundMediaId = (id: string): string | undefined => {
+    try {
+      return decodeURIComponent(id);
+    } catch {
+      return undefined;
+    }
+  };
+  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
+  if (canonicalMatch?.[1]) {
+    const id = decodeInboundMediaId(canonicalMatch[1]);
+    return id ? toInboundMediaPath(id) : undefined;
+  }
+  const normalized = mediaPath.replace(/\\/g, "/");
+  if (!normalized.includes("/media/inbound/")) {
+    return undefined;
+  }
+  return toInboundMediaPath(path.posix.basename(normalized));
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -666,7 +701,7 @@ export const registerTelegramHandlers = ({
     runtimeCfg?: OpenClawConfig;
   }): {
     agentId: string;
-    sessionEntry: ReturnType<typeof resolveSessionStoreEntry>["existing"];
+    sessionEntry: ReturnType<typeof getSessionEntry>;
     sessionKey: string;
     model?: string;
   } => {
@@ -708,8 +743,12 @@ export const registerTelegramHandlers = ({
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath);
-    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    const entry = (telegramDeps.getSessionEntry ?? getSessionEntry)({ storePath, sessionKey });
+    const store = Object.fromEntries(
+      (telegramDeps.listSessionEntries ?? listSessionEntries)({ storePath }).map(
+        ({ sessionKey: key, entry: value }) => [key, value],
+      ),
+    );
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
       sessionStore: store,
@@ -1104,9 +1143,13 @@ export const registerTelegramHandlers = ({
     media?: TelegramMediaRef,
   ): TelegramReplyChainEntry => {
     const { sourceMessage: _sourceMessage, ...entry } = node;
+    if (!media?.path) {
+      return entry;
+    }
+    const { mediaRef: _mediaRef, ...entryWithoutProviderMediaRef } = entry;
     return {
-      ...entry,
-      ...(media?.path ? { mediaPath: media.path } : {}),
+      ...entryWithoutProviderMediaRef,
+      mediaPath: media.path,
       ...(media?.contentType ? { mediaType: media.contentType } : {}),
     };
   };
@@ -1114,6 +1157,7 @@ export const registerTelegramHandlers = ({
   const toPromptContextMessage = (
     node: TelegramCachedMessageNode,
     flags?: { replyTarget?: boolean },
+    media?: TelegramMediaRef,
   ) => ({
     message_id: node.messageId,
     thread_id: node.threadId,
@@ -1122,8 +1166,9 @@ export const registerTelegramHandlers = ({
     sender_username: node.senderUsername,
     timestamp_ms: node.timestamp,
     body: node.body,
-    media_type: node.mediaType,
-    media_ref: node.mediaRef,
+    media_type: media?.contentType ?? node.mediaType,
+    media_path: media?.path,
+    media_ref: media?.path ? undefined : node.mediaRef,
     reply_to_id: node.replyToId,
     is_reply_target: flags?.replyTarget === true ? true : undefined,
   });
@@ -1132,6 +1177,7 @@ export const registerTelegramHandlers = ({
     msg: Message,
     replyChainNodes: TelegramCachedMessageNode[],
     options?: TelegramMessageContextOptions,
+    mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
   ): Promise<TelegramPromptContextEntry[]> => {
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = await messageCache.get({
@@ -1163,7 +1209,11 @@ export const registerTelegramHandlers = ({
               order: "chronological",
               relation: "selected_for_current_message",
               messages: conversationContext.map((entry) =>
-                toPromptContextMessage(entry.node, { replyTarget: entry.isReplyTarget }),
+                toPromptContextMessage(
+                  entry.node,
+                  { replyTarget: entry.isReplyTarget },
+                  entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
+                ),
               ),
             },
           },
@@ -1235,10 +1285,39 @@ export const registerTelegramHandlers = ({
         params.ctx,
         replyChainNodes,
       );
+      const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
+      const currentMessageId =
+        typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined;
+      const currentMedia = params.allMedia[0];
+      const currentPromptMediaPath = currentMedia?.path
+        ? resolveTelegramPromptMediaPath(currentMedia.path)
+        : undefined;
+      if (currentMessageId && currentMedia && currentPromptMediaPath) {
+        promptContextMediaByMessageId.set(currentMessageId, {
+          ...currentMedia,
+          path: currentPromptMediaPath,
+        });
+      }
+      const isGroupConversation =
+        params.msg.chat.type === "group" || params.msg.chat.type === "supergroup";
+      if (!isGroupConversation) {
+        for (const entry of replyChain) {
+          const promptMediaPath = entry.mediaPath
+            ? resolveTelegramPromptMediaPath(entry.mediaPath)
+            : undefined;
+          if (entry.messageId && entry.mediaPath && promptMediaPath) {
+            promptContextMediaByMessageId.set(entry.messageId, {
+              path: promptMediaPath,
+              ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
+            });
+          }
+        }
+      }
       const promptContext = await buildPromptContextForMessage(
         params.msg,
         replyChainNodes,
         params.options,
+        promptContextMediaByMessageId,
       );
       const result = await processMessage(
         params.ctx,
@@ -2716,18 +2795,25 @@ export const registerTelegramHandlers = ({
               selection.model === resolvedDefault.model;
 
             try {
-              await updateSessionStore(storePath, (store) => {
-                const sessionKey = sessionState.sessionKey;
-                const entry = store[sessionKey] ?? {};
-                store[sessionKey] = entry;
-                applyModelOverrideToSessionEntry({
-                  entry,
-                  selection: {
-                    provider: selection.provider,
-                    model: selection.model,
-                    isDefault: isDefaultSelection,
-                  },
-                });
+              await patchSessionEntry({
+                storePath,
+                sessionKey: sessionState.sessionKey,
+                fallbackEntry: {
+                  sessionId: randomUUID(),
+                  updatedAt: Date.now(),
+                },
+                replaceEntry: true,
+                update: (entry) => {
+                  applyModelOverrideToSessionEntry({
+                    entry,
+                    selection: {
+                      provider: selection.provider,
+                      model: selection.model,
+                      isDefault: isDefaultSelection,
+                    },
+                  });
+                  return entry;
+                },
               });
             } catch (err) {
               throw new TelegramRetryableCallbackError(err);

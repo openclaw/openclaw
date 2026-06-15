@@ -301,7 +301,7 @@ describe("agentCliCommand", () => {
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
-      expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
       expect(agentCommand).not.toHaveBeenCalled();
       expect(agentModuleLoadCount).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");

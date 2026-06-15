@@ -18,6 +18,7 @@ import {
 import {
   createEmptyPluginRegistry,
   createMockPluginRegistry,
+  createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -798,6 +799,163 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
+  it("records the current provider and transport thread for implicit message sends", async () => {
+    const hasRepliedRef = { value: false };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            id: "slack",
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            threading: {
+              resolveAutoThreadId: ({
+                to,
+                toolContext,
+              }: {
+                to: string;
+                toolContext?: {
+                  currentChannelId?: string;
+                  currentMessagingTarget?: string;
+                  currentThreadTs?: string;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                  hasRepliedRef?: { value: boolean };
+                };
+              }) => {
+                if (
+                  to !== toolContext?.currentMessagingTarget &&
+                  to !== toolContext?.currentChannelId
+                ) {
+                  return undefined;
+                }
+                if (
+                  (toolContext?.replyToMode === "first" ||
+                    toolContext?.replyToMode === "batched") &&
+                  !toolContext.hasRepliedRef?.value
+                ) {
+                  return toolContext.currentThreadTs;
+                }
+                return undefined;
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "message",
+          execute: vi.fn(async () => {
+            hasRepliedRef.value = true;
+            return textToolResult("Sent.");
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+      hookContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "D1",
+        currentMessagingTarget: "user:u1",
+        currentThreadId: "171.222",
+        replyToMode: "first",
+        hasRepliedRef,
+      },
+    });
+
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      to: "user:U1",
+      text: "hello from Codex",
+    });
+
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "slack",
+        to: "user:u1",
+        threadId: "171.222",
+        threadImplicit: true,
+        text: "hello from Codex",
+      },
+    ]);
+  });
+
+  it("records the provider-confirmed route for successful message sends", async () => {
+    const registry = createTestRegistry([
+      {
+        pluginId: "mattermost",
+        plugin: {
+          id: "mattermost",
+          messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+          actions: {
+            extractToolSend: ({ args }: { args: Record<string, unknown> }) =>
+              args.action === "send" && typeof args.to === "string"
+                ? { to: args.to, threadImplicit: true }
+                : null,
+            extractToolSendResult: ({ result }: { result: unknown }) => {
+              const details = requireRecord(
+                requireRecord(result, "message result").details,
+                "message details",
+              );
+              const toolSend = requireRecord(details.toolSend, "tool send details");
+              return {
+                to: String(toolSend.to),
+                threadId: String(toolSend.threadId),
+              };
+            },
+          },
+        },
+        source: "test",
+      },
+    ]);
+    const middleware = vi.fn(async (event: { result: AgentToolResult<unknown> }) => {
+      const details = requireRecord(event.result.details, "middleware details");
+      const toolSend = requireRecord(details.toolSend, "middleware tool send");
+      toolSend.to = "channel:corrupted";
+      toolSend.threadId = "corrupted-root";
+      return undefined;
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "route-details-stripper",
+      pluginName: "Route details stripper",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", {
+        toolSend: {
+          to: "channel:resolved-id",
+          threadId: "root-post-id",
+        },
+      }),
+    );
+
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      provider: "mattermost",
+      to: "town-square",
+      text: "hello from Codex",
+    });
+
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "mattermost",
+        to: "channel:resolved-id",
+        threadId: "root-post-id",
+        threadImplicit: undefined,
+        threadSuppressed: undefined,
+        text: "hello from Codex",
+      },
+    ]);
+  });
+
   it("records message tool media attachment aliases as delivery evidence", async () => {
     const toolResult = {
       content: [{ type: "text", text: "Sent." }],
@@ -1230,6 +1388,45 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("done"));
+    expect(result.sideEffectEvidence).toBe(true);
+  });
+
+  it("keeps audited core read-only dynamic tools replay-safe", async () => {
+    const bridge = createBridgeWithToolResult("search", textToolResult("no matches"));
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "search",
+      arguments: { query: "scheduler" },
+    });
+
+    expect(result).toEqual(expectInputText("no matches"));
+    expect(result.sideEffectEvidence).toBeUndefined();
+  });
+
+  it("keeps async-started read-only tools replay-unsafe", async () => {
+    const bridge = createBridgeWithToolResult(
+      "search",
+      textToolResult("Background task started.", {
+        async: true,
+        status: "started",
+        taskId: "task-1",
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "search",
+      arguments: { query: "scheduler" },
+    });
+
+    expect(result.asyncStarted).toBe(true);
     expect(result.sideEffectEvidence).toBe(true);
   });
 

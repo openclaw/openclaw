@@ -56,6 +56,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["SessionsResetParams", ["agentId"]],
   ["SessionsDeleteParams", ["agentId"]],
   ["SessionsCompactParams", ["agentId"]],
+  ["SessionsResolveParams", ["allowMissing"]],
   ["SessionsUsageParams", ["agentId", "agentScope"]],
   ["ChatHistoryParams", ["agentId"]],
   ["ChatSendParams", ["agentId"]],

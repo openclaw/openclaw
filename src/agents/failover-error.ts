@@ -398,6 +398,11 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
+/** Return true when an abort-signal reason is an intentional timeout; plain AbortError is a cancellation, not a timeout. */
+export function isSignalTimeoutReason(reason: unknown): boolean {
+  return readErrorName(reason) === "TimeoutError";
+}
+
 function failoverReasonFromClassification(
   classification: FailoverClassification | null,
 ): FailoverReason | null {

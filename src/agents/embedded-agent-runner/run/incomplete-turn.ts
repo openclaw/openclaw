@@ -12,12 +12,13 @@ import {
 import type { EmbeddedAgentExecutionContract } from "../../../config/types.agent-defaults.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
+import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
 } from "../../execution-contract.js";
+import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasMessagingToolDeliveryEvidence,
@@ -44,6 +45,13 @@ type IncompleteTurnAttempt = Pick<
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
+  | "heartbeatToolResponse"
+  | "toolMediaUrls"
+  | "toolAudioAsVoice"
+  | "toolTrustedLocalMedia"
+  | "hasToolMediaBlockReply"
+  | "didDeliverSourceReplyViaMessageTool"
+  | "messagingToolSourceReplyPayloads"
   | "didSendViaMessagingTool"
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
@@ -109,14 +117,13 @@ const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"
 
 export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
+  hasTerminalOutput?: boolean;
   lastAssistant?: { stopReason?: string } | null;
 }): boolean {
-  // A tool-use stop reason means the model issued a tool call and expected
-  // to continue after tool results. If the session ended before the
-  // post-tool assistant message arrived, the turn is incomplete regardless
-  // of whether pre-tool text exists — that text is preliminary analysis,
-  // not the final answer. (#76477)
-  return params.lastAssistant?.stopReason === "toolUse";
+  const stopReason = params.lastAssistant?.stopReason;
+  // Tool-use expects a post-tool continuation; length means the output budget
+  // ended before a complete final answer. Partial visible text completes neither.
+  return stopReason === "toolUse" || (stopReason === "length" && !params.hasTerminalOutput);
 }
 
 const PLANNING_ONLY_PROMISE_RE =
@@ -234,17 +241,17 @@ export type PlanningOnlyPlanDetails = {
 };
 
 /**
- * Marks whether retrying the attempt can safely replay the prompt. Mutating
- * tools, async work, committed delivery, spawned sessions, and cron writes all
- * count as side effects that make blind replay unsafe.
+ * Marks whether retrying the attempt can safely replay the prompt. Concrete
+ * tool-instance policy, async work, committed delivery, spawned sessions, and
+ * cron writes all contribute side-effect evidence.
  */
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
+  const hadUnsafeTools = params.toolMetas.some((entry) => entry.replaySafe !== true);
   const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
-    hadMutatingTools ||
+    hadUnsafeTools ||
     hadAsyncStartedTool ||
     hasMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
@@ -260,6 +267,57 @@ export function resolveAttemptReplayMetadata(attempt: {
   replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
 }): EmbeddedRunAttemptResult["replayMetadata"] {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
+}
+
+type TerminalAttemptState = Pick<
+  EmbeddedRunAttemptResult,
+  | "clientToolCalls"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "heartbeatToolResponse"
+  | "lastToolError"
+  | "toolMediaUrls"
+  | "toolAudioAsVoice"
+  | "toolTrustedLocalMedia"
+  | "hasToolMediaBlockReply"
+  | "didDeliverSourceReplyViaMessageTool"
+  | "messagingToolSourceReplyPayloads"
+  | "successfulCronAdds"
+> &
+  Partial<
+    Pick<
+      EmbeddedRunAttemptResult,
+      | "acceptedSessionSpawns"
+      | "messagingToolSentTexts"
+      | "messagingToolSentMediaUrls"
+      | "messagingToolSentTargets"
+    >
+  > & {
+    toolMetas?: readonly { asyncStarted?: boolean }[];
+  };
+
+export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean {
+  return Boolean(
+    attempt.clientToolCalls ||
+    attempt.yieldDetected ||
+    attempt.didSendDeterministicApprovalPrompt ||
+    attempt.heartbeatToolResponse ||
+    attempt.lastToolError ||
+    attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
+    attempt.toolAudioAsVoice ||
+    attempt.toolTrustedLocalMedia ||
+    attempt.hasToolMediaBlockReply ||
+    attempt.didDeliverSourceReplyViaMessageTool ||
+    attempt.messagingToolSourceReplyPayloads?.length ||
+    hasCommittedMessagingToolDeliveryEvidence({
+      messagingToolSentTexts: attempt.messagingToolSentTexts ?? [],
+      messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls ?? [],
+      messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
+    }) ||
+    hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+    hasAsyncStartedToolActivity(attempt.toolMetas) ||
+    (attempt.successfulCronAdds ?? 0) > 0,
+  );
 }
 
 /**
@@ -281,16 +339,33 @@ export function resolveIncompleteTurnPayloadText(params: {
   // produced. (#76477)
   const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  // Unsigned thinking payloads count toward payloadCount but carry no user-visible
-  // content; bypass the visible-text guard when unsigned thinking was the only output
-  // so that incomplete-turn stall detection fires below. (#89787)
-  const unsignedThinkingOnlyTerminal =
+  const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
+  // A length terminal is provider-confirmed output-budget exhaustion. Partial
+  // visible text is not a complete final answer and must not bypass recovery.
+  const lengthTerminal = isIncompleteTerminalAssistantTurn({
+    hasAssistantVisibleText: params.payloadCount > 0,
+    hasTerminalOutput,
+    lastAssistant: assistant,
+  });
+  // Thinking payloads can count toward payloadCount but carry no user-visible
+  // content; bypass the visible-text guard when thinking was the only output
+  // so that incomplete-turn stall detection fires below. (#89787, #91953)
+  const thinkingOnlyTerminal =
     params.payloadCount !== 0 &&
     !joinAssistantTexts(params.attempt.assistantTexts).length &&
-    isUnsignedThinkingOnlyAssistantTurn(assistant);
+    !hasTerminalOutput &&
+    Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
+  const emptyResponseAssistant = isEmptyResponseAssistantTurn({
+    payloadCount: params.payloadCount,
+    attempt: params.attempt,
+  });
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal && !unsignedThinkingOnlyTerminal) ||
+    (params.payloadCount !== 0 &&
+      !toolUseTerminal &&
+      !lengthTerminal &&
+      !thinkingOnlyTerminal &&
+      !emptyResponseAssistant) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -320,17 +395,15 @@ export function resolveIncompleteTurnPayloadText(params: {
   const stopReason = params.attempt.lastAssistant?.stopReason;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
+    hasTerminalOutput,
     lastAssistant: params.attempt.lastAssistant,
   });
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
-  const emptyResponseAssistant = isEmptyResponseAssistantTurn({
-    payloadCount: params.payloadCount,
-    attempt: params.attempt,
-  });
   if (
     !incompleteTerminalAssistant &&
+    !lengthTerminal &&
     !reasoningOnlyAssistant &&
-    !unsignedThinkingOnlyTerminal &&
+    !thinkingOnlyTerminal &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -541,6 +614,20 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
 }
 
+function hasEmptyPostToolFinalAssistantTurn(attempt: IncompleteTurnAttempt): boolean {
+  // assistantTexts aggregates earlier narration. After tools, the latest typed
+  // assistant message is the final-delivery contract and must carry the answer.
+  const currentAssistant = Object.hasOwn(attempt, "currentAttemptAssistant")
+    ? attempt.currentAttemptAssistant
+    : attempt.lastAssistant;
+  return Boolean(
+    attempt.toolMetas.length > 0 &&
+    !hasAttemptTerminalState(attempt) &&
+    currentAssistant &&
+    extractAssistantVisibleText(currentAssistant).trim().length === 0,
+  );
+}
+
 // Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
 // returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
 // so the content.length > 0 guard is required to distinguish the two cases.
@@ -555,17 +642,62 @@ function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
 }
 
-function isEmptyResponseAssistantTurn(params: {
-  payloadCount: number;
+export function shouldRetrySilentErrorAssistantTurn(params: {
   attempt: Pick<
-    IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+    EmbeddedRunAttemptResult,
+    | "assistantTexts"
+    | "clientToolCalls"
+    | "yieldDetected"
+    | "didSendDeterministicApprovalPrompt"
+    | "heartbeatToolResponse"
+    | "lastToolError"
+    | "toolMediaUrls"
+    | "toolAudioAsVoice"
+    | "toolTrustedLocalMedia"
+    | "didDeliverSourceReplyViaMessageTool"
+    | "messagingToolSourceReplyPayloads"
+    | "replayMetadata"
   >;
+  assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
-  if (params.payloadCount !== 0) {
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return false;
   }
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+  if (hasAttemptTerminalState(params.attempt)) {
+    return false;
+  }
+  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
+    return false;
+  }
+
+  const assistant = params.assistant;
+  if (!assistant || assistant.stopReason !== "error") {
+    return false;
+  }
+
+  const content = (assistant as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return !hasPositiveOutputTokenUsage(assistant);
+  }
+
+  return hasOnlyAssistantReasoningContent(assistant);
+}
+
+function isEmptyResponseAssistantTurn(params: {
+  payloadCount: number;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  const emptyPostToolFinalAssistant = hasEmptyPostToolFinalAssistantTurn(params.attempt);
+  if (params.payloadCount !== 0 && !emptyPostToolFinalAssistant) {
+    return false;
+  }
+  if (
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 &&
+    !emptyPostToolFinalAssistant
+  ) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
@@ -580,7 +712,7 @@ function isEmptyResponseAssistantTurn(params: {
       hasAssistantVisibleText: false,
       lastAssistant: assistant,
     }) ||
-    isReasoningOnlyAssistantTurn(assistant)
+    (isReasoningOnlyAssistantTurn(assistant) && !emptyPostToolFinalAssistant)
   ) {
     return false;
   }
@@ -589,10 +721,7 @@ function isEmptyResponseAssistantTurn(params: {
 
 function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   payloadCount: number;
-  attempt: Pick<
-    IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
-  >;
+  attempt: IncompleteTurnAttempt;
 }): boolean {
   if (isEmptyResponseAssistantTurn(params)) {
     return true;
@@ -744,12 +873,14 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null;
+  const emptyPostToolFinalAssistant = hasEmptyPostToolFinalAssistantTurn(params.attempt);
   if (
     assistant?.stopReason === "stop" &&
     OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
       normalizeLowercaseStringOrEmpty(params.provider ?? ""),
     ) &&
-    !hasPositiveOutputTokenUsage(assistant)
+    !hasPositiveOutputTokenUsage(assistant) &&
+    !emptyPostToolFinalAssistant
   ) {
     return null;
   }
@@ -761,6 +892,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
       modelApi: params.modelApi,
       executionContract: params.executionContract,
     }) ||
+    emptyPostToolFinalAssistant ||
     // Keep the generic zero-usage stop retry for providers that expose a
     // provider-neutral "nothing was generated" signal, even outside the
     // provider allowlist above.

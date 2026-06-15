@@ -249,6 +249,7 @@ export function createCronPromptExecutor(params: {
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
             sourceReplyDeliveryMode,
+            requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,

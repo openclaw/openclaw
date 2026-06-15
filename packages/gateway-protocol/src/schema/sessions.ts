@@ -232,6 +232,8 @@ export const SessionsResolveParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
+    /** Return a successful `{ ok: false }` response when the selector does not match a session. */
+    allowMissing: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

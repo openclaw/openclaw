@@ -92,7 +92,7 @@ function scenarioWithCoverage(params: {
     },
     objective: "Exercise test coverage.",
     successCriteria: ["Evidence is recorded."],
-    sourcePath: params.sourcePath ?? "qa/scenarios/test/test-scenario.md",
+    sourcePath: params.sourcePath ?? "qa/scenarios/test/test-scenario.yaml",
     execution,
   };
 }
@@ -121,7 +121,7 @@ describe("qa coverage report", () => {
     expect(inventory.scorecardTaxonomy.taxonomyFulfillmentPercent).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.evidenceRefCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.scenarioCoverageIdCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.unmappedCoverageIdCount).toBe(0);
+    expect(inventory.scorecardTaxonomy.unknownCoverageIdCount).toBe(0);
     expect(inventory.scorecardTaxonomy.validationIssues.length).toBeGreaterThan(0);
     expect(
       inventory.scorecardTaxonomy.validationIssues.every(
@@ -157,7 +157,7 @@ describe("qa coverage report", () => {
       kind: "playwright",
       path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
       role: "primary",
-      scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.md"],
+      scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
     });
     expect(inventory.scenarioPacks.map((pack) => pack.id)).toEqual([
       "observability",
@@ -184,7 +184,7 @@ describe("qa coverage report", () => {
     expect(report).toContain("- Missing coverage metadata: 0");
     expect(report).toContain("- Overlapping coverage IDs:");
     expect(report).toContain("memory.recall");
-    expect(report).toContain("primary: memory-recall (qa/scenarios/memory/memory-recall.md)");
+    expect(report).toContain("primary: memory-recall (qa/scenarios/memory/memory-recall.yaml)");
     expect(report).toContain("secondary: active-memory-preprompt-recall");
     expect(report).toContain("## Scenario Packs");
     expect(report).toContain(
@@ -210,7 +210,7 @@ describe("qa coverage report", () => {
       "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; partial): profiles: release, smoke-ci; coverage IDs:",
     );
     expect(report).toContain("primary:playwright:ui/src/ui/e2e/chat-flow.e2e.test.ts (ui.control)");
-    expect(report).not.toContain("### Unmapped Scenario Coverage IDs");
+    expect(report).not.toContain("### Unknown Scenario Coverage IDs");
   });
 
   it("renders Playwright matches as qa suite targets", () => {
@@ -236,7 +236,7 @@ describe("qa coverage report", () => {
       primary: [TEST_BROWSER_COVERAGE_ID],
       executionKind: "playwright",
       executionPath: playwrightExecutionPath,
-      sourcePath: "qa/scenarios/ui/control-ui-chat-flow-playwright.md",
+      sourcePath: "qa/scenarios/ui/control-ui-chat-flow-playwright.yaml",
     });
     const report = renderQaScenarioMatchesMarkdownReport({
       query: "mixed",
@@ -292,7 +292,7 @@ describe("qa coverage report", () => {
     });
 
     expect(report.fulfilledFeatureCount).toBe(0);
-    expect(report.categories[0]?.mappingStatus).toBe("missing");
+    expect(report.categories[0]?.coverageStatus).toBe("missing");
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "coverage-id-not-found",
       "coverage-id-missing-primary-evidence",
@@ -310,7 +310,7 @@ describe("qa coverage report", () => {
       scenarios: [
         scenarioWithCoverage({
           primary: [TEST_BROWSER_COVERAGE_ID],
-          sourcePath: "qa/scenarios/ui/control-ui-chat-flow-playwright.md",
+          sourcePath: "qa/scenarios/ui/control-ui-chat-flow-playwright.yaml",
           executionKind: "playwright",
           executionPath: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
         }),
@@ -320,9 +320,9 @@ describe("qa coverage report", () => {
     expect(report.validationIssues).toStrictEqual([]);
     expect(report.fulfilledCategoryCount).toBe(1);
     expect(report.fulfilledFeatureCount).toBe(1);
-    expect(report.categories[0]?.mappingStatus).toBe("mapped");
+    expect(report.categories[0]?.coverageStatus).toBe("covered");
     expect(report.categories[0]?.scenarioRefs).toStrictEqual([
-      "qa/scenarios/ui/control-ui-chat-flow-playwright.md",
+      "qa/scenarios/ui/control-ui-chat-flow-playwright.yaml",
     ]);
     expect(report.categories[0]?.evidence).toStrictEqual([
       {
@@ -330,7 +330,7 @@ describe("qa coverage report", () => {
         kind: "playwright",
         path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
         role: "primary",
-        scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.md"],
+        scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
       },
     ]);
   });
@@ -389,14 +389,14 @@ describe("qa coverage report", () => {
       scenarios: [
         scenarioWithCoverage({
           primary: [TEST_EXECUTABLE_COVERAGE_ID],
-          sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
         }),
       ],
     });
 
     expect(report.validationIssues).toStrictEqual([]);
     expect(report.categories[0]?.scenarioRefs).toStrictEqual([
-      "qa/scenarios/channels/dm-chat-baseline.md",
+      "qa/scenarios/channels/dm-chat-baseline.yaml",
     ]);
     expect(report.categories[0]?.evidence).toStrictEqual([
       {
@@ -404,7 +404,7 @@ describe("qa coverage report", () => {
         kind: "qa-scenario",
         path: null,
         role: "primary",
-        scenarioRefs: ["qa/scenarios/channels/dm-chat-baseline.md"],
+        scenarioRefs: ["qa/scenarios/channels/dm-chat-baseline.yaml"],
       },
     ]);
   });
@@ -422,7 +422,7 @@ describe("qa coverage report", () => {
     });
 
     expect(report.fulfilledFeatureCount).toBe(0);
-    expect(report.categories[0]?.mappingStatus).toBe("partial");
+    expect(report.categories[0]?.coverageStatus).toBe("partial");
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "coverage-id-not-found",
       "coverage-id-missing-primary-evidence",

@@ -6,11 +6,16 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
+  getChannelAgentToolMeta,
+  getPluginToolMeta,
   type EmbeddedRunAttemptParams,
+  isAgentToolReplaySafe,
   isToolWrappedWithBeforeToolCallHook,
   isToolResultError,
   isMessagingTool,
@@ -51,6 +56,12 @@ type CodexDynamicToolHookContext = {
   sessionKey?: string;
   runId?: string;
   channelId?: string;
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+  currentThreadId?: string;
+  replyToMode?: "off" | "first" | "all" | "batched";
+  hasRepliedRef?: { value: boolean };
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
@@ -66,6 +77,22 @@ type CodexDynamicToolSchemaQuarantine = {
   tool: string;
   violations: readonly string[];
 };
+
+function applyCurrentMessageProvider(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+): Record<string, unknown> {
+  const hasProvider =
+    typeof args.provider === "string" && args.provider.trim().length > 0
+      ? true
+      : typeof args.channel === "string" && args.channel.trim().length > 0;
+  const provider = currentProvider?.trim();
+  if (toolName !== "message" || hasProvider || !provider) {
+    return args;
+  }
+  return { ...args, provider };
+}
 
 /** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
@@ -154,6 +181,16 @@ export function createCodexDynamicToolBridge(params: {
     runtime: "codex",
     ...toolResultHookContext,
   });
+  const isReplaySafeTool = (tool: AnyAgentTool) =>
+    isAgentToolReplaySafe(tool, {
+      declaredReplaySafe: (candidate) => {
+        const pluginMeta = getPluginToolMeta(candidate as AnyAgentTool);
+        if (pluginMeta) {
+          return pluginMeta.replaySafe === true;
+        }
+        return getChannelAgentToolMeta(candidate as never) ? false : undefined;
+      },
+    });
   const legacyExtensionRunner =
     createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
   const directToolNames = new Set([
@@ -213,9 +250,30 @@ export function createCodexDynamicToolBridge(params: {
         // Prepare before marking side-effect evidence; argument preparation can
         // fail without the target tool actually starting.
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
+        const messagingTelemetryArgs = applyCurrentMessageProvider(
+          toolName,
+          telemetryArgs,
+          params.hookContext?.currentChannelProvider,
+        );
+        const messagingTarget =
+          isMessagingTool(toolName) && isMessagingToolSendAction(toolName, telemetryArgs)
+            ? extractMessagingToolSend(toolName, messagingTelemetryArgs, {
+                config: params.hookContext?.config,
+                currentChannelId: params.hookContext?.currentChannelId,
+                currentMessagingTarget: params.hookContext?.currentMessagingTarget,
+                currentThreadId: params.hookContext?.currentThreadId,
+                replyToMode: params.hookContext?.replyToMode,
+                hasRepliedRef: params.hookContext?.hasRepliedRef,
+              })
+            : undefined;
         didStartExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);
         const rawIsError = isCodexToolResultError(rawResult);
+        const confirmedMessagingTarget =
+          !rawIsError && messagingTarget
+            ? extractMessagingToolSendResult(messagingTarget, rawResult)
+            : messagingTarget;
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
@@ -237,11 +295,12 @@ export function createCodexDynamicToolBridge(params: {
         notifyAgentToolResult(options?.onAgentToolResult, toolName, result, resultIsError);
         collectToolTelemetry({
           toolName,
-          args,
+          args: telemetryArgs,
           result,
           mediaTrustResult: rawResult,
           telemetry,
           isError: resultIsError,
+          messagingTarget: confirmedMessagingTarget,
         });
         void runAgentHarnessAfterToolCallHook({
           toolName,
@@ -270,11 +329,13 @@ export function createCodexDynamicToolBridge(params: {
             isToolResultYield(rawResult) ||
             isToolResultYield(result),
         );
-        withDynamicToolAsyncStarted(
+        const asyncStarted =
+          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
+        withDynamicToolAsyncStarted(response, asyncStarted);
+        return withSideEffectEvidence(
           response,
-          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result),
+          asyncStarted || (terminalType !== "blocked" && !isReplaySafeTool(toolEntry.tool)),
         );
-        return withSideEffectEvidence(response, terminalType !== "blocked");
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         notifyAgentToolResult(
@@ -315,7 +376,7 @@ export function createCodexDynamicToolBridge(params: {
             },
             "error",
           ),
-          didStartExecution,
+          didStartExecution && !isReplaySafeTool(toolEntry.tool),
         );
       }
     },
@@ -631,6 +692,7 @@ function collectToolTelemetry(params: {
   mediaTrustResult?: AgentToolResult<unknown>;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
+  messagingTarget?: MessagingToolSend;
 }): void {
   if (params.isError) {
     return;
@@ -683,11 +745,13 @@ function collectToolTelemetry(params: {
   const mediaUrls = collectMediaUrls(params.args);
   params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
   params.telemetry.messagingToolSentTargets.push({
-    tool: params.toolName,
-    provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
-    accountId: readFirstString(params.args, ["accountId", "account_id"]),
-    to: readFirstString(params.args, ["to", "target", "recipient"]),
-    threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
+    ...(params.messagingTarget ?? {
+      tool: params.toolName,
+      provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
+      accountId: readFirstString(params.args, ["accountId", "account_id"]),
+      to: readFirstString(params.args, ["to", "target", "recipient"]),
+      threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
+    }),
     ...(text ? { text } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
   });

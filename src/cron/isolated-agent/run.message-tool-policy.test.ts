@@ -9,6 +9,7 @@ import {
   cleanupDirectCronSessionMock,
   dispatchCronDeliveryMock,
   getChannelPluginMock,
+  isCliProviderMock,
   isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
@@ -20,6 +21,7 @@ import {
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
   restoreFastTestEnv,
+  runCliAgentMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
@@ -347,6 +349,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         },
         messageToolEnabled: true,
         messageToolForced: false,
+        requireExplicitMessageTarget: true,
+        requireExplicitMessageTargetEvidence: true,
         directFallback: true,
       }),
       skillsSnapshot: emptySkillsSnapshot,
@@ -704,10 +708,37 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expectEmbeddedRunFields({
       sourceReplyDeliveryMode: undefined,
       forceMessageTool: false,
+      requireExplicitMessageTarget: true,
       messageChannel: "messagechat",
       messageTo: "123",
       currentChannelId: "123",
     });
+    expect(expectEmbeddedRunPrompt()).toContain("with an explicit target");
+  });
+
+  it("requires explicit message targets for CLI-backed announce delivery", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob(),
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      {
+        messageChannel: "messagechat",
+        requireExplicitMessageTarget: true,
+      },
+      "CLI run params",
+    );
   });
 
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
@@ -1072,13 +1103,34 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
-  it("skips cron fallback delivery when the message tool sends to the bound target", async () => {
-    await expectCronFallbackSkippedForMessageToolDelivery({
-      sentTargets: [],
-      job: {
-        id: "message-tool-bound-target",
-        name: "Message Tool Bound Target",
+  it("uses cron fallback delivery when the message tool returns no target evidence", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    runEmbeddedAgentMock.mockResolvedValue(makeMessageToolRunResult([]));
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        id: "message-tool-no-target-evidence",
+        name: "Message Tool No Target Evidence",
+      }),
+    });
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expectDispatchFields({
+      deliveryRequested: true,
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [],
+        verifiedMessageToolDelivery: false,
+        satisfiesSourceDelivery: false,
+        unverifiedMessageToolDelivery: false,
       },
+    });
+    expectDeliveryFields(result.delivery, {
+      intended: { channel: "messagechat", to: "123", source: "explicit" },
+      resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
+      fallbackUsed: true,
+      delivered: true,
     });
   });
 
