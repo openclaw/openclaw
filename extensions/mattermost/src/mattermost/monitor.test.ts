@@ -17,6 +17,7 @@ import {
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
+  shouldDropEmptyMattermostBody,
   shouldFinalizeMattermostPreviewAfterDispatch,
   shouldClearMattermostDraftPreview,
   shouldSuppressMattermostDefaultToolProgressMessages,
@@ -1065,5 +1066,62 @@ describe("resolveMattermostReactionChannelId", () => {
 
   it("returns undefined when neither payload location includes channel_id", () => {
     expect(resolveMattermostReactionChannelId({})).toBeUndefined();
+  });
+});
+
+describe("shouldDropEmptyMattermostBody", () => {
+  it("drops a non-mention message that normalizes to an empty body", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        wasMentioned: false,
+        rawText: "   ",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a message that still has body text", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "hello",
+        wasMentioned: false,
+        rawText: "hello",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a bare mention in a group (wasMentioned)", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        wasMentioned: true,
+        rawText: "@openclaw",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a bare mention when raw text contains the bot @username (covers DMs)", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        wasMentioned: false,
+        rawText: "@OpenClaw",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("still drops an empty body when the bot username is unknown", () => {
+    expect(
+      shouldDropEmptyMattermostBody({
+        bodyText: "",
+        wasMentioned: false,
+        rawText: "@someoneelse",
+        botUsername: undefined,
+      }),
+    ).toBe(true);
   });
 });
