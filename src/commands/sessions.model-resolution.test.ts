@@ -8,6 +8,15 @@ import {
   writeStore,
 } from "./sessions.test-helpers.js";
 
+vi.mock("../infra/state-migrations.js", () => ({
+  autoMigrateLegacyState: vi.fn(async () => ({
+    migrated: false,
+    skipped: true,
+    changes: [],
+    warnings: [],
+  })),
+}));
+
 mockSessionsConfig();
 
 import { sessionsCommand } from "./sessions.js";
