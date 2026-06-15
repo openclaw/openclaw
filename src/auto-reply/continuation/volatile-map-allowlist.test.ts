@@ -135,6 +135,28 @@ const ALLOWLIST = [
     restartContract:
       "Lost on process restart; new ReplyOperation instances attach fresh backend handles when work resumes.",
   },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.ts",
+    symbol: "followupAdmissionBarriersByKey",
+    owner: "reply run registry singleton",
+    purpose:
+      "Maps each active sessionKey to its in-flight followup admission barrier (a settle Promise plus the bound sessionId) that gates whether a followup reply may be admitted.",
+    safeVolatileClassification:
+      "Each barrier holds a live in-process settle Promise and a failsafe timer; Promises and timer handles cannot be serialized or resumed across process boundaries.",
+    restartContract:
+      "Lost on process restart; durable followup intent remains in TaskFlow and the session store, and the next admission pass arms a fresh barrier.",
+  },
+  {
+    file: "src/auto-reply/reply/reply-run-registry.ts",
+    symbol: "afterClearCallbacksByOperation",
+    owner: "reply run registry singleton",
+    purpose:
+      "Weakly associates a live ReplyOperation with the set of after-clear callbacks to run once that operation no longer owns its session lane.",
+    safeVolatileClassification:
+      "WeakMap keys are live ReplyOperation process objects and the values are in-process callback closures; persisting either would be meaningless and would defeat weak-reference semantics.",
+    restartContract:
+      "Lost on process restart; new ReplyOperation instances register fresh after-clear callbacks when work resumes.",
+  },
 ] as const satisfies readonly AllowlistEntry[];
 
 // These older reply-continuation symbols are already pinned by
