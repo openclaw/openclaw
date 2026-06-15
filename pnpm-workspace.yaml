@@ -88,6 +88,7 @@ minimumReleaseAgeExclude:
   - "sqlite-vec-*"
   - "rastermill"
   - "clawpdf"
+  - "zod-compiler@1.10.2"
 
 nodeLinker: hoisted
 blockExoticSubdeps: true

@@ -1964,7 +1964,7 @@
     "tsx": "4.22.3",
     "unrun": "0.3.0",
     "vitest": "4.1.7",
-    "zod-compiler": "^1.9.1"
+    "zod-compiler": "^1.10.2"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"
