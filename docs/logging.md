@@ -119,7 +119,9 @@ OpenClaw preserves the original structured log arguments alongside these fields
 so existing parsers that read numbered tslog argument keys keep working.
 
 Diagnostic events (such as `model.usage`, `session.state`, or `message.delivery`)
-are also written to the file log. See
+are dispatched through the diagnostic event bus and consumed by the stability
+recorder, OTLP exporter, and other diagnostic listeners — they are not written
+to the JSONL file log. See
 [Diagnostic event catalog](/gateway/opentelemetry#diagnostic-event-catalog) for
 the exact field names and structure of each event type.
 
