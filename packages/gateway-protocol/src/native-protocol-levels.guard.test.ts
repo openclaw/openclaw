@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it } from "vitest";
+import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./version.js";
 
 /**
@@ -176,6 +177,39 @@ describe("native Gateway protocol levels", () => {
         /maxProtocol:\s*PROTOCOL_VERSION/,
         "connect params must advertise PROTOCOL_VERSION as maxProtocol.",
       );
+    }
+  });
+
+  it("emits named string-literal unions as Swift enums", async () => {
+    const swiftGeneratedPath =
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
+    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
+
+    for (const [name, schema] of Object.entries(ProtocolSchemas)) {
+      const branches = schema.anyOf ?? schema.oneOf;
+      if (!branches || branches.length < 2) {
+        continue;
+      }
+      const values = branches.map((branch) => branch.const);
+      if (values.some((value) => typeof value !== "string")) {
+        continue;
+      }
+
+      const enumStart = `public enum ${name}: String, Codable, Sendable {`;
+      const start = swiftGenerated.indexOf(enumStart);
+      if (start < 0) {
+        throw new Error(`${swiftGeneratedPath}: missing Swift enum for ${name}.`);
+      }
+      const end = swiftGenerated.indexOf("\n}\n", start);
+      const enumSource = swiftGenerated.slice(start, end);
+      for (const value of values) {
+        assertPattern(
+          enumSource,
+          swiftGeneratedPath,
+          new RegExp(`= ${JSON.stringify(value)}$`, "m"),
+          `${name} must include the ${JSON.stringify(value)} literal.`,
+        );
+      }
     }
   });
 });
