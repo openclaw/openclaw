@@ -139,6 +139,25 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("rejects non-Discord requester ids for Discord moderation actions", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "timeout",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+          durationMin: 5,
+        },
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
   it("keeps read-only guild lookups available from non-Discord requesters", async () => {
     const cfg = discordConfig({ channelInfo: true });
     await handleDiscordMessageAction({
