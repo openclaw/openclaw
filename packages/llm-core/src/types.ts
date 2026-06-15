@@ -227,6 +227,7 @@ export interface TextContent {
   type: "text";
   text: string;
   textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
+  thinkingSignature?: string; // e.g., for reasoning_details stored on text blocks when no dedicated thinking block exists
 }
 
 /** Provider reasoning/thinking content block, including opaque replay signatures. */
