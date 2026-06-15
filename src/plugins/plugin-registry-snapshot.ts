@@ -5,6 +5,7 @@ import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
@@ -328,9 +329,30 @@ function hasMismatchedPersistedBundledPluginRoot(
   if (!bundledPluginsDir) {
     return false;
   }
+  const allowedBundledRoots = resolveComparableBundledPluginRoots(bundledPluginsDir);
   return index.plugins.some(
     (plugin) =>
-      plugin.origin === "bundled" && !isPathInsideOrEqual(plugin.rootDir, bundledPluginsDir),
+      plugin.origin === "bundled" &&
+      !allowedBundledRoots.some((allowedRoot) => isPathInsideOrEqual(plugin.rootDir, allowedRoot)),
+  );
+}
+
+function resolveComparableBundledPluginRoots(bundledPluginsDir: string): string[] {
+  const roots = [resolveComparablePath(bundledPluginsDir)];
+  const legacyRoot = buildLegacyBundledRootPath(bundledPluginsDir);
+  if (legacyRoot && isSourceCheckoutBundledPluginRoot(legacyRoot)) {
+    roots.push(resolveComparablePath(legacyRoot));
+  }
+  return [...new Set(roots)];
+}
+
+function isSourceCheckoutBundledPluginRoot(extensionsDir: string): boolean {
+  const packageRoot = path.dirname(extensionsDir);
+  return (
+    fs.existsSync(extensionsDir) &&
+    fs.existsSync(path.join(packageRoot, ".git")) &&
+    fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+    fs.existsSync(path.join(packageRoot, "src"))
   );
 }
 
