@@ -14,6 +14,15 @@ import {
   writeStore,
 } from "./sessions.test-helpers.js";
 
+vi.mock("../infra/state-migrations.js", () => ({
+  autoMigrateLegacyState: vi.fn(async () => ({
+    migrated: false,
+    skipped: true,
+    changes: [],
+    warnings: [],
+  })),
+}));
+
 /**
  * Catalog #20 — `model` / `modelProvider` reported as agent-config, not ACP runtime actuals.
  *
