@@ -962,6 +962,7 @@ export const zh_CN = {
       webSearchGetKey: "获取 key：{url}",
       webSearchAuthProfile: "凭据：使用已有 {provider} auth profile。",
       webSearchKeyEnv: "API key：通过 {env} 环境变量提供。",
+      webSearchKeyFree: "Web search 已就绪 —— 此 provider 无需 API key。",
       webSearchKeyRef: "API key：通过 secret reference 配置。",
       webSearchKeyStored: "API key：已存入配置。",
       webSearchNeedsKey: "添加 key 前 web_search 无法工作。",

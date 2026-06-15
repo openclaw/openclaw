@@ -1,16 +1,16 @@
 // Session reset cleanup tests protect ACP metadata resets, active run shutdown,
 // hook emission, thread bindings, and browser/MCP cleanup side effects.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { embeddedRunMock, readSessionStore, testState, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   bootstrapCacheMocks,
@@ -256,9 +256,103 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
   });
-  const store = readSessionStore(storePath) as Record<string, { acp?: ResetAcpState }>;
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { acp?: ResetAcpState }
+  >;
   expect(store["agent:main:main"]).not.toHaveProperty("acp");
   expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
+});
+
+test("sessions.reset finishes after lifecycle rotation during destructive cleanup", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  const prepareFreshSession = installAcpRuntimeBackendWithFreshSession();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:main",
+    sessionId: "sess-main",
+    meta: resolvedAcpMeta({
+      recordId: "agent:main:main",
+      backendSessionId: "backend-session-1",
+      runtimeOptions: {
+        runtimeMode: "auto",
+        timeoutSeconds: 30,
+      },
+    }),
+  });
+  let lifecycleCurrent = true;
+  acpManagerMocks.closeSession.mockImplementationOnce(async () => {
+    lifecycleCurrent = false;
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+  const reset = await performGatewaySessionReset({
+    key: "main",
+    reason: "new",
+    commandSource: "gateway:agent",
+    assertCurrent: () => {
+      if (!lifecycleCurrent) {
+        throw new Error("stale lifecycle");
+      }
+    },
+  });
+
+  expect(reset.ok).toBe(true);
+  expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
+  expect(prepareFreshSession).not.toHaveBeenCalled();
+});
+
+test("sessions.reset preserves a newer session after lifecycle rotation", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  installAcpRuntimeBackendWithFreshSession();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+  writeAcpSessionMetaForMigration({
+    sessionKey: "agent:main:main",
+    sessionId: "sess-main",
+    meta: resolvedAcpMeta({
+      recordId: "agent:main:main",
+      backendSessionId: "backend-session-1",
+    }),
+  });
+  let lifecycleCurrent = true;
+  acpManagerMocks.closeSession.mockImplementationOnce(async () => {
+    lifecycleCurrent = false;
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry("new-owner-session"),
+      },
+    });
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+  await expect(
+    performGatewaySessionReset({
+      key: "main",
+      reason: "new",
+      commandSource: "gateway:agent",
+      assertCurrent: () => {
+        if (!lifecycleCurrent) {
+          throw new Error("stale lifecycle");
+        }
+      },
+    }),
+  ).rejects.toThrow("stale lifecycle");
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
+  expect(store["agent:main:main"]?.sessionId).toBe("new-owner-session");
 });
 
 test("sessions.reset closes child ACP runtime handles spawned from the parent", async () => {
@@ -337,19 +431,29 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
   };
   const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   const codexStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
-  await writeSessionStoreForTestAsync(mainStorePath, {
-    "agent:main:main": {
-      sessionId: "sess-main",
-      updatedAt: Date.now(),
-    },
-  });
-  await writeSessionStoreForTestAsync(codexStorePath, {
-    "agent:codex:acp:cross-store-child": {
-      sessionId: "sess-codex-child",
-      updatedAt: Date.now(),
-      spawnedBy: "agent:main:main",
-    },
-  });
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(codexStorePath), { recursive: true });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify({
+      main: {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    }),
+    "utf-8",
+  );
+  await fs.writeFile(
+    codexStorePath,
+    JSON.stringify({
+      "agent:codex:acp:cross-store-child": {
+        sessionId: "sess-codex-child",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      },
+    }),
+    "utf-8",
+  );
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:main",
     meta: {

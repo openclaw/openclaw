@@ -118,6 +118,160 @@ function makeFinishChunk(
 }
 
 describe("OpenAI-compatible completions params", () => {
+  it("skips unreadable schemas while preserving healthy official OpenAI tools", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        ...context,
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {},
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        toolChoice: { type: "function", function: { name: "lookup" } },
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "lookup",
+          description: "Lookup",
+          parameters: {},
+          strict: false,
+        },
+      },
+    ]);
+    expect(capturedPayload?.tool_choice).toEqual({
+      type: "function",
+      function: { name: "lookup" },
+    });
+  });
+
+  it("fails locally when a pinned official OpenAI tool is unreadable", async () => {
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        ...context,
+        tools: [
+          {
+            name: "broken",
+            description: "Broken tool.",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        toolChoice: { type: "function", function: { name: "broken" } },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain('requested unavailable tool "broken"');
+  });
+
+  it("preserves the empty tools marker for tool history after quarantining every schema", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc",
+                name: "lookup",
+                arguments: {},
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "done" }],
+            toolCallId: "call_abc",
+          },
+          ...context.messages,
+        ],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken tool.",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.tools).toEqual([]);
+  });
+
+  it("does not reread an unreadable tool inventory length", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const tools = new Proxy([], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const stream = streamOpenAICompletions(model, { ...context, tools } as never, {
+      apiKey: "sk-test",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).not.toHaveProperty("tools");
+  });
+
   it("clamps requested max tokens to the model output cap", async () => {
     let capturedMaxTokens: unknown;
     const stream = streamOpenAICompletions(createModel(32_000), context, {

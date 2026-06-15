@@ -14,9 +14,16 @@ import {
 } from "../infra/diagnostic-error-metadata.js";
 import {
   emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
+  type DiagnosticEventPrivateData,
   type DiagnosticToolParamsSummary,
   type DiagnosticToolSource,
 } from "../infra/diagnostic-events.js";
+import {
+  cloneDiagnosticContentValue,
+  resolveDiagnosticModelContentCapturePolicy,
+  type DiagnosticModelContentCapturePolicy,
+} from "../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -700,6 +707,26 @@ export function buildBlockedToolResult(params: {
   };
 }
 
+// Build the private (trusted-listener-only) tool content payload for a tool
+// execution diagnostic event. Raw args/results never ride the public event bus;
+// consumers (e.g. diagnostics-otel) bound and redact before export.
+function buildToolContentPrivateData(
+  policy: DiagnosticModelContentCapturePolicy,
+  args: { input: unknown; output?: unknown; includeOutput: boolean },
+): DiagnosticEventPrivateData | undefined {
+  if (!policy.toolInputs && !policy.toolOutputs) {
+    return undefined;
+  }
+  const toolContent: { toolInput?: unknown; toolOutput?: unknown } = {};
+  if (policy.toolInputs) {
+    toolContent.toolInput = cloneDiagnosticContentValue(args.input);
+  }
+  if (args.includeOutput && policy.toolOutputs) {
+    toolContent.toolOutput = cloneDiagnosticContentValue(args.output);
+  }
+  return Object.keys(toolContent).length > 0 ? { toolContent } : undefined;
+}
+
 function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
   if (params === null) {
     return { kind: "null" };
@@ -1117,6 +1144,9 @@ export function wrapToolWithBeforeToolCallHook(
     ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
     emitDiagnostics: options.emitDiagnostics !== false,
   };
+  // Resolved once per wrap from the same opt-in config gate the model-content
+  // path uses; controls whether tool input/output rides the trusted private channel.
+  const toolContentPolicy = resolveDiagnosticModelContentCapturePolicy(ctx?.config);
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -1235,24 +1265,37 @@ export function wrapToolWithBeforeToolCallHook(
               toolCallId,
             });
           }
-          emitTrustedDiagnosticEvent({
-            type: "tool.execution.completed",
-            ...eventBase,
-            durationMs,
-          });
+          emitTrustedDiagnosticEventWithPrivateData(
+            {
+              type: "tool.execution.completed",
+              ...eventBase,
+              durationMs,
+            },
+            buildToolContentPrivateData(toolContentPolicy, {
+              input: executeParams,
+              output: result,
+              includeOutput: true,
+            }),
+          );
         }
         return result;
       } catch (err) {
         const cause = unwrapErrorCause(err);
         const errorCode = diagnosticHttpStatusCode(cause);
         if (hookOptions.emitDiagnostics) {
-          emitTrustedDiagnosticEvent({
-            type: "tool.execution.error",
-            ...eventBase,
-            durationMs: Date.now() - startedAt,
-            errorCategory: diagnosticErrorCategory(cause),
-            ...(errorCode ? { errorCode } : {}),
-          });
+          emitTrustedDiagnosticEventWithPrivateData(
+            {
+              type: "tool.execution.error",
+              ...eventBase,
+              durationMs: Date.now() - startedAt,
+              errorCategory: diagnosticErrorCategory(cause),
+              ...(errorCode ? { errorCode } : {}),
+            },
+            buildToolContentPrivateData(toolContentPolicy, {
+              input: executeParams,
+              includeOutput: false,
+            }),
+          );
         }
         await recordLoopOutcome({
           ctx,
@@ -1314,11 +1357,20 @@ export function rewrapToolWithBeforeToolCallHook(
     wrappedContext && typeof wrappedContext === "object"
       ? (wrappedContext as HookContext)
       : undefined;
-  return wrapToolWithBeforeToolCallHook(
-    source && typeof source === "object" ? (source as AnyAgentTool) : tool,
-    ctx ?? preservedContext,
-    options,
-  );
+  const sourceTool = source && typeof source === "object" ? (source as AnyAgentTool) : tool;
+  if (sourceTool === tool) {
+    return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
+  }
+  // Keep schema and metadata replacements applied after the original wrap while
+  // restoring the unwrapped execute function for the new hook context.
+  const rewrapSource: AnyAgentTool = {
+    ...tool,
+    execute: sourceTool.execute,
+  };
+  delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
+  copyPluginToolMeta(tool, rewrapSource);
+  copyChannelAgentToolMeta(tool as never, rewrapSource as never);
+  return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }
 
 /** Copy before_tool_call marker metadata when another wrapper replaces a tool. */

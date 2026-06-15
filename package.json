@@ -91,6 +91,7 @@
     "!dist/extensions/google-meet/**",
     "!dist/extensions/googlechat/**",
     "!dist/extensions/line/**",
+    "!dist/extensions/llama-cpp/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/memory-lancedb/**",
     "!dist/extensions/matrix/**",
@@ -584,6 +585,10 @@
     "./plugin-sdk/agent-harness": {
       "types": "./dist/plugin-sdk/agent-harness.d.ts",
       "default": "./dist/plugin-sdk/agent-harness.js"
+    },
+    "./plugin-sdk/agent-harness-exec-review-runtime": {
+      "types": "./dist/plugin-sdk/agent-harness-exec-review-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-harness-exec-review-runtime.js"
     },
     "./plugin-sdk/agent-harness-runtime": {
       "types": "./dist/plugin-sdk/agent-harness-runtime.d.ts",
@@ -1165,6 +1170,10 @@
       "types": "./dist/plugin-sdk/memory-host-status.d.ts",
       "default": "./dist/plugin-sdk/memory-host-status.js"
     },
+    "./plugin-sdk/message-tool-delivery-hints": {
+      "types": "./dist/plugin-sdk/message-tool-delivery-hints.d.ts",
+      "default": "./dist/plugin-sdk/message-tool-delivery-hints.js"
+    },
     "./plugin-sdk/models-provider-runtime": {
       "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
       "default": "./dist/plugin-sdk/models-provider-runtime.js"
@@ -1444,11 +1453,12 @@
     "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node scripts/check.mjs",
-    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm lint:kysely",
+    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
     "check:changelog-attributions": "node scripts/check-changelog-attributions.mjs",
+    "check:database-first-legacy-stores": "node scripts/check-database-first-legacy-stores.mjs",
     "check:deprecated-api-usage": "node scripts/check-deprecated-api-usage.mjs",
     "check:deprecated-jsdoc": "node scripts/check-deprecated-jsdoc.mjs",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
@@ -1587,6 +1597,7 @@
     "lint:tmp:no-random-messaging": "node scripts/check-no-random-messaging-tmp.mjs",
     "lint:tmp:no-raw-channel-fetch": "node scripts/check-no-raw-channel-fetch.mjs",
     "lint:tmp:no-raw-http2-imports": "node scripts/check-no-raw-http2-imports.mjs",
+    "lint:tmp:session-accessor-boundary": "node scripts/check-session-accessor-boundary.mjs",
     "lint:tmp:tsgo-core-boundary": "node scripts/check-tsgo-core-boundary.mjs",
     "lint:ui:no-raw-window-open": "node scripts/check-no-raw-window-open.mjs",
     "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",
@@ -1661,7 +1672,6 @@
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
     "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
     "release:prep": "node scripts/release-preflight.mjs --fix",
-    "rtt": "node --import tsx scripts/rtt.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
     "start": "node openclaw.mjs",
@@ -1808,6 +1818,9 @@
     "test:perf:imports:changed": "node scripts/test-projects-imports.mjs --changed origin/main",
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
+    "test:sqlite:perf": "node --import tsx scripts/bench-sqlite-state.ts --profile default --output .artifacts/sqlite-perf/default.json",
+    "test:sqlite:perf:large": "node --import tsx scripts/bench-sqlite-state.ts --profile large --output .artifacts/sqlite-perf/large.json",
+    "test:sqlite:perf:smoke": "node --import tsx scripts/bench-sqlite-state.ts --profile smoke --output .artifacts/sqlite-perf/smoke.json",
     "test:plugins:gateway-gauntlet": "node scripts/check-plugin-gateway-gauntlet.mjs",
     "test:plugins:kitchen-sink-live": "bash -lc 'if [ -x \"$HOME/.local/bin/openclaw-testbox-env\" ]; then exec \"$HOME/.local/bin/openclaw-testbox-env\" pnpm openclaw qa suite --provider-mode live-frontier --scenario kitchen-sink-live-openai; fi; exec pnpm openclaw qa suite --provider-mode live-frontier --scenario kitchen-sink-live-openai'",
     "test:plugins:kitchen-sink-rpc": "node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mjs",
@@ -1939,7 +1952,7 @@
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260527.2",
     "@vitest/coverage-v8": "4.1.7",
-    "esbuild": "0.28.0",
+    "esbuild": "0.28.1",
     "jscpd": "4.2.4",
     "jsdom": "29.1.1",
     "lit": "3.3.3",

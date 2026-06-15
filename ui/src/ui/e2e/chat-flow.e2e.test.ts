@@ -221,6 +221,103 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("starts the workspace files panel collapsed and toggles it open", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "artifacts.list": {
+          artifacts: [
+            {
+              download: { mode: "bytes" },
+              id: "artifact-1",
+              mimeType: "image/png",
+              sizeBytes: 128,
+              title: "preview.png",
+              type: "image",
+            },
+          ],
+        },
+        "sessions.files.list": {
+          browser: {
+            entries: [
+              {
+                kind: "directory",
+                name: "src",
+                path: "src",
+                sessionKind: "modified",
+              },
+              {
+                kind: "file",
+                name: "package.json",
+                path: "package.json",
+                size: 4096,
+              },
+            ],
+            path: "",
+          },
+          files: [
+            {
+              kind: "modified",
+              missing: false,
+              name: "AGENTS.md",
+              path: "/workspace/AGENTS.md",
+              size: 2048,
+            },
+          ],
+          root: "/workspace",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Expand session workspace" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+
+      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
+        timeout: 10_000,
+      });
+      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+      await page.getByText("preview.png").waitFor({ timeout: 10_000 });
+      await page.getByText("Project files").waitFor({ timeout: 10_000 });
+      await page.locator(".chat-workspace-rail__file-name", { hasText: "package.json" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+      expect(await gateway.getRequests("artifacts.list")).toHaveLength(1);
+
+      await page.getByRole("button", { name: "Collapse session workspace" }).click();
+      await page.getByRole("button", { name: "Expand session workspace" }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+
+      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
+        timeout: 10_000,
+      });
+      await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+
+      await page.setViewportSize({ height: 900, width: 1000 });
+      expect(await page.locator(".chat-workspace-rail").isHidden()).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
     const context = await browser.newContext({
       locale: "en-US",

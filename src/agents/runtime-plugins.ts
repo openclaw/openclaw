@@ -58,6 +58,7 @@ export function ensureRuntimePluginsLoaded(params: {
       config: params.config,
       workspaceDir,
       ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
+      ...(startupPluginIds === undefined ? {} : { forceFullRuntimeForChannelPlugins: true }),
       runtimeOptions: allowGatewaySubagentBinding
         ? { allowGatewaySubagentBinding: true }
         : undefined,

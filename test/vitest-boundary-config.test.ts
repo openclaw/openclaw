@@ -1,10 +1,7 @@
 // Vitest boundary config tests validate boundary test configuration.
 import { describe, expect, it } from "vitest";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
-import {
-  createBoundaryVitestConfig,
-  loadBoundaryIncludePatternsFromEnv,
-} from "./vitest/vitest.boundary.config.ts";
+import { createBoundaryVitestConfig } from "./vitest/vitest.boundary.config.ts";
 import { boundaryTestFiles } from "./vitest/vitest.unit-paths.mjs";
 
 function requireTestConfig(config: ReturnType<typeof createBoundaryVitestConfig>) {
@@ -13,12 +10,6 @@ function requireTestConfig(config: ReturnType<typeof createBoundaryVitestConfig>
   }
   return config.test;
 }
-
-describe("loadBoundaryIncludePatternsFromEnv", () => {
-  it("returns null when no include file is configured", () => {
-    expect(loadBoundaryIncludePatternsFromEnv({})).toBeNull();
-  });
-});
 
 describe("boundary vitest config", () => {
   it("keeps boundary suites on the non-isolated runner with shared test bootstrap", () => {

@@ -64,7 +64,7 @@ export {
 export {
   DEFAULT_QA_AGENT_IDENTITY_MARKDOWN,
   hasQaScenarioPack,
-  listQaScenarioMarkdownPaths,
+  listQaScenarioYamlPaths,
   type QaBootstrapScenarioCatalog,
   type QaScenarioExecution,
   type QaScenarioFlow,
@@ -76,7 +76,7 @@ export {
   readQaScenarioExecutionConfig,
   readQaScenarioOverviewMarkdown,
   readQaScenarioPack,
-  readQaScenarioPackMarkdown,
+  readQaScenarioPackYamlSource,
   validateQaScenarioExecutionConfig,
 } from "./src/scenario-catalog.js";
 export { createQaSelfCheckScenario } from "./src/self-check-scenario.js";
@@ -106,5 +106,6 @@ export {
   type QaSuiteStartLabFn,
   type QaSuiteSummaryJson,
   type QaSuiteSummaryJsonParams,
-  runQaSuite,
+  runQaFlowSuite,
 } from "./src/suite.js";
+export { runQaSuite, type QaSuiteRuntimeResult } from "./src/suite-launch.runtime.js";
