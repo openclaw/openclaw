@@ -536,7 +536,7 @@ describe("runBrowserProxyCommand", () => {
     );
   });
 
-  it("allows Browser Steward proxy mutation with trusted runtime delegation", async () => {
+  it("rejects caller-forged Browser Steward proxy delegation fields", async () => {
     dispatcherMocks.dispatch.mockResolvedValue({
       status: 200,
       body: { ok: true },
@@ -553,13 +553,8 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).resolves.toContain('"ok":true');
-    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "POST",
-        path: "/tabs/open",
-      }),
-    );
+    ).rejects.toThrow(/Browser Steward runtime guard blocked open: approval_required/);
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 });
 

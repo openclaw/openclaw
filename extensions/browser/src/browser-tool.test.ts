@@ -583,7 +583,7 @@ describe("Browser Steward runtime guard", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("propagates trusted Browser Steward delegation to node proxy params", async () => {
+  it("keeps Browser Steward delegation local before node proxy dispatch", async () => {
     mockSingleBrowserProxyNode();
     const tool = createBrowserTool({
       agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
@@ -602,12 +602,18 @@ describe("Browser Steward runtime guard", () => {
       expect.objectContaining({
         command: "browser.proxy",
         params: expect.objectContaining({
-          agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
-          browserStewardRuntimeDelegated: true,
           path: "/tabs/open",
         }),
       }),
     );
+    const params = mockCallArg<{ params?: Record<string, unknown> }>(
+      gatewayMocks.callGatewayTool,
+      0,
+      2,
+    ).params;
+    expect(params).not.toHaveProperty("agentSessionKey");
+    expect(params).not.toHaveProperty("browserStewardRuntimeApproved");
+    expect(params).not.toHaveProperty("browserStewardRuntimeDelegated");
   });
 });
 

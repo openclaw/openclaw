@@ -34,8 +34,6 @@ type BrowserProxyParams = {
   timeoutMs?: number;
   profile?: string;
   agentSessionKey?: string;
-  browserStewardRuntimeApproved?: boolean;
-  browserStewardRuntimeDelegated?: boolean;
 };
 
 type BrowserProxyFile = {
@@ -261,8 +259,6 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
       action: resolveBrowserStewardProxyAction({ method, path, body }),
       profile: requestedProfile,
       agentSessionKey: params.agentSessionKey,
-      approved: params.browserStewardRuntimeApproved === true,
-      delegated: params.browserStewardRuntimeDelegated === true,
       request: {
         method,
         path,

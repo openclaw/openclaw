@@ -320,8 +320,6 @@ async function callBrowserProxy(params: {
   timeoutMs?: number;
   profile?: string;
   agentSessionKey?: string;
-  browserStewardApproved?: boolean;
-  browserStewardDelegated?: boolean;
 }): Promise<BrowserProxyResult> {
   const proxyTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
@@ -341,9 +339,7 @@ async function callBrowserProxy(params: {
         body: params.body,
         timeoutMs: proxyTimeoutMs,
         profile: params.profile,
-        agentSessionKey: params.agentSessionKey,
-        browserStewardRuntimeApproved: params.browserStewardApproved === true,
-        browserStewardRuntimeDelegated: params.browserStewardDelegated === true,
+        ...(params.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
       },
       idempotencyKey: crypto.randomUUID(),
     },
@@ -577,9 +573,7 @@ export function createBrowserTool(opts?: {
               body: proxyOpts.body,
               timeoutMs: proxyOpts.timeoutMs,
               profile: proxyOpts.profile,
-              agentSessionKey: opts?.agentSessionKey,
-              browserStewardApproved: opts?.browserStewardApproved,
-              browserStewardDelegated: opts?.browserStewardDelegated,
+              agentSessionKey: browserStewardRuntimeDecision ? undefined : opts?.agentSessionKey,
             });
             const mapping = await persistProxyFiles(proxy.files);
             applyProxyPaths(proxy.result, mapping);
