@@ -228,10 +228,16 @@ function isCronAddAction(args: unknown): boolean {
   return normalizeOptionalLowercaseString(action) === "add";
 }
 
-function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
+function buildToolCallSummary(
+  toolName: string,
+  args: unknown,
+  meta: string | undefined,
+  replaySafe: boolean,
+): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
     meta,
+    replaySafe: replaySafe && !mutation.mutatingAction,
     mutatingAction: mutation.mutatingAction,
     actionFingerprint: mutation.actionFingerprint,
     fileTarget: mutation.fileTarget,
@@ -888,7 +894,12 @@ async function emitToolResultOutput(params: {
 /** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
-  evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
+  evt: AgentEvent & {
+    toolName: string;
+    toolCallId: string;
+    args: unknown;
+    replaySafe?: boolean;
+  },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
@@ -984,7 +995,11 @@ export function handleToolExecutionStart(
         detailMode: ctx.params.toolProgressDetail ?? "explain",
       }),
     );
-    ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
+    const replaySafe =
+      evt.replaySafe === true ||
+      ctx.params.replaySafeToolNames?.has(rawToolName) === true ||
+      ctx.params.replaySafeToolNames?.has(toolName) === true;
+    ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta, replaySafe));
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
     );
@@ -1237,13 +1252,14 @@ export async function handleToolExecutionEnd(
   toolStartData.delete(toolStartKey);
   ctx.state.execLiveUpdateStateById?.delete(toolCallId);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
-  const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
+  const completedReplayUnsafeAction = !isToolError && callSummary?.replaySafe !== true;
   const meta = callSummary?.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   ctx.state.toolMetas.push({
     toolName,
     meta,
+    replaySafe: callSummary?.replaySafe === true,
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -1289,7 +1305,7 @@ export async function handleToolExecutionEnd(
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
-  if (completedMutatingAction || acceptedSessionSpawn || asyncStarted) {
+  if (completedReplayUnsafeAction || acceptedSessionSpawn || asyncStarted) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,

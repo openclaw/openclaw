@@ -655,7 +655,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
-  it("keeps read-only subagents list actions replay-safe", async () => {
+  it("keeps action-dependent subagents calls replay-unsafe", async () => {
     const { ctx } = createTestContext();
 
     await handleToolExecutionStart(
@@ -681,6 +681,39 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       } as never,
     );
 
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("keeps audited core read-only tools replay-safe", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.replaySafeToolNames = new Set(["search"]);
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "search",
+        toolCallId: "tool-search",
+        args: { query: "scheduler" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "search",
+        toolCallId: "tool-search",
+        isError: false,
+        result: { matches: [] },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "search", replaySafe: true }),
+    ]);
     expect(ctx.state.replayState).toEqual({
       replayInvalid: false,
       hadPotentialSideEffects: false,

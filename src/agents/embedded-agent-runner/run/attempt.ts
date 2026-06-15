@@ -130,6 +130,7 @@ import {
 } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
+  getChannelAgentToolMeta,
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
@@ -213,6 +214,7 @@ import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
+import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
@@ -2266,6 +2268,24 @@ export async function runEmbeddedAttempt(
         isPluginTool: (tool) =>
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
       });
+      const replaySafetyOptions = {
+        declaredReplaySafe: (candidate: { name?: string }) => {
+          const pluginMeta = getPluginToolMeta(
+            candidate as Parameters<typeof getPluginToolMeta>[0],
+          );
+          if (pluginMeta) {
+            return pluginMeta.replaySafe === true;
+          }
+          return getChannelAgentToolMeta(candidate as never) ? false : undefined;
+        },
+      };
+      const isReplaySafeTool = (tool: { name?: string }) =>
+        isAgentToolReplaySafe(tool, replaySafetyOptions);
+      const replaySafeTools = new Set(uncompactedEffectiveTools.filter(isReplaySafeTool));
+      const replaySafeToolNames = collectReplaySafeToolNames(
+        uncompactedEffectiveTools,
+        replaySafetyOptions,
+      );
       // Directory exact-name hydration cannot distinguish a hidden catalog tool
       // from a visible client tool that shadows it. Other modes preserve the
       // existing client/plugin coexistence behavior and use core conflicts only.
@@ -3469,6 +3489,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           builtinToolNames,
+          replaySafeToolNames,
           internalEvents: params.internalEvents,
         }),
       );
@@ -3511,6 +3532,7 @@ export async function runEmbeddedAttempt(
             toolName: toolParams.toolName,
             toolCallId: toolParams.toolCallId,
             args: toolParams.input,
+            replaySafe: replaySafeTools.has(toolParams.tool as never),
             execute: async () =>
               await toolParams.tool.execute(
                 toolParams.toolCallId,
@@ -5089,6 +5111,7 @@ export async function runEmbeddedAttempt(
           ): entry is {
             toolName: string;
             meta?: string;
+            replaySafe?: boolean;
             asyncStarted?: boolean;
             asyncTaskRunId?: string;
             asyncTaskId?: string;
@@ -5098,12 +5121,14 @@ export async function runEmbeddedAttempt(
           const normalized: {
             toolName: string;
             meta?: string;
+            replaySafe: boolean;
             asyncStarted?: true;
             asyncTaskRunId?: string;
             asyncTaskId?: string;
           } = {
             toolName: entry.toolName,
             meta: entry.meta,
+            replaySafe: entry.replaySafe === true,
           };
           if (entry.asyncStarted === true) {
             normalized.asyncStarted = true;

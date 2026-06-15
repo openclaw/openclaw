@@ -1336,6 +1336,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       toolName: string;
       toolCallId: string;
       args: unknown;
+      replaySafe?: boolean;
       execute: () => Promise<T>;
     }): Promise<T> => {
       await handleToolExecutionStart(ctx, {
@@ -1343,6 +1344,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
         args: toolParams.args,
+        replaySafe: toolParams.replaySafe,
       } as never);
       try {
         const result = await toolParams.execute();

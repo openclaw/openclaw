@@ -313,6 +313,7 @@ export class CodexAppServerEventProjector {
       assistantTexts.length > 0
         ? this.createAssistantMessage(assistantTexts.join("\n\n"))
         : undefined;
+    const currentAttemptAssistant = this.createCurrentAttemptAssistantMessage();
     // Each snapshot entry is tagged with a stable mirror identity of the
     // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
     // from this identity rather than from snapshot position or content
@@ -385,6 +386,7 @@ export class CodexAppServerEventProjector {
       assistantTexts,
       toolMetas,
       lastAssistant,
+      currentAttemptAssistant,
       ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
@@ -614,10 +616,10 @@ export class CodexAppServerEventProjector {
       this.completedItemIds.add(itemId);
     }
     this.rememberAssistantPhase(item);
-    if (item?.type === "agentMessage" && typeof item.text === "string" && item.text) {
+    if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
-      if (this.isCommentaryAssistantItem(item.id)) {
+      if (item.text && this.isCommentaryAssistantItem(item.id)) {
         this.emitCommentaryProgress({ itemId: item.id, text: item.text });
       }
     }
@@ -752,7 +754,7 @@ export class CodexAppServerEventProjector {
     }
     for (const item of turn.items ?? []) {
       this.rememberAssistantPhase(item);
-      if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
+      if (item.type === "agentMessage" && typeof item.text === "string") {
         this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
       }
@@ -1688,6 +1690,26 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.assistantItemOrder.push(itemId);
+  }
+
+  private createCurrentAttemptAssistantMessage(): AssistantMessage | undefined {
+    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
+      const itemId = this.assistantItemOrder[i];
+      if (
+        !itemId ||
+        this.isCommentaryAssistantItem(itemId) ||
+        !this.assistantTextByItem.has(itemId)
+      ) {
+        continue;
+      }
+      const text = this.assistantTextByItem.get(itemId) ?? "";
+      const normalizedText = text.trim();
+      if (normalizedText && this.toolProgressTexts.has(normalizedText)) {
+        continue;
+      }
+      return this.createAssistantMessage(text);
+    }
+    return undefined;
   }
 
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {

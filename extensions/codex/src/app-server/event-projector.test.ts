@@ -309,6 +309,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
+    expect(result.currentAttemptAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
     expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
     expectUsageFields(result.lastAssistant?.usage, {
       input: 3,
@@ -751,6 +752,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toEqual([]);
     expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
   });
 
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
@@ -1050,6 +1052,34 @@ describe("CodexAppServerEventProjector", () => {
       },
     ]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("checking thread context");
+  });
+
+  it("preserves an empty final assistant item after tool activity", async () => {
+    const projector = await createProjector();
+    projector.recordDynamicToolCall({
+      callId: "call-search",
+      tool: "memory_search",
+      arguments: { query: "scheduler" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-search",
+      tool: "memory_search",
+      success: true,
+      sideEffectEvidence: false,
+      contentItems: [{ type: "inputText", text: "no matches" }],
+    });
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-before-tool", text: "Checking the scheduler now." },
+        { type: "agentMessage", id: "msg-final", text: "" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["Checking the scheduler now."]);
+    expect(result.currentAttemptAssistant?.content).toEqual([{ type: "text", text: "" }]);
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
   });
 
   it("streams commentary agent messages as keyed progress events", async () => {

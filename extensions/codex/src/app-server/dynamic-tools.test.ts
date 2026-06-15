@@ -1391,6 +1391,45 @@ describe("createCodexDynamicToolBridge", () => {
     expect(result.sideEffectEvidence).toBe(true);
   });
 
+  it("keeps audited core read-only dynamic tools replay-safe", async () => {
+    const bridge = createBridgeWithToolResult("search", textToolResult("no matches"));
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "search",
+      arguments: { query: "scheduler" },
+    });
+
+    expect(result).toEqual(expectInputText("no matches"));
+    expect(result.sideEffectEvidence).toBeUndefined();
+  });
+
+  it("keeps async-started read-only tools replay-unsafe", async () => {
+    const bridge = createBridgeWithToolResult(
+      "search",
+      textToolResult("Background task started.", {
+        async: true,
+        status: "started",
+        taskId: "task-1",
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "search",
+      arguments: { query: "scheduler" },
+    });
+
+    expect(result.asyncStarted).toBe(true);
+    expect(result.sideEffectEvidence).toBe(true);
+  });
+
   it("does not mark pre-execution argument failures as side-effect evidence", async () => {
     const execute = vi.fn(async () => textToolResult("should not run"));
     const bridge = createCodexDynamicToolBridge({
