@@ -185,7 +185,8 @@ plugins.
       dashboard session, except when `session.dmScope: "main"` is configured
       and the current parent is the agent's main session — in that case `/new`
       resets the main session in place. Typed `/reset` still runs the Gateway's
-      in-place reset.
+      in-place reset. Use `/model default` when you want to clear a pinned
+      session model selection.
     </Note>
 
   </Accordion>
