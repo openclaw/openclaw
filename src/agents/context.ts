@@ -25,9 +25,25 @@ import {
   beginContextWindowCacheRefresh,
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
-import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
-import { loadModelCatalog } from "./model-catalog.runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
+
+// Lazy loaders for catalog modules — preserved as dynamic imports to respect
+// the lazy loading boundary. Errors are caught to prevent process crashes.
+function lazyLoadModelCatalog(): Promise<typeof import("./model-catalog.runtime.js")> {
+  return import("./model-catalog.runtime.js").catch(() => {
+    return { loadModelCatalog: async () => [] } as typeof import("./model-catalog.runtime.js");
+  });
+}
+
+function lazyLoadStaticCatalog(): Promise<
+  typeof import("./embedded-agent-runner/model.static-catalog.js")
+> {
+  return import("./embedded-agent-runner/model.static-catalog.js").catch(() => {
+    return {
+      loadBundledProviderStaticCatalogContextModels: async () => [],
+    } as typeof import("./embedded-agent-runner/model.static-catalog.js");
+  });
+}
 
 export {
   ANTHROPIC_CONTEXT_1M_TOKENS,
@@ -185,6 +201,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
 
 export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
   const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
+
   // NOTE: If a load is already in-flight (singleton match), cfgOverride is
   // discarded — the in-flight promise uses whichever config started first.
   // The sync path (config direct scan) handles caller-provided overrides.
@@ -201,43 +218,44 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
   }
   const stagedTokenCache = new Map<string, number>();
 
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = Promise.resolve()
-    .then(async () => {
+  // Start catalog discovery eagerly (not deferred via .then()) so microtask
+  // boundaries are minimized. The loadPromise allows callers to await completion.
+  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = (async () => {
+    if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
+      return;
+    }
+    try {
+      // Lazy-load catalog modules at runtime to preserve lazy import boundaries.
+      const [modelsResult, providerStaticModelsResult] = await Promise.allSettled([
+        lazyLoadModelCatalog().then((m) => m.loadModelCatalog({ config: cfg, readOnly: true })),
+        lazyLoadStaticCatalog().then((m) =>
+          m.loadBundledProviderStaticCatalogContextModels({ cfg }),
+        ),
+      ]);
       if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
         return;
       }
-      try {
-        // Read-only catalog loading overlays current config and manifest rows
-        // onto persisted discovery without rewriting models.json.
-        const [modelsResult, providerStaticModelsResult] = await Promise.allSettled([
-          loadModelCatalog({ config: cfg, readOnly: true }),
-          loadBundledProviderStaticCatalogContextModels({ cfg }),
-        ]);
-        if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-          return;
-        }
-        const models = modelsResult.status === "fulfilled" ? modelsResult.value : [];
-        const providerStaticModels =
-          providerStaticModelsResult.status === "fulfilled" ? providerStaticModelsResult.value : [];
-        applyDiscoveredContextWindows({
-          cache: stagedTokenCache,
-          models: [...models, ...providerStaticModels],
-        });
-      } catch {
-        // If model discovery fails, continue with config overrides only.
-      }
+      const models = modelsResult.status === "fulfilled" ? modelsResult.value : [];
+      const providerStaticModels =
+        providerStaticModelsResult.status === "fulfilled" ? providerStaticModelsResult.value : [];
+      applyDiscoveredContextWindows({
+        cache: stagedTokenCache,
+        models: [...models, ...providerStaticModels],
+      });
+    } catch {
+      // If model discovery fails, continue with config overrides only.
+    }
 
-      if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-        return;
-      }
-      MODEL_CONTEXT_TOKEN_CACHE.clear();
-      for (const [key, value] of stagedTokenCache) {
-        MODEL_CONTEXT_TOKEN_CACHE.set(key, value);
-      }
-    })
-    .catch(() => {
-      // Keep lookup best-effort.
-    });
+    if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
+      return;
+    }
+    MODEL_CONTEXT_TOKEN_CACHE.clear();
+    for (const [key, value] of stagedTokenCache) {
+      MODEL_CONTEXT_TOKEN_CACHE.set(key, value);
+    }
+  })().catch(() => {
+    // Keep lookup best-effort.
+  });
   CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
   return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
 }

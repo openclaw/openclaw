@@ -744,32 +744,28 @@ describe("lookupContextTokens", () => {
       },
     ]);
 
-    // Simulate startup: ensureContextWindowCacheLoaded is called
+    // Simulate startup: ensureContextWindowCacheLoaded is called and awaited
     const { ensureContextWindowCacheLoaded, resolveContextTokensForModel } =
       await importFreshContextModule();
-    void ensureContextWindowCacheLoaded();
+    await ensureContextWindowCacheLoaded();
 
-    // Simulate status command: calls resolveContextTokensForModel with cfg
-    // and no allowAsyncLoad: false (our fix removed that).
-    const cfg = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
+    // After deterministic warming: call without cfg reads from warmed cache
     const firstStatusResult = resolveContextTokensForModel({
+      provider: "anthropic",
+      model: "claude-opus-4.7-20260219",
+    });
+
+    // The discovered 200k should be upgraded to 1M via Anthropic fixed window
+    expect(firstStatusResult).not.toBe(DEFAULT_CONTEXT_TOKENS);
+    expect(firstStatusResult).toBe(1_048_576);
+
+    // Status path with explicit config override still respects the configured window
+    const cfg = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
+    const configuredResult = resolveContextTokensForModel({
       cfg: cfg as never,
       provider: "anthropic",
       model: "claude-opus-4.7-20260219",
     });
-    // First call returns config override (200k) before warming completes
-    expect(firstStatusResult).toBe(200_000);
-
-    await flushAsyncWarmup();
-
-    // After warming: call without cfg (reads from warmed cache)
-    const afterWarmResult = resolveContextTokensForModel({
-      provider: "anthropic",
-      model: "claude-opus-4.7-20260219",
-    });
-
-    // The discovered 200k should be upgraded to 1M
-    expect(afterWarmResult).not.toBe(DEFAULT_CONTEXT_TOKENS);
-    expect(afterWarmResult).toBe(1_048_576);
+    expect(configuredResult).toBe(200_000);
   });
 });
