@@ -301,6 +301,30 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  const promoteMostRecentSessionRun = (): boolean => {
+    if (state.activeChatRunId || sessionRuns.size === 0) {
+      return false;
+    }
+    let nextRunId: string | undefined;
+    let nextSeenAt = -1;
+    for (const [runId, seenAt] of sessionRuns) {
+      if (seenAt > nextSeenAt) {
+        nextRunId = runId;
+        nextSeenAt = seenAt;
+      }
+    }
+    if (!nextRunId) {
+      return false;
+    }
+    // A concurrent run can outlive the active run. Keep the activity owner on
+    // remaining work so terminal cleanup cannot incorrectly return the TUI idle.
+    state.activeChatRunId = nextRunId;
+    clearStreamingWatchdog();
+    setActivityStatus("running");
+    armStreamingWatchdog(nextRunId);
+    return true;
+  };
+
   const clearStaleStreamingIfNoTrackedRunRemains = () => {
     const activeRunId = state.activeChatRunId;
     // A missing active run is the recovery case; only tracked active runs block cleanup.
@@ -344,15 +368,18 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     noteFinalizedRun(params.runId, { displayedFinal: params.displayedFinal });
     clearActiveRunIfMatch(params.runId);
+    const promotedRemainingRun = promoteMostRecentSessionRun();
     flushPendingHistoryRefreshIfIdle();
-    if (params.wasActiveRun) {
-      setActivityStatus(params.status);
-      clearStreamingWatchdog();
-    } else {
-      if (streamingWatchdogRunId === params.runId) {
+    if (!promotedRemainingRun) {
+      if (params.wasActiveRun) {
+        setActivityStatus(params.status);
         clearStreamingWatchdog();
+      } else {
+        if (streamingWatchdogRunId === params.runId) {
+          clearStreamingWatchdog();
+        }
+        clearStaleStreamingIfNoTrackedRunRemains();
       }
-      clearStaleStreamingIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };
@@ -367,12 +394,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
+    const promotedRemainingRun = promoteMostRecentSessionRun();
     flushPendingHistoryRefreshIfIdle();
-    if (params.wasActiveRun) {
-      setActivityStatus(params.status);
-      clearStreamingWatchdog();
-    } else if (streamingWatchdogRunId === params.runId) {
-      clearStreamingWatchdog();
+    if (!promotedRemainingRun) {
+      if (params.wasActiveRun) {
+        setActivityStatus(params.status);
+        clearStreamingWatchdog();
+      } else if (streamingWatchdogRunId === params.runId) {
+        clearStreamingWatchdog();
+      }
     }
     void refreshSessionInfo?.();
   };
@@ -419,10 +449,7 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const hasConcurrentActiveRun = (runId: string) => {
     const activeRunId = state.activeChatRunId;
-    if (!activeRunId || activeRunId === runId) {
-      return false;
-    }
-    return sessionRuns.has(activeRunId);
+    return Boolean(activeRunId && activeRunId !== runId);
   };
 
   const maybeRefreshHistoryForRun = (

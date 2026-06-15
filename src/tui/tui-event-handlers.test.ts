@@ -265,9 +265,45 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       sessionKey: state.currentSessionKey,
       data: { phase: "start" },
     });
+    handleAgentEvent({
+      runId: "run-bridge",
+      stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "finishing" },
+    });
+    handleAgentEvent({
+      runId: "run-bridge",
+      stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "end" },
+    });
 
     expect(state.activeChatRunId).toBe("run-user");
     expect(setActivityStatus).not.toHaveBeenCalledWith("running");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("finishing context");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("promotes a remaining system-injected run when the active run finishes", () => {
+    const { state, setActivityStatus, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-user" },
+    });
+
+    handleAgentEvent({
+      runId: "run-bridge",
+      stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "start" },
+    });
+    handleChatEvent({
+      runId: "run-user",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }], stopReason: "stop" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-bridge");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("running");
   });
 
   it("renders terminal lifecycle errors after retry grace and clears the active run", () => {
