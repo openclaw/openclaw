@@ -1726,6 +1726,49 @@ function canStartTrustedToolPolicyPlugin(params: {
   );
 }
 
+function canStartExplicitlyEnabledPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  platform?: NodeJS.Platform;
+}): boolean {
+  // Include externally-installed plugins that are explicitly enabled via
+  // plugins.entries.<id>.enabled=true but don't match any channel/provider/
+  // hook/harness startup predicate. Bundled plugins are covered by other
+  // manifest-based predicates and do not need this fallback.
+  if (params.plugin.origin === "bundled") {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled && activationState.explicitlyEnabled;
+}
+
 function canStartConfiguredChannelPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   config: OpenClawConfig;
@@ -2076,6 +2119,18 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       canStartTrustedToolPolicyPlugin({
         plugin,
         manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartExplicitlyEnabledPlugin({
+        plugin,
         config: params.config,
         pluginsConfig,
         activationSource,

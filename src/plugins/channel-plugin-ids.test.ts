@@ -1252,7 +1252,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["brave"],
     ],
     [
-      "honors disabled web search when selecting startup providers",
+      "loads explicitly enabled global web search plugins even when search feature is disabled",
       {
         channels: {},
         tools: {
@@ -1272,7 +1272,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      [],
+      ["brave"],
     ],
     [
       "honors explicit plugin disablement for configured web search providers",
@@ -1432,7 +1432,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("skips startup when activation.onStartup is false", () => {
+  it("loads explicitly enabled global plugins at startup even without activation.onStartup", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         enabledPluginIds: ["demo-global-startup-opt-out"],
@@ -1440,7 +1440,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         noConfiguredChannels: true,
         memorySlot: "none",
       }),
-      expected: [],
+      expected: ["demo-global-startup-opt-out"],
     });
   });
 
@@ -2430,12 +2430,12 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("does not include context-engine plugins not selected via the slot", () => {
+  it("includes explicitly enabled context-engine plugins even when not selected via slot", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         enabledPluginIds: ["lossless-claw"],
       }),
-      expected: ["demo-channel", "browser", "memory-core"],
+      expected: ["demo-channel", "browser", "memory-core", "lossless-claw"],
     });
   });
 
