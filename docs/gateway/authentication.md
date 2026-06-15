@@ -208,9 +208,12 @@ openclaw doctor --fix
 openclaw models auth list --provider openai
 ```
 
-Doctor rewrites legacy `openai-codex:*` profile ids and
-`auth.order.openai-codex` entries to the canonical `openai` auth route. For
-OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
+Doctor migrates legacy `openai-codex:*` profile ids and
+`auth.order.openai-codex` entries only when the shared migration plan can safely
+move the matching legacy routes to canonical `openai`. If the legacy provider,
+auth order, or session state must be retained, doctor leaves it in place and
+prints a manual-migration warning. For OpenAI-specific model/runtime routing,
+see [OpenAI](/providers/openai).
 
 ### During login (CLI)
 

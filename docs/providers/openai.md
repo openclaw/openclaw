@@ -46,20 +46,22 @@ changing config.
 
 The names are similar but not interchangeable:
 
-| Name you see                            | Layer             | Meaning                                                                                           |
-| --------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
-| `openai`                                | Provider prefix   | Canonical OpenAI model route; agent turns use the Codex runtime.                                  |
-| legacy OpenAI Codex prefix              | Legacy prefix     | Older model/profile namespace. `openclaw doctor --fix` migrates it to `openai`.                   |
-| `codex` plugin                          | Plugin            | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls. |
-| provider/model `agentRuntime.id: codex` | Agent runtime     | Force the native Codex app-server harness for matching embedded turns.                            |
-| `/codex ...`                            | Chat command set  | Bind/control Codex app-server threads from a conversation.                                        |
-| `runtime: "acp", agentId: "codex"`      | ACP session route | Explicit fallback path that runs Codex through ACP/acpx.                                          |
+| Name you see                            | Layer             | Meaning                                                                                                                                   |
+| --------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `openai`                                | Provider prefix   | Canonical OpenAI model route; agent turns use the Codex runtime.                                                                          |
+| legacy OpenAI Codex prefix              | Legacy prefix     | Older model/profile namespace. `openclaw doctor --fix` migrates safe routes to `openai` and reports retained routes for manual migration. |
+| `codex` plugin                          | Plugin            | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls.                                         |
+| provider/model `agentRuntime.id: codex` | Agent runtime     | Force the native Codex app-server harness for matching embedded turns.                                                                    |
+| `/codex ...`                            | Chat command set  | Bind/control Codex app-server threads from a conversation.                                                                                |
+| `runtime: "acp", agentId: "codex"`      | ACP session route | Explicit fallback path that runs Codex through ACP/acpx.                                                                                  |
 
 This means a config can intentionally contain `openai/*` model refs while auth
 profiles point at either API-key or ChatGPT/Codex OAuth credentials. Use
 `auth.order.openai` for config; `openclaw doctor --fix` rewrites legacy
-legacy Codex model refs, legacy Codex auth profile ids, and
-legacy Codex auth order to the canonical OpenAI route.
+Codex model refs, auth profile ids, and auth order only when the shared
+migration plan marks the matching routes safe to canonicalize. Retained routes
+stay on the legacy namespace until you manually confirm the credentials and
+runtime policy.
 
 <Note>
 GPT-5.5 is available through both direct OpenAI Platform API-key access and
@@ -281,7 +283,8 @@ Choose your preferred auth method and follow the setup steps.
     the common subscription plus native runtime setup, sign in with Codex auth
     but keep the model ref as `openai/gpt-5.5`. New config should put OpenAI
     agent auth order under `auth.order.openai`; doctor migrates older
-    legacy Codex auth order entries.
+    legacy Codex auth order entries when the matching legacy routes are safe to
+    canonicalize, and otherwise reports them for manual migration.
     </Note>
 
     ### Config example
@@ -430,7 +433,9 @@ still account-based. OpenClaw selects auth in this order:
 
 1. Ordered OpenAI auth profiles for the agent, preferably under
    `auth.order.openai`. Run `openclaw doctor --fix` to migrate older
-   legacy Codex auth profile ids and legacy Codex auth order.
+   legacy Codex auth profile ids and legacy Codex auth order when the matching
+   legacy routes are safe to canonicalize; retained routes need manual
+   migration after credentials and runtime policy are confirmed.
 2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
 3. For local stdio app-server launches only, `CODEX_API_KEY`, then
    `OPENAI_API_KEY`, when the app-server reports no account and still requires

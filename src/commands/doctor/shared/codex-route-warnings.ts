@@ -3130,25 +3130,14 @@ export function repairCodexSessionStoreRoutes(params: {
   };
 }
 
-function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): string[] {
-  return Object.entries(store).flatMap(([sessionKey, entry]) => {
-    if (!entry) {
-      return [];
-    }
-    const hasLegacyRoute =
-      normalizeString(entry.modelProvider) === "openai-codex" ||
-      normalizeString(entry.providerOverride) === "openai-codex" ||
-      isOpenAICodexModelRef(entry.model) ||
-      isOpenAICodexModelRef(entry.modelOverride) ||
-      (isProviderlessModelRef(entry.modelOverride) &&
-        isOpenAICodexAuthProfileRef(entry.authProfileOverride) &&
-        entry.authProfileOverrideSource === "auto" &&
-        entry.modelOverrideSource === "auto" &&
-        !normalizeString(entry.providerOverride)) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeActiveModel);
-    return hasLegacyRoute ? [sessionKey] : [];
-  });
+function scanCodexSessionStoreRoutes(
+  store: Record<string, SessionEntry>,
+  migrationPlan?: LegacyOpenAICodexMigrationPlan,
+): string[] {
+  return repairCodexSessionStoreRoutes({
+    store: structuredClone(store),
+    migrationPlan,
+  }).sessionKeys;
 }
 
 /** Scan or repair all configured agent session stores that still contain legacy Codex routes. */
@@ -3175,6 +3164,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
     const stale = targets.flatMap((target) => {
       const sessionKeys = scanCodexSessionStoreRoutes(
         loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+        migrationPlan,
       );
       return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
     });
@@ -3200,6 +3190,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   for (const target of targets) {
     const staleSessionKeys = scanCodexSessionStoreRoutes(
       loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+      migrationPlan,
     );
     if (staleSessionKeys.length === 0) {
       continue;

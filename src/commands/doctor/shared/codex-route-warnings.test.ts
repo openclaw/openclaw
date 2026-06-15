@@ -1,4 +1,7 @@
 // Codex route warning tests cover doctor diagnostics for Codex route configuration.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -34,6 +37,7 @@ vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => 
 import {
   collectCodexRouteWarnings,
   maybeRepairCodexRoutes,
+  maybeRepairCodexSessionRoutes,
   repairCodexSessionStoreRoutes,
 } from "./codex-route-warnings.js";
 
@@ -3944,6 +3948,79 @@ describe("collectCodexRouteWarnings", () => {
     expect(store.main.fallbackNoticeSelectedModel).toBe("openai-codex/gpt-5.5");
     expect(store.main.fallbackNoticeActiveModel).toBe("openai-codex/gpt-5.5");
     expect(store.main.fallbackNoticeReason).toBe("rate-limit");
+  });
+
+  it("does not advertise repair for retained legacy Codex session routes in preview mode", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-session-preview-"));
+    try {
+      const stateDir = path.join(tempRoot, "state");
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const store: Record<string, SessionEntry> = {
+        main: {
+          sessionId: "s1",
+          updatedAt: 1,
+          modelProvider: "openai-codex",
+          model: "gpt-5.5",
+          providerOverride: "openai-codex",
+          modelOverride: "openai-codex/gpt-5.5",
+          modelOverrideSource: "auto",
+          agentHarnessId: "codex",
+          agentRuntimeOverride: "codex",
+          authProfileOverride: "openai-codex:default",
+          authProfileOverrideSource: "auto",
+          fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
+          fallbackNoticeActiveModel: "openai-codex/gpt-5.5",
+          fallbackNoticeReason: "rate-limit",
+        },
+      };
+      fs.writeFileSync(storePath, `${JSON.stringify(store, null, 2)}\n`);
+
+      const result = await maybeRepairCodexSessionRoutes({
+        cfg: {
+          auth: {
+            order: {
+              openai: [],
+              "openai-codex": ["openai-codex:default"],
+            },
+            profiles: {
+              "openai-codex:default": {
+                provider: "openai-codex",
+                mode: "oauth",
+              },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                models: [{ id: "gpt-5.5" }],
+              },
+              "openai-codex": {
+                models: [{ id: "gpt-5.5" }],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+        shouldRepair: false,
+      });
+
+      expect(result).toEqual({
+        scannedStores: 1,
+        repairedStores: 0,
+        repairedSessions: 0,
+        warnings: [],
+        changes: [],
+      });
+      const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+        string,
+        SessionEntry
+      >;
+      expect(persisted.main.modelProvider).toBe("openai-codex");
+      expect(persisted.main.providerOverride).toBe("openai-codex");
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("preserves explicit OpenClaw runtime pins while repairing legacy session routes", () => {

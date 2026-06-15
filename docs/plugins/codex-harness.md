@@ -748,8 +748,11 @@ Useful excerpts usually include `openai/gpt-5.5` or `openai/gpt-5.4`,
 path instead of a plain OpenAI API-key failure.
 
 **Legacy Codex model refs config remains:** run `openclaw doctor --fix`.
-Doctor rewrites legacy model refs to `openai/*`, removes stale session and
-whole-agent runtime pins, and preserves existing auth-profile overrides.
+Doctor rewrites legacy model refs to `openai/*` only when the shared migration
+plan marks the matching routes safe to canonicalize. Migrated routes have stale
+session and whole-agent runtime pins removed while existing auth-profile
+overrides are preserved. Retained routes stay in place and are reported with a
+manual-migration warning.
 
 **The app-server is rejected:** use Codex app-server `0.125.0` or newer.
 Same-version prereleases or build-suffixed versions such as

@@ -21,9 +21,11 @@ OpenClaw.
 
 OpenClaw stores both OpenAI API-key auth and ChatGPT/Codex OAuth under the
 canonical provider id `openai`. Older `openai-codex:*` profile ids and
-`auth.order.openai-codex` entries are legacy state repaired by
-`openclaw doctor --fix`; use `openai:*` profile ids and `auth.order.openai` for
-new config.
+`auth.order.openai-codex` entries are legacy state. `openclaw doctor --fix`
+migrates them when the matching legacy routes can safely move to canonical
+`openai`; retained legacy routes require manual migration after credentials and
+runtime policy are confirmed. Use `openai:*` profile ids and `auth.order.openai`
+for new config.
 
 For Anthropic in production, API key auth is the safer recommended path.
 
@@ -138,9 +140,10 @@ openclaw models auth login --provider openai
 
 Use `--profile-id openai:<name>` for multiple ChatGPT/Codex OAuth accounts in
 one agent. Do not use `openai-codex:<name>` for new profiles. Doctor migrates
-that older prefix to a collision-free `openai:*` profile id; run
-`openclaw models auth list --provider openai` after repair before copying
-profile ids into `auth.order` or `/model ...@<profileId>`.
+that older prefix to a collision-free `openai:*` profile id when the matching
+legacy route is safe to canonicalize; retained routes are reported for manual
+migration. Run `openclaw models auth list --provider openai` after repair before
+copying profile ids into `auth.order` or `/model ...@<profileId>`.
 
 Flow shape (PKCE):
 
