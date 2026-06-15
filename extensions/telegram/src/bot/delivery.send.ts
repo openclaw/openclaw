@@ -23,6 +23,10 @@ import type { TelegramThreadSpec } from "./helpers.js";
 export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+// Telegram rejects empty-text sends with two known descriptions: the
+// long-standing "message text is empty" and the newer "text must be non-empty"
+// Bot API variant. Match either so the post-render empty-text skip catches both.
+const EMPTY_TEXT_ERR_RE = /message text is empty|text must be non-empty/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -105,7 +109,18 @@ export async function sendTelegramText(
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
-): Promise<number> {
+): Promise<number | undefined> {
+  // Silently skip empty-text sends before any API work. An interrupted
+  // mid-reply turn can emit content that collapses to only whitespace after the
+  // markdown render + supported-tag filter (a half-emitted code fence, a
+  // heading with no body). Telegram rejects those with a 400 ("message text is
+  // empty" / "text must be non-empty"), which would surface as a delivery
+  // failure even though the model produced nothing visible. Skipping pre-flight
+  // returns no message id so callers do not count it as delivered.
+  if (!text.trim()) {
+    runtime.log?.(`telegram sendMessage skipped chat=${chatId}: empty text after trim`);
+    return undefined;
+  }
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     replyQuoteMessageId: opts?.replyQuoteMessageId,
@@ -123,23 +138,36 @@ export async function sendTelegramText(
   });
   const richRawApi = getTelegramRichRawApi(bot.api);
 
-  if (!text.trim()) {
-    throw new Error("Message must be non-empty for Telegram sends");
+  let res: Awaited<ReturnType<typeof richRawApi.sendRichMessage>>;
+  try {
+    res = await sendTelegramWithThreadFallback({
+      operation: "sendRichMessage",
+      runtime,
+      thread: opts?.thread,
+      requestParams: richParams,
+      removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+      send: (effectiveParams) =>
+        richRawApi.sendRichMessage({
+          chat_id: chatId,
+          rich_message: richMessage,
+          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...effectiveParams,
+        }),
+    });
+  } catch (err) {
+    // Non-whitespace input can still render to an empty payload through the
+    // markdown render + supported-tag filter (e.g. `<i></i>` or a half-emitted
+    // code fence). Telegram rejects those with "message text is empty" / "text
+    // must be non-empty"; skip silently instead of surfacing a delivery failure
+    // and retrying forever for content the model never made visible.
+    if (EMPTY_TEXT_ERR_RE.test(formatErrorMessage(err))) {
+      runtime.log?.(
+        `telegram sendRichMessage skipped chat=${chatId}: Telegram rejected text as empty (${formatErrorMessage(err)})`,
+      );
+      return undefined;
+    }
+    throw err;
   }
-  const res = await sendTelegramWithThreadFallback({
-    operation: "sendRichMessage",
-    runtime,
-    thread: opts?.thread,
-    requestParams: richParams,
-    removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
-    send: (effectiveParams) =>
-      richRawApi.sendRichMessage({
-        chat_id: chatId,
-        rich_message: richMessage,
-        ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-        ...effectiveParams,
-      }),
-  });
   runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
   return res.message_id;
 }
