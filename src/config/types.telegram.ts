@@ -1,6 +1,7 @@
 // Defines Telegram channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingProgressConfig,
   ChannelStreamingPreviewConfig,
   ContextVisibilityMode,
   DmPolicy,
@@ -69,8 +70,21 @@ export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
 export type TelegramGroupHistoryContextMode = "none" | "mention-only" | "recent";
 
-export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
+export type TelegramStreamingProgressConfig = ChannelStreamingProgressConfig & {
+  /**
+   * While mode="progress", also stream assistant answer partials in a separate
+   * transient preview message instead of replacing the progress/status draft.
+   * Default: false.
+   */
+  assistantPreview?: boolean;
+};
+
+export type TelegramPreviewStreamingConfig = Omit<
+  ChannelPreviewStreamingConfig,
+  "preview" | "progress"
+> & {
   preview?: ChannelStreamingPreviewConfig;
+  progress?: TelegramStreamingProgressConfig;
 };
 
 export type TelegramExecApprovalConfig = {

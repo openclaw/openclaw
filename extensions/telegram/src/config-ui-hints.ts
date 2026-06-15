@@ -114,6 +114,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
   },
+  "streaming.progress.assistantPreview": {
+    label: "Telegram Assistant Preview Lane",
+    help: "In progress mode, stream assistant answer partials in a separate temporary draft while keeping the progress/status draft visible. Default: false.",
+  },
   "streaming.progress.commandText": {
     label: "Telegram Progress Command Text",
     help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',

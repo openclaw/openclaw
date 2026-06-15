@@ -817,7 +817,8 @@ export function resolveChannelProgressDraftAssistantPreview(
   defaultValue = false,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
-  return asBoolean(config?.progress?.assistantPreview) ?? defaultValue;
+  const progress = asObjectRecord(config?.progress);
+  return asBoolean(progress?.assistantPreview) ?? defaultValue;
 }
 
 export function resolveChannelStreamingProgressCommentary(

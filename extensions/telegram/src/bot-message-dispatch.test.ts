@@ -2922,9 +2922,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    expect(progressDraftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`");
-    expect(progressDraftStream.update).not.toHaveBeenCalledWith(
-      "I am checking the logs and will report back shortly.",
+    expect(progressDraftStream.updatePreview).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Shelling\n\n`🛠️ Exec`" }),
+    );
+    expect(progressDraftStream.updatePreview).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "I am checking the logs and will report back shortly." }),
     );
     expect(assistantDraftStream.update).toHaveBeenCalledWith(
       "I am checking the logs and will report back shortly.",
