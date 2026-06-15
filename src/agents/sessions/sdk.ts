@@ -170,7 +170,7 @@ function getDefaultAgentDir(): string {
   return getAgentDir();
 }
 
-export function getAttributionHeaders(
+function getAttributionHeaders(
   model: Model,
   settingsManager: SettingsManager,
 ): Record<string, string> | undefined {
