@@ -370,34 +370,68 @@ describe("SessionManager.open", () => {
     expect(warmEntry).toMatchObject({ data: { value: "first" } });
   });
 
-  it("validates the transcript prefix after a custom entry is serialized", async () => {
-    const dir = await makeTempDir();
-    const sessionFile = path.join(dir, "session.jsonl");
-    const originalEntry = {
-      type: "message",
-      id: "assistant-1",
-      parentId: null,
-      timestamp: "2026-06-04T00:00:01.000Z",
-      message: buildAssistantMessage("message 1"),
-    };
-    const replacementEntry = {
-      ...originalEntry,
-      message: buildAssistantMessage("changed 1"),
-    };
-    const headerLine = JSON.stringify(buildSessionHeader(dir));
-    await fs.writeFile(sessionFile, `${headerLine}\n${JSON.stringify(originalEntry)}\n`, "utf8");
-
-    const sessionManager = SessionManager.open(sessionFile, dir, dir);
-    await withOwnedSessionTranscriptWrites(
+  it("validates the transcript prefix after extension-owned entries are serialized", async () => {
+    const appenders: Array<{
+      name: string;
+      append: (manager: SessionManager, value: unknown) => void;
+    }> = [
       {
-        sessionFile,
-        canAdvanceSessionEntryCache: () => true,
-        publishSessionFileSnapshot: () => true,
-        withSessionWriteLock: async (run) => await run(),
+        name: "custom",
+        append: (manager, value) =>
+          manager.appendCustomEntry("rewrite-during-serialization", {
+            value,
+          }),
       },
-      async () => {
-        sessionManager.appendCustomEntry("rewrite-during-serialization", {
-          value: {
+      {
+        name: "custom_message",
+        append: (manager, value) =>
+          manager.appendCustomMessageEntry(
+            "rewrite-during-serialization",
+            "extension message",
+            false,
+            { value },
+          ),
+      },
+      {
+        name: "compaction",
+        append: (manager, value) =>
+          manager.appendCompaction("summary", "assistant-1", 1, { value }, true),
+      },
+      {
+        name: "branch_summary",
+        append: (manager, value) =>
+          manager.branchWithSummary("assistant-1", "summary", { value }, true),
+      },
+    ];
+
+    for (const { name, append } of appenders) {
+      const dir = await makeTempDir();
+      const sessionFile = path.join(dir, `${name}.jsonl`);
+      const originalEntry = {
+        type: "message",
+        id: "assistant-1",
+        parentId: null,
+        timestamp: "2026-06-04T00:00:01.000Z",
+        message: buildAssistantMessage("message 1"),
+      };
+      const replacementEntry = {
+        ...originalEntry,
+        message: buildAssistantMessage("changed 1"),
+      };
+      const headerLine = JSON.stringify(buildSessionHeader(dir));
+      await fs.writeFile(sessionFile, `${headerLine}\n${JSON.stringify(originalEntry)}\n`, "utf8");
+
+      const sessionManager = SessionManager.open(sessionFile, dir, dir);
+      const publishSessionFileSnapshot = vi.fn(() => true);
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          canAdvanceSessionEntryCache: () => true,
+          publishSessionFileSnapshot,
+          withSessionWriteLock: async (run) => await run(),
+        },
+        async () => {
+          append(sessionManager, {
             toJSON() {
               writeFileSync(
                 sessionFile,
@@ -406,17 +440,18 @@ describe("SessionManager.open", () => {
               );
               return "persisted";
             },
-          },
-        });
-      },
-    );
+          });
+        },
+      );
 
-    expect(
-      SessionManager.open(sessionFile, dir, dir)
-        .getEntries()
-        .filter((entry) => entry.type === "message")
-        .map((entry) => readMessageContent(entry)),
-    ).toEqual(["changed 1"]);
+      expect(
+        SessionManager.open(sessionFile, dir, dir)
+          .getEntries()
+          .filter((entry) => entry.type === "message")
+          .map((entry) => readMessageContent(entry)),
+      ).toEqual(["changed 1"]);
+      expect(publishSessionFileSnapshot).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("invalidates incremental repair when append ownership cannot be proven", async () => {

@@ -613,14 +613,31 @@ function rememberAppendedSessionEntry(
   beforeAppendSnapshot: SessionFileSnapshot | undefined,
   serializedAppend: string,
   cacheOwnedAppend: boolean,
-): { snapshot: SessionFileSnapshot | undefined; cacheAdvanced: boolean } {
+  publishOwnedAppend: boolean,
+): {
+  snapshot: SessionFileSnapshot | undefined;
+  cacheAdvanced: boolean;
+  ownedAppendVerified: boolean;
+} {
   const resolvedPath = resolve(filePath);
+  const appendedByteLength = BigInt(Buffer.byteLength(serializedAppend, "utf8"));
+  const isVerifiedOwnedAppend = (snapshot: SessionFileSnapshot | undefined) =>
+    Boolean(
+      publishOwnedAppend &&
+      beforeAppendSnapshot &&
+      snapshot &&
+      snapshot.dev === beforeAppendSnapshot.dev &&
+      snapshot.ino === beforeAppendSnapshot.ino &&
+      snapshot.size === beforeAppendSnapshot.size + appendedByteLength,
+    );
   if (!cacheOwnedAppend) {
     sessionEntriesCache.delete(resolvedPath);
     invalidateSessionFileRepairCache(resolvedPath);
+    const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
     return {
-      snapshot: readSessionFileSnapshotIfExists(resolvedPath),
+      snapshot,
       cacheAdvanced: false,
+      ownedAppendVerified: isVerifiedOwnedAppend(snapshot),
     };
   }
   if (
@@ -633,6 +650,7 @@ function rememberAppendedSessionEntry(
     return {
       snapshot: readSessionFileSnapshotIfExists(resolvedPath),
       cacheAdvanced: false,
+      ownedAppendVerified: false,
     };
   }
 
@@ -641,8 +659,7 @@ function rememberAppendedSessionEntry(
   // Owned transcript writes serialize appenders under the session lock. Full
   // rewrites refresh the cache explicitly, so identity and size are sufficient
   // to advance this append-only snapshot without reading the whole file.
-  const expectedSize =
-    beforeAppendSnapshot.size + BigInt(Buffer.byteLength(serializedAppend, "utf8"));
+  const expectedSize = beforeAppendSnapshot.size + appendedByteLength;
   if (
     !snapshot ||
     !cached ||
@@ -655,11 +672,11 @@ function rememberAppendedSessionEntry(
   ) {
     sessionEntriesCache.delete(resolvedPath);
     invalidateSessionFileRepairCache(resolvedPath);
-    return { snapshot, cacheAdvanced: false };
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: false };
   }
   if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
     sessionEntriesCache.delete(resolvedPath);
-    return { snapshot, cacheAdvanced: false };
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: true };
   }
 
   const persistedEntry = JSON.parse(
@@ -671,7 +688,7 @@ function rememberAppendedSessionEntry(
   sessionEntriesCache.delete(resolvedPath);
   sessionEntriesCache.set(resolvedPath, cached);
   trimSessionEntriesCache();
-  return { snapshot, cacheAdvanced: true };
+  return { snapshot, cacheAdvanced: true, ownedAppendVerified: true };
 }
 
 function publishRememberedSessionFileSnapshot(
@@ -686,6 +703,15 @@ function publishRememberedSessionFileSnapshot(
     sessionEntriesCache.delete(resolve(filePath));
     invalidateSessionFileRepairCache(filePath);
   }
+}
+
+function canIncrementallyCacheAppendedEntry(entry: SessionEntry): boolean {
+  return !(
+    entry.type === "custom" ||
+    entry.type === "custom_message" ||
+    entry.type === "compaction" ||
+    entry.type === "branch_summary"
+  );
 }
 
 function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot | undefined {
@@ -1328,13 +1354,16 @@ export class SessionManager {
       // prefix state that immediately precedes the exact bytes being appended.
       const serializedEntry = serializeJsonlEntry(entry);
       const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
-      const cacheOwnedAppend = Boolean(
+      const canPublishOwnedAppend = Boolean(
         beforeAppendSnapshot &&
         canAdvanceOwnedSessionEntryCache({
           sessionFile: this.sessionFile,
           snapshot: beforeAppendSnapshot,
         }),
       );
+      // Extension/detail-bearing entries can run arbitrary toJSON code while
+      // serializing, so stat-only append validation is too weak for them.
+      const cacheOwnedAppend = canPublishOwnedAppend && canIncrementallyCacheAppendedEntry(entry);
       const serializedAppend = appendSerializedJsonlEntrySync(this.sessionFile, serializedEntry, {
         prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
       });
@@ -1344,9 +1373,10 @@ export class SessionManager {
         beforeAppendSnapshot,
         serializedAppend,
         cacheOwnedAppend,
+        canPublishOwnedAppend,
       );
       this.sessionFileSnapshot = rememberedAppend.snapshot;
-      if (rememberedAppend.cacheAdvanced) {
+      if (rememberedAppend.ownedAppendVerified) {
         publishRememberedSessionFileSnapshot(this.sessionFile, rememberedAppend.snapshot);
       }
     }
