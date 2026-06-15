@@ -2,7 +2,7 @@
 const __defProp$1 = Object.defineProperty;
 const __exportAll = (all, no_symbols) => {
 	const target = {};
-	for (let name in all) {__defProp$1(target, name, {
+	for (const name in all) {__defProp$1(target, name, {
 		get: all[name],
 		enumerable: true
 	});}
@@ -85,8 +85,7 @@ function isResolvedButton(props) {
 }
 function isResolvedCard(props) {
 	if (!isObject(props)) {return false;}
-	if (!("child" in props)) {if (!("children" in props)) {return false;}
-	else {return Array.isArray(props.children) && props.children.every(isAnyComponentNode);}}
+	if (!("child" in props)) {if (!("children" in props)) {return false;}return Array.isArray(props.children) && props.children.every(isAnyComponentNode);}
 	return isAnyComponentNode(props.child);
 }
 function isResolvedCheckbox(props) {
@@ -308,16 +307,16 @@ const ZodError = class ZodError extends Error {
 		};
 		const fieldErrors = { _errors: [] };
 		const processError = (error) => {
-			for (const issue of error.issues) {if (issue.code === "invalid_union") issue.unionErrors.map(processError);
-			else if (issue.code === "invalid_return_type") processError(issue.returnTypeError);
-			else if (issue.code === "invalid_arguments") processError(issue.argumentsError);
-			else if (issue.path.length === 0) fieldErrors._errors.push(mapper(issue));
+			for (const issue of error.issues) {if (issue.code === "invalid_union") {issue.unionErrors.map(processError);}
+			else if (issue.code === "invalid_return_type") {processError(issue.returnTypeError);}
+			else if (issue.code === "invalid_arguments") {processError(issue.argumentsError);}
+			else if (issue.path.length === 0) {fieldErrors._errors.push(mapper(issue));}
 			else {
 				let curr = fieldErrors;
 				let i = 0;
 				while (i < issue.path.length) {
 					const el = issue.path[i];
-					if (!(i === issue.path.length - 1)) curr[el] = curr[el] || { _errors: [] };
+					if (!(i === issue.path.length - 1)) {curr[el] = curr[el] || { _errors: [] };}
 					else {
 						curr[el] = curr[el] || { _errors: [] };
 						curr[el]._errors.push(mapper(issue));
@@ -349,7 +348,7 @@ const ZodError = class ZodError extends Error {
 			const firstEl = sub.path[0];
 			fieldErrors[firstEl] = fieldErrors[firstEl] || [];
 			fieldErrors[firstEl].push(mapper(sub));
-		} else formErrors.push(mapper(sub));}
+		} else {formErrors.push(mapper(sub));}}
 		return {
 			formErrors,
 			fieldErrors
@@ -557,8 +556,8 @@ const ParseInputLazyPath = class {
 		this._key = key;
 	}
 	get path() {
-		if (!this._cachedPath.length) {if (Array.isArray(this._key)) this._cachedPath.push(...this._path, ...this._key);
-		else this._cachedPath.push(...this._path, this._key);}
+		if (!this._cachedPath.length) {if (Array.isArray(this._key)) {this._cachedPath.push(...this._path, ...this._key);}
+		else {this._cachedPath.push(...this._path, this._key);}}
 		return this._cachedPath;
 	}
 };
@@ -682,7 +681,7 @@ const ZodType = class {
 			});
 			return isValid(result) ? { value: result.value } : { issues: ctx.common.issues };
 		} catch (err) {
-			if (err?.message?.toLowerCase()?.includes("encountered")) this["~standard"].async = true;
+			if (err?.message?.toLowerCase()?.includes("encountered")) {this["~standard"].async = true;}
 			ctx.common = {
 				issues: [],
 				async: true
@@ -722,8 +721,7 @@ const ZodType = class {
 	refine(check, message) {
 		const getIssueProperties = (val) => {
 			if (typeof message === "string" || message === undefined) {return { message };}
-			else if (typeof message === "function") {return message(val);}
-			else {return message;}
+			else if (typeof message === "function") {return message(val);}return message;
 		};
 		return this._refinement((val, ctx) => {
 			const result = check(val);
@@ -735,7 +733,7 @@ const ZodType = class {
 				if (!data) {
 					setError();
 					return false;
-				} else return true;
+				}return true;
 			});}
 			if (!result) {
 				setError();
@@ -982,22 +980,22 @@ const ZodString = class ZodString extends ZodType {
 			const tooSmall = input.data.length < check.value;
 			if (tooBig || tooSmall) {
 				ctx = this._getOrReturnCtx(input, ctx);
-				if (tooBig) addIssueToContext(ctx, {
+				if (tooBig) {addIssueToContext(ctx, {
 					code: ZodIssueCode.too_big,
 					maximum: check.value,
 					type: "string",
 					inclusive: true,
 					exact: true,
 					message: check.message
-				});
-				else if (tooSmall) addIssueToContext(ctx, {
+				});}
+				else if (tooSmall) {addIssueToContext(ctx, {
 					code: ZodIssueCode.too_small,
 					minimum: check.value,
 					type: "string",
 					inclusive: true,
 					exact: true,
 					message: check.message
-				});
+				});}
 				status.dirty();
 			}
 		} else if (check.kind === "email") {
@@ -1011,7 +1009,7 @@ const ZodString = class ZodString extends ZodType {
 				status.dirty();
 			}
 		} else if (check.kind === "emoji") {
-			if (!emojiRegex) emojiRegex = new RegExp(_emojiRegex, "u");
+			if (!emojiRegex) {emojiRegex = new RegExp(_emojiRegex, "u");}
 			if (!emojiRegex.test(input.data)) {
 				ctx = this._getOrReturnCtx(input, ctx);
 				addIssueToContext(ctx, {
@@ -1071,7 +1069,7 @@ const ZodString = class ZodString extends ZodType {
 				});
 				status.dirty();
 			}
-		} else if (check.kind === "url") try {
+		} else if (check.kind === "url") {try {
 			new URL(input.data);
 		} catch {
 			ctx = this._getOrReturnCtx(input, ctx);
@@ -1081,7 +1079,7 @@ const ZodString = class ZodString extends ZodType {
 				message: check.message
 			});
 			status.dirty();
-		}
+		}}
 		else if (check.kind === "regex") {
 			check.regex.lastIndex = 0;
 			if (!check.regex.test(input.data)) {
@@ -1093,7 +1091,7 @@ const ZodString = class ZodString extends ZodType {
 				});
 				status.dirty();
 			}
-		} else if (check.kind === "trim") input.data = input.data.trim();
+		} else if (check.kind === "trim") {input.data = input.data.trim();}
 		else if (check.kind === "includes") {
 			if (!input.data.includes(check.value, check.position)) {
 				ctx = this._getOrReturnCtx(input, ctx);
@@ -1107,8 +1105,8 @@ const ZodString = class ZodString extends ZodType {
 				});
 				status.dirty();
 			}
-		} else if (check.kind === "toLowerCase") input.data = input.data.toLowerCase();
-		else if (check.kind === "toUpperCase") input.data = input.data.toUpperCase();
+		} else if (check.kind === "toLowerCase") {input.data = input.data.toLowerCase();}
+		else if (check.kind === "toUpperCase") {input.data = input.data.toUpperCase();}
 		else if (check.kind === "startsWith") {
 			if (!input.data.startsWith(check.value)) {
 				ctx = this._getOrReturnCtx(input, ctx);
@@ -1219,7 +1217,7 @@ const ZodString = class ZodString extends ZodType {
 				});
 				status.dirty();
 			}
-		} else util.assertNever(check);}
+		} else {util.assertNever(check);}}
 		return {
 			status: status.value,
 			value: input.data
@@ -1481,14 +1479,14 @@ const ZodString = class ZodString extends ZodType {
 	get minLength() {
 		let min = null;
 		for (const ch of this._def.checks) {if (ch.kind === "min") {
-			if (min === null || ch.value > min) min = ch.value;
+			if (min === null || ch.value > min) {min = ch.value;}
 		}}
 		return min;
 	}
 	get maxLength() {
 		let max = null;
 		for (const ch of this._def.checks) {if (ch.kind === "max") {
-			if (max === null || ch.value < max) max = ch.value;
+			if (max === null || ch.value < max) {max = ch.value;}
 		}}
 		return max;
 	}
@@ -1583,7 +1581,7 @@ const ZodNumber = class ZodNumber extends ZodType {
 				});
 				status.dirty();
 			}
-		} else util.assertNever(check);}
+		} else {util.assertNever(check);}}
 		return {
 			status: status.value,
 			value: input.data
@@ -1685,14 +1683,14 @@ const ZodNumber = class ZodNumber extends ZodType {
 	get minValue() {
 		let min = null;
 		for (const ch of this._def.checks) {if (ch.kind === "min") {
-			if (min === null || ch.value > min) min = ch.value;
+			if (min === null || ch.value > min) {min = ch.value;}
 		}}
 		return min;
 	}
 	get maxValue() {
 		let max = null;
 		for (const ch of this._def.checks) {if (ch.kind === "max") {
-			if (max === null || ch.value < max) max = ch.value;
+			if (max === null || ch.value < max) {max = ch.value;}
 		}}
 		return max;
 	}
@@ -1702,11 +1700,11 @@ const ZodNumber = class ZodNumber extends ZodType {
 	get isFinite() {
 		let max = null;
 		let min = null;
-		for (const ch of this._def.checks) {if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") return true;
+		for (const ch of this._def.checks) {if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") {return true;}
 		else if (ch.kind === "min") {
-			if (min === null || ch.value > min) min = ch.value;
+			if (min === null || ch.value > min) {min = ch.value;}
 		} else if (ch.kind === "max") {
-			if (max === null || ch.value < max) max = ch.value;
+			if (max === null || ch.value < max) {max = ch.value;}
 		}}
 		return Number.isFinite(min) && Number.isFinite(max);
 	}
@@ -1768,7 +1766,7 @@ const ZodBigInt = class ZodBigInt extends ZodType {
 				});
 				status.dirty();
 			}
-		} else util.assertNever(check);}
+		} else {util.assertNever(check);}}
 		return {
 			status: status.value,
 			value: input.data
@@ -1854,14 +1852,14 @@ const ZodBigInt = class ZodBigInt extends ZodType {
 	get minValue() {
 		let min = null;
 		for (const ch of this._def.checks) {if (ch.kind === "min") {
-			if (min === null || ch.value > min) min = ch.value;
+			if (min === null || ch.value > min) {min = ch.value;}
 		}}
 		return min;
 	}
 	get maxValue() {
 		let max = null;
 		for (const ch of this._def.checks) {if (ch.kind === "max") {
-			if (max === null || ch.value < max) max = ch.value;
+			if (max === null || ch.value < max) {max = ch.value;}
 		}}
 		return max;
 	}
@@ -1940,7 +1938,7 @@ const ZodDate = class ZodDate extends ZodType {
 				});
 				status.dirty();
 			}
-		} else util.assertNever(check);}
+		} else {util.assertNever(check);}}
 		return {
 			status: status.value,
 			value: new Date(input.data)
@@ -1969,14 +1967,14 @@ const ZodDate = class ZodDate extends ZodType {
 	get minDate() {
 		let min = null;
 		for (const ch of this._def.checks) {if (ch.kind === "min") {
-			if (min === null || ch.value > min) min = ch.value;
+			if (min === null || ch.value > min) {min = ch.value;}
 		}}
 		return min != null ? new Date(min) : null;
 	}
 	get maxDate() {
 		let max = null;
 		for (const ch of this._def.checks) {if (ch.kind === "max") {
-			if (max === null || ch.value < max) max = ch.value;
+			if (max === null || ch.value < max) {max = ch.value;}
 		}}
 		return max != null ? new Date(max) : null;
 	}
@@ -2281,7 +2279,7 @@ const ZodObject = class ZodObject extends ZodType {
 		const { shape, keys: shapeKeys } = this._getCached();
 		const extraKeys = [];
 		if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
-			for (const key in ctx.data) {if (!shapeKeys.includes(key)) extraKeys.push(key);}
+			for (const key in ctx.data) {if (!shapeKeys.includes(key)) {extraKeys.push(key);}}
 		}
 		const pairs = [];
 		for (const key of shapeKeys) {
@@ -2298,7 +2296,7 @@ const ZodObject = class ZodObject extends ZodType {
 		}
 		if (this._def.catchall instanceof ZodNever) {
 			const unknownKeys = this._def.unknownKeys;
-			if (unknownKeys === "passthrough") {for (const key of extraKeys) pairs.push({
+			if (unknownKeys === "passthrough") {for (const key of extraKeys) {pairs.push({
 				key: {
 					status: "valid",
 					value: key
@@ -2307,7 +2305,7 @@ const ZodObject = class ZodObject extends ZodType {
 					status: "valid",
 					value: ctx.data[key]
 				}
-			});}
+			});}}
 			else if (unknownKeys === "strict") {
 				if (extraKeys.length > 0) {
 					addIssueToContext(ctx, {
@@ -2345,8 +2343,7 @@ const ZodObject = class ZodObject extends ZodType {
 			return syncPairs;
 		}).then((syncPairs) => {
 			return ParseStatus.mergeObjectSync(status, syncPairs);
-		});}
-		else {return ParseStatus.mergeObjectSync(status, pairs);}
+		});}return ParseStatus.mergeObjectSync(status, pairs);
 	}
 	get shape() {
 		return this._def.shape();
@@ -2411,7 +2408,7 @@ const ZodObject = class ZodObject extends ZodType {
 	}
 	pick(mask) {
 		const shape = {};
-		for (const key of util.objectKeys(mask)) {if (mask[key] && this.shape[key]) shape[key] = this.shape[key];}
+		for (const key of util.objectKeys(mask)) {if (mask[key] && this.shape[key]) {shape[key] = this.shape[key];}}
 		return new ZodObject({
 			...this._def,
 			shape: () => shape
@@ -2419,7 +2416,7 @@ const ZodObject = class ZodObject extends ZodType {
 	}
 	omit(mask) {
 		const shape = {};
-		for (const key of util.objectKeys(this.shape)) {if (!mask[key]) shape[key] = this.shape[key];}
+		for (const key of util.objectKeys(this.shape)) {if (!mask[key]) {shape[key] = this.shape[key];}}
 		return new ZodObject({
 			...this._def,
 			shape: () => shape
@@ -2445,10 +2442,10 @@ const ZodObject = class ZodObject extends ZodType {
 	}
 	required(mask) {
 		const newShape = {};
-		for (const key of util.objectKeys(this.shape)) {if (mask && !mask[key]) newShape[key] = this.shape[key];
+		for (const key of util.objectKeys(this.shape)) {if (mask && !mask[key]) {newShape[key] = this.shape[key];}
 		else {
 			let newField = this.shape[key];
-			while (newField instanceof ZodOptional) newField = newField._def.innerType;
+			while (newField instanceof ZodOptional) {newField = newField._def.innerType;}
 			newShape[key] = newField;
 		}}
 		return new ZodObject({
@@ -2492,7 +2489,7 @@ const ZodUnion = class extends ZodType {
 		const { ctx } = this._processInputParams(input);
 		const options = this._def.options;
 		function handleResults(results) {
-			for (const result of results) {if (result.result.status === "valid") return result.result;}
+			for (const result of results) {if (result.result.status === "valid") {return result.result;}}
 			for (const result of results) {if (result.result.status === "dirty") {
 				ctx.common.issues.push(...result.ctx.common.issues);
 				return result.result;
@@ -2522,7 +2519,6 @@ const ZodUnion = class extends ZodType {
 				ctx: childCtx
 			};
 		})).then(handleResults);}
-		else {
 			let dirty = void 0;
 			const issues = [];
 			for (const option of options) {
@@ -2556,7 +2552,7 @@ const ZodUnion = class extends ZodType {
 				unionErrors
 			});
 			return INVALID;
-		}
+		
 	}
 	get options() {
 		return this._def.options;
@@ -2610,12 +2606,11 @@ const ZodDiscriminatedUnion = class ZodDiscriminatedUnion extends ZodType {
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
-		});}
-		else {return option._parseSync({
+		});}return option._parseSync({
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
-		});}
+		});
 	}
 	get discriminator() {
 		return this._def.discriminator;
@@ -2719,8 +2714,7 @@ const ZodIntersection = class extends ZodType {
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
-		})]).then(([left, right]) => handleParsed(left, right));}
-		else {return handleParsed(this._def.left._parseSync({
+		})]).then(([left, right]) => handleParsed(left, right));}return handleParsed(this._def.left._parseSync({
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
@@ -2728,7 +2722,7 @@ const ZodIntersection = class extends ZodType {
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
-		}));}
+		}));
 	}
 };
 ZodIntersection.create = (left, right, params) => {
@@ -2777,8 +2771,7 @@ const ZodTuple = class ZodTuple extends ZodType {
 		}).filter((x) => Boolean(x));
 		if (ctx.common.async) {return Promise.all(items).then((results) => {
 			return ParseStatus.mergeArray(status, results);
-		});}
-		else {return ParseStatus.mergeArray(status, items);}
+		});}return ParseStatus.mergeArray(status, items);
 	}
 	get items() {
 		return this._def.items;
@@ -2824,8 +2817,7 @@ const ZodRecord = class ZodRecord extends ZodType {
 			value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key], ctx.path, key)),
 			alwaysSet: key in ctx.data
 		});}
-		if (ctx.common.async) {return ParseStatus.mergeObjectAsync(status, pairs);}
-		else {return ParseStatus.mergeObjectSync(status, pairs);}
+		if (ctx.common.async) {return ParseStatus.mergeObjectAsync(status, pairs);}return ParseStatus.mergeObjectSync(status, pairs);
 	}
 	get element() {
 		return this._def.valueType;
@@ -2890,8 +2882,8 @@ const ZodMap = class extends ZodType {
 			for (const pair of pairs) {
 				const key = pair.key;
 				const value = pair.value;
-				if (key.status === "aborted" || value.status === "aborted") return INVALID;
-				if (key.status === "dirty" || value.status === "dirty") status.dirty();
+				if (key.status === "aborted" || value.status === "aborted") {return INVALID;}
+				if (key.status === "dirty" || value.status === "dirty") {status.dirty();}
 				finalMap.set(key.value, value.value);
 			}
 			return {
@@ -2961,8 +2953,7 @@ const ZodSet = class ZodSet extends ZodType {
 			};
 		}
 		const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath(ctx, item, ctx.path, i)));
-		if (ctx.common.async) {return Promise.all(elements).then((elements) => finalizeSet(elements));}
-		else {return finalizeSet(elements);}
+		if (ctx.common.async) {return Promise.all(elements).then((elements) => finalizeSet(elements));}return finalizeSet(elements);
 	}
 	min(minSize, message) {
 		return new ZodSet({
@@ -3065,10 +3056,10 @@ const ZodFunction = class ZodFunction extends ZodType {
 			const me = this;
 			return OK(function(...args) {
 				const parsedArgs = me._def.args.safeParse(args, params);
-				if (!parsedArgs.success) throw new ZodError([makeArgsIssue(args, parsedArgs.error)]);
+				if (!parsedArgs.success) {throw new ZodError([makeArgsIssue(args, parsedArgs.error)]);}
 				const result = Reflect.apply(fn, this, parsedArgs.data);
 				const parsedReturns = me._def.returns.safeParse(result, params);
-				if (!parsedReturns.success) throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);
+				if (!parsedReturns.success) {throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);}
 				return parsedReturns.data;
 			});
 		
@@ -3306,18 +3297,17 @@ const ZodEffects = class extends ZodType {
 		if (effect.type === "preprocess") {
 			const processed = effect.transform(ctx.data, checkCtx);
 			if (ctx.common.async) {return Promise.resolve(processed).then(async (processed) => {
-				if (status.value === "aborted") return INVALID;
+				if (status.value === "aborted") {return INVALID;}
 				const result = await this._def.schema._parseAsync({
 					data: processed,
 					path: ctx.path,
 					parent: ctx
 				});
-				if (result.status === "aborted") return INVALID;
-				if (result.status === "dirty") return DIRTY(result.value);
-				if (status.value === "dirty") return DIRTY(result.value);
+				if (result.status === "aborted") {return INVALID;}
+				if (result.status === "dirty") {return DIRTY(result.value);}
+				if (status.value === "dirty") {return DIRTY(result.value);}
 				return result;
 			});}
-			else {
 				if (status.value === "aborted") {return INVALID;}
 				const result = this._def.schema._parseSync({
 					data: processed,
@@ -3328,7 +3318,7 @@ const ZodEffects = class extends ZodType {
 				if (result.status === "dirty") {return DIRTY(result.value);}
 				if (status.value === "dirty") {return DIRTY(result.value);}
 				return result;
-			}
+			
 		}
 		if (effect.type === "refinement") {
 			const executeRefinement = (acc) => {
@@ -3355,8 +3345,8 @@ const ZodEffects = class extends ZodType {
 				path: ctx.path,
 				parent: ctx
 			}).then((inner) => {
-				if (inner.status === "aborted") return INVALID;
-				if (inner.status === "dirty") status.dirty();
+				if (inner.status === "aborted") {return INVALID;}
+				if (inner.status === "dirty") {status.dirty();}
 				return executeRefinement(inner.value).then(() => {
 					return {
 						status: status.value,
@@ -3371,14 +3361,14 @@ const ZodEffects = class extends ZodType {
 				path: ctx.path,
 				parent: ctx
 			});
-			if (!isValid(base)) return INVALID;
+			if (!isValid(base)) {return INVALID;}
 			const result = effect.transform(base.value, checkCtx);
-			if (result instanceof Promise) throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
+			if (result instanceof Promise) {throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);}
 			return {
 				status: status.value,
 				value: result
 			};
-		} else return this._def.schema._parseAsync({
+		}return this._def.schema._parseAsync({
 			data: ctx.data,
 			path: ctx.path,
 			parent: ctx
@@ -3491,8 +3481,7 @@ const ZodCatch = class extends ZodType {
 					input: newCtx.data
 				})
 			};
-		});}
-		else {return {
+		});}return {
 			status: "valid",
 			value: result.status === "valid" ? result.value : this._def.catchValue({
 				get error() {
@@ -3500,7 +3489,7 @@ const ZodCatch = class extends ZodType {
 				},
 				input: newCtx.data
 			})
-		};}
+		};
 	}
 	removeCatch() {
 		return this._def.innerType;
@@ -3578,14 +3567,14 @@ const ZodPipeline = class ZodPipeline extends ZodType {
 				path: ctx.path,
 				parent: ctx
 			});
-			if (inResult.status === "aborted") return INVALID;
+			if (inResult.status === "aborted") {return INVALID;}
 			if (inResult.status === "dirty") {
 				status.dirty();
 				return {
 					status: "dirty",
 					value: inResult.value
 				};
-			} else return this._def.out._parseSync({
+			}return this._def.out._parseSync({
 				data: inResult.value,
 				path: ctx.path,
 				parent: ctx
@@ -4140,7 +4129,7 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 	getSurfaces() {
 		const allSurfaces = this.surfaces;
 		const visibleSurfaces = /* @__PURE__ */ new Map();
-		for (const [surfaceId, surface] of allSurfaces) {if (surface.rootComponentId) visibleSurfaces.set(surfaceId, surface);}
+		for (const [surfaceId, surface] of allSurfaces) {if (surface.rootComponentId) {visibleSurfaces.set(surfaceId, surface);}}
 		return visibleSurfaces;
 	}
 	clearSurfaces() {
@@ -4191,7 +4180,7 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 		if (trimmedValue.startsWith("{") && trimmedValue.endsWith("}") || trimmedValue.startsWith("[") && trimmedValue.endsWith("]")) {try {
 			return JSON.parse(value);
 		} catch (e) {
-			console.warn(`Failed to parse potential JSON string: "${value.substring(0, 50)}..."`, e);
+			console.warn(`Failed to parse potential JSON string: "${value.slice(0, 50)}..."`, e);
 			return value;
 		}}
 		return value;
@@ -4221,10 +4210,10 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 			const valueKey = this.findValueKey(item);
 			if (valueKey) {
 				value = item[valueKey];
-				if (valueKey === "valueMap" && Array.isArray(value)) value = this.convertKeyValueArrayToMap(value);
-				else if (typeof value === "string") value = this.parseIfJsonString(value);
-			} else value = this.convertKeyValueArrayToMap(value);
-		} else value = this.convertKeyValueArrayToMap(value);}
+				if (valueKey === "valueMap" && Array.isArray(value)) {value = this.convertKeyValueArrayToMap(value);}
+				else if (typeof value === "string") {value = this.parseIfJsonString(value);}
+			} else {value = this.convertKeyValueArrayToMap(value);}
+		} else {value = this.convertKeyValueArrayToMap(value);}}
 		const segments = this.normalizePath(path).split("/").filter((s) => s);
 		if (segments.length === 0) {
 			if (value instanceof Map || isObject(value)) {
@@ -4239,18 +4228,18 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 			const segment = segments[i];
 			let target;
 			if (current instanceof Map) {target = current.get(segment);}
-			else if (Array.isArray(current) && /^\d+$/.test(segment)) {target = current[parseInt(segment, 10)];}
+			else if (Array.isArray(current) && /^\d+$/.test(segment)) {target = current[Number.parseInt(segment, 10)];}
 			if (target === void 0 || typeof target !== "object" || target === null) {
 				target = new this.mapCtor();
 				if (current instanceof this.mapCtor) {current.set(segment, target);}
-				else if (Array.isArray(current)) {current[parseInt(segment, 10)] = target;}
+				else if (Array.isArray(current)) {current[Number.parseInt(segment, 10)] = target;}
 			}
 			current = target;
 		}
 		const finalSegment = segments[segments.length - 1];
 		const storedValue = value;
 		if (current instanceof this.mapCtor) {current.set(finalSegment, storedValue);}
-		else if (Array.isArray(current) && /^\d+$/.test(finalSegment)) {current[parseInt(finalSegment, 10)] = storedValue;}
+		else if (Array.isArray(current) && /^\d+$/.test(finalSegment)) {current[Number.parseInt(finalSegment, 10)] = storedValue;}
 	}
 	/**
 	* Normalizes a path string into a consistent, slash-delimited format.
@@ -4267,7 +4256,7 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 		for (const segment of segments) {
 			if (current === void 0 || current === null) {return null;}
 			if (current instanceof Map) {current = current.get(segment);}
-			else if (Array.isArray(current) && /^\d+$/.test(segment)) {current = current[parseInt(segment, 10)];}
+			else if (Array.isArray(current) && /^\d+$/.test(segment)) {current = current[Number.parseInt(segment, 10)];}
 			else if (isObject(current)) {current = current[segment];}
 			else {return null;}
 		}
@@ -4341,7 +4330,7 @@ const A2uiMessageProcessor = class A2uiMessageProcessor {
 		const componentType = Object.keys(componentProps)[0];
 		const unresolvedProperties = componentProps[componentType];
 		const resolvedProperties = new this.objCtor();
-		if (isObject(unresolvedProperties)) {for (const [key, value] of Object.entries(unresolvedProperties)) resolvedProperties[key] = this.resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix);}
+		if (isObject(unresolvedProperties)) {for (const [key, value] of Object.entries(unresolvedProperties)) {resolvedProperties[key] = this.resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix);}}
 		visited.delete(fullId);
 		const baseNode = {
 			id: fullId,
@@ -5062,14 +5051,14 @@ const __publicField = (obj, key, value) => {
 	return value;
 };
 const __accessCheck = (obj, member, msg) => {
-	if (!member.has(obj)) {throw TypeError("Cannot " + msg);}
+	if (!member.has(obj)) {throw new TypeError("Cannot " + msg);}
 };
 const __privateIn = (member, obj) => {
-	if (Object(obj) !== obj) {throw TypeError("Cannot use the \"in\" operator on this value");}
+	if (Object(obj) !== obj) {throw new TypeError("Cannot use the \"in\" operator on this value");}
 	return member.has(obj);
 };
 const __privateAdd = (obj, member, value) => {
-	if (member.has(obj)) {throw TypeError("Cannot add the same private member more than once");}
+	if (member.has(obj)) {throw new TypeError("Cannot add the same private member more than once");}
 	member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
 };
 const __privateMethod = (obj, member, method) => {
@@ -5903,7 +5892,7 @@ const Data = {
 const t$7 = globalThis, e$13 = t$7.ShadowRoot && (void 0 === t$7.ShadyCSS || t$7.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, s$9 = Symbol(), o$14 = /* @__PURE__ */ new WeakMap();
 const n$13 = class {
 	constructor(t, e, o) {
-		if (this._$cssResult$ = !0, o !== s$9) {throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");}
+		if (this._$cssResult$ = !0, o !== s$9) {throw new Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");}
 		this.cssText = t, this.t = e;
 	}
 	get styleSheet() {
@@ -6027,7 +6016,7 @@ const y$1 = class extends HTMLElement {
 		const t = this[Symbol.metadata];
 		if (t !== null) {
 			const s = litPropertyMetadata.get(t);
-			if (void 0 !== s) {for (const [t, i] of s) this.elementProperties.set(t, i);}
+			if (void 0 !== s) {for (const [t, i] of s) {this.elementProperties.set(t, i);}}
 		}
 		this._$Eh = /* @__PURE__ */ new Map();
 		for (const [t, s] of this.elementProperties) {
@@ -6202,7 +6191,7 @@ const S = class S {
 		}
 		for (; (r = P.nextNode()) !== null && d.length < u;) {
 			if (r.nodeType === 1) {
-				if (r.hasAttributes()) {for (const t of r.getAttributeNames()) if (t.endsWith(h$6)) {
+				if (r.hasAttributes()) {for (const t of r.getAttributeNames()) {if (t.endsWith(h$6)) {
 					const i = v[a++], s = r.getAttribute(t).split(o$12), e = /([.?@])?(.*)/.exec(i);
 					d.push({
 						type: 1,
@@ -6214,7 +6203,7 @@ const S = class S {
 				} else t.startsWith(o$12) && (d.push({
 					type: 6,
 					index: l
-				}), r.removeAttribute(t));}
+				}), r.removeAttribute(t));}}
 				if (y.test(r.tagName)) {
 					const t = r.textContent.split(o$12), i = t.length - 1;
 					if (i > 0) {
@@ -6226,16 +6215,16 @@ const S = class S {
 						r.append(t[i], c$5());
 					}
 				}
-			} else if (r.nodeType === 8) {if (r.data === n$11) d.push({
+			} else if (r.nodeType === 8) {if (r.data === n$11) {d.push({
 				type: 2,
 				index: l
-			});
+			});}
 			else {
 				let t = -1;
-				for (; -1 !== (t = r.data.indexOf(o$12, t + 1));) d.push({
+				for (; (t = r.data.indexOf(o$12, t + 1)) !== -1;) {d.push({
 					type: 7,
 					index: l
-				}), t += o$12.length - 1;
+				}), t += o$12.length - 1;}
 			}}
 			l++;
 		}
@@ -6746,8 +6735,8 @@ function h$3(i) {
 }
 function n$5(i, t = !1, e = 0) {
 	const r = this._$AH, h = this._$AN;
-	if (void 0 !== h && h.size !== 0) {if (t) {if (Array.isArray(r)) for (let i = e; i < r.length; i++) s$4(r[i], !1), o$6(r[i]);
-	else null != r && (s$4(r, !1), o$6(r));}
+	if (void 0 !== h && h.size !== 0) {if (t) {if (Array.isArray(r)) {for (let i = e; i < r.length; i++) s$4(r[i], !1), o$6(r[i]);}
+	else r != null && (s$4(r, !1), o$6(r));}
 	else {s$4(this, i);}}
 }
 const c$3 = (i) => {
@@ -7060,8 +7049,8 @@ const __esDecorate$19 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -7226,12 +7215,12 @@ const Root = (() => {
 				metadata: _metadata
 			}, null, _classExtraInitializers);
 			Root = _classThis = _classDescriptor.value;
-			if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, {
+			if (_metadata) {Object.defineProperty(_classThis, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
 				writable: true,
 				value: _metadata
-			});
+			});}
 		}
 		#surfaceId_accessor_storage = (__runInitializers$19(this, _instanceExtraInitializers), __runInitializers$19(this, _surfaceId_initializers, null));
 		get surfaceId() {
@@ -7307,7 +7296,7 @@ const Root = (() => {
 		#lightDomEffectDisposer = null;
 		willUpdate(changedProperties) {
 			if (changedProperties.has("childComponents")) {
-				if (this.#lightDomEffectDisposer) this.#lightDomEffectDisposer();
+				if (this.#lightDomEffectDisposer) {this.#lightDomEffectDisposer();}
 				this.#lightDomEffectDisposer = effect(() => {
 					const allChildren = this.childComponents ?? null;
 					D(this.renderComponentTree(allChildren), this, { host: this });
@@ -7319,14 +7308,14 @@ const Root = (() => {
 		*/
 		disconnectedCallback() {
 			super.disconnectedCallback();
-			if (this.#lightDomEffectDisposer) this.#lightDomEffectDisposer();
+			if (this.#lightDomEffectDisposer) {this.#lightDomEffectDisposer();}
 		}
 		/**
 		* Turns the SignalMap into a renderable TemplateResult for Lit.
 		*/
 		renderComponentTree(components) {
-			if (!components) return A;
-			if (!Array.isArray(components)) return A;
+			if (!components) {return A;}
+			if (!Array.isArray(components)) {return A;}
 			return b` ${o$3(components, (component) => {
 				if (this.enableCustomElements) {
 					const elCtor = componentRegistry.get(component.type) || customElements.get(component.type);
@@ -7334,13 +7323,13 @@ const Root = (() => {
 						const node = component;
 						const el = new elCtor();
 						el.id = node.id;
-						if (node.slotName) el.slot = node.slotName;
+						if (node.slotName) {el.slot = node.slotName;}
 						el.component = node;
 						el.weight = node.weight ?? "initial";
 						el.processor = this.processor;
 						el.surfaceId = this.surfaceId;
 						el.dataContextPath = node.dataContextPath ?? "/";
-						for (const [prop, val] of Object.entries(component.properties)) el[prop] = val;
+						for (const [prop, val] of Object.entries(component.properties)) {el[prop] = val;}
 						return b`${el}`;
 					}
 				}
@@ -7363,7 +7352,7 @@ const Root = (() => {
 					case "Card": {
 						const node = component;
 						let childComponents = node.properties.children;
-						if (!childComponents && node.properties.child) childComponents = [node.properties.child];
+						if (!childComponents && node.properties.child) {childComponents = [node.properties.child];}
 						return b`<a2ui-card
             id=${node.id}
             slot=${node.slotName ? node.slotName : A}
@@ -7600,10 +7589,10 @@ const Root = (() => {
 						const node = component;
 						const titles = [];
 						const childComponents = [];
-						if (node.properties.tabItems) for (const item of node.properties.tabItems) {
+						if (node.properties.tabItems) {for (const item of node.properties.tabItems) {
 							titles.push(item.title);
 							childComponents.push(item.child);
-						}
+						}}
 						return b`<a2ui-tabs
             id=${node.id}
             slot=${node.slotName ? node.slotName : A}
@@ -7638,19 +7627,19 @@ const Root = (() => {
 			})}`;
 		}
 		renderCustomComponent(component) {
-			if (!this.enableCustomElements) return;
+			if (!this.enableCustomElements) {return;}
 			const node = component;
 			const elCtor = componentRegistry.get(component.type) || customElements.get(component.type);
-			if (!elCtor) return b`Unknown element ${component.type}`;
+			if (!elCtor) {return b`Unknown element ${component.type}`;}
 			const el = new elCtor();
 			el.id = node.id;
-			if (node.slotName) el.slot = node.slotName;
+			if (node.slotName) {el.slot = node.slotName;}
 			el.component = node;
 			el.weight = node.weight ?? "initial";
 			el.processor = this.processor;
 			el.surfaceId = this.surfaceId;
 			el.dataContextPath = node.dataContextPath ?? "/";
-			for (const [prop, val] of Object.entries(component.properties)) el[prop] = val;
+			for (const [prop, val] of Object.entries(component.properties)) {el[prop] = val;}
 			return b`${el}`;
 		}
 		render() {
@@ -7744,8 +7733,8 @@ const __esDecorate$18 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -7884,8 +7873,8 @@ const __esDecorate$17 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -8035,8 +8024,8 @@ const __esDecorate$16 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -8168,8 +8157,8 @@ const __esDecorate$15 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -8356,8 +8345,8 @@ const __esDecorate$14 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -8552,8 +8541,8 @@ const __esDecorate$13 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -8821,8 +8810,8 @@ const __esDecorate$12 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -8911,8 +8900,8 @@ const __esDecorate$11 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -9067,8 +9056,8 @@ const __esDecorate$10 = function(ctor, descriptorIn, decorators, contextIn, init
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -9303,8 +9292,8 @@ const __esDecorate$9 = function(ctor, descriptorIn, decorators, contextIn, initi
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -9443,8 +9432,8 @@ const __esDecorate$8 = function(ctor, descriptorIn, decorators, contextIn, initi
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -10063,8 +10052,8 @@ const __esDecorate$7 = function(ctor, descriptorIn, decorators, contextIn, initi
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -10285,8 +10274,8 @@ const __esDecorate$6 = function(ctor, descriptorIn, decorators, contextIn, initi
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -10481,8 +10470,8 @@ const __esDecorate$5 = function(ctor, descriptorIn, decorators, contextIn, initi
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -10719,8 +10708,8 @@ const __esDecorate$4 = function(ctor, descriptorIn, decorators, contextIn, initi
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -10888,7 +10877,7 @@ const __runInitializers$4 = function(thisArg, initializers, value) {
 		}
 		#renderSurface() {
 			const styles = {};
-			if (this.surface?.styles) {for (const [key, value] of Object.entries(this.surface.styles)) switch (key) {
+			if (this.surface?.styles) {for (const [key, value] of Object.entries(this.surface.styles)) {switch (key) {
 				case "primaryColor":
 					styles["--p-100"] = "#ffffff";
 					styles["--p-99"] = `color-mix(in srgb, ${value} 2%, white 98%)`;
@@ -10913,7 +10902,7 @@ const __runInitializers$4 = function(thisArg, initializers, value) {
 					styles["--font-family"] = value;
 					styles["--font-family-flex"] = value;
 					break;
-			}}
+			}}}
 			return b`<a2ui-root
       style=${o$2(styles)}
       .surfaceId=${this.surfaceId}
@@ -10976,12 +10965,12 @@ const u = (e, s, t) => {
 		else if (h[j] === a[k]) {v$2[k] = u$1(d[j], p$3[k]), v(s, d[x], d[j]), j--, k++;}
 		else if (void 0 === m && (m = u(a, k, w), y = u(h, x, j)), m.has(h[x])) {if (m.has(h[j])) {
 			const e = y.get(a[k]), t = void 0 !== e ? d[e] : null;
-			if (null === t) {
+			if (t === null) {
 				const e = v(s, d[x]);
 				u$1(e, p$3[k]), v$2[k] = e;
-			} else v$2[k] = u$1(t, p$3[k]), v(s, d[x], t), d[e] = null;
+			} else {v$2[k] = u$1(t, p$3[k]), v(s, d[x], t), d[e] = null;}
 			k++;
-		} else h$4(d[j]), j--;}
+		} else {h$4(d[j]), j--;}}
 		else {h$4(d[x]), x++;}}
 		for (; k <= w;) {
 			const e = v(s, v$2[w + 1]);
@@ -11021,8 +11010,8 @@ const __esDecorate$3 = function(ctor, descriptorIn, decorators, contextIn, initi
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -11200,8 +11189,8 @@ const __esDecorate$2 = function(ctor, descriptorIn, decorators, contextIn, initi
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -11423,12 +11412,12 @@ const __runInitializers$2 = function(thisArg, initializers, value) {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const e = class extends i$5 {
 	constructor(i) {
-		if (super(i), this.it = A, i.type !== t$3.CHILD) {throw Error(this.constructor.directiveName + "() can only be used in child bindings");}
+		if (super(i), this.it = A, i.type !== t$3.CHILD) {throw new Error(this.constructor.directiveName + "() can only be used in child bindings");}
 	}
 	render(r) {
 		if (r === A || r == null) {return this._t = void 0, this.it = r;}
 		if (r === E) {return r;}
-		if (typeof r != "string") {throw Error(this.constructor.directiveName + "() called with a non-string value");}
+		if (typeof r != "string") {throw new Error(this.constructor.directiveName + "() called with a non-string value");}
 		if (r === this.it) {return this._t;}
 		this.it = r;
 		const s = [r];
@@ -11580,8 +11569,8 @@ const __esDecorate$1 = function(ctor, descriptorIn, decorators, contextIn, initi
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -11819,8 +11808,8 @@ const __esDecorate = function(ctor, descriptorIn, decorators, contextIn, initial
 			if (_ = accept(result.get)) {descriptor.get = _;}
 			if (_ = accept(result.set)) {descriptor.set = _;}
 			if (_ = accept(result.init)) {initializers.unshift(_);}
-		} else if (_ = accept(result)) {if (kind === "field") initializers.unshift(_);
-		else descriptor[key] = _;}
+		} else if (_ = accept(result)) {if (kind === "field") {initializers.unshift(_);}
+		else {descriptor[key] = _;}}
 	}
 	if (target) {Object.defineProperty(target, contextIn.name, descriptor);}
 	done = true;
@@ -12413,8 +12402,8 @@ const OpenClawA2UIHost = class extends i$7 {
 		globalThis["__openclawLastA2UIAction"] = userAction;
 		const handler = globalThis.webkit?.messageHandlers?.openclawCanvasA2UIAction ?? globalThis.openclawCanvasA2UIAction;
 		if (handler?.postMessage) {try {
-			if (handler === globalThis.openclawCanvasA2UIAction) postNativeMessage(handler, JSON.stringify({ userAction }));
-			else postNativeMessage(handler, { userAction });
+			if (handler === globalThis.openclawCanvasA2UIAction) {postNativeMessage(handler, JSON.stringify({ userAction }));}
+			else {postNativeMessage(handler, { userAction });}
 		} catch (e) {
 			const msg = String(e?.message ?? e);
 			this.pendingAction = {
