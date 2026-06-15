@@ -37,11 +37,11 @@ local workers as text-only helpers by default.
 
 ## How the pieces fit
 
-| Role             | Who does it                               | Surface                                                       |
-| ---------------- | ----------------------------------------- | ------------------------------------------------------------- |
-| Orchestrator     | Cloud model with tools                    | `agents.defaults.model.primary`                               |
-| Delegated worker | Local model, text only                    | sub-agent model override, `llm-task`, or a CLI backend        |
-| Safety net       | Cloud fallback when the local box is down | `agents.defaults.model.fallbacks` with `models.mode: "merge"` |
+| Role             | Who does it                                                           | Surface                                                       |
+| ---------------- | --------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Orchestrator     | Cloud model with tools                                                | `agents.defaults.model.primary`                               |
+| Delegated worker | Local model (restricted sub-agent, or no-tool `llm-task`/CLI backend) | sub-agent model override, `llm-task`, or a CLI backend        |
+| Safety net       | Cloud fallback when the local box is down                             | `agents.defaults.model.fallbacks` with `models.mode: "merge"` |
 
 ## Step 1: cloud orchestrator, local provider registered
 
@@ -103,9 +103,16 @@ Choose the worker surface that matches how much structure you need.
 Set a cheaper model for sub-agents while the main agent stays on the cloud model.
 Native sub-agents inherit the caller model unless you set
 `agents.defaults.subagents.model` (or per-agent
-`agents.list[].subagents.model`). Native sub-agents do **not** get session tools
-by default and return plain assistant text to the parent, which matches the
-bounded text-worker role.
+`agents.list[].subagents.model`).
+
+Native sub-agents are **not** text-only by default. They run the same
+tool-policy pipeline as the parent or target agent, so with no restrictive
+`tools.profile` a sub-agent receives every tool except the message, session, and
+system tools — including `read`, `exec`, and `web_*`. Pointing a sub-agent at a
+local model does not make it text-only; it just changes the model behind that
+tool-capable worker. To narrow a local worker, set an allow-only filter with
+`tools.subagents.tools.allow` (deny still wins, and an allow list cannot add back
+a tool removed by `tools.profile`):
 
 ```json5
 {
@@ -118,8 +125,21 @@ bounded text-worker role.
       },
     },
   },
+  tools: {
+    subagents: {
+      tools: {
+        // allow-only: restrict the local worker to a minimal tool set
+        allow: ["read"],
+      },
+    },
+  },
 }
 ```
+
+If you want a guaranteed no-tool text worker, prefer
+[LLM task](#llm-task-for-schema-validated-text-steps) or a
+[CLI backend](#cli-backend-as-a-text-only-fallback) below — those surfaces expose
+no OpenClaw tools to the model at all.
 
 Brief the child fully in the task text, because isolated sub-agents start with a
 clean transcript. See [Sub-agents](/tools/subagents) for context modes,
@@ -166,9 +186,10 @@ responses.
 
 ## Step 3: keep local tool expectations honest
 
-Local workers are text-only by default. When a local model is asked to do agent
-work and emits tool-call-looking text instead of real tool calls, tighten the
-local surface rather than expecting autonomous tool use:
+Treat local workers as text-only: even when a tool-capable surface exposes tools
+to them, local models often emit tool-call-looking text instead of real tool
+calls. When that happens, tighten the local surface rather than expecting
+autonomous tool use:
 
 - Enable `agents.defaults.experimental.localModelLean: true` to drop the heaviest
   default tools and route larger catalogs behind Tool Search. See
