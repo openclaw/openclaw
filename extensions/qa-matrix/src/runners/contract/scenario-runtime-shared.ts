@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime shared behavior.
 import { randomUUID } from "node:crypto";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
@@ -56,7 +57,7 @@ export type MatrixQaScenarioContext = {
   topology: MatrixQaProvisionedTopology;
   patchGatewayConfig?: (
     patch: Record<string, unknown>,
-    opts?: { restartDelayMs?: number },
+    opts?: { replacePaths?: string[]; restartDelayMs?: number },
   ) => Promise<void>;
   waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
 };
@@ -95,6 +96,7 @@ export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: strin
 export const MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME = "QA_KICKOFF_TASK.md";
 export const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
   "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt";
+export const MATRIX_QA_TOOL_PROGRESS_COMMAND = "printf 'matrix-command-progress-start\\n'; sleep 2";
 
 export function buildMatrixToolProgressTaskContent(text: string) {
   return [
@@ -111,6 +113,14 @@ export function buildMatrixToolProgressPrompt(sutUserId: string) {
     `Do not guess or send any marker before the tool result returns.`,
     `Do not read \`HEARTBEAT.md\` for this check.`,
     `After that read completes, reply with only the exact marker from the file and no other text.`,
+  ].join(" ");
+}
+
+export function buildMatrixToolProgressCommandPrompt(sutUserId: string, text: string) {
+  return [
+    `${sutUserId} Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${MATRIX_QA_TOOL_PROGRESS_COMMAND}\`.`,
+    `The QA harness must observe that exec command preview and its completion as edits to one Matrix draft.`,
+    `After that exec command completes or fails, reply exactly \`${text}\`.`,
   ].join(" ");
 }
 

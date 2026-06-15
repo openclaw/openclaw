@@ -1,3 +1,4 @@
+// End-to-end embedded-agent runner tests with mocked model/runtime seams.
 import fs from "node:fs/promises";
 import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
@@ -101,6 +102,8 @@ vi.mock("openclaw/plugin-sdk/llm", async () => {
 });
 
 const installRunEmbeddedMocks = () => {
+  // Install only the runtime seams needed by runner orchestration so tests avoid
+  // loading real providers, MCP runtimes, or gateway side effects.
   installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
@@ -213,6 +216,8 @@ const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
 
 const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
+  // Builds a session with an orphaned user message to exercise retry/resume
+  // cleanup paths from persisted JSONL.
   const sessionFile = nextSessionFile();
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendMessage({
@@ -812,39 +817,26 @@ describe("runEmbeddedAgent", () => {
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
   });
 
-  it("retries a planning-only GPT turn once with an act-now steer", async () => {
+  it("returns visible assistant prose without semantic retry classification", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["gpt-5.4"]);
     const sessionKey = nextSessionKey();
 
-    runEmbeddedAttemptMock
-      .mockImplementationOnce(async (params: unknown) => {
-        expect((params as { prompt?: string }).prompt).toMatch(/^ship it(?:\n\n|$)/);
-        return makeEmbeddedRunnerAttempt({
-          assistantTexts: ["I'll inspect the files, make the change, and run the checks."],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            model: "gpt-5.4",
-            content: [
-              {
-                type: "text",
-                text: "I'll inspect the files, make the change, and run the checks.",
-              },
-            ],
-          }),
-        });
-      })
-      .mockImplementationOnce(async (params: unknown) => {
-        expect((params as { prompt?: string }).prompt).toContain(
-          "Do not restate the plan. Act now",
-        );
-        return makeEmbeddedRunnerAttempt({
-          assistantTexts: ["done"],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            model: "gpt-5.4",
-            content: [{ type: "text", text: "done" }],
-          }),
-        });
+    runEmbeddedAttemptMock.mockImplementationOnce(async (params: unknown) => {
+      expect((params as { prompt?: string }).prompt).toMatch(/^ship it(?:\n\n|$)/);
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: ["I'll inspect the files, make the change, and run the checks."],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "text",
+              text: "I'll inspect the files, make the change, and run the checks.",
+            },
+          ],
+        }),
       });
+    });
 
     const result = await runEmbeddedAgent({
       sessionId: "session:test",
@@ -857,12 +849,14 @@ describe("runEmbeddedAgent", () => {
       model: "gpt-5.4",
       timeoutMs: 5_000,
       agentDir,
-      runId: nextRunId("planning-only-retry"),
+      runId: nextRunId("visible-prose"),
       enqueue: immediateEnqueue,
     });
 
-    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]?.text).toBe("done");
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.text).toBe(
+      "I'll inspect the files, make the change, and run the checks.",
+    );
   });
 
   it("handles prompt error paths without dropping user state", async () => {

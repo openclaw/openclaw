@@ -1,3 +1,4 @@
+// Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {
@@ -8,16 +9,25 @@ import {
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallMessageNormalization,
 } from "../../packages/tool-call-repair/src/index.js";
+import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
+import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
+export { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
+export { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
+export { notifyLlmRequestActivity, onLlmRequestActivity } from "../shared/llm-request-activity.js";
 
+type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
+
+/** Optional provider stream decorator factory used by shared provider wrappers. */
 export type ProviderStreamWrapperFactory =
   /** Wrapper factory that can decorate, replace, or omit a provider stream function. */
   ((streamFn: StreamFn | undefined) => StreamFn | undefined) | null | undefined | false;
 
+/** Compose stream wrapper factories from left to right around a base stream function. */
 export function composeProviderStreamWrappers(
   /** Base provider stream function to pass through the wrapper chain. */
   baseStreamFn: StreamFn | undefined,
@@ -234,6 +244,7 @@ export function defaultToolStreamExtraParams(
   };
 }
 
+/** Wrap a provider stream so callers can patch the outbound provider payload once. */
 export function createPayloadPatchStreamWrapper(
   /** Provider stream function whose outbound payload should be patched. */
   baseStreamFn: StreamFn | undefined,
@@ -266,6 +277,44 @@ export function createPayloadPatchStreamWrapper(
     return streamWithPayloadPatch(underlying, model, context, options, (payload) =>
       patchPayload({ payload, model, context, options }),
     );
+  };
+}
+
+/**
+ * Applies explicit disabled-thinking intent to OpenAI-compatible Chat
+ * Completions payloads without changing enabled reasoning levels.
+ */
+export function createOpenAICompatibleCompletionsThinkingOffWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (thinkingLevel !== "off") {
+    return underlying;
+  }
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (!("reasoning_effort" in payload)) {
+        return;
+      }
+      const disabled = resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "none",
+        fallbackMap: resolveOpenAIReasoningEffortMap({
+          provider: typeof model.provider === "string" ? model.provider : null,
+          id: typeof model.id === "string" ? model.id : null,
+          compat: model.compat,
+        }),
+      });
+      if (disabled) {
+        payload.reasoning_effort = disabled;
+      } else {
+        delete payload.reasoning_effort;
+      }
+    });
   };
 }
 

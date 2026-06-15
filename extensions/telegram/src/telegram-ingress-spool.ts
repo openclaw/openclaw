@@ -1,3 +1,4 @@
+// Telegram plugin module implements telegram ingress spool behavior.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -211,6 +212,7 @@ export function isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
   return Boolean(
     claim.claim &&
     claim.claim.processId !== TELEGRAM_SPOOLED_UPDATE_PROCESS_ID &&
+    claim.claim.processPid !== process.pid &&
     isFreshClaimOwner(claim.claim) &&
     processExists(claim.claim.processPid),
   );

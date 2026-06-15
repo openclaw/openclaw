@@ -53,23 +53,53 @@ vi.mock("../../plugins/git-install.js", async () => {
   };
 });
 
-vi.mock("../../cli/plugins-install-persist.js", () => ({
+vi.mock("../../cli/plugins-install-persist.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cli/plugins-install-persist.js")>()),
   persistPluginInstall: persistPluginInstallMock,
 }));
 
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-plugins-install-");
 
-function buildPluginsParams(commandBodyNormalized: string, workspaceDir: string) {
-  return buildPluginsCommandParams({
+function buildPluginsParams(
+  commandBodyNormalized: string,
+  workspaceDir: string,
+  options: {
+    gatewayClientScopes?: string[];
+    omitGatewayClientScopes?: boolean;
+    senderIsOwner?: boolean;
+  } = {},
+) {
+  const params = buildPluginsCommandParams({
     commandBodyNormalized,
     workspaceDir,
-    gatewayClientScopes: ["operator.admin", "operator.write", "operator.pairing"],
+    gatewayClientScopes: options.gatewayClientScopes ?? [
+      "operator.admin",
+      "operator.write",
+      "operator.pairing",
+    ],
   });
+  if (options.senderIsOwner !== undefined) {
+    params.command.senderIsOwner = options.senderIsOwner;
+  }
+  if (options.omitGatewayClientScopes) {
+    delete params.ctx.GatewayClientScopes;
+  }
+  return params;
 }
 
 function expectPersistedInstall(pluginId: string, expectedInstall: Record<string, unknown>): void {
   const persisted = mockFirstObjectArg(persistPluginInstallMock);
   expect(persisted.pluginId).toBe(pluginId);
+  const snapshot = persisted.snapshot as Record<string, unknown>;
+  const writeOptions = snapshot.writeOptions as Record<string, unknown>;
+  expectObjectFields(persisted.snapshot, {
+    writeOptions: expect.objectContaining({
+      assertConfigPathForWrite: expect.any(Function),
+      expectedConfigPath: expect.stringContaining("openclaw.json"),
+      ownedConfigPathForWrite: expect.stringContaining("openclaw.json"),
+    }),
+  });
+  expect(writeOptions).not.toHaveProperty("basePluginMetadataSnapshot");
   expectObjectFields(persisted.install, expectedInstall);
 }
 
@@ -109,6 +139,66 @@ describe("handleCommands /plugins install", () => {
         source: "path",
         sourcePath: pluginDir,
         installPath: "/tmp/path-install-plugin",
+        version: "0.0.1",
+      });
+    });
+  });
+
+  it("blocks channel-authorized non-owner plugin installs before installer side effects", async () => {
+    await withTempHome("openclaw-command-plugins-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const pluginDir = path.join(workspaceDir, "fixtures", "channel-installed-plugin");
+      await fs.mkdir(pluginDir, { recursive: true });
+
+      const params = buildPluginsParams(`/plugins install ${pluginDir}`, workspaceDir, {
+        omitGatewayClientScopes: true,
+        senderIsOwner: false,
+      });
+      params.command.channel = "telegram";
+      params.command.channelId = "telegram";
+      params.command.surface = "telegram";
+      params.command.senderId = "telegram-user-3";
+      params.command.isAuthorizedSender = true;
+      params.ctx.Provider = "telegram";
+      params.ctx.Surface = "telegram";
+
+      const result = await handlePluginsCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+      expect(persistPluginInstallMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows gateway clients with operator.admin to install plugins", async () => {
+    installPluginFromPathMock.mockResolvedValue({
+      ok: true,
+      pluginId: "gateway-admin-plugin",
+      targetDir: "/tmp/gateway-admin-plugin",
+      version: "0.0.1",
+      extensions: ["index.js"],
+    });
+    persistPluginInstallMock.mockResolvedValue({});
+
+    await withTempHome("openclaw-command-plugins-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const pluginDir = path.join(workspaceDir, "fixtures", "gateway-admin-plugin");
+      await fs.mkdir(pluginDir, { recursive: true });
+
+      const params = buildPluginsParams(`/plugins install ${pluginDir}`, workspaceDir, {
+        gatewayClientScopes: ["operator.admin", "operator.write"],
+        senderIsOwner: false,
+      });
+
+      const result = await handlePluginsCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain('Installed plugin "gateway-admin-plugin"');
+      expect(mockFirstObjectArg(installPluginFromPathMock).path).toBe(pluginDir);
+      expectPersistedInstall("gateway-admin-plugin", {
+        source: "path",
+        sourcePath: pluginDir,
+        installPath: "/tmp/gateway-admin-plugin",
         version: "0.0.1",
       });
     });
@@ -188,6 +278,31 @@ describe("handleCommands /plugins install", () => {
         process.env.OPENCLAW_NIX_MODE = previousNixMode;
       }
     }
+  });
+
+  it("refuses installs through a root include before package installer side effects", async () => {
+    await withTempHome("openclaw-command-plugins-home-", async (home) => {
+      const sharedConfigPath = path.join(home, ".openclaw", "shared.json5");
+      await fs.writeFile(sharedConfigPath, `${JSON.stringify({ plugins: {} }, null, 2)}\n`);
+      await fs.writeFile(
+        path.join(home, ".openclaw", "openclaw.json"),
+        `${JSON.stringify({ $include: "./shared.json5" }, null, 2)}\n`,
+      );
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const params = buildPluginsParams("/plugins install @acme/demo", workspaceDir);
+
+      const result = await handlePluginsCommand(params, true);
+
+      if (result === null) {
+        throw new Error("expected plugin install result");
+      }
+      expect(result.reply?.text).toContain("unsupported $include shape at the root");
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+      expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+      expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
+      expect(persistPluginInstallMock).not.toHaveBeenCalled();
+    });
   });
 
   it("installs from an explicit git: spec", async () => {

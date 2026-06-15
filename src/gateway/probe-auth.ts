@@ -1,3 +1,5 @@
+// Gateway probe auth resolver.
+// Adapts gateway credential precedence for local/remote reachability checks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
@@ -30,7 +32,7 @@ function buildGatewayProbeCredentialPolicy(params: {
   };
 }
 
-function resolveGatewayProbeCredentialConfig(params: {
+export function resolveGatewayProbeCredentialConfig(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
 }): OpenClawConfig {

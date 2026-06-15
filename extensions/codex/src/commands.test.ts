@@ -1,3 +1,4 @@
+// Codex tests cover commands plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -2562,7 +2563,7 @@ describe("codex command", () => {
         await firstConfirmBindingRead;
       }
       return {
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         threadId: "thread-race",
         cwd: "/repo",
         sessionFile: bindingSessionFile,

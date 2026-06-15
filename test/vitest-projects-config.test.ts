@@ -1,3 +1,4 @@
+// Vitest project config tests validate aggregate Vitest project wiring.
 import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
@@ -81,6 +82,19 @@ describe("projects vitest config", () => {
         "test/vitest/vitest.extension-media.config.ts",
         "test/vitest/vitest.extension-misc.config.ts",
       ]),
+    );
+  });
+
+  it("keeps root watch projects aligned with dedicated tooling shard lanes", () => {
+    const toolingShard = fullSuiteVitestShards.find(
+      (shard) => shard.config === "test/vitest/vitest.full-core-tooling.config.ts",
+    );
+
+    expect(toolingShard?.projects).toEqual(
+      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
+    );
+    expect(rootVitestProjects).toEqual(
+      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
     );
   });
 

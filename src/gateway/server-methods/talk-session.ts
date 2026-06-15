@@ -1,3 +1,5 @@
+// Talk session methods manage unified realtime/transcription/handoff sessions,
+// audio appends, tool results, steering, turns, joins, and cleanup.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -142,7 +144,20 @@ function respondInvalidRequest(respond: RespondFn, message: string) {
 }
 
 function respondUnavailable(respond: RespondFn, err: unknown) {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+  const message = formatForLog(err);
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, message, {
+      details: {
+        talkIssue: {
+          code: "realtime_unavailable",
+          message,
+          phase: "request",
+        },
+      },
+    }),
+  );
 }
 
 function respondOk(respond: RespondFn, payload: unknown = { ok: true }) {
@@ -240,6 +255,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         });
         if (!resolvedSession.ok) {
           respond(false, undefined, resolvedSession.error);
+          return;
+        }
+        if ("missing" in resolvedSession) {
+          respondInvalidRequest(respond, `No session found: ${params.sessionKey}`);
           return;
         }
         const handoff = createTalkHandoff({

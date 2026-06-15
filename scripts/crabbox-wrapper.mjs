@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Resolves and delegates to the repo-local or PATH crabbox binary.
 import { spawn, spawnSync } from "node:child_process";
 import {
   accessSync,
@@ -489,7 +490,10 @@ function brokerAuthConfigured() {
   } catch {
     return false;
   }
-  return Boolean(parsed?.coordinator && parsed?.brokerAuth === "configured");
+  if (!parsed?.coordinator || parsed?.brokerAuth !== "configured") {
+    return false;
+  }
+  return checkedOutput(binary, ["whoami"]).status === 0;
 }
 
 function enforceBrokeredAws(commandArgs, providerName) {

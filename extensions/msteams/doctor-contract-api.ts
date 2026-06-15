@@ -1,3 +1,4 @@
+// Msteams API module exposes the plugin public contract.
 import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";

@@ -1,3 +1,5 @@
+// Runtime plan tool tests cover schema normalization and diagnostics when the
+// runtime plan owns tool policy, with legacy provider fallback still available.
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
@@ -6,7 +8,15 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
+import {
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "../agent-tools.before-tool-call.js";
 import type { RuntimeToolSchemaDiagnostic } from "../tool-schema-projection.js";
+import {
+  getToolTerminalPresentation,
+  setToolTerminalPresentation,
+} from "../tool-terminal-presentation.js";
 import { logAgentRuntimeToolDiagnostics, normalizeAgentRuntimeTools } from "./tools.js";
 import type { AgentRuntimePlan } from "./types.js";
 
@@ -57,6 +67,8 @@ describe("AgentRuntimePlan tool policy helpers", () => {
   });
 
   it("quarantines unreadable tools before RuntimePlan normalization", () => {
+    // Broken plugin tool getters are removed before plan/provider normalization
+    // so one bad tool cannot crash the full runtime tool list.
     const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
     const unreadable = { ...createParameterFreeTool(), name: "fuzzplugin_unreadable" } as AgentTool;
     Object.defineProperty(unreadable, "parameters", {
@@ -190,6 +202,8 @@ describe("AgentRuntimePlan tool policy helpers", () => {
   });
 
   it("preserves plugin metadata when provider schema normalization clones tools", () => {
+    // Provider normalization may clone tool objects; plugin metadata has to move
+    // with the clone so later dispatch still knows the owning plugin/MCP server.
     const tool = createParameterFreeTool("fixture__lookup_note") as AgentTool;
     setPluginToolMeta(tool, {
       pluginId: "bundle-mcp",
@@ -220,6 +234,36 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         toolName: "lookup_note",
       },
     });
+  });
+
+  it("preserves private execution metadata when provider normalization clones tools", () => {
+    const formatter = vi.fn(() => ({ text: "Terminal summary" }));
+    const tool = {
+      ...createParameterFreeTool("web_fetch"),
+      label: "Web fetch",
+      execute: vi.fn(),
+    } as AgentTool;
+    const source = setToolTerminalPresentation(
+      wrapToolWithBeforeToolCallHook(tool, {
+        agentId: "main",
+        sessionId: "session-runtime-normalization",
+      }),
+      formatter,
+    );
+    const normalized = {
+      ...source,
+      parameters: normalizedParameterFreeSchema(),
+    };
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+
+    const result = normalizeAgentRuntimeTools({
+      tools: [source],
+      provider: "openai",
+    });
+
+    expect(result[0]).toBe(normalized);
+    expect(isToolWrappedWithBeforeToolCallHook(result[0])).toBe(true);
+    expect(getToolTerminalPresentation(result[0])).toBe(formatter);
   });
 
   it("does not reread quarantined tools while preserving normalized metadata", () => {

@@ -1,3 +1,5 @@
+// SSH spawn-env tests ensure subprocesses inherit only safe environment values
+// while command execution and uploads run through ssh.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
@@ -5,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureFullEnv } from "../../test-utils/env.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -48,6 +51,8 @@ function mockSuccessfulSpawnCalls(times = 1) {
 }
 
 function spawnOptionsAt(index: number): SpawnOptions {
+  // Secret filtering happens at the child_process.spawn boundary, so tests read
+  // the captured SpawnOptions env directly.
   const options = spawnMock.mock.calls[index]?.[2] as SpawnOptions | undefined;
   if (!options) {
     throw new Error(`expected spawn options for call ${index}`);
@@ -59,10 +64,11 @@ let runSshSandboxCommand: typeof import("./ssh.js").runSshSandboxCommand;
 let uploadDirectoryToSshTarget: typeof import("./ssh.js").uploadDirectoryToSshTarget;
 
 describe("ssh subprocess env sanitization", () => {
-  const originalEnv = { ...process.env };
   const tempDirs: string[] = [];
+  let envSnapshot: ReturnType<typeof captureFullEnv>;
 
   beforeEach(async () => {
+    envSnapshot = captureFullEnv();
     vi.resetModules();
     vi.clearAllMocks();
     ({ runSshSandboxCommand, uploadDirectoryToSshTarget } = await import("./ssh.js"));
@@ -74,12 +80,7 @@ describe("ssh subprocess env sanitization", () => {
         await fs.rm(dir, { recursive: true, force: true });
       }),
     );
-    for (const key of Object.keys(process.env)) {
-      if (!(key in originalEnv)) {
-        delete process.env[key];
-      }
-    }
-    Object.assign(process.env, originalEnv);
+    envSnapshot.restore();
   });
 
   it("filters blocked secrets before spawning ssh commands", async () => {

@@ -1,9 +1,10 @@
 // E2E tests for run-reply-agent execution and generated session artifacts.
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
+import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
@@ -15,6 +16,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyOperation, testing as replyRunTesting } from "./reply-run-registry.js";
+import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -60,6 +62,14 @@ function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex =
   return call;
 }
 
+function requireStoredSessionEntry(storePath: string, sessionKey = "main"): SessionEntry {
+  const entry = readSessionStoreForTest(storePath)[sessionKey];
+  if (!entry) {
+    throw new Error(`expected stored session entry for ${sessionKey}`);
+  }
+  return entry;
+}
+
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
 let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
 
@@ -84,6 +94,7 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
   }) => ({
+    outcome: "completed" as const,
     result: await run(provider, model),
     provider,
     model,
@@ -134,9 +145,9 @@ beforeEach(() => {
   });
   state.queueEmbeddedAgentMessageMock.mockReset();
   state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
-  vi.mocked(enqueueFollowupRun).mockClear();
-  vi.mocked(refreshQueuedFollowupSession).mockClear();
-  vi.mocked(scheduleFollowupDrain).mockClear();
+  vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
+  vi.mocked(refreshQueuedFollowupSession).mockReset();
+  vi.mocked(scheduleFollowupDrain).mockReset();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
@@ -368,6 +379,25 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("cleans up typing when followup admission is rejected", async () => {
+    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps typing alive when a followup is queued behind a live active run", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },
@@ -430,13 +460,12 @@ describe("runReplyAgent pending final delivery capture", () => {
   async function createSessionStoreFile(entry: SessionEntry) {
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-pending-"));
     const storePath = join(dir, "sessions.json");
-    await writeFile(storePath, JSON.stringify({ main: entry }), "utf8");
+    await saveSessionStore(storePath, { main: entry }, { skipMaintenance: true });
     return storePath;
   }
 
   async function readStoredMainSession(storePath: string): Promise<SessionEntry> {
-    const raw = await readFile(storePath, "utf8");
-    return JSON.parse(raw).main as SessionEntry;
+    return requireStoredSessionEntry(storePath);
   }
 
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
@@ -669,12 +698,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("does not persist heartbeat ack text as pending final delivery", async () => {
     const dir = await mkdtemp(join(tmpdir(), "openclaw-heartbeat-pending-"));
     const storePath = join(dir, "sessions.json");
-    await writeFile(
+    await saveSessionStore(
       storePath,
-      JSON.stringify({
-        main: { sessionId: "session", updatedAt: 1 },
-      }),
-      "utf-8",
+      { main: { sessionId: "session", updatedAt: 1 } },
+      { skipMaintenance: true },
     );
     try {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -690,11 +717,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       await run();
 
-      const store = JSON.parse(await readFile(storePath, "utf-8")) as {
-        main?: { pendingFinalDelivery?: boolean; pendingFinalDeliveryText?: string };
-      };
-      expect(store.main?.pendingFinalDelivery).toBeUndefined();
-      expect(store.main?.pendingFinalDeliveryText).toBeUndefined();
+      const stored = requireStoredSessionEntry(storePath);
+      expect(stored.pendingFinalDelivery).toBeUndefined();
+      expect(stored.pendingFinalDeliveryText).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1108,6 +1133,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           fallbackStepFinalOutcome: "succeeded",
         });
         return {
+          outcome: "completed" as const,
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -1151,6 +1177,84 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("does not report an exhausted fallback candidate as a successful winner", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-exhausted-trace-"));
+    const storePath = join(root, "sessions.json");
+    const sessionFile = join(root, "session.jsonl");
+    const runId = "run-exhausted-trace";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      traceLevel: "raw",
+    };
+    await saveSessionStore(storePath, { main: sessionEntry }, { skipMaintenance: true });
+    try {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "Terminal tool summary", isError: true }],
+        meta: {
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent ended incomplete",
+            fallbackSafe: true,
+            terminalPresentation: true,
+          },
+          executionTrace: {
+            winnerProvider: "anthropic",
+            winnerModel: "claude",
+            attempts: [{ provider: "anthropic", model: "claude", result: "success" }],
+            fallbackUsed: false,
+            runner: "embedded",
+          },
+          agentMeta: {
+            sessionId: "session",
+            provider: "anthropic",
+            model: "claude",
+            usage: { input: 10, output: 2 },
+          },
+        },
+      });
+      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(
+        async (args) => ({
+          outcome: "exhausted",
+          result: await args.run("anthropic", "claude"),
+          provider: "anthropic",
+          model: "claude",
+          attempts: [
+            {
+              provider: "anthropic",
+              model: "claude",
+              error: "Agent ended incomplete",
+              reason: "format",
+            },
+          ],
+        }),
+      );
+
+      const { run } = createMinimalRun({
+        opts: { runId },
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath,
+        runOverrides: {
+          sessionFile,
+          traceAuthorized: true,
+        },
+      });
+      const result = await run();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text ?? "")
+        .join("\n");
+
+      expect(text).not.toContain("winner=anthropic/claude");
+      expect(text).not.toContain("result=success");
+      expect(text).toContain("Summary: fallback=yes attempts=1");
+      expect(consumeReplyUsageState(runId)?.resolvedRef).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not persist active fallback state for internal subagent announce fallback", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1162,7 +1266,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-internal-fallback-"));
     const storePath = join(storeRoot, "sessions.json");
-    await writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
     try {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "subagent timed out" }],
@@ -1185,6 +1289,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           fallbackStepFinalOutcome: "succeeded",
         });
         return {
+          outcome: "completed" as const,
           result: await run("google", "gemini-2.5-flash"),
           provider: "google",
           model: "gemini-2.5-flash",
@@ -1223,14 +1328,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
       expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
       expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
-      const persistedStore = JSON.parse(await readFile(storePath, "utf-8"));
-      expect(persistedStore.main.modelProvider).toBe("openai");
-      expect(persistedStore.main.model).toBe("gpt-5.5");
-      expect(persistedStore.main.providerOverride).toBeUndefined();
-      expect(persistedStore.main.modelOverride).toBeUndefined();
-      expect(persistedStore.main.modelOverrideSource).toBeUndefined();
-      expect(persistedStore.main.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(persistedStore.main.fallbackNoticeActiveModel).toBeUndefined();
+      const persistedSession = requireStoredSessionEntry(storePath);
+      expect(persistedSession.modelProvider).toBe("openai");
+      expect(persistedSession.model).toBe("gpt-5.5");
+      expect(persistedSession.providerOverride).toBeUndefined();
+      expect(persistedSession.modelOverride).toBeUndefined();
+      expect(persistedSession.modelOverrideSource).toBeUndefined();
+      expect(persistedSession.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(persistedSession.fallbackNoticeActiveModel).toBeUndefined();
       const payloads = Array.isArray(res) ? res : res ? [res] : [];
       expect(payloads.some((payload) => payload.text?.includes("Model Fallback:"))).toBe(false);
       expect(payloads.some((payload) => payload.text?.includes("Usage:"))).toBe(false);
@@ -1261,6 +1366,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         fallbackStepFinalOutcome: "succeeded",
       });
       return {
+        outcome: "completed" as const,
         result: await run("google", "gemini-2.5-flash"),
         provider: "google",
         model: "gemini-2.5-flash",
@@ -1319,6 +1425,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -1367,6 +1474,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -1417,6 +1525,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1464,6 +1573,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1551,6 +1661,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1606,6 +1717,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1656,6 +1768,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1707,6 +1820,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1758,6 +1872,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1805,6 +1920,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("openai", "gpt-5.5"),
           provider: "openai",
           model: "gpt-5.5",
@@ -1857,6 +1973,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementation(
         async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -1924,6 +2041,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           callCount += 1;
           if (callCount === 2) {
             return {
+              outcome: "completed" as const,
               result: await run(provider, model),
               provider,
               model,
@@ -1931,6 +2049,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
             };
           }
           return {
+            outcome: "completed" as const,
             result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
             provider: "deepinfra",
             model: "moonshotai/Kimi-K2.5",
@@ -1994,6 +2113,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           callCount += 1;
           if (callCount === 1) {
             return {
+              outcome: "completed" as const,
               result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
               provider: "deepinfra",
               model: "moonshotai/Kimi-K2.5",
@@ -2008,6 +2128,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
             };
           }
           return {
+            outcome: "completed" as const,
             result: await run(provider, model),
             provider,
             model,
@@ -2074,6 +2195,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           callCount += 1;
           if (callCount === 1) {
             return {
+              outcome: "completed" as const,
               result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
               provider: "deepinfra",
               model: "moonshotai/Kimi-K2.5",
@@ -2088,6 +2210,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
             };
           }
           return {
+            outcome: "completed" as const,
             result: await run(provider, model),
             provider,
             model,
@@ -2163,6 +2286,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         .spyOn(modelFallbackModule, "runWithModelFallback")
         .mockImplementation(
           async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+            outcome: "completed" as const,
             result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
             provider: "deepinfra",
             model: "moonshotai/Kimi-K2.5",
@@ -2204,7 +2328,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-cli-alias-"));
     const storePath = join(dir, "sessions.json");
-    await writeFile(storePath, JSON.stringify({ main: sessionEntry }), "utf8");
+    await saveSessionStore(storePath, { main: sessionEntry }, { skipMaintenance: true });
 
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
@@ -2238,7 +2362,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     await run();
 
-    const stored = JSON.parse(await readFile(storePath, "utf8")).main as SessionEntry;
+    const stored = requireStoredSessionEntry(storePath);
     expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
     expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
     expect(stored.fallbackNoticeSelectedModel).toBeUndefined();

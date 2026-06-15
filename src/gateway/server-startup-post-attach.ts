@@ -1,3 +1,5 @@
+// Gateway post-attach startup sidecars.
+// Schedules warmups, sentinels, update checks, memory backend, and plugin services.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -151,9 +153,6 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
   if (cfg.memory?.backend !== "qmd") {
-    return { mode: "off" };
-  }
-  if (cfg.memory.qmd?.update?.onBoot === false) {
     return { mode: "off" };
   }
   const startup = cfg.memory.qmd?.update?.startup;
@@ -779,6 +778,17 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
+    try {
+      const { markStartupOrphanedMainSessionsForRecovery } =
+        await loadMainSessionRestartRecoveryModule();
+      await markStartupOrphanedMainSessionsForRecovery({ cfg: params.cfg });
+    } catch (err) {
+      params.log.warn(
+        `main-session startup orphan marking failed before channel startup: ${String(err)}`,
+      );
+    }
+  });
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
@@ -942,17 +952,6 @@ export async function startGatewaySidecars(params: {
     run: async () => {
       const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
       scheduleSubagentOrphanRecovery();
-    },
-  });
-
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
-    name: "sidecars.main-session-recovery",
-    log: params.log,
-    run: async () => {
-      const { scheduleRestartAbortedMainSessionRecovery } =
-        await loadMainSessionRestartRecoveryModule();
-      scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfg });
     },
   });
 
@@ -1330,6 +1329,13 @@ export async function startGatewayPostAttachRuntime(
         ]);
         for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
           params.unavailableGatewayMethods.delete(method);
+        }
+        try {
+          const { scheduleRestartAbortedMainSessionRecovery } =
+            await loadMainSessionRestartRecoveryModule();
+          scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfgAtStart });
+        } catch (err) {
+          params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
         }
         if (!pluginServicesReported) {
           reportPluginServices(result.pluginServices);

@@ -1,3 +1,6 @@
+// Builds the gateway-visible combined session store across agent-specific stores.
+// Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
+
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -6,7 +9,7 @@ import {
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
-import { loadSessionStore } from "./store-load.js";
+import { listSessionEntries } from "./session-accessor.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
@@ -17,6 +20,15 @@ import type { SessionEntry } from "./types.js";
 // Template-backed stores need per-agent scans before they can be merged for Gateway views.
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
+}
+
+function loadGatewayStoreEntries(storePath: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ clone: false, storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
 }
 
 function mergeSessionEntryIntoCombined(params: {
@@ -30,6 +42,7 @@ function mergeSessionEntryIntoCombined(params: {
   const existing = combined[canonicalKey];
 
   if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
+    // Preserve the freshest entry while still canonicalizing spawnedBy for this agent store.
     const spawnedBy = canonicalizeSpawnedByForAgent(
       cfg,
       agentId,
@@ -59,6 +72,7 @@ function mergeSessionEntryIntoCombined(params: {
   }
 }
 
+/** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
   opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
@@ -68,9 +82,10 @@ export function loadCombinedSessionStoreForGateway(
 } {
   const storeConfig = cfg.session?.store;
   if (storeConfig && !isStorePathTemplate(storeConfig)) {
+    // A single shared store still needs keys canonicalized as if owned by the default agent.
     const storePath = resolveStorePath(storeConfig);
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    const store = loadSessionStore(storePath, { clone: false });
+    const store = loadGatewayStoreEntries(storePath);
     const combined: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
@@ -102,7 +117,7 @@ export function loadCombinedSessionStoreForGateway(
   for (const target of targets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
-    const store = loadSessionStore(storePath, { clone: false });
+    const store = loadGatewayStoreEntries(storePath);
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
         cfg,

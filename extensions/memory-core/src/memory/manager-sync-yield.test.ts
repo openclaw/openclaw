@@ -1,3 +1,4 @@
+// Memory Core tests cover manager sync yield plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -39,6 +40,9 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
 
 vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
+  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+    providerId === "local" ? "local" : "remote",
+  resolveEmbeddingProviderIndexIdentity: () => undefined,
   createEmbeddingProvider: vi.fn(),
 }));
 
@@ -113,6 +117,10 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     return "test";
   }
 
+  protected resolveProviderIndexIdentities() {
+    return [];
+  }
+
   protected async sync(): Promise<void> {}
 
   protected async withTimeout<T>(
@@ -130,6 +138,8 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   protected pruneEmbeddingCacheIfNeeded(): void {}
 
   protected resetProviderInitializationForRetry(): void {}
+
+  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
     entry: MemoryIndexEntry,

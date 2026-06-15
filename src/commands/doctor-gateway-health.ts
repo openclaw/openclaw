@@ -1,3 +1,4 @@
+/** Gateway health probes used by doctor before deeper daemon and memory diagnostics. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,6 +8,7 @@ import {
   callGateway,
   isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
+import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -37,6 +39,10 @@ function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
 }
 
+function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
+  return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
+}
+
 function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
   const gatewayVersion = status?.runtimeVersion?.trim();
   if (!gatewayVersion || gatewayVersion === VERSION) {
@@ -52,6 +58,12 @@ function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
   );
 }
 
+/**
+ * Probes gateway status and reports user-facing connection/auth/channel warnings.
+ *
+ * A credentials-required gateway still counts as healthy but unauthenticated when the preauth
+ * probe confirms the server is reachable.
+ */
 export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
@@ -95,7 +107,7 @@ export async function checkGatewayHealth(params: {
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {
-    if (isGatewayCredentialsRequiredError(err)) {
+    if (isGatewayHealthAuthUnavailableError(err)) {
       const probeDetails = await buildGatewayProbeConnectionDetails({ config: params.cfg });
       const probe = await probeGatewayStatus({
         url: probeDetails.url,
@@ -127,6 +139,7 @@ export async function checkGatewayHealth(params: {
   return { healthOk, authenticated: false, status };
 }
 
+/** Probes gateway memory readiness without forcing deep embedding checks. */
 export async function probeGatewayMemoryStatus(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;

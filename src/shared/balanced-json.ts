@@ -39,9 +39,6 @@ export function extractBalancedJsonPrefix(
   let escaped = false;
   for (let i = start; i < raw.length; i += 1) {
     const char = raw[i];
-    if (char === undefined) {
-      break;
-    }
     if (inString) {
       // Delimiters inside strings are data, not structure. Track escapes so an
       // escaped quote does not prematurely end string mode.

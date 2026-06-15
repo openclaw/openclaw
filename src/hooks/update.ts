@@ -1,3 +1,4 @@
+// Hook update helpers refresh installed hook records and config references.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
 import {
@@ -135,6 +136,7 @@ export async function updateNpmInstalledHookPacks(params: {
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
     const result = await installHooksFromNpmSpec({
+      config: params.config,
       spec: effectiveSpec,
       mode: "update",
       dryRun: params.dryRun,

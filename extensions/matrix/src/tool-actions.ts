@@ -1,3 +1,4 @@
+// Matrix plugin module implements tool actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
@@ -271,10 +272,12 @@ export async function handleMatrixAction(
         });
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
+        const threadId = readStringParam(params, "threadId");
         const result = await readMatrixMessages(roomId, {
           limit: limit ?? undefined,
           before: before ?? undefined,
           after: after ?? undefined,
+          threadId: threadId ?? undefined,
           ...clientOpts,
         });
         return jsonResult({ ok: true, ...result });

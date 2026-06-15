@@ -93,6 +93,17 @@ const pluginRuntimeState = vi.hoisted(
     }) satisfies { registry: PluginRegistry },
 );
 
+const jsonFileMockState = vi.hoisted(() => ({
+  writeJsonOverride: null as
+    | null
+    | ((
+        actualWriteJson: (filePath: string, value: unknown, options?: unknown) => Promise<void>,
+        filePath: string,
+        value: unknown,
+        options?: unknown,
+      ) => Promise<void>),
+}));
+
 vi.mock("../infra/home-dir.js", async () => {
   const actual =
     await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
@@ -103,6 +114,33 @@ vi.mock("../infra/home-dir.js", async () => {
         return approvalsPath;
       }
       return actual.expandHomePrefix(value);
+    },
+  };
+});
+
+vi.mock("../infra/json-files.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/json-files.js")>("../infra/json-files.js");
+  return {
+    ...actual,
+    writeJson: async (
+      filePath: string,
+      value: unknown,
+      options?: Parameters<typeof actual.writeJson>[2],
+    ) => {
+      if (jsonFileMockState.writeJsonOverride) {
+        return await jsonFileMockState.writeJsonOverride(
+          actual.writeJson as (
+            filePath: string,
+            value: unknown,
+            options?: unknown,
+          ) => Promise<void>,
+          filePath,
+          value,
+          options,
+        );
+      }
+      return await actual.writeJson(filePath, value, options);
     },
   };
 });
@@ -483,6 +521,86 @@ describe("plugin conversation binding approvals", () => {
     );
 
     expect(differentAccount.status).toBe("pending");
+  });
+
+  it("serializes overlapping always-allow approval writes", async () => {
+    const firstWriteGate = createDeferredVoid();
+    const firstWriteStarted = createDeferredVoid();
+    let writeCount = 0;
+    jsonFileMockState.writeJsonOverride = async (actualWriteJson, filePath, value, options) => {
+      writeCount += 1;
+      if (writeCount === 1) {
+        firstWriteStarted.resolve();
+        await firstWriteGate.promise;
+      }
+      await actualWriteJson(filePath, value, options);
+    };
+
+    try {
+      const firstRequest = await requestPendingBinding(
+        createDiscordCodexBindRequest(
+          "channel:race-1",
+          "Bind this conversation to Codex thread race-1.",
+          "default",
+        ),
+      );
+      const firstApproval = resolvePluginConversationBindingApproval({
+        approvalId: firstRequest.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      });
+      await firstWriteStarted.promise;
+
+      const secondRequest = await requestPendingBinding(
+        createDiscordCodexBindRequest(
+          "channel:race-2",
+          "Bind this conversation to Codex thread race-2.",
+          "work",
+        ),
+      );
+      let secondSettled = false;
+      const secondApproval = resolvePluginConversationBindingApproval({
+        approvalId: secondRequest.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      }).then((result) => {
+        secondSettled = true;
+        return result;
+      });
+
+      await flushMicrotasks();
+      expect(secondSettled).toBe(false);
+      expect(writeCount).toBe(1);
+
+      firstWriteGate.resolve();
+      const [firstResult, secondResult] = await Promise.all([firstApproval, secondApproval]);
+
+      expect(firstResult.status).toBe("approved");
+      expect(secondResult.status).toBe("approved");
+      expect(writeCount).toBe(2);
+
+      const persisted = JSON.parse(fs.readFileSync(approvalsPath, "utf8")) as {
+        approvals: Array<{ accountId: string; channel: string; pluginRoot: string }>;
+      };
+      expect(persisted.approvals).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            accountId: "default",
+            channel: "discord",
+            pluginRoot: "/plugins/codex-a",
+          }),
+          expect.objectContaining({
+            accountId: "work",
+            channel: "discord",
+            pluginRoot: "/plugins/codex-a",
+          }),
+        ]),
+      );
+      expect(persisted.approvals).toHaveLength(2);
+    } finally {
+      firstWriteGate.resolve();
+      jsonFileMockState.writeJsonOverride = null;
+    }
   });
 
   it("shares pending bind approvals across duplicate module instances", async () => {

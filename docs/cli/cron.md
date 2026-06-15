@@ -34,6 +34,27 @@ openclaw cron create "0 18 * * 1-5" \
   --webhook "https://example.invalid/openclaw/cron"
 ```
 
+Use `--command` for deterministic shell-style jobs that should run inside OpenClaw cron without starting an isolated agent/model run:
+
+<Note>
+Command cron jobs are admin-authored Gateway automation. Creating, editing,
+removing, or manually running them requires `operator.admin`; the scheduled run
+later executes in the Gateway process, not as an agent `tools.exec` tool call.
+`tools.exec.*` and exec approvals still govern model-visible exec tools.
+</Note>
+
+```bash
+openclaw cron create "*/15 * * * *" \
+  --name "Queue depth probe" \
+  --command "scripts/check-queue.sh" \
+  --command-cwd "/srv/app" \
+  --announce \
+  --channel telegram \
+  --to "-1001234567890"
+```
+
+`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal cron history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
@@ -92,6 +113,10 @@ Note: isolated cron runs treat run-level agent failures as job errors even when
 no reply payload is produced, so model/provider failures still increment error
 counters and trigger failure notifications.
 
+Command cron jobs do not start an isolated agent turn. A zero exit code records
+`ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and
+can trigger the same failure notification path.
+
 If an isolated run times out before the first model request, `openclaw cron show`
 and `openclaw cron runs` include a phase-specific error such as
 `setup timed out before runner start` or
@@ -143,7 +168,7 @@ Use `--due` when you want the manual command to run only if the job is currently
 
 ## Models
 
-`cron add|edit --model <ref>` selects an allowed model for the job.
+`cron add|edit --model <ref>` selects an allowed model for the job. `cron edit <job-id> --clear-model` removes the per-job model override so the job follows normal cron model-selection precedence (a stored cron-session override if present, otherwise the agent/default model); it cannot be combined with `--model`.
 
 <Warning>
 If the model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of falling back to the job's agent or default model selection.
@@ -251,6 +276,21 @@ openclaw cron create "0 7 * * *" \
 ```
 
 `--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
+
+Create a command job with exact argv, cwd, env, stdin, and output limits:
+
+```bash
+openclaw cron create "*/30 * * * *" \
+  --name "Position export" \
+  --command-argv '["node","scripts/export-position.mjs"]' \
+  --command-cwd "/srv/app" \
+  --command-env "NODE_ENV=production" \
+  --command-input '{"mode":"summary"}' \
+  --timeout-seconds 120 \
+  --no-output-timeout-seconds 30 \
+  --output-max-bytes 65536 \
+  --webhook "https://example.invalid/openclaw/cron"
+```
 
 ## Common admin commands
 

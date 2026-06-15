@@ -1,11 +1,10 @@
+// Subagent spawn test helpers install mocked runtime seams so sessions_spawn
+// tests can exercise orchestration without real gateway/session-store effects.
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 
-// Test helpers for sessions_spawn. They install a mocked runtime barrel so
-// spawn tests can exercise orchestration without touching the real gateway or
-// session stores.
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
   mockImplementation: (implementation: (opts: { method?: string }) => Promise<unknown>) => unknown;
@@ -129,6 +128,8 @@ export function expectPersistedRuntimeModel(params: {
 /** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
+  dispatchGatewayMethodInProcessMock?: MockFn;
+  hasInProcessGatewayContextMock?: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
   loadSessionStoreMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
@@ -197,8 +198,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resetModules?: boolean;
 }): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
-    // The helper rewires module imports with vi.doMock, so each test starts from
-    // a fresh module graph unless explicitly sharing mocks.
+    // The helper rewires imports with vi.doMock, so each test starts from a
+    // fresh module graph unless explicitly sharing mocks.
     vi.resetModules();
   }
 
@@ -210,6 +211,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
 
   vi.doMock("./subagent-spawn.runtime.js", () => ({
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
+    dispatchGatewayMethodInProcess: (...args: unknown[]) =>
+      params.dispatchGatewayMethodInProcessMock?.(...args),
+    hasInProcessGatewayContext: () => Boolean(params.hasInProcessGatewayContextMock?.()),
     buildSubagentSystemPrompt: () => "system-prompt",
     forkSessionFromParent:
       params.forkSessionFromParentMock ??

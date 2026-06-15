@@ -1,3 +1,4 @@
+// Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildMarkdownCard } from "./send.js";
@@ -199,6 +200,10 @@ describe("getMessageFeishu", () => {
       messageId: "om_1",
     });
 
+    expect(mockClientGet).toHaveBeenCalledWith({
+      params: { card_msg_content_type: "user_card_content" },
+      path: { message_id: "om_1" },
+    });
     expect(result).toEqual({
       messageId: "om_1",
       chatId: "oc_1",
@@ -469,6 +474,15 @@ describe("getMessageFeishu", () => {
       rootMessageId: "om_root",
     });
 
+    expect(mockClientList).toHaveBeenCalledWith({
+      params: {
+        container_id_type: "thread",
+        container_id: "omt_1",
+        sort_type: "ByCreateTimeDesc",
+        page_size: 21,
+        card_msg_content_type: "user_card_content",
+      },
+    });
     expect(result).toEqual([
       {
         messageId: "om_file",

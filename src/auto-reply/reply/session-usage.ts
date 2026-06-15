@@ -118,6 +118,7 @@ export async function persistSessionUsageUpdate(params: {
   clearCliSessionBinding?: boolean;
   compactionTokensAfter?: number;
   preserveFreshTotalTokensOnStaleUsage?: boolean;
+  preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
   logLabel?: string;
 }): Promise<void> {
@@ -148,9 +149,11 @@ export async function persistSessionUsageUpdate(params: {
         update: async (entry) => {
           const updatedAt = Date.now();
           const preserveSessionModelState =
-            params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+            params.isHeartbeat === true ||
+            params.preserveRuntimeModel === true ||
+            params.preserveUserFacingSessionModelState === true;
           const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
-          const resolvedContextTokens = preserveUserFacingRunState
+          const resolvedContextTokens = preserveSessionModelState
             ? entry.contextTokens
             : (params.contextTokensUsed ?? entry.contextTokens);
           // Use last-call usage for totalTokens when available. The accumulated
@@ -234,7 +237,7 @@ export async function persistSessionUsageUpdate(params: {
           ) {
             patch.totalTokensFresh = false;
           }
-          return preserveUserFacingRunState
+          return preserveSessionModelState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
@@ -254,9 +257,11 @@ export async function persistSessionUsageUpdate(params: {
         takeCacheOwnership: true,
         update: async (entry) => {
           const preserveSessionModelState =
-            params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+            params.isHeartbeat === true ||
+            params.preserveRuntimeModel === true ||
+            params.preserveUserFacingSessionModelState === true;
           const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
-          const contextTokens = preserveUserFacingRunState
+          const contextTokens = preserveSessionModelState
             ? entry.contextTokens
             : (params.contextTokensUsed ?? entry.contextTokens);
           const patch: Partial<SessionEntry> = {
@@ -270,7 +275,7 @@ export async function persistSessionUsageUpdate(params: {
               : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
           };
-          return preserveUserFacingRunState
+          return preserveSessionModelState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },

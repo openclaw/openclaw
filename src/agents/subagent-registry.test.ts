@@ -1,3 +1,5 @@
+// Subagent registry tests cover run state, completion capture, archive cleanup,
+// persistence, lifecycle hooks, and orphan recovery scheduling.
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +61,8 @@ function findRecordCallArg(
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
+  // Cleanup assertions need ENOENT proof; fs.access success means the artifact
+  // directory survived when lifecycle cleanup should have removed it.
   try {
     await fs.access(targetPath);
   } catch (error) {
@@ -83,6 +87,7 @@ const mocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(() => "/tmp/test-session-store.json"),
   updateSessionStore: vi.fn(),
   emitSessionLifecycleEvent: vi.fn(),
+  clearSubagentRunsReadCacheForTest: vi.fn(),
   persistSubagentRunsToDisk: vi.fn(),
   persistSubagentRunsToDiskOrThrow: vi.fn(),
   restoreSubagentRunsFromDisk: vi.fn(() => 0),
@@ -129,6 +134,7 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
 }));
 
 vi.mock("./subagent-registry-state.js", () => ({
+  clearSubagentRunsReadCacheForTest: mocks.clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow: mocks.persistSubagentRunsToDiskOrThrow,
@@ -1994,6 +2000,185 @@ describe("subagent registry seam flow", () => {
     expect(replacement?.endedAt).toBeUndefined();
   });
 
+  it("keeps yield terminals paused when the lifecycle event also signals abort (#92448)", async () => {
+    // sessions_yield ends the turn by aborting the run signal, so a depth-1
+    // subagent's yield terminal can arrive carrying yielded plus aborted (or
+    // stopReason="aborted"). The event handler must still pause the run, not
+    // settle it `cancelled` and deliver a false notice to the requester.
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    const cases = [
+      { runId: "run-yield-stopreason-aborted", extra: { stopReason: "aborted" } },
+      { runId: "run-yield-aborted-flag", extra: { aborted: true } },
+    ];
+
+    for (const testCase of cases) {
+      mod.registerSubagentRun({
+        runId: testCase.runId,
+        childSessionKey: `agent:main:subagent:${testCase.runId}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "wait for child continuation",
+        cleanup: "keep",
+      });
+
+      const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+        mocks.onAgentEvent.mock.calls.length - 1
+      ] as unknown as
+        | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+        | undefined;
+      const lifecycleHandler = lastOnAgentEventCall?.[0];
+      expect(lifecycleHandler).toBeTypeOf("function");
+
+      lifecycleHandler?.({
+        runId: testCase.runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 111,
+          endedAt: 222,
+          yielded: true,
+          ...testCase.extra,
+        },
+      });
+
+      await waitForFast(() => {
+        const run = mod
+          .listSubagentRunsForRequester("agent:main:main")
+          .find((entry) => entry.runId === testCase.runId);
+        expect(run?.pauseReason).toBe("sessions_yield");
+        expect(run?.outcome?.status).not.toBe("error");
+      });
+    }
+
+    // Paused, never killed → no farewell/cancellation notice reaches the requester.
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending grace timer when a yield follows an intermediate aborted terminal (#92448)", async () => {
+    // An earlier aborted terminal schedules a deferred kill grace timer; a
+    // following yield must clear it, or it fires and settles the now-paused run.
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-yield-after-pending-timeout",
+      childSessionKey: "agent:main:subagent:pending-timeout",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait for child continuation",
+      cleanup: "keep",
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    // Intermediate aborted terminal → schedules the deferred kill grace timer.
+    lifecycleHandler?.({
+      runId: "run-yield-after-pending-timeout",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 111, endedAt: 222, aborted: true },
+    });
+    // Yield terminal → must pause and cancel the pending grace timer.
+    lifecycleHandler?.({
+      runId: "run-yield-after-pending-timeout",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 111, endedAt: 333, yielded: true },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-yield-after-pending-timeout");
+      expect(run?.pauseReason).toBe("sessions_yield");
+    });
+
+    // Advancing well past the 15s grace window must not undo the pause.
+    await vi.advanceTimersByTimeAsync(60_000);
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-yield-after-pending-timeout");
+    expect(run?.pauseReason).toBe("sessions_yield");
+    expect(run?.outcome?.status).not.toBe("error");
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending grace timer when agent.wait observes the yield after an aborted terminal (#92448)", async () => {
+    let resolveWait: (value: {
+      status: "ok";
+      startedAt: number;
+      endedAt: number;
+      yielded: true;
+    }) => void = () => {};
+    const waitResult = new Promise<{
+      status: "ok";
+      startedAt: number;
+      endedAt: number;
+      yielded: true;
+    }>((resolve) => {
+      resolveWait = resolve;
+    });
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return waitResult;
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-wait-yield-after-pending-timeout",
+      childSessionKey: "agent:main:subagent:pending-wait-timeout",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait for child continuation through wait",
+      cleanup: "keep",
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-wait-yield-after-pending-timeout",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 111, endedAt: 222, aborted: true },
+    });
+    resolveWait({ status: "ok", startedAt: 111, endedAt: 333, yielded: true });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-wait-yield-after-pending-timeout");
+      expect(run?.pauseReason).toBe("sessions_yield");
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-wait-yield-after-pending-timeout");
+    expect(run?.pauseReason).toBe("sessions_yield");
+    expect(run?.outcome?.status).not.toBe("timeout");
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("announces blocked agent.wait snapshots as errors instead of success", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
@@ -2590,6 +2775,101 @@ describe("subagent registry seam flow", () => {
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces restart lifecycle end events as killed subagent failures", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-restart-end",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "restart task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    lifecycleHandler?.({
+      runId: "run-restart-end",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 10,
+        endedAt: 20,
+        aborted: true,
+        stopReason: "restart",
+      },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-restart-end");
+      expect(run?.endedReason).toBe("subagent-killed");
+      expect(run?.outcome?.status).toBe("error");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("announces restart lifecycle error events as killed subagent failures", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-restart-error",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "restart error task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    lifecycleHandler?.({
+      runId: "run-restart-error",
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 10,
+        endedAt: 20,
+        error: "ACP turn failed before completion",
+        aborted: true,
+        stopReason: "restart",
+      },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-restart-error");
+      expect(run?.endedReason).toBe("subagent-killed");
+      expect(run?.outcome?.status).toBe("error");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("resumes ended cleanup when lifecycle killed completion rejects before cleanup", async () => {

@@ -1,3 +1,4 @@
+// Control UI tests cover control ui vite config behavior.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";

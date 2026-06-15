@@ -1,3 +1,4 @@
+// Agent command tests cover local agent runs, session routing, and command runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
@@ -6,6 +7,7 @@ import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
+import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -374,7 +376,7 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
-  it("enables the Codex runtime plugin and provider owner for one-shot OpenAI model overrides", async () => {
+  it("enables Codex, provider owner, and memory slot plugins for one-shot OpenAI model overrides", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
       mockConfig(home, storePath, { models: undefined });
@@ -395,7 +397,7 @@ describe("agentCommand", () => {
         expect(registryLoad?.config).toBeTypeOf("object");
         expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
         expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
-        expect(registryLoad?.onlyPluginIds).toEqual(["codex", "openai"]);
+        expect(registryLoad?.onlyPluginIds).toEqual(["codex", "openai", "memory-core"]);
       }
       expectLastRunProviderModel("openai", "gpt-5.2");
     });
@@ -1277,6 +1279,49 @@ describe("agentCommand", () => {
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:global");
       expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+    });
+  });
+
+  it("rejects agent-scoped to session selectors that conflict with the requested agent", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId: "wechat-session", updatedAt: Date.now() },
+      });
+      mockConfig(home, store, undefined, undefined, [{ id: "main" }, { id: "work" }]);
+
+      await expect(
+        agentCommand({ message: "hi", agentId: "work", to: sessionKey }, runtime),
+      ).rejects.toThrow('Agent id "work" does not match session key agent "main".');
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not forward agent-scoped to session selectors as delivery targets", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "wechat-session",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "+1555",
+        },
+      });
+      mockConfig(home, store);
+
+      await agentCommand(
+        { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
+        runtime,
+      );
+
+      const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
+        | { opts?: { to?: string }; sessionEntry?: { lastTo?: string } }
+        | undefined;
+      expect(deliveryCall?.opts?.to).toBeUndefined();
+      expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
     });
   });
 

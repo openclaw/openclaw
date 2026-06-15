@@ -1,3 +1,4 @@
+// Markdown Core module implements render behavior.
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
 /** Marker pair used to wrap a styled Markdown span in the target renderer. */
@@ -28,6 +29,12 @@ const STYLE_ORDER: MarkdownStyle[] = [
   "blockquote",
   "code_block",
   "code",
+  "heading_1",
+  "heading_2",
+  "heading_3",
+  "heading_4",
+  "heading_5",
+  "heading_6",
   "bold",
   "italic",
   "strikethrough",

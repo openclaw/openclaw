@@ -1,3 +1,4 @@
+// Codex plugin module implements apply behavior.
 import path from "node:path";
 import {
   applyMigrationManualItem,
@@ -507,6 +508,7 @@ function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy |
     pluginName,
     enabled: true,
     allowDestructiveActions: true,
+    destructiveApprovalMode: "allow",
   };
 }
 

@@ -6,6 +6,7 @@ import type { AgentMessage } from "../runtime/index.js";
 /** Mutable lifecycle flags observed while a single agent attempt runs. */
 export type AgentAttemptLifecycleState = {
   currentTurnUserMessagePersisted: boolean;
+  lifecycleError?: string;
   lifecycleFinishing: boolean;
   lifecycleEnded: boolean;
 };
@@ -29,6 +30,9 @@ export function createAgentAttemptLifecycleCallbacks(state: AgentAttemptLifecycl
     onAgentEvent: (evt) => {
       if (evt.stream !== "lifecycle" || typeof evt.data?.phase !== "string") {
         return;
+      }
+      if (typeof evt.data.error === "string" && evt.data.error.trim()) {
+        state.lifecycleError = evt.data.error;
       }
       // Finishing means output ended but transcript/session persistence may still
       // need to run; end/error means the runtime lifecycle is complete.
