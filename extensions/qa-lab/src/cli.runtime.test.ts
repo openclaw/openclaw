@@ -124,6 +124,7 @@ function makeQaEvidence(entries: unknown[] = []) {
     kind: "openclaw.qa.evidence-summary",
     schemaVersion: 2,
     generatedAt: "2026-06-14T00:00:00.000Z",
+    evidenceMode: "full",
     entries,
   };
 }
@@ -441,6 +442,8 @@ describe("qa cli runtime", () => {
       expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+        evidenceMode?: unknown;
+        entries?: unknown[];
         profile?: unknown;
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
@@ -453,6 +456,7 @@ describe("qa cli runtime", () => {
         };
       };
       expect(evidence.profile).toBe("smoke-ci");
+      expect(evidence.evidenceMode).toBe("slim");
       expect(evidence.scorecard).toMatchObject({
         run: {
           evidenceEntryCount: 1,
@@ -468,6 +472,7 @@ describe("qa cli runtime", () => {
           fulfilled: 1,
         },
       });
+      expect(evidence.entries?.[0]).not.toHaveProperty("execution");
       expect(JSON.stringify(evidence.scorecard)).not.toContain("dm-chat-baseline");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
       expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);

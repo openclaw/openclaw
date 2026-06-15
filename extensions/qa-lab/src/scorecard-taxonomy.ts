@@ -19,10 +19,12 @@ function isRepoRootRelativeRef(value: string) {
 }
 
 const qaCoverageEvidenceRoleSchema = z.enum(["primary", "secondary"]);
+export const qaScorecardEvidenceModeSchema = z.enum(["full", "slim"]);
 
 const qaScorecardProfileSchema = z.object({
   id: qaScorecardIdSchema,
   description: z.string().trim().min(1),
+  evidenceMode: qaScorecardEvidenceModeSchema.optional(),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
 });
 
@@ -81,6 +83,7 @@ const qaMaturityTaxonomySchema = z
 
 export type QaNativeCoverageEvidenceKind = "vitest" | "playwright";
 export type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
+export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
 type QaCoverageEvidenceRole = z.infer<typeof qaCoverageEvidenceRoleSchema>;
 type QaMaturityTaxonomy = z.infer<typeof qaMaturityTaxonomySchema>;
 
@@ -125,6 +128,7 @@ export type QaScorecardCategoryCoverageReport = {
 
 export type QaScorecardProfileReport = {
   id: string;
+  evidenceMode: QaScorecardEvidenceMode;
   categoryIds: string[];
 };
 
@@ -332,6 +336,18 @@ export function readQaScorecardFeatureCoverageByCategory(repoRoot?: string) {
   );
 }
 
+export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
+  const profile = profileId?.trim();
+  if (!profile) {
+    return { evidenceMode: "full" as const };
+  }
+  return {
+    evidenceMode:
+      readQaMaturityTaxonomy(repoRoot)?.profiles.find((entry) => entry.id === profile)
+        ?.evidenceMode ?? "full",
+  };
+}
+
 function pushMissingPrimaryIssues(params: {
   issues: QaScorecardValidationIssue[];
   category: MaturityCategoryRef;
@@ -467,6 +483,7 @@ export function buildQaScorecardTaxonomyReport(params: {
       }
       return {
         id: profile.id,
+        evidenceMode: profile.evidenceMode ?? "full",
         categoryIds: validCategoryIds,
       };
     }) ?? [];
