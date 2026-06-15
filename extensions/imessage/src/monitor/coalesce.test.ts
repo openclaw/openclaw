@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   combineIMessagePayloads,
-  hasIMessageUrlBalloonBundleID,
   IMESSAGE_URL_BALLOON_BUNDLE_ID,
   MAX_COALESCED_ATTACHMENTS,
   MAX_COALESCED_ENTRIES,
@@ -24,52 +23,6 @@ const makePayload = (overrides: Partial<IMessagePayload> = {}): IMessagePayload 
 });
 
 describe("combineIMessagePayloads", () => {
-  it("recognizes URL balloon rows from imsg structural metadata", () => {
-    const text = makePayload({ text: "Dump" });
-    const balloon = makePayload({
-      text: "https://example.com/article",
-      balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
-    });
-
-    expect(hasIMessageUrlBalloonBundleID(text)).toBe(false);
-    expect(hasIMessageUrlBalloonBundleID(balloon)).toBe(true);
-    // A real URL split-send merges regardless of the session capability latch.
-    expect(shouldCombineIMessagePayloadBucket([text, balloon], false)).toBe(true);
-    expect(shouldCombineIMessagePayloadBucket([text, balloon], true)).toBe(true);
-  });
-
-  it("falls back to a legacy merge when the build has never emitted balloon metadata (older imsg)", () => {
-    // Older imsg builds emit no balloon_bundle_id at all. We cannot tell a URL
-    // split-send from separate sends, so we preserve the pre-metadata merge
-    // rather than regress split-send users to two turns. Back-compat path,
-    // removed once imsg coalesces upstream (openclaw/imsg#141, tracked by #91243).
-    const text = makePayload({ text: "Dump" });
-    const url = makePayload({ text: "https://example.com/article" });
-    expect(shouldCombineIMessagePayloadBucket([text, url], false)).toBe(true);
-  });
-
-  it("keeps a plain bucket separate once the build is known to emit balloon metadata", () => {
-    // Capability latch is true (a prior row this session carried metadata), so a
-    // plain bucket with no URL marker is genuinely not a split-send. imsg omits
-    // the field for plain rows, so this case is indistinguishable per-bucket and
-    // depends on the session-level signal.
-    const a = makePayload({ text: "first" });
-    const b = makePayload({ text: "second" });
-    expect(shouldCombineIMessagePayloadBucket([a, b], true)).toBe(false);
-  });
-
-  it("keeps a bucket separate when imsg exposes balloon metadata in the bucket but no URL marker", () => {
-    // New imsg surfaced balloon metadata in this very bucket, proving this build
-    // emits the field, but the bucket is not a URL split-send. Keep separate even
-    // if the latch had not flipped yet.
-    const text = makePayload({ text: "hi" });
-    const nonUrlBalloon = makePayload({
-      text: "tap to vote",
-      balloon_bundle_id: "com.apple.messages.MSMessageExtensionBalloonPlugin",
-    });
-    expect(shouldCombineIMessagePayloadBucket([text, nonUrlBalloon], false)).toBe(false);
-  });
-
   it("throws on empty input", () => {
     expect(() => combineIMessagePayloads([])).toThrow(
       "combineIMessagePayloads: cannot combine empty payloads",
@@ -83,23 +36,22 @@ describe("combineIMessagePayloads", () => {
     expect(result.guid).toBe("solo");
   });
 
-  it("merges Dump + URL split-send into one payload anchored on the first GUID", () => {
-    const text = makePayload({
+  it("merges two same-sender rows into one payload anchored on the first GUID", () => {
+    const first = makePayload({
       id: 41,
-      text: "Dump",
+      text: "summarize",
       guid: "row-1",
       created_at: "2025-01-01T00:00:00Z",
     });
-    const balloon = makePayload({
+    const second = makePayload({
       id: 42,
       text: "https://example.com/article",
-      balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
       guid: "row-2",
       created_at: "2025-01-01T00:00:01.500Z",
     });
-    const merged = combineIMessagePayloads([text, balloon]);
+    const merged = combineIMessagePayloads([first, second]);
 
-    expect(merged.text).toBe("Dump https://example.com/article");
+    expect(merged.text).toBe("summarize https://example.com/article");
     expect(merged.guid).toBe("row-1");
     expect(merged.created_at).toBe("2025-01-01T00:00:01.500Z");
     expect(merged.coalescedMessageGuids).toEqual(["row-1", "row-2"]);
@@ -207,5 +159,43 @@ describe("combineIMessagePayloads", () => {
 
   it("respects the documented entry cap value", () => {
     expect(MAX_COALESCED_ENTRIES).toBeGreaterThan(1);
+  });
+});
+
+describe("shouldCombineIMessagePayloadBucket", () => {
+  it("combines a command row with a structurally marked URL balloon row", () => {
+    const command = makePayload({ text: "summarize", guid: "row-1" });
+    const preview = makePayload({
+      text: "https://example.com/article",
+      guid: "row-2",
+      balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+    });
+
+    expect(shouldCombineIMessagePayloadBucket([command, preview], true)).toBe(true);
+  });
+
+  it("keeps ordinary buffered rows separate once the bridge emits balloon metadata", () => {
+    const first = makePayload({ text: "first thought", guid: "row-1" });
+    const second = makePayload({ text: "second thought", guid: "row-2" });
+
+    expect(shouldCombineIMessagePayloadBucket([first, second], true)).toBe(false);
+  });
+
+  it("keeps non-URL balloon rows separate", () => {
+    const first = makePayload({ text: "first thought", guid: "row-1" });
+    const second = makePayload({
+      text: "second thought",
+      guid: "row-2",
+      balloon_bundle_id: "com.apple.messages.HandwritingProvider",
+    });
+
+    expect(shouldCombineIMessagePayloadBucket([first, second], false)).toBe(false);
+  });
+
+  it("falls back to combining old bridge buckets with no balloon metadata", () => {
+    const command = makePayload({ text: "summarize", guid: "row-1" });
+    const url = makePayload({ text: "https://example.com/article", guid: "row-2" });
+
+    expect(shouldCombineIMessagePayloadBucket([command, url], false)).toBe(true);
   });
 });

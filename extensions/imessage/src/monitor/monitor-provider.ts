@@ -70,6 +70,7 @@ import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js
 import {
   combineIMessagePayloads,
   hasIMessageBalloonMetadata,
+  hasIMessageUrlBalloonBundleID,
   shouldCombineIMessagePayloadBucket,
 } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
@@ -113,10 +114,29 @@ const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
+const IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS = 2_500;
 type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
 
 function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
   return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
+}
+
+function resolveIMessageSplitSendCompatDebounceMs(
+  cfg: OpenClawConfig,
+  coalesceSameSenderDms: boolean,
+): number | undefined {
+  if (!coalesceSameSenderDms) {
+    return undefined;
+  }
+  const inbound = cfg.messages?.inbound;
+  const channelOverride = inbound?.byChannel?.imessage;
+  if (typeof channelOverride === "number" && Number.isFinite(channelOverride)) {
+    return undefined;
+  }
+  if (typeof inbound?.debounceMs === "number" && Number.isFinite(inbound.debounceMs)) {
+    return undefined;
+  }
+  return IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS;
 }
 
 function isIMessagePluginPayloadAttachment(attachment: {
@@ -457,23 +477,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : recoveryCursorRowid
       : recoveryBoundaryRowid;
 
-  // When `coalesceSameSenderDms` is enabled and the user has not set an
-  // explicit inbound debounce for this channel, widen the window to 2500 ms.
-  // Apple's split-send for `<command> <URL>` arrives ~0.8-2.0 s apart on most
-  // setups, so the legacy 0 ms default would flush the command alone before
-  // the URL row reaches the debouncer.
   const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
-  const inboundCfg = cfg.messages?.inbound;
-  const hasExplicitInboundDebounce =
-    typeof inboundCfg?.debounceMs === "number" ||
-    typeof inboundCfg?.byChannel?.imessage === "number";
-  const debounceMsOverride =
-    coalesceSameSenderDms && !hasExplicitInboundDebounce ? 2500 : undefined;
-
+  const debounceMsOverride = resolveIMessageSplitSendCompatDebounceMs(cfg, coalesceSameSenderDms);
   // Session capability latch: flips true once any inbound row from this imsg
   // build carries balloon metadata. The coalesce flush gate needs a build-level
-  // (not per-bucket) signal because imsg omits `balloon_bundle_id` for plain
-  // rows, so a bucket of plain text looks identical on old and new builds.
+  // signal because imsg omits `balloon_bundle_id` for plain rows.
   let imsgEmitsBalloonMetadata = false;
   let recoveryCursorHoldBeforeRowid: number | null = null;
   let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
@@ -585,8 +593,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     message: IMessagePayload;
     // Exact replay-guard key claimed for this row at ingestion (GUID or, for a
     // GUID-less row, the composite fallback). Carried through so flush commits
-    // or releases the same key it claimed, even after coalescing rewrites the
-    // payload identity. null when the row had no derivable key (fail open).
+    // or releases the same key it claimed, even after a debounce merge rewrites
+    // the payload identity. null when the row had no derivable key (fail open).
     replayKey: string | null;
   }>({
     cfg,
@@ -603,10 +611,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           ? `chat:${msg.chat_id}`
           : (msg.chat_guid ?? msg.chat_identifier ?? "unknown");
 
-      // With coalesceSameSenderDms enabled, DMs key on chat:sender so Apple's
-      // split text row and URL-balloon row land in the same bucket. The flush
-      // path still requires imsg's structural balloon metadata before merging.
-      // Group chats keep the legacy key to preserve multi-user turn structure.
       if (coalesceSameSenderDms && msg.is_group !== true) {
         return `imessage:${accountInfo.accountId}:dm:${conversationId}:${sender}`;
       }
@@ -623,15 +627,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         return false;
       }
 
-      // Hold opt-in DMs long enough for a following URL-balloon row to arrive.
-      // The flush gate (shouldCombineIMessagePayloadBucket) decides merge vs.
-      // separate: it merges precisely on imsg's balloon marker, and falls back
-      // to a legacy merge only when the build emits no balloon metadata at all.
+      // Opt-in DM coalescing holds rows long enough for Apple's command+URL
+      // split-send to arrive. Group chats keep instant per-message dispatch.
       if (coalesceSameSenderDms) {
         return msg.is_group !== true;
       }
 
-      // Legacy gate: text-only, no control commands, no media.
+      // General same-sender inbound debounce: text-only, no control commands,
+      // no media. Off by default unless messages.inbound is configured.
       return shouldDebounceTextInbound({
         text: msg.text,
         cfg,
@@ -644,7 +647,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (entries.length === 0) {
         return;
       }
-      // Dispatch one unit (a single row or a coalesced bucket), then commit the
+      // Dispatch one unit (a single row or a merged bucket), then commit the
       // exact replay keys that were claimed at ingestion, or release them if
       // dispatch throws so a transient failure can retry on a later re-emit. Per
       // unit so a failure in one bucket entry cannot strand another's claim.
@@ -687,13 +690,39 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         }
         return;
       }
-
+      // The bucket-level gate only says this window contains coalescible work.
+      // URL balloons merge with the immediately preceding row; unrelated rows in
+      // the same sender/window dispatch separately instead of joining the pair.
+      if (messages.some(hasIMessageUrlBalloonBundleID)) {
+        let pending: { message: IMessagePayload; replayKey: string | null } | null = null;
+        for (const entry of entries) {
+          if (hasIMessageUrlBalloonBundleID(entry.message) && pending) {
+            const unitEntries = [pending, entry];
+            await dispatchUnit(
+              unitEntries,
+              combineIMessagePayloads(unitEntries.map((e) => e.message)),
+            );
+            pending = null;
+            continue;
+          }
+          if (pending) {
+            await dispatchUnit([pending], pending.message);
+          }
+          pending = entry;
+        }
+        if (pending) {
+          await dispatchUnit([pending], pending.message);
+        }
+        return;
+      }
       const combined = combineIMessagePayloads(messages);
       if (shouldLogVerbose()) {
         const text = combined.text ?? "";
         const preview = text.slice(0, 50);
         const ellipsis = text.length > 50 ? "..." : "";
-        logVerbose(`[imessage] coalesced ${entries.length} messages: "${preview}${ellipsis}"`);
+        logVerbose(
+          `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
+        );
       }
       await dispatchUnit(entries, combined);
     },
@@ -1332,8 +1361,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
       return;
     }
-    // Latch build capability from any row that carries balloon metadata so the
-    // coalesce flush gate can trust a missing URL marker on later plain buckets.
     if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
       imsgEmitsBalloonMetadata = true;
     }

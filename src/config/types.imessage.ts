@@ -119,7 +119,8 @@ export type IMessageAccountConfig = {
    * rows ~0.8-2.0 s apart) lands as one merged message. DM-only — group chats
    * keep instant per-message dispatch. Widens the default inbound debounce
    * window to 2500 ms when enabled without an explicit
-   * `messages.inbound.byChannel.imessage`. Default: `false`.
+   * `messages.inbound.byChannel.imessage` or global
+   * `messages.inbound.debounceMs`. Default: `false`.
    */
   coalesceSameSenderDms?: boolean;
   groups?: Record<
