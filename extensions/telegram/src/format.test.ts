@@ -152,6 +152,14 @@ describe("markdownToTelegramHtml", () => {
     expect(sanitized).not.toContain("<table>");
   });
 
+  it("clamps raw rich HTML table colspans before fallback", () => {
+    const html = '<table><tbody><tr><td colspan="1000000000">x</td></tr></tbody></table>';
+    const sanitized = sanitizeTelegramRichHtml(html);
+
+    expect(sanitized).toContain("<pre><code>");
+    expect(sanitized.length).toBeLessThan(300);
+  });
+
   it("renders block-mode tables as code in legacy Telegram HTML", () => {
     const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
 
@@ -176,6 +184,12 @@ describe("markdownToTelegramHtml", () => {
     expect(
       markdownToTelegramRichHtml("[docs](https://example.com)", { skipEntityDetection: true }),
     ).toBe('<a href="https://example.com">docs</a>');
+  });
+
+  it("preserves Markdown heading levels in rich HTML", () => {
+    expect(markdownToTelegramRichHtml("# Title\n\n### Detail")).toBe(
+      "<h1>Title</h1>\n\n<h3>Detail</h3>",
+    );
   });
 
   it("normalizes raw code language HTML without leaking tags", () => {

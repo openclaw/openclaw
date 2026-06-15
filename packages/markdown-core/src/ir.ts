@@ -22,6 +22,7 @@ type RenderEnv = {
 
 type MarkdownToken = {
   type: string;
+  tag?: string;
   content?: string;
   info?: string;
   children?: MarkdownToken[];
@@ -38,7 +39,13 @@ export type MarkdownStyle =
   | "code"
   | "code_block"
   | "spoiler"
-  | "blockquote";
+  | "blockquote"
+  | "heading_1"
+  | "heading_2"
+  | "heading_3"
+  | "heading_4"
+  | "heading_5"
+  | "heading_6";
 
 export type MarkdownStyleSpan = {
   start: number;
@@ -113,7 +120,7 @@ type TableState = {
 
 type RenderState = RenderTarget & {
   env: RenderEnv;
-  headingStyle: "none" | "bold";
+  headingStyle: "none" | "bold" | "rich";
   blockquotePrefix: string;
   enableSpoilers: boolean;
   tableMode: MarkdownTableMode;
@@ -125,7 +132,7 @@ type RenderState = RenderTarget & {
 export type MarkdownParseOptions = {
   linkify?: boolean;
   enableSpoilers?: boolean;
-  headingStyle?: "none" | "bold";
+  headingStyle?: "none" | "bold" | "rich";
   blockquotePrefix?: string;
   autolink?: boolean;
   /** How to render tables (off|bullets|code|block). Default: off. */
@@ -389,6 +396,25 @@ function handleLinkClose(state: RenderState) {
     return;
   }
   target.links.push({ start, end, href });
+}
+
+function headingStyleFromToken(token: MarkdownToken): MarkdownStyle | null {
+  switch (token.tag) {
+    case "h1":
+      return "heading_1";
+    case "h2":
+      return "heading_2";
+    case "h3":
+      return "heading_3";
+    case "h4":
+      return "heading_4";
+    case "h5":
+      return "heading_5";
+    case "h6":
+      return "heading_6";
+    default:
+      return null;
+  }
 }
 
 function isInsideMarkdownHtmlTag(text: string): boolean {
@@ -720,11 +746,21 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "heading_open":
         if (state.headingStyle === "bold") {
           openStyle(state, "bold");
+        } else if (state.headingStyle === "rich") {
+          const style = headingStyleFromToken(token);
+          if (style) {
+            openStyle(state, style);
+          }
         }
         break;
       case "heading_close":
         if (state.headingStyle === "bold") {
           closeStyle(state, "bold");
+        } else if (state.headingStyle === "rich") {
+          const style = headingStyleFromToken(token);
+          if (style) {
+            closeStyle(state, style);
+          }
         }
         appendParagraphSeparator(state);
         break;
