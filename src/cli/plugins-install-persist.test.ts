@@ -49,7 +49,7 @@ describe("persistPluginInstall", () => {
     } as OpenClawConfig;
     const enabledConfig = {
       plugins: {
-        allow: ["alpha", "memory-core"],
+        allow: ["memory-core", "alpha"],
         entries: {
           alpha: { enabled: true },
         },
@@ -58,7 +58,7 @@ describe("persistPluginInstall", () => {
     enablePluginInConfig.mockImplementation((...args: unknown[]) => {
       const [cfg, pluginId] = args as [OpenClawConfig, string];
       expect(pluginId).toBe("alpha");
-      expect(cfg.plugins?.allow).toEqual(["alpha", "memory-core"]);
+      expect(cfg.plugins?.allow).toEqual(["memory-core", "alpha"]);
       return { config: enabledConfig };
     });
 
@@ -66,6 +66,11 @@ describe("persistPluginInstall", () => {
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
+        writeOptions: {
+          expectedConfigPath: "/tmp/openclaw.json",
+          includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },
+          includeFileTargetsForWrite: { "/tmp/plugins.json5": "/tmp/plugins.json5" },
+        },
       },
       pluginId: "alpha",
       install: {
@@ -91,6 +96,9 @@ describe("persistPluginInstall", () => {
       nextConfig: enabledConfig,
       baseHash: "config-1",
       writeOptions: {
+        expectedConfigPath: "/tmp/openclaw.json",
+        includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },
+        includeFileTargetsForWrite: { "/tmp/plugins.json5": "/tmp/plugins.json5" },
         afterWrite: { mode: "restart", reason: "plugin source changed" },
         unsetPaths: [["plugins", "installs"]],
       },

@@ -1,6 +1,7 @@
 // Persistence helpers for plugin and hook-pack installs plus related config mutation.
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { replaceConfigFile } from "../config/config.js";
+import type { ConfigWriteOptions } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
@@ -39,7 +40,7 @@ function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): O
     ...cfg,
     plugins: {
       ...cfg.plugins,
-      allow: [...allow, pluginId].toSorted(),
+      allow: [...allow, pluginId],
     },
   };
 }
@@ -66,6 +67,13 @@ function removeInstalledPluginFromDenylist(cfg: OpenClawConfig, pluginId: string
 export type ConfigSnapshotForInstallPersist = {
   config: OpenClawConfig;
   baseHash: string | undefined;
+  writeOptions?: Pick<
+    ConfigWriteOptions,
+    | "expectedConfigPath"
+    | "envSnapshotForRestore"
+    | "includeFileHashesForWrite"
+    | "includeFileTargetsForWrite"
+  >;
 };
 
 function sourceMatchesInstalledPath(params: {
@@ -237,6 +245,7 @@ export async function persistPluginInstall(params: {
         nextConfig: next,
         baseHash: params.snapshot.baseHash,
         writeOptions: {
+          ...params.snapshot.writeOptions,
           afterWrite: { mode: "restart", reason: "plugin source changed" },
         },
       }),
@@ -302,6 +311,7 @@ export async function persistHookPackInstall(params: {
   await replaceConfigFile({
     nextConfig: next,
     baseHash: params.snapshot.baseHash,
+    ...(params.snapshot.writeOptions ? { writeOptions: params.snapshot.writeOptions } : {}),
   });
   runtime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
   logHookPackRestartHint(runtime);
