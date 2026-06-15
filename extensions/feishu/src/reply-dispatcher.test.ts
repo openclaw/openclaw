@@ -1697,9 +1697,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       firstMockArg(sendMessageFeishuMock, "send message params").text,
     );
     expect(fallbackText).toContain("without visible content");
-    // Verify the fallback includes the slash-prefixed recovery command.
+    // Verify the fallback includes the status command in both languages.
     expect(fallbackText).toContain("/status");
-    expect(fallbackText).toContain("/状态");
+    expect(fallbackText).toContain("查看当前会话状态");
     expect(result.getVisibleReplyState()).toEqual({
       visibleReplySent: true,
       skippedFinalReason: null,

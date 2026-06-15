@@ -43,10 +43,10 @@ function formatNoVisibleReplyFallback(reason: string): string {
   return (
     `⚠️ This reply completed without visible content (${reasonCode}). ` +
     `The turn may have been interrupted. ` +
-    `Send \`/status\` (or \`/状态\`) to recover from the current session.\n\n` +
+    `Send \`/status\` to check the current session status.\n\n` +
     `⚠️ 此回复完成时无可见内容 (${reasonCode})。` +
     `本轮对话可能已被中断。` +
-    `发送 \`/状态\` (or \`/status\`) 恢复当前会话。`
+    `发送 \`/status\` 查看当前会话状态。`
   );
 }
 const streamingStartBackoffUntilByAccount = new Map<string, number>();
